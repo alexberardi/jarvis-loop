@@ -196,6 +196,7 @@ type detail struct {
 		ReturnStage string `json:"return_stage"`
 		Question    string `json:"question"`
 		HeadSHA     string `json:"head_sha"`
+		PR          int    `json:"pr"`
 		Risk        string `json:"risk"`
 		HoldReason  string `json:"hold_reason"`
 		BounceCount int    `json:"bounce_count"`
@@ -248,6 +249,7 @@ func TestAuth(t *testing.T) {
 	e.refused(runnerTok, "POST", "/items/1/answer", map[string]any{"text": "x"}, 403, "forbidden")
 	e.refused(runnerTok, "POST", "/items/1/approve", map[string]any{"head_sha": shaA}, 403, "forbidden")
 	e.refused(runnerTok, "POST", "/items/1/hold", map[string]any{}, 403, "forbidden")
+	e.refused(runnerTok, "POST", "/items/1/drop", map[string]any{"words": "x"}, 403, "forbidden")
 	// Both.
 	id := e.addItem("from the user")
 	var it struct{ ID int64 }
@@ -793,5 +795,50 @@ func TestMainCIEventRoute(t *testing.T) {
 	last := d.Events[len(d.Events)-1]
 	if last.Kind != "main_ci" || last.Actor != "runner:devbox" || last.Data["result"] != "green" {
 		t.Fatalf("event %+v", last)
+	}
+}
+
+// drop: the user closes an item from any open stage; a live lease ends. The runner then lists the
+// dropped items whose PR it has to close and records pr_closed once.
+func TestDropRoute(t *testing.T) {
+	e := newEnv(t)
+	id := e.toLand("normal", []string{"M internal/x.go"})
+	e.mustClaim("lander", id, "land")
+	toClose := func() []int64 {
+		e.t.Helper()
+		var out struct{ Items []struct{ ID int64 } }
+		e.do(runnerTok, "GET", "/items?pr_to_close=1", nil, 200, &out)
+		var ids []int64
+		for _, it := range out.Items {
+			ids = append(ids, it.ID)
+		}
+		return ids
+	}
+	if ids := toClose(); len(ids) != 0 {
+		t.Fatalf("before the drop: %v", ids)
+	}
+	path := fmt.Sprintf("/items/%d/drop", id)
+	e.refused(runnerTok, "POST", path, map[string]any{"words": "no"}, 403, "forbidden")
+	e.do(userTok, "POST", path, map[string]any{"words": "no hardware"}, 200, nil)
+	d := e.get(id)
+	last := d.Events[len(d.Events)-1]
+	if d.Item.Stage != "closed" || d.Lease != nil || last.Kind != "dropped" || last.Actor != "user:alex" ||
+		last.From != "land" || last.Data["words"] != "no hardware" || last.Data["reason"] != "dropped by the user" {
+		t.Fatalf("after drop: stage %s lease %v event %+v", d.Item.Stage, d.Lease, last)
+	}
+	e.refused(userTok, "POST", path, map[string]any{}, 409, "wrong_stage")
+	e.refused(runnerTok, "GET", "/items?pr_to_close=maybe", nil, 400, "invalid_field")
+	if ids := toClose(); len(ids) != 1 || ids[0] != id {
+		t.Fatalf("to close: %v", ids)
+	}
+	ev := map[string]any{"kind": "pr_closed", "data": map[string]any{"pr": 1, "state": "closed"}}
+	ev["data"].(map[string]any)["pr"] = d.Item.PR
+	events := fmt.Sprintf("/items/%d/events", id)
+	e.refused(userTok, "POST", events, ev, 403, "forbidden")
+	e.refused(runnerTok, "POST", events, map[string]any{"kind": "pr_closed", "data": map[string]any{"pr": 3, "state": "gone"}}, 400, "invalid_field")
+	e.do(otherTok, "POST", events, ev, 201, nil)
+	e.refused(runnerTok, "POST", events, ev, 409, "already_recorded")
+	if ids := toClose(); len(ids) != 0 {
+		t.Fatalf("after pr_closed: %v", ids)
 	}
 }

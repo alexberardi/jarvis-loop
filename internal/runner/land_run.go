@@ -17,6 +17,10 @@ const LandPollEvery = 30 * time.Second
 // LandWaitingAfter is how long a wait lasts before the item's Slack parent says so.
 const LandWaitingAfter = 10 * time.Minute
 
+// errNotLanding: the item left land while the run waited (the user dropped it); the run stops
+// without merging or reporting.
+var errNotLanding = errors.New("the item is no longer in land")
+
 // landRun is one land claim.
 type landRun struct {
 	item    Item
@@ -93,6 +97,10 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 		f, err := r.landFacts(ctx, lr)
 		if ctx.Err() != nil {
 			return // shutdown: the lease expires and the item waits in land
+		}
+		if errors.Is(err, errNotLanding) {
+			lr.log.Info("land stopped: the item is " + lr.item.Stage)
+			return
 		}
 		if err != nil {
 			r.landAdvance(report, lr, failed("land could not read the PR's state: %s", clip(err.Error(), 800)), nil)
@@ -176,6 +184,11 @@ func (r *Runner) landFacts(ctx context.Context, lr *landRun) (LandFacts, error) 
 	}
 	it := d.Item
 	lr.item = it
+	// A merge cannot be undone: the stage is read again before every pass of the gates, so a
+	// drop stops the run here, not at its next heartbeat.
+	if it.Stage != StageLand {
+		return f, errNotLanding
+	}
 	pr, err := r.Land.LandView(ctx, lr.repo.Slug, it.PR)
 	if err != nil {
 		return f, err

@@ -17,6 +17,7 @@ const helpText = "*/loop commands*\n" +
 	"`/loop status` the board\n" +
 	"`/loop show <id>` one item\n" +
 	"`/loop priority <id> P1`\u2013`P5` change a priority\n" +
+	"`/loop drop <id> [why]` close an item you won't land (its PR is closed, the branch stays)\n" +
 	"`/loop agents <0-6>` how many agents may run at once (0 = paused)\n" +
 	"`/loop stop` / `/loop resume` stop running agents / start again\n" +
 	"`/loop usage <N>%` record what /usage shows\n" +
@@ -62,10 +63,10 @@ func (b *Bot) runCommand(ctx context.Context, c command) string {
 	verb, args := strings.ToLower(fields[0]), fields[1:]
 	rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(c.Text), fields[0]))
 	actor := actorPrefix + c.UserID
-	approverOnly := map[string]bool{"add": true, "priority": true, "agents": true, "stop": true, "resume": true, "usage": true}
+	approverOnly := map[string]bool{"add": true, "priority": true, "agents": true, "stop": true, "resume": true, "usage": true, "drop": true}
 	if approverOnly[verb] && !IsApprover(c.UserID) {
 		var itemID int64
-		if verb == "priority" && len(args) > 0 {
+		if (verb == "priority" || verb == "drop") && len(args) > 0 {
 			itemID, _ = strconv.ParseInt(strings.TrimPrefix(args[0], "#"), 10, 64)
 			if _, err := b.c.Store.GetItem(ctx, itemID); err != nil {
 				itemID = 0
@@ -112,6 +113,21 @@ func (b *Bot) runCommand(ctx context.Context, c command) string {
 			return Escape(errMessage(err))
 		}
 		return fmt.Sprintf("#%d is now %s.", it.ID, it.Priority)
+	case "drop":
+		if len(args) == 0 {
+			return helpText
+		}
+		id, err := strconv.ParseInt(strings.TrimPrefix(args[0], "#"), 10, 64)
+		if err != nil {
+			return helpText
+		}
+		words := strings.TrimSpace(strings.TrimPrefix(rest, args[0]))
+		it, err := b.c.Store.Drop(ctx, actor, id, words)
+		if err != nil {
+			return Escape(errMessage(err))
+		}
+		b.cancelPending(it.ID)
+		return fmt.Sprintf("#%d dropped (closed).", it.ID)
 	case "agents":
 		n, err := strconv.Atoi(strings.Join(args, ""))
 		if err != nil || n < 0 || n > 6 {

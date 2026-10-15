@@ -630,6 +630,20 @@ func ApplyHold(it Item, words string) (Transition, error) {
 	return Transition{Item: it, From: Held, To: Held, Kind: "held", Data: map[string]any{"words": words}}, nil
 }
 
+// DropReason is the reason a dropped item's event records.
+const DropReason = "dropped by the user"
+
+// ApplyDrop closes an open item at the user's word, from any stage but done and closed.
+func ApplyDrop(it Item, words string) (Transition, error) {
+	if it.Stage == Done || it.Stage == Closed {
+		return Transition{}, errf(CodeWrongStage, "item is %s", it.Stage)
+	}
+	from := it.Stage
+	it.Stage, it.ReturnStage, it.Question = Closed, "", ""
+	return Transition{Item: it, From: from, To: Closed, Kind: "dropped",
+		Data: map[string]any{"reason": DropReason, "words": strings.TrimSpace(words)}}, nil
+}
+
 // ApplyPatch changes an item's priority or title.
 func ApplyPatch(it Item, priority, title *string) (Transition, error) {
 	if it.Stage == Done || it.Stage == Closed {

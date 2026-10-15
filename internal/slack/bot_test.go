@@ -478,7 +478,7 @@ func TestHeldMessageHasButtons(t *testing.T) {
 		}
 	}
 	ids := actionIDs(held)
-	if len(ids) != 2 || ids[0] != "approve" || ids[1] != "keep_holding" {
+	if len(ids) != 3 || ids[0] != "approve" || ids[1] != "keep_holding" || ids[2] != "drop" {
 		t.Fatalf("buttons %v", ids)
 	}
 	if v := elementValue(held, "approve"); v != fmt.Sprintf("%d:%s", id, shaA) {

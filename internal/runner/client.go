@@ -255,6 +255,15 @@ func (c *Client) OpenItems(ctx context.Context) ([]BoardRow, error) {
 	return out.Items, err
 }
 
+// PRsToClose lists the dropped items whose PR no runner has closed yet (GET /items?pr_to_close=1).
+func (c *Client) PRsToClose(ctx context.Context) ([]BoardRow, error) {
+	var out struct {
+		Items []BoardRow `json:"items"`
+	}
+	_, err := c.json(ctx, "GET", "/items?pr_to_close=1", nil, &out)
+	return out.Items, err
+}
+
 // DownloadEvidence saves evidence file n of an item to dst (at most MaxEvidenceBytes).
 func (c *Client) DownloadEvidence(ctx context.Context, id int64, n int, dst string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(c.Base, "/")+fmt.Sprintf("/items/%d/evidence/%d", id, n), nil)

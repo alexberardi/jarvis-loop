@@ -319,6 +319,15 @@ func button(text, actionID, value, style string) map[string]any {
 	return b
 }
 
+// dropButton closes the item (store.Drop), after Slack's own confirmation dialog.
+func dropButton(id int64, value string) map[string]any {
+	b := button("Drop", "drop", value, "danger")
+	b["confirm"] = map[string]any{"title": plain(fmt.Sprintf("Drop #%d?", id)),
+		"text":    plain("It closes, a running agent stops, and its PR is closed (the branch stays)."),
+		"confirm": plain("Drop"), "deny": plain("Cancel"), "style": "danger"}
+	return b
+}
+
 var priorityNames = []string{"P1 highest", "P2 high", "P3 medium", "P4 low", "P5 lowest"}
 
 func selectMenu(actionID string, labels, values []string, current string) map[string]any {
@@ -423,7 +432,9 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 			q = str(e.Data, "question")
 		}
 		text := fmt.Sprintf("<@%s> #%d needs you: %s\nReply in this thread to answer.", Approver, id, b.field(q, 1500, id))
-		return Message{Text: text, Blocks: []map[string]any{section(text)}}, true
+		return Message{Text: text, Blocks: []map[string]any{section(text),
+			{"type": "actions", "block_id": "needs_you", "elements": []any{dropButton(id, strconv.FormatInt(id, 10))}},
+		}}, true
 	}
 	if e.Kind == "advanced" && pipeline.Outcome(e.Outcome) == pipeline.Hold {
 		return b.heldMessage(e, d), true
@@ -474,6 +485,18 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 		return Message{}, false // pending CI does not post; the parent's stage line says it
 	case "main_ci":
 		text = b.mainCILine(e, id)
+	case "dropped":
+		text = "Dropped by " + who(e.Actor)
+		if w := str(e.Data, "words"); w != "" {
+			text += ": '" + f("words", 300) + "'"
+		}
+		text += ". Closed"
+		if pr := b.prLink(it); pr != "" {
+			text += "; the runner closes " + pr + " (the branch stays)"
+		}
+		text += "."
+	case "pr_closed":
+		return Message{}, false // the dropped line already said so
 	case "advanced":
 		switch pipeline.Outcome(e.Outcome) {
 		case pipeline.Reproduced:
@@ -565,6 +588,7 @@ func (b *Bot) heldMessage(e store.Event, d store.Detail) Message {
 		{"type": "actions", "block_id": "held", "elements": []any{
 			button("Approve merge", "approve", value, "primary"),
 			button("Keep holding", "keep_holding", value, ""),
+			dropButton(it.ID, value),
 		}},
 	}}
 }
@@ -840,6 +864,11 @@ func (b *Bot) onActions(ctx context.Context, p interaction) {
 			}
 		case "approve":
 			b.approveButton(ctx, channel, msgTS, user, itemID, a.Value)
+		case "drop":
+			b.cancelPending(itemID)
+			if _, err := b.c.Store.Drop(ctx, actor, itemID, "Drop button"); err != nil {
+				b.ephemeral(ctx, channel, user, Escape(errMessage(err)))
+			}
 		case "keep_holding":
 			b.cancelPending(itemID)
 			if _, err := b.c.Store.Hold(ctx, actor, itemID, "Keep holding"); err != nil {
@@ -876,13 +905,13 @@ func (b *Bot) onActions(ctx context.Context, p interaction) {
 }
 
 // actionItem finds the item an action is about: the parent's block_id "item:N", or a held
-// button's value "N:sha".
+// button's value "N:sha", or a Drop button's "N" or "N:sha".
 func actionItem(actionID, blockID, value string) int64 {
 	if rest, ok := strings.CutPrefix(blockID, "item:"); ok {
 		id, _ := strconv.ParseInt(rest, 10, 64)
 		return id
 	}
-	if actionID == "approve" || actionID == "keep_holding" {
+	if actionID == "approve" || actionID == "keep_holding" || actionID == "drop" {
 		n, _, _ := strings.Cut(value, ":")
 		id, _ := strconv.ParseInt(n, 10, 64)
 		return id

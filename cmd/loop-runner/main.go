@@ -64,7 +64,8 @@ func run(args []string) error {
 			return fmt.Errorf("a --dry-run runner cannot land: take \"land\" out of the config's stages")
 		}
 	} else {
-		r.Land = gh // only with land in stages does the runner ever claim a land item
+		r.Land = gh  // only with land in stages does the runner ever claim a land item
+		r.Close = gh // closes the PRs of the items the user dropped
 	}
 	if *cfg.VerifyPR && !*dry {
 		r.VerifyPR = runner.GHVerify

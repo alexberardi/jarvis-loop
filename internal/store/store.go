@@ -416,6 +416,8 @@ type ListFilter struct {
 	Priority string
 	// Open leaves out done and closed items (the runner's snapshot for triage's dedupe).
 	Open bool
+	// PRToClose keeps the dropped items with a PR the runner has not closed yet (pr_closed).
+	PRToClose bool
 }
 
 // ListItems is the board, highest priority first, then oldest. Empty filters match everything.
@@ -438,6 +440,11 @@ func (s *Store) ListItemsFilter(ctx context.Context, f ListFilter) ([]BoardRow, 
 	}
 	if f.Open {
 		q += ` AND i.stage NOT IN ('done','closed')`
+	}
+	if f.PRToClose {
+		q += ` AND i.stage = 'closed' AND i.pr > 0
+			AND EXISTS (SELECT 1 FROM events e WHERE e.item_id = i.id AND e.kind = 'dropped')
+			AND NOT EXISTS (SELECT 1 FROM events e WHERE e.item_id = i.id AND e.kind = 'pr_closed')`
 	}
 	q += ` ORDER BY i.priority, i.created_at, i.id`
 	rows, err := s.r.QueryContext(ctx, q, args...)
