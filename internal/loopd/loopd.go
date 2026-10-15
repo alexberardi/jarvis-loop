@@ -18,14 +18,24 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/web"
 )
 
-// Handler serves the API, plus the status page at / and its form at /ui/control.
-func Handler(st *store.Store, toks *api.Tokens, log *slog.Logger) http.Handler {
+// Handler serves the API, plus the status page at / and its form at /ui/control, and the board
+// at /board.
+func Handler(st *store.Store, toks *api.Tokens, log *slog.Logger, board web.BoardConfig) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/", api.New(st, toks, log))
 	page := api.Logged(log, web.New(st, toks, log))
 	mux.Handle("GET /{$}", page)
 	mux.Handle("POST /ui/control", page)
+	b := BoardHandler(st, toks, log, board)
+	mux.Handle("/board", b)
+	mux.Handle("/board/", b)
 	return mux
+}
+
+// BoardHandler serves the board's read routes and nothing else (404 elsewhere, 405 for anything
+// but GET): it is what loopd's LAN listener (--board-addr) serves, so the API stays on loopback.
+func BoardHandler(st *store.Store, toks *api.Tokens, log *slog.Logger, board web.BoardConfig) http.Handler {
+	return api.Logged(log, web.NewBoard(st, toks, log, board))
 }
 
 // Slack configures the Slack layer.

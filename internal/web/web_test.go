@@ -28,7 +28,7 @@ func setup(t *testing.T) (*httptest.Server, *store.Store) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	toks, err := api.ParseTokens(strings.NewReader(userTok + "\tuser\talex\n" + runnerTok + "\trunner\tdevbox\n"))
+	toks, err := api.ParseTokens(strings.NewReader(userTok + "\tuser\talex\n" + runnerTok + "\trunner\tdevbox\n" + boardTok + "\tboard\tphone\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +64,10 @@ func TestBoardPage(t *testing.T) {
 	req.SetBasicAuth("x", runnerTok)
 	if resp, _ := send(t, req); resp.StatusCode != 403 {
 		t.Fatalf("runner token on the page: %d", resp.StatusCode)
+	}
+	req.SetBasicAuth("x", boardTok)
+	if resp, _ := send(t, req); resp.StatusCode != 403 {
+		t.Fatalf("board token on the status page: %d", resp.StatusCode)
 	}
 	req.SetBasicAuth("alex", userTok)
 	resp, body := send(t, req)

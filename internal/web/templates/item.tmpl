@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>#{{.Item.ID}} {{.Item.Title}} · Jarvis Loop</title>
+{{template "style"}}
+<style>
+main { max-width: 960px; margin: 0 auto; }
+h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 20px 0 6px; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; overflow-wrap: anywhere; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 0; font: 13px/1.45 ui-monospace, monospace; }
+figure { margin: 0 0 12px; }
+figure img { max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; }
+figcaption, .files { font-size: 13px; color: var(--muted); }
+.events { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); font-size: 13px; }
+td { padding: 4px 8px; border-top: 1px solid var(--line); vertical-align: top; }
+td.when { white-space: nowrap; color: var(--muted); }
+td.data { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<main>
+<p class="sub"><a href="/board">← board</a></p>
+<h1>#{{.Item.ID}} {{.Item.Title}}</h1>
+{{- with .Item}}
+<dl>
+<dt>Stage</dt><dd>{{$.Display}}</dd>
+{{- if $.RepoName}}
+<dt>Repo</dt><dd>{{$.RepoName}}</dd>
+{{- end}}
+<dt>Priority</dt><dd>{{.Priority}}</dd>
+<dt>Age</dt><dd>{{age $.Age}}</dd>
+{{- if $.ClaimedBy}}
+<dt>Claimed by</dt><dd>{{$.ClaimedBy}}</dd>
+{{- end}}
+{{- if $.PRURL}}
+<dt>PR</dt><dd><a href="{{$.PRURL}}">#{{.PR}}</a></dd>
+{{- end}}
+{{- if $.SlackURL}}
+<dt>Slack</dt><dd><a href="{{$.SlackURL}}">thread</a></dd>
+{{- end}}
+{{- if $.Reason}}
+<dt>{{if eq $.Display "held"}}Held{{else}}Question{{end}}</dt><dd class="reason">{{$.Reason}}</dd>
+{{- end}}
+</dl>
+{{- if .Ask}}
+<h2>Ask</h2>
+<pre>{{.Ask}}</pre>
+{{- end}}
+{{- if .Summary}}
+<h2>Summary</h2>
+<pre>{{.Summary}}</pre>
+{{- end}}
+{{- end}}
+<h2>Evidence · {{len .Evidence}}</h2>
+{{- range .Evidence}}
+{{- if .Image}}
+<figure><img src="/board/items/{{.ItemID}}/evidence/{{.N}}" alt="{{if .Label}}{{.Label}}{{else}}{{.Name}}{{end}}" loading="lazy"><figcaption><a href="/board/items/{{.ItemID}}/evidence/{{.N}}" download>{{.Name}}</a>{{if .Label}} · {{.Label}}{{end}} · {{size .Size}}</figcaption></figure>
+{{- else}}
+<p class="files"><a href="/board/items/{{.ItemID}}/evidence/{{.N}}" download>{{.Name}}</a>{{if .Label}} · {{.Label}}{{end}} · {{size .Size}}</p>
+{{- end}}
+{{- else}}
+<p class="muted">None.</p>
+{{- end}}
+<h2>Events · {{len .Events}}</h2>
+<div class="events">
+<table>
+{{- range .Events}}
+<tr><td class="when">{{stamp .At}}</td><td>{{.Actor}}</td><td>{{.Kind}}{{if or .From .To}} {{.From}}→{{.To}}{{end}}{{if .Outcome}} ({{.Outcome}}){{end}}</td><td class="data">{{.DataText}}</td></tr>
+{{- end}}
+</table>
+</div>
+</main>
+</body>
+</html>

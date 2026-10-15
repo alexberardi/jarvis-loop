@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/loopd"
 	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/store"
+	"github.com/alexberardi/jarvis-loop/internal/web"
 )
 
 func main() {
@@ -44,6 +46,8 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	data := fs.String("data", "~/.local/share/jarvis-loop", "data directory (database and evidence)")
 	tokensPath := fs.String("tokens", "~/.config/jarvis-loop/tokens", "tokens file, 0600: token<TAB>kind<TAB>name per line")
 	lan := fs.Bool("lan", false, "allow listening on a non-loopback address")
+	boardAddr := fs.String("board-addr", "", "a second listener serving only the read-only board at /board (e.g. 0.0.0.0:7790, the LAN); off when empty")
+	slackWorkspace := fs.String("slack-workspace", "", "the Slack workspace's address (https://<team>.slack.com), for the board's links to item threads; none without it")
 	slackEnv := fs.String("slack-env", "", "Slack env file, 0600, with SLACK_BOT_TOKEN and SLACK_APP_TOKEN; Slack is off without it")
 	slackLink := fs.String("slack-link", "", "loopd's address as the Slack reader reaches it (LAN), for links to long text; default: point at `loop show`")
 	reposFlag := fs.String("repos", "", "the repos the loop works on, as owner/name slugs, comma-separated: the only repos triage may give an item that has none, and the ones `/loop add` recognises by name")
@@ -53,6 +57,16 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	}
 	if err := checkAddr(*addr, *lan); err != nil {
 		return err
+	}
+	if *boardAddr != "" {
+		if _, _, err := net.SplitHostPort(*boardAddr); err != nil {
+			return fmt.Errorf("--board-addr: %w", err)
+		}
+	}
+	if *slackWorkspace != "" {
+		if u, err := url.Parse(*slackWorkspace); err != nil || u.Scheme != "https" || u.Host == "" {
+			return fmt.Errorf("--slack-workspace %q: want https://<team>.slack.com", *slackWorkspace)
+		}
 	}
 	repos, err := parseRepos(*reposFlag)
 	if err != nil {
@@ -94,9 +108,10 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	defer st.Close()
 	st.SetRepos(repos)
 
+	boardCfg := web.BoardConfig{SlackWorkspace: *slackWorkspace, Clock: clock.Real{}}
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           handler(st, toks, log),
+		Handler:           handler(st, toks, log, boardCfg),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       5 * time.Minute, // evidence uploads
 		WriteTimeout:      5 * time.Minute,
@@ -108,6 +123,25 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 	log.Info("loopd listening", "addr", ln.Addr().String(), "data", expand(*data))
+	var boardSrv *http.Server
+	var boardLn net.Listener
+	if *boardAddr != "" {
+		// The board's own listener, for the LAN: read-only routes only, so it needs no --lan.
+		boardSrv = &http.Server{
+			Addr:              *boardAddr,
+			Handler:           loopd.BoardHandler(st, toks, log, boardCfg),
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       time.Minute,
+			WriteTimeout:      5 * time.Minute, // evidence downloads
+			IdleTimeout:       2 * time.Minute,
+			MaxHeaderBytes:    64 << 10,
+		}
+		if boardLn, err = net.Listen("tcp", *boardAddr); err != nil {
+			ln.Close()
+			return fmt.Errorf("--board-addr: %w", err)
+		}
+		log.Info("board listening", "addr", boardLn.Addr().String())
+	}
 
 	var bg sync.WaitGroup
 	defer bg.Wait()
@@ -117,6 +151,9 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		if _, err := loopd.StartSlack(sctx, &bg, st, loopd.Slack{BaseURL: slack.DefaultBaseURL, Tokens: slackToks,
 			LinkBase: *slackLink, Repos: repos, Aliases: aliases, Clock: clock.Real{}, Log: log}); err != nil {
 			ln.Close()
+			if boardLn != nil {
+				boardLn.Close()
+			}
 			return err
 		}
 	}
@@ -137,28 +174,46 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		}
 	}()
 
-	errc := make(chan error, 1)
+	// Either server failing stops both: loopd is up with both listeners or not at all.
+	servers := []*http.Server{srv}
+	errc := make(chan error, 2)
 	go func() { errc <- srv.Serve(ln) }()
+	if boardSrv != nil {
+		servers = append(servers, boardSrv)
+		go func() { errc <- boardSrv.Serve(boardLn) }()
+	}
+	var serveErr error
 	select {
-	case err := <-errc:
-		return err
+	case serveErr = <-errc:
 	case <-ctx.Done():
 	}
 	log.Info("loopd shutting down")
 	shutCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutCtx); err != nil {
-		return err
+	var errs []error
+	for _, s := range servers {
+		if err := s.Shutdown(shutCtx); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
-		return err
+	pending := len(servers)
+	if serveErr != nil {
+		pending--
+		if !errors.Is(serveErr, http.ErrServerClosed) {
+			errs = append(errs, serveErr)
+		}
 	}
-	return nil
+	for range pending {
+		if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
-// handler serves the API, plus the status page at / and its form at /ui/control.
-func handler(st *store.Store, toks *api.Tokens, log *slog.Logger) http.Handler {
-	return loopd.Handler(st, toks, log)
+// handler serves the API, plus the status page at / and its form at /ui/control, and the board.
+func handler(st *store.Store, toks *api.Tokens, log *slog.Logger, board web.BoardConfig) http.Handler {
+	return loopd.Handler(st, toks, log, board)
 }
 
 var slugRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
