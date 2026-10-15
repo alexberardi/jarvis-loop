@@ -6,12 +6,5 @@
 /.data/
 .env
 .env.*
-# local runs: never commit tokens or data
-tokens
-*.db
-*.db-wal
-*.db-shm
-/loopd
-/loop
 # never commit tokens
 tokens
