@@ -123,6 +123,7 @@ negative ones are checked once the loop has gone quiet:
 | `remote`: {`branches`: {alias: head-subject regexp}, `files`: {alias: [paths]}, `only`, `main`: alias} | the remote's branches; `main` is where it started or where a merge or `push` put it, and (`main`) is that item's squash commit |
 | `agent_runs`: {stage: n} | the runner started n agent runs for that stage (land starts none) |
 | `absent`: [paths under the stack dir] | they do not exist |
+| `board`: {alias: {`column`, `card` regexp}} | the item's card is in that column of the web board (read from the stack's board listener with a board token, through the `?t=` cookie flow), its HTML matching `card` |
 
 **Always checked, after every step (must-not):** no bot call to a channel other than `#loop` and
 `#loop-digest`; no token (Slack, loopd user, runner or hand) in any call to Slack or any message; the
