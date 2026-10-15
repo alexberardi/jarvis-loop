@@ -48,6 +48,9 @@ type Runner struct {
 	HeartbeatEvery time.Duration
 	KillGrace      time.Duration
 
+	fenceOnce sync.Once
+	fenceErr  error
+
 	paused   atomic.Value // string: why the runner stopped claiming
 	mirrorMu sync.Map     // mirror path -> *sync.Mutex
 	watching atomic.Int64 // main-CI watches running
@@ -426,12 +429,19 @@ func writeAtomic(path string, b []byte) error {
 	return os.Rename(tmp, path)
 }
 
+// shell runs a prepare, setup or cleanup command under the fence (fence.go): it runs files from
+// a tree the agent may have changed.
 func (r *Runner) shell(ctx context.Context, dir, command string, limit time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", "-c", command)
-	cmd.Dir = dir
-	cmd.Env = r.agentEnv()
+	fc, err := r.fence(dir, command, r.agentEnv())
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(ctx, fc.Path, fc.Args[1:]...)
+	cmd.Dir, cmd.Env = fc.Dir, fc.Env
+	ownGroup(cmd)
+	cmd.Cancel = func() error { return signalGroup(cmd.Process.Pid, syscall.SIGKILL) }
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

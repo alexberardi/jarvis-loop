@@ -112,8 +112,9 @@ A runner is a small daemon on a machine that can do the work. It polls `loopd` c
 installed by the runner before the agent) and `verify` steps. An item with no repo is **routed
 first**: a triage run with no checkouts reads `repos.md` (group, aliases, description, recent PR
 titles) and returns `routed`; the next triage run has that one repo checked out. After a build, the
-runner itself runs the repo's **verify steps** outside the agent's sandbox, one at a time per
-machine, from its own config only: the logs and files they write are the item's evidence and are
+runner itself runs the repo's **verify steps** outside the agent's sandbox but inside a bubblewrap
+fence (credentials masked, no tokens, no pushing; fail closed), one at a time per machine, from its
+own config only: the logs and files they write are the item's evidence and are
 listed apart in the PR's Verification footer; a failure sends the build back (counted like a
 bounce) with nothing pushed. Details: `docs/decisions/2026-10-15-all-repos.md`.
 

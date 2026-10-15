@@ -61,6 +61,12 @@ type Config struct {
 	// machine (the GPU model, the emulator and the mobile build dir are single). Default
 	// ~/.cache/jarvis-loop/verify.lock, shared by every runner of the user.
 	VerifyLock string `json:"verify_lock,omitempty"`
+	// VerifyMask are the files and directories hidden from setup, prepare, cleanup and verify
+	// commands (which run the agent's code outside its sandbox): default the credential stores,
+	// loopd's tokens and data, the Slack tokens and this config (fence.go). Missing paths are
+	// skipped. Bwrap is the bubblewrap binary (default /usr/bin/bwrap).
+	VerifyMask []string `json:"verify_mask,omitempty"`
+	Bwrap      string   `json:"bwrap,omitempty"`
 
 	path             string
 	ciWait, mainWait time.Duration
@@ -107,6 +113,9 @@ type RepoConfig struct {
 
 // Groups are the kinds of repo a config may name.
 var Groups = []string{"server", "loop", "mobile", "docs", "installer", "package"}
+
+// DefaultBwrap is where bubblewrap is.
+const DefaultBwrap = "/usr/bin/bwrap"
 
 // DefaultVerifyTimeout is a verify step's time limit when its config gives none.
 const DefaultVerifyTimeout = 20 * time.Minute
@@ -240,6 +249,16 @@ func (c *Config) normalize() error {
 		c.VerifyLock = "~/.cache/jarvis-loop/verify.lock"
 	}
 	c.VerifyLock = Expand(c.VerifyLock)
+	if c.Bwrap == "" {
+		c.Bwrap = DefaultBwrap
+	}
+	if c.VerifyMask == nil {
+		c.VerifyMask = DefaultVerifyMask(Home())
+	}
+	for i, p := range c.VerifyMask {
+		c.VerifyMask[i] = Expand(p)
+	}
+	c.VerifyMask = uniq(append(c.VerifyMask, c.ownSecrets()...))
 	if c.UserEmulator == "" {
 		c.UserEmulator = "emulator-5554"
 	}
