@@ -574,3 +574,114 @@ func TestListOpenItems(t *testing.T) {
 		t.Fatalf("all %+v\nopen %+v", all, open)
 	}
 }
+
+// Migration 0004 tags the rules a user set before rules had a repo with jarvis-server's slug: they
+// were jarvis-server's hold list. The built-in defaults ('') stay untouched.
+func TestHoldRulesMigrationTagsJarvisServer(t *testing.T) {
+	dir := t.TempDir()
+	clk := clock.NewFake(t0)
+	s, err := Open(dir, clk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// As a database at version 3 with custom rules would look.
+	if _, err := s.w.Exec(`DELETE FROM schema_migrations WHERE version = 4`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.w.Exec(`UPDATE control SET hold_rules = ?`,
+		`[{"name":"auth","glob":"internal/modules/auth/**"},{"name":"tests","glob":"**/*_test.go","statuses":["D","R"]},{"name":"mine","glob":"x/**","repo":"o/other"}]`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if s, err = Open(dir, clk); err != nil {
+		t.Fatal(err)
+	}
+	ctl, err := s.Control(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []pipeline.HoldRule{
+		{Name: "auth", Glob: "internal/modules/auth/**", Repo: pipeline.ServerRepo},
+		{Name: "tests", Glob: "**/*_test.go", Statuses: []string{"D", "R"}, Repo: pipeline.ServerRepo},
+		{Name: "mine", Glob: "x/**", Repo: "o/other"},
+	}
+	if fmt.Sprint(ctl.HoldRules) != fmt.Sprint(want) {
+		t.Fatalf("migrated rules %+v, want %+v", ctl.HoldRules, want)
+	}
+	s.Close()
+
+	// A fresh database keeps the built-in defaults (both repos' lists).
+	s2, _ := open(t)
+	ctl, _ = s2.Control(context.Background())
+	if fmt.Sprint(ctl.HoldRules) != fmt.Sprint(pipeline.DefaultHoldRules()) {
+		t.Fatalf("fresh rules %+v", ctl.HoldRules)
+	}
+}
+
+// toDone takes an item through every stage, merged by runnerName.
+func toDone(t *testing.T, s *Store, runnerName string) pipeline.Item {
+	t.Helper()
+	ctx := context.Background()
+	it := add(t, s, "ship it", "")
+	step := func(agent string, out pipeline.Outcome, f map[string]string, paths []string, ev bool) {
+		t.Helper()
+		c, err := s.Claim(ctx, runnerName, pipeline.ClaimRequest{Runner: runnerName, Agent: agent})
+		if err != nil || c == nil || c.Item.ID != it.ID {
+			t.Fatalf("claim for %s: %+v %v", out, c, err)
+		}
+		if ev {
+			if _, err := s.AddEvidence(ctx, runnerName, it.ID, "log", "run.log", strings.NewReader("ok\n")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := s.Advance(ctx, runnerName, it.ID, out, f, paths); err != nil {
+			t.Fatalf("%s: %v", out, err)
+		}
+	}
+	step("triager", pipeline.Reproduced, map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": ""}, nil, true)
+	step("builder", pipeline.PROpened, map[string]string{"repo": "o/r", "pr": "7", "branch": "loop/1-x", "head_sha": shaA}, []string{"M x.go"}, true)
+	step("reviewer", pipeline.Approved, map[string]string{"summary": "ok", "head_sha": shaA}, nil, false)
+	step("lander", pipeline.Merged, map[string]string{"merge_sha": "ffffffffffffffffffffffffffffffffffffffff", "head_sha": shaA}, []string{"M x.go"}, false)
+	return it
+}
+
+// main_ci is recorded by the runner that merged the item, once, on a done item, with a known
+// result; anything else is refused.
+func TestMainCIEvent(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	it := toDone(t, s, runner)
+	good := map[string]any{"result": "red", "urls": []any{"https://github.com/o/r/actions/runs/1"}, "failing": []any{"test"},
+		"merge_sha": "ffffffffffffffffffffffffffffffffffffffff", "p1_item": float64(9)}
+
+	if _, err := s.MainCI(ctx, "other-runner", it.ID, good); code(err) != CodeNotYourMerge {
+		t.Fatalf("another runner: %v", err)
+	}
+	for name, bad := range map[string]map[string]any{
+		"no result":       {"urls": []any{}},
+		"unknown result":  {"result": "purple"},
+		"urls not a list": {"result": "green", "urls": "https://x"},
+		"url not text":    {"result": "green", "urls": []any{1.0}},
+		"unknown key":     {"result": "green", "token": "x"},
+		"bad p1":          {"result": "red", "p1_item": "nine"},
+	} {
+		if _, err := s.MainCI(ctx, runner, it.ID, bad); code(err) != pipeline.CodeInvalidField && code(err) != pipeline.CodeMissingField {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	ev, err := s.MainCI(ctx, runner, it.ID, good)
+	if err != nil || ev.Kind != "main_ci" || ev.Actor != "runner:"+runner || ev.Data["result"] != "red" {
+		t.Fatalf("main_ci: %+v %v", ev, err)
+	}
+	if _, err := s.MainCI(ctx, runner, it.ID, good); code(err) != CodeAlreadyRecorded {
+		t.Fatalf("a second main_ci: %v", err)
+	}
+	// Not done (or not merged at all): refused.
+	notDone := add(t, s, "not merged", "")
+	if _, err := s.MainCI(ctx, runner, notDone.ID, good); code(err) != pipeline.CodeWrongStage {
+		t.Fatalf("an open item: %v", err)
+	}
+	if _, err := s.MainCI(ctx, runner, 999, good); code(err) != CodeNotFound {
+		t.Fatalf("no item: %v", err)
+	}
+}

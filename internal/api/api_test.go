@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/clock"
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 	"github.com/alexberardi/jarvis-loop/internal/store"
 )
 
@@ -577,7 +578,7 @@ func (e *env) toLand(risk string, paths []string) int64 {
 	e.advance(id, "reproduced", map[string]string{"area": "a", "size": "S", "risk": risk, "resources": ""}, 200)
 	e.mustClaim("builder", id, "build")
 	e.upload(runnerTok, id, "e.txt", []byte("e"), 201)
-	e.advanceWith(id, "pr_opened", map[string]string{"repo": "r", "pr": "1", "branch": "b", "head_sha": shaA}, paths, 200)
+	e.advanceWith(id, "pr_opened", map[string]string{"repo": "alexberardi/jarvis-server", "pr": "1", "branch": "b", "head_sha": shaA}, paths, 200)
 	e.mustClaim("reviewer", id, "review")
 	e.advance(id, "approved", map[string]string{"summary": "ok", "head_sha": shaA}, 200)
 	return id
@@ -682,10 +683,12 @@ func TestHoldRulesInControl(t *testing.T) {
 			Name     string   `json:"name"`
 			Glob     string   `json:"glob"`
 			Statuses []string `json:"statuses"`
+			Repo     string   `json:"repo"`
 		} `json:"hold_rules"`
 	}
 	e.do(runnerTok, "GET", "/control", nil, 200, &ctl)
-	if len(ctl.HoldRules) != 8 || ctl.HoldRules[0].Glob != "internal/modules/auth/**" {
+	if len(ctl.HoldRules) != len(pipeline.DefaultHoldRules()) || ctl.HoldRules[0].Glob != "internal/modules/auth/**" ||
+		ctl.HoldRules[0].Repo != "alexberardi/jarvis-server" {
 		t.Fatalf("default hold rules: %+v", ctl.HoldRules)
 	}
 	e.refused(userTok, "PUT", "/control", map[string]any{"hold_rules": []map[string]any{{"name": "x", "glob": "/abs"}}}, 400, "invalid_field")
@@ -753,4 +756,42 @@ func TestOpenItemsList(t *testing.T) {
 		t.Fatalf("all items %+v", out.Items)
 	}
 	e.refused(userTok, "GET", "/items?open=maybe", nil, 400, "invalid_field")
+}
+
+// Land's back_to_review: a new head goes to review, the approval for the old one is void.
+func TestBackToReviewFromLand(t *testing.T) {
+	e := newEnv(t)
+	id := e.toLand("normal", []string{"M internal/x.go"})
+	e.mustClaim("lander", id, "land")
+	e.advanceWith(id, "back_to_review", map[string]string{"notes": "the PR head moved since review", "head_sha": shaB}, nil, 400)
+	e.advanceWith(id, "back_to_review", map[string]string{"notes": "the PR head moved since review", "head_sha": shaB}, []string{"M internal/x.go"}, 200)
+	d := e.get(id)
+	if d.Item.Stage != "review" || d.Item.HeadSHA != shaB {
+		t.Fatalf("after back_to_review: %+v", d.Item)
+	}
+	// The builder still cannot review the new head.
+	if c := e.claim(runnerTok, "builder"); c != nil {
+		t.Fatalf("the builder got the review of the new head: %+v", c)
+	}
+}
+
+// main_ci: the runner that merged the item records main's CI once the item is done.
+func TestMainCIEventRoute(t *testing.T) {
+	e := newEnv(t)
+	id := e.toLand("normal", []string{"M internal/x.go"})
+	ev := map[string]any{"kind": "main_ci", "data": map[string]any{"result": "green", "urls": []string{"https://github.com/o/r/actions/runs/1"}}}
+	path := fmt.Sprintf("/items/%d/events", id)
+	e.mustClaim("lander", id, "land")
+	e.refused(runnerTok, "POST", path, ev, 409, "wrong_stage") // not merged yet
+	e.advanceWith(id, "merged", map[string]string{"merge_sha": shaM, "head_sha": shaA}, []string{"M internal/x.go"}, 200)
+	e.refused(userTok, "POST", path, ev, 403, "forbidden")
+	e.refused(otherTok, "POST", path, ev, 403, "not_your_merge")
+	e.refused(runnerTok, "POST", path, map[string]any{"kind": "main_ci", "data": map[string]any{"result": "maybe"}}, 400, "invalid_field")
+	e.do(runnerTok, "POST", path, ev, 201, nil)
+	e.refused(runnerTok, "POST", path, ev, 409, "already_recorded")
+	d := e.get(id)
+	last := d.Events[len(d.Events)-1]
+	if last.Kind != "main_ci" || last.Actor != "runner:devbox" || last.Data["result"] != "green" {
+		t.Fatalf("event %+v", last)
+	}
 }

@@ -113,7 +113,7 @@ func TestDefaultHoldRules(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		hits := MatchHoldRules(rules, paths)
+		hits := MatchHoldRules(rules, ServerRepo, paths)
 		if c.want == "" {
 			if len(hits) != 0 {
 				t.Errorf("%q matched %v, want nothing", c.line, hits)
@@ -145,9 +145,118 @@ func TestHoldRuleValidate(t *testing.T) {
 	} {
 		wantCode(t, r.Validate(), CodeInvalidField)
 	}
+	for _, repo := range []string{"jarvis-loop", "a/b/c", "/x", "x/", "a b/c"} {
+		wantCode(t, HoldRule{Name: "x", Glob: "a/**", Repo: repo}.Validate(), CodeInvalidField)
+	}
+	wantCode(t, HoldRule{Name: "x", Glob: "a/**", Repo: "alexberardi/jarvis-loop"}.Validate(), "")
 	c := DefaultControl()
 	c.HoldRules = append(c.HoldRules, c.HoldRules[0])
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("duplicate rule names: %v", err)
+	}
+	// The same name in two repos is two rules (both repos have a "ci" rule).
+	c = DefaultControl()
+	c.HoldRules = []HoldRule{{Name: "ci", Glob: "a/**", Repo: "o/one"}, {Name: "ci", Glob: "a/**", Repo: "o/two"}, {Name: "ci", Glob: "a/**"}}
+	wantCode(t, c.Validate(), "")
+}
+
+// A rule with a repo applies only to that repo's items; a rule without one to every repo. An item
+// whose repo is not known yet gets every rule (holding more is the safe direction), and an item
+// whose repo is a bare name (a runner config key) matches the rule's repo by name.
+func TestPerRepoHoldRules(t *testing.T) {
+	rules := []HoldRule{
+		{Name: "server-auth", Glob: "auth/**", Repo: "o/server"},
+		{Name: "loop-auth", Glob: "auth/**", Repo: "o/loop"},
+		{Name: "everywhere", Glob: "ci/**"},
+	}
+	paths, _ := ParseChangedPaths([]string{"M auth/x.go", "M ci/y.yml"})
+	names := func(repo string) []string {
+		var out []string
+		for _, m := range MatchHoldRules(rules, repo, paths) {
+			out = append(out, m.Rule)
+		}
+		return out
+	}
+	cases := map[string]string{
+		"o/server": "server-auth everywhere",
+		"o/loop":   "loop-auth everywhere",
+		"o/other":  "everywhere",
+		"server":   "server-auth everywhere",
+		"x/server": "everywhere",
+		"":         "server-auth loop-auth everywhere",
+	}
+	for repo, want := range cases {
+		if got := strings.Join(names(repo), " "); got != want {
+			t.Errorf("repo %q: rules %q, want %q", repo, got, want)
+		}
+	}
+}
+
+// jarvis-loop's own rules (docs/phases/06-land.md): who may approve or merge, token handling and
+// the landing gates are held, so the land script never merges a change to itself unattended.
+func TestJarvisLoopHoldRules(t *testing.T) {
+	rules := DefaultHoldRules()
+	held := func(repo string, lines ...string) []HoldMatch {
+		t.Helper()
+		paths, err := ParseChangedPaths(lines)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return MatchHoldRules(rules, repo, paths)
+	}
+	// Item #2's actual paths (the first real run, 2026-10-15) are not held.
+	if m := held(LoopRepo, "M cmd/loop/main.go", "M internal/slack/bot.go", "M internal/slack/commands.go",
+		"A scenarios/16-show-repo.json", "M scenarios/01-happy-path.json"); len(m) != 0 {
+		t.Fatalf("item #2's paths are held: %v", m)
+	}
+	cases := []struct{ line, rule string }{
+		{"M internal/pipeline/pipeline.go", "approval"},
+		{"A internal/pipeline/approve.go", "approval"},
+		{"M internal/runner/land.go", "land"},
+		{"M internal/runner/land_gh.go", "land"},
+		{"M internal/runner/pr.go", "land"},
+		{"M internal/runner/git.go", "land"},
+		{"M internal/api/auth.go", "api-auth"},
+		{"M internal/slack/approve.go", "slack-approver"},
+		{"M internal/slack/env.go", "tokens"},
+		{"M internal/runner/config.go", "tokens"},
+		{"M internal/runner/client.go", "tokens"},
+		{"M internal/guard/guard.go", "guard"},
+		{"M cmd/loop-guard/main.go", "guard"},
+		{"M internal/runner/settings.go", "guard"},
+		{"M .github/workflows/ci.yml", "ci"},
+		{"D internal/slack/text_test.go", "deleted-test"},
+		{"R internal/x_test.go internal/x.go", "deleted-test"},
+		{"D scenarios/04-someone-else.json", "scenario-removed"},
+		{"R scenarios/04-someone-else.json scenarios/x.json", "scenario-removed"},
+	}
+	for _, c := range cases {
+		found := false
+		m := held(LoopRepo, c.line)
+		for _, h := range m {
+			found = found || h.Rule == c.rule
+		}
+		if !found {
+			t.Errorf("%q in jarvis-loop matched %v, want rule %q", c.line, m, c.rule)
+		}
+	}
+	for _, line := range []string{"M internal/slack/bot.go", "M internal/runner/runner.go", "M internal/runner/stages.go",
+		"A scenarios/16-auto-land.json", "M internal/slack/text_test.go", "M docs/DESIGN.md"} {
+		if m := held(LoopRepo, line); len(m) != 0 {
+			t.Errorf("%q in jarvis-loop is held: %v", line, m)
+		}
+	}
+	// The repos do not share rules: jarvis-server's auth path is nothing to jarvis-loop, and
+	// jarvis-loop's pipeline is nothing to jarvis-server.
+	if m := held(LoopRepo, "M internal/modules/auth/x.go"); len(m) != 0 {
+		t.Errorf("a jarvis-server rule applied to jarvis-loop: %v", m)
+	}
+	if m := held(ServerRepo, "M internal/pipeline/pipeline.go"); len(m) != 0 {
+		t.Errorf("a jarvis-loop rule applied to jarvis-server: %v", m)
+	}
+	for _, r := range rules {
+		if r.Repo != ServerRepo && r.Repo != LoopRepo {
+			t.Errorf("default rule %q has repo %q; every default names its repo", r.Name, r.Repo)
+		}
 	}
 }

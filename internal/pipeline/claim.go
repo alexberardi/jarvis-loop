@@ -51,15 +51,18 @@ func (c Control) Validate() error {
 			return errf(CodeInvalidField, "limit %s must be 0 or more", k)
 		}
 	}
-	names := map[string]bool{}
+	// A name may repeat within a repo for several globs (jarvis-loop's "land" rule covers three
+	// files), but the same (repo, name, glob) twice is a mistake.
+	seen := map[[3]string]bool{}
 	for _, r := range c.HoldRules {
 		if err := r.Validate(); err != nil {
 			return err
 		}
-		if names[r.Name] {
-			return errf(CodeInvalidField, "duplicate hold rule name %q", r.Name)
+		k := [3]string{r.Repo, r.Name, r.Glob}
+		if seen[k] {
+			return errf(CodeInvalidField, "duplicate hold rule name %q (repo %q, glob %q)", r.Name, r.Repo, r.Glob)
 		}
-		names[r.Name] = true
+		seen[k] = true
 	}
 	return nil
 }

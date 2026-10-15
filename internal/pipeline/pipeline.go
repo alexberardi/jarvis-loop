@@ -76,6 +76,7 @@ const (
 	Merged          Outcome = "merged"
 	Hold            Outcome = "hold"
 	BackToBuild     Outcome = "back_to_build"
+	BackToReview    Outcome = "back_to_review"
 	UsageLimit      Outcome = "usage_limit"
 	Failed          Outcome = "failed"
 )
@@ -240,7 +241,7 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 	allowed := map[Outcome][]Stage{
 		Reproduced: {Triage}, NotReproducible: {Triage}, Question: {Triage, Build},
 		PROpened: {Build}, Approved: {Review}, Bounce: {Review},
-		Merged: {Land}, Hold: {Land}, BackToBuild: {Land},
+		Merged: {Land}, Hold: {Land}, BackToBuild: {Land}, BackToReview: {Land},
 		UsageLimit: {Triage, Build, Review, Land}, Failed: {Triage, Build, Review, Land},
 	}
 	stages, known := allowed[a.Outcome]
@@ -270,9 +271,15 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		data["changed_paths"] = a.ChangedPaths
 		return paths, nil
 	}
+	// The rules that apply are the item's repo's; pr_opened reports the repo (the item may have
+	// none yet).
+	ruleRepo := it.Repo
+	if a.Outcome == PROpened {
+		ruleRepo = strings.TrimSpace(a.Fields["repo"])
+	}
 	// holdReasons computes the rule hits and records them on the event.
 	holdReasons := func(paths []ChangedPath, extra ...string) []string {
-		matches := MatchHoldRules(a.HoldRules, paths)
+		matches := MatchHoldRules(a.HoldRules, ruleRepo, paths)
 		reasons := []string{}
 		for _, m := range matches {
 			reasons = append(reasons, m.String())
@@ -465,7 +472,36 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if _, err := f.need("reason"); err != nil {
 			return Transition{}, err
 		}
+		// The land script sends the paths it computed; risk is recomputed on them.
+		if len(a.ChangedPaths) > 0 {
+			paths, err := needPaths()
+			if err != nil {
+				return Transition{}, err
+			}
+			raiseRisk(&it, holdReasons(paths))
+		}
 		it.Stage = Build
+	case BackToReview:
+		// The PR's head moved since review (or land merged the base in): the new head gets a
+		// fresh review by an agent other than the builder.
+		if _, err := f.need("notes"); err != nil {
+			return Transition{}, err
+		}
+		head, err := f.sha("head_sha")
+		if err != nil {
+			return Transition{}, err
+		}
+		paths, err := needPaths()
+		if err != nil {
+			return Transition{}, err
+		}
+		if it.Approval != nil && it.Approval.HeadSHA != head {
+			it.Approval = nil // an approval is for the commit the user saw
+			data["approval_voided"] = true
+		}
+		it.HeadSHA = head
+		raiseRisk(&it, holdReasons(paths))
+		it.Stage = Review
 	case UsageLimit:
 		if _, err := f.need("error"); err != nil {
 			return Transition{}, err

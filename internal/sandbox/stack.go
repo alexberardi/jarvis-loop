@@ -26,6 +26,7 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/api"
 	"github.com/alexberardi/jarvis-loop/internal/clock"
 	"github.com/alexberardi/jarvis-loop/internal/loopd"
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 	"github.com/alexberardi/jarvis-loop/internal/runner"
 	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/slackfake"
@@ -205,8 +206,10 @@ func StartStack(opts Options) (st *Stack, err error) {
 	if s.Store, err = store.Open(filepath.Join(dir, "loopd"), clk); err != nil {
 		return nil, err
 	}
-	// loopd's --repos.
+	// loopd's --repos, and the built-in hold rules pointed at the scratch repos: jarvis-server's
+	// at demo, jarvis-loop's at the stand-in for jarvis-loop.
 	s.Store.SetRepos([]string{RepoSlug, LoopSlug})
+	s.Store.SetDefaultHoldRules(SandboxHoldRules())
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -289,6 +292,20 @@ func StartStack(opts Options) (st *Stack, err error) {
 		go func() { defer s.bg.Done(); s.Runner.Run(s.ctx) }()
 	}
 	return s, nil
+}
+
+// SandboxHoldRules are the built-in hold rules with their repos swapped for the sandbox's: the
+// rules for jarvis-server apply to demo, jarvis-loop's to the sandbox's jarvis-loop.
+func SandboxHoldRules() []pipeline.HoldRule {
+	swap := map[string]string{pipeline.ServerRepo: RepoSlug, pipeline.LoopRepo: LoopSlug}
+	var out []pipeline.HoldRule
+	for _, r := range pipeline.DefaultHoldRules() {
+		if to, ok := swap[r.Repo]; ok {
+			r.Repo = to
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // agentEnv is the environment the fake claude (and the runner's helper commands) start with: the
