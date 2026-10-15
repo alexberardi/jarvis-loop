@@ -1,0 +1,34 @@
+{
+  "name": "ci-timeout",
+  "about": "A repo with no CI reporting on the PR's head: land does not take \"no checks\" as a pass; it waits (heartbeating, so the lease stays live) and after land_ci_wait (30 minutes) gives the item to the user with \"CI still pending\".",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "clock", "advance": "29m"},
+    {"do": "expect", "stage": {"a": "land"}, "leased": {"a": true}, "pr": {"a": {"merge_calls": 0}}},
+    {"do": "clock", "advance": "1m30s"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "needs_you"},
+    "question": {"a": "^CI \\(no checks reported yet\\) still pending after 30m$"},
+    "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
+    "events": [
+      {"item": "a", "kind": "land_waiting", "data": {"waiting_for": "^CI \\(no checks reported yet\\)$"}, "count": 1},
+      {"item": "a", "kind": "advanced", "outcome": "failed", "actor": "runner", "count": 1}
+    ],
+    "no_events": [
+      {"item": "a", "kind": "lease_expired"},
+      {"item": "a", "kind": "run_overtime"}
+    ],
+    "messages": [
+      {"thread": "a", "text": "<@U0C9AFPAMD4> #\\d+ needs you: CI \\(no checks reported yet\\) still pending after 30m"}
+    ]
+  }
+}

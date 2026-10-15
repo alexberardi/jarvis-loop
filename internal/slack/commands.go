@@ -63,7 +63,7 @@ func (b *Bot) runCommand(ctx context.Context, c command) string {
 	rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(c.Text), fields[0]))
 	actor := actorPrefix + c.UserID
 	approverOnly := map[string]bool{"add": true, "priority": true, "agents": true, "stop": true, "resume": true, "usage": true}
-	if approverOnly[verb] && c.UserID != Approver {
+	if approverOnly[verb] && !IsApprover(c.UserID) {
 		var itemID int64
 		if verb == "priority" && len(args) > 0 {
 			itemID, _ = strconv.ParseInt(strings.TrimPrefix(args[0], "#"), 10, 64)

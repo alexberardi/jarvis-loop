@@ -63,6 +63,26 @@ type Store struct {
 
 	reposMu sync.RWMutex
 	repos   []string
+	rules   []pipeline.HoldRule // the built-in hold rules; nil: pipeline.DefaultHoldRules
+}
+
+// SetDefaultHoldRules replaces the built-in hold rules (what control's hold_rules means while the
+// user has set none). Nothing is recorded: like SetRepos, it is configuration, not a change. The
+// loop's harness uses it to point the defaults at its scratch repos.
+func (s *Store) SetDefaultHoldRules(rules []pipeline.HoldRule) {
+	s.reposMu.Lock()
+	defer s.reposMu.Unlock()
+	s.rules = append([]pipeline.HoldRule(nil), rules...)
+}
+
+// DefaultHoldRules are the built-in hold rules.
+func (s *Store) DefaultHoldRules() []pipeline.HoldRule {
+	s.reposMu.RLock()
+	defer s.reposMu.RUnlock()
+	if s.rules == nil {
+		return pipeline.DefaultHoldRules()
+	}
+	return append([]pipeline.HoldRule(nil), s.rules...)
 }
 
 // SetRepos sets the repo slugs (owner/name) loopd is configured with (loopd's --repos): the only
@@ -584,7 +604,7 @@ func (s *Store) human(ctx context.Context, actor string, id int64, action string
 
 // ---- control ----
 
-func loadControl(q interface {
+func (s *Store) loadControl(q interface {
 	QueryRow(string, ...any) *sql.Row
 }) (pipeline.Control, error) {
 	var c pipeline.Control
@@ -600,7 +620,7 @@ func loadControl(q interface {
 		return c, err
 	}
 	if rules == "" {
-		c.HoldRules = pipeline.DefaultHoldRules()
+		c.HoldRules = s.DefaultHoldRules()
 		return c, nil
 	}
 	err = json.Unmarshal([]byte(rules), &c.HoldRules)
@@ -630,7 +650,7 @@ func saveControl(tx *sql.Tx, c pipeline.Control) error {
 
 // Control returns the current control row.
 func (s *Store) Control(ctx context.Context) (pipeline.Control, error) {
-	return loadControl(s.r)
+	return s.loadControl(s.r)
 }
 
 // ControlPatch changes some of the control row; Limits are merged key by key, HoldRules
@@ -647,7 +667,7 @@ type ControlPatch struct {
 func (s *Store) SetControl(ctx context.Context, actor string, p ControlPatch) (pipeline.Control, error) {
 	var out pipeline.Control
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		old, err := loadControl(tx)
+		old, err := s.loadControl(tx)
 		if err != nil {
 			return err
 		}
@@ -715,7 +735,7 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 			runnerName, strings.Join(caps, ","), now.UnixNano()); err != nil {
 			return err
 		}
-		ctl, err := loadControl(tx)
+		ctl, err := s.loadControl(tx)
 		if err != nil {
 			return err
 		}
@@ -796,7 +816,7 @@ func endLease(tx *sql.Tx, id string, at time.Time, reason string) error {
 func (s *Store) Sweep(ctx context.Context) error {
 	// A cheap read first, so most requests do not take the write lock.
 	now := s.clock.Now()
-	ctl, err := loadControl(s.r)
+	ctl, err := s.loadControl(s.r)
 	if err != nil {
 		return err
 	}
@@ -811,7 +831,7 @@ func (s *Store) Sweep(ctx context.Context) error {
 
 func (s *Store) sweep(tx *sql.Tx) error {
 	now := s.clock.Now()
-	ctl, err := loadControl(tx)
+	ctl, err := s.loadControl(tx)
 	if err != nil {
 		return err
 	}
@@ -876,7 +896,7 @@ func (s *Store) Heartbeat(ctx context.Context, runnerName, leaseID, note string)
 			stop = true
 			return nil
 		}
-		ctl, err := loadControl(tx)
+		ctl, err := s.loadControl(tx)
 		if err != nil {
 			return err
 		}
@@ -960,7 +980,7 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM evidence WHERE lease_id = ?`, l.ID).Scan(&n); err != nil {
 			return err
 		}
-		ctl, err := loadControl(tx)
+		ctl, err := s.loadControl(tx)
 		if err != nil {
 			return err
 		}
@@ -980,7 +1000,7 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 			return err
 		}
 		if tr.ActiveAgentsZero {
-			ctl, err := loadControl(tx)
+			ctl, err := s.loadControl(tx)
 			if err != nil {
 				return err
 			}

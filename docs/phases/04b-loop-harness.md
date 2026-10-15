@@ -93,7 +93,7 @@ cannot silently check nothing. Steps (`"do"`):
 | --- | --- |
 | `add` `item`, `title`, [`priority`], [`via`: `cli`\|`slack`], [`text`] | add an item (CLI: `POST /items` with repo `demo`; Slack: `/loop add <title>`, or `/loop add <text>` as typed, repo and priority words included) |
 | `triage` / `review` `item` | claim the stage by hand (a `hand` runner token, as `loop claim`/`loop advance`) and finish it: reproduced with evidence / approved for the PR head |
-| `land` `item`, `outcome` (`hold`\|`merged`\|`back_to_build`), [`reason`] | the land stage by hand, with the PR's changed paths |
+| `land` `item`, `outcome` (`hold`\|`merged`\|`back_to_build`), [`reason`] | the land stage by hand, with the PR's changed paths (a scenario whose `stages` include `land` lets the runner's land script do it instead) |
 | `script` `item`, `play`, [`file`], [`for`], [`picks`] | how the fake claude plays the item's runs of a stage (`for`: `triage`, `build` (default), `review`). Build: `good`, `escape`, `hang`, `ignore_term`, `usage_limit`, `question`, `exit3`, …; `file`: the path it changes; after a bounce it addresses `.loop/review/`. Triage: `reproduce` (default; `picks`: the repo it names when the item has none), `duplicate`, `triage_question`, `triage_bad_repo`. Review: `approve` (default), `bounce`, `review_commit` |
 | `runner` [`claims`: alias\|`none`] | the runner polls once: claims (and works in the background) or finds nothing |
 | `agent_running` `item` | wait until the item's agent is mid-run (a hanging fake) |
@@ -103,6 +103,9 @@ cannot silently check nothing. Steps (`"do"`):
 | `press` / `choose` `item` or `message: control`, `button` (action_id), [`value`], `as` | press a button / pick a menu option on the newest message that has it |
 | `command` `text`, `as`, [`answer` regexp] | `/loop <text>`; the ephemeral answer must match |
 | `control` `active_agents`, `max_run_minutes`, `stopped` | `PUT /control` as the CLI |
+| `ci` [`item`, `checks`: {name: `pass`\|`fail`\|`pending`\|`cancel`\|`skip`}], [`main`: {name: `pass`\|`fail`\|`pending`}] | the CI checks on the item's PR head now (a new head has none), and how the workflow runs on main's merge commits go (phase 6) |
+| `push` `item` or `branch` (`main`), `file`, `text` | someone else's commit on the item's branch, or on demo's main |
+| `github` [`refuse_merges`: n], [`item` + `merge_by_hand`] | GitHub refuses the next n merges; the item's PR is merged on GitHub outside the loop |
 | `expect` / `wait` + expectations | as below, at that point |
 
 Expectations (`expect`, in a step or at the end) are retried for `within` (default 10 s); the
@@ -115,9 +118,10 @@ negative ones are checked once the loop has gone quiet:
 | `messages` (in this order) / `no_messages`: [{`thread` or `parent`: alias, `channel` (`loop`\|`digest`), `from` (`bot`, `approver`, `other`), `kind` (`message`, `ephemeral`, `command`, `response`), `to`, `text` regexp, `buttons`: [labels], `pinned`}] | such messages exist, as they stand after edits / none do |
 | `control`: {`active_agents`, `stopped`} | loopd's control |
 | `prs`: n | PRs opened on the fake GitHub |
-| `pr`: {alias: {`number`, `repo`, `title` regexp, `body` regexp, `edits`, `comments`, `comment` regexp}} | the PR the runner opened for the item, at its branch's head: how often it updated it, how many comments (review verdicts) it posted, the newest |
+| `pr`: {alias: {`number`, `repo`, `title` regexp, `body` regexp, `edits`, `comments`, `comment` regexp, `state`, `merge_calls`}} | the PR the runner opened for the item, at its branch's head: how often it updated it, how many comments (review verdicts) it posted, the newest |
 | `same_prefix`: [stages] | each stage ran at least twice, and every run's prompt starts with that stage's static brief and has the same argv |
-| `remote`: {`branches`: {alias: head-subject regexp}, `files`: {alias: [paths]}, `only`} | the remote's branches; `main` never moved |
+| `remote`: {`branches`: {alias: head-subject regexp}, `files`: {alias: [paths]}, `only`, `main`: alias} | the remote's branches; `main` is where it started or where a merge or `push` put it, and (`main`) is that item's squash commit |
+| `agent_runs`: {stage: n} | the runner started n agent runs for that stage (land starts none) |
 | `absent`: [paths under the stack dir] | they do not exist |
 
 **Always checked, after every step (must-not):** no bot call to a channel other than `#loop` and

@@ -1,0 +1,32 @@
+{
+  "name": "conflict-docs",
+  "about": "The PR's only conflict with main is in docs/: land merges main into the branch in a scratch worktree with git's union driver (both sides kept, no -X), pushes the merge to the item's loop/ branch (not forced), and sends the new head back to review for a fresh review; nothing is merged yet.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Document the digest"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "good", "file": "docs/notes.md"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "push", "branch": "main", "file": "docs/notes.md", "text": "main's own notes\n"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review"},
+    "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
+    "remote": {"branches": {"a": "^Merge main into loop/1-document-the-digest \\(loop land\\)$"}, "only": true},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "back_to_review", "actor": "runner",
+       "data": {"notes": "conflicts only in docs/ \\(docs/notes\\.md\\), both sides kept by git's union merge", "head_sha": "^[0-9a-f]{40}$",
+                "changed_paths": "docs/notes\\.md"}, "count": 1}
+    ],
+    "messages": [
+      {"thread": "a", "text": "^Claimed for land\\.$"},
+      {"thread": "a", "text": "^Back to review: Land merged main into the branch \\(conflicts only in docs/"}
+    ]
+  }
+}

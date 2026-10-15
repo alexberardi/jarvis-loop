@@ -1,0 +1,30 @@
+{
+  "name": "conflict-code",
+  "about": "While the PR waits to land, a change to the same file lands on main. GitHub calls the PR conflicting; land tries to merge main into the branch, git reports a real conflict outside docs/, and the item goes back to build naming the file. Nothing is pushed or merged.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "push", "branch": "main", "file": "feature.txt", "text": "main's own version of the feature\n"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "build"},
+    "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
+    "remote": {"branches": {"a": "^feat: add a feature$"}, "only": true},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "back_to_build", "actor": "runner",
+       "data": {"reason": "^Merge conflict with main outside docs/: feature\\.txt$"}, "count": 1}
+    ],
+    "messages": [
+      {"thread": "a", "text": "^Claimed for land\\.$"},
+      {"thread": "a", "text": "^Back to build: Merge conflict with main outside docs/: feature\\.txt$"}
+    ]
+  }
+}

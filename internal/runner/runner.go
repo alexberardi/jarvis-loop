@@ -25,7 +25,8 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/guard"
 )
 
-// Runner claims triage, build and review items (config stages) and runs one agent per item.
+// Runner claims triage, build and review items (config stages) and runs one agent per item; it
+// works land items itself, with no agent (land*.go).
 type Runner struct {
 	Cfg    *Config
 	Client *Client
@@ -41,12 +42,16 @@ type Runner struct {
 	Push func(ctx context.Context, mirror, branch string) error
 	// VerifyPR checks the PR on GitHub; nil skips the check (the dry run, tests).
 	VerifyPR func(ctx context.Context, slug string, pr int) (PRInfo, error)
+	// Land asks GitHub what the land gates need and merges (GH; nil: this runner cannot land).
+	Land LandGitHub
 	// HeartbeatEvery and KillGrace default to 60 s and 10 s.
 	HeartbeatEvery time.Duration
 	KillGrace      time.Duration
 
 	paused   atomic.Value // string: why the runner stopped claiming
 	mirrorMu sync.Map     // mirror path -> *sync.Mutex
+	watching atomic.Int64 // main-CI watches running
+	bg       sync.WaitGroup
 }
 
 // PRInfo is what GitHub says about a PR.
@@ -101,6 +106,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		}()
 	}
 	wg.Wait()
+	r.bg.Wait()
 	return nil
 }
 
@@ -120,6 +126,10 @@ func (r *Runner) ClaimAndRun(ctx context.Context) (bool, error) {
 	cl, err := r.Client.Claim(ctx, agent, r.Cfg.Capabilities, r.Cfg.Stages)
 	if err != nil || cl == nil {
 		return false, err
+	}
+	if cl.Stage == StageLand {
+		r.land(ctx, cl, agent) // a script, not an agent
+		return true, nil
 	}
 	r.work(ctx, cl, agent)
 	return true, nil

@@ -2,8 +2,6 @@ package slack
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,16 +55,6 @@ type Bot struct {
 	pending  map[string]*pendingApproval // by id
 	digestTS time.Time                   // the boundary the failures below are for
 	digestNG int                         // failed attempts to post that digest
-}
-
-type pendingApproval struct {
-	id      string
-	itemID  int64
-	sha     string
-	words   string
-	due     time.Time
-	echoTS  string
-	channel string
 }
 
 const (
@@ -247,6 +235,7 @@ func (b *Bot) handleEvent(ctx context.Context, e store.Event) {
 			return
 		}
 		if e.Kind == "created" {
+			b.urgentFinding(ctx, d, ts)
 			return
 		}
 	} else if e.Kind == "created" {
@@ -259,6 +248,17 @@ func (b *Bot) handleEvent(ctx context.Context, e store.Event) {
 	pm := b.parentMessage(d)
 	pm.TS = ts
 	b.update(ctx, "parent update", pm)
+}
+
+// urgentFinding mentions the approver in the thread of a P1 the loop filed itself (a red main):
+// "drop everything" work nobody asked for must reach someone. The user's own P1s need no ping.
+func (b *Bot) urgentFinding(ctx context.Context, d store.Detail, ts string) {
+	it := d.Item
+	if it.Priority != "P1" || it.Source == "user" {
+		return
+	}
+	text := fmt.Sprintf("<@%s> P1, filed by the loop: %s", Approver, b.field(it.Title, 300, it.ID))
+	b.post(ctx, "urgent finding", Message{Channel: ChannelLoop, ThreadTS: ts, Text: text, Blocks: []map[string]any{section(text)}})
 }
 
 func (b *Bot) hint(id int64) string {
@@ -340,7 +340,7 @@ func selectMenu(actionID string, labels, values []string, current string) map[st
 func (b *Bot) parentMessage(d store.Detail) Message {
 	it := d.Item
 	head := fmt.Sprintf("#%d %s", it.ID, b.field(it.Title, 300, it.ID))
-	line := fmt.Sprintf("Priority *%s* · Stage *%s* · Source %s · Repo %s", it.Priority, d.Display, Escape(it.Source), repoText(it))
+	line := fmt.Sprintf("Priority *%s* · Stage *%s* · Source %s · Repo %s", it.Priority, d.Display+landWaiting(d), Escape(it.Source), repoText(it))
 	if pr := b.prLink(it); pr != "" {
 		line += " · " + pr
 	}
@@ -354,6 +354,24 @@ func (b *Bot) parentMessage(d store.Detail) Message {
 		sec["accessory"] = selectMenu("priority", priorityNames, []string{"P1", "P2", "P3", "P4", "P5"}, it.Priority)
 	}
 	return Message{Channel: ChannelLoop, Text: fmt.Sprintf("%s — %s, %s", head, it.Priority, d.Display), Blocks: []map[string]any{sec}}
+}
+
+// landWaiting is what a land run has been waiting on for a while (its land_waiting event, while
+// that is the item's latest), for the parent's stage line: ", waiting for CI (check) since 14:05
+// UTC".
+func landWaiting(d store.Detail) string {
+	if d.Item.Stage != pipeline.Land || len(d.Events) == 0 {
+		return ""
+	}
+	e := d.Events[len(d.Events)-1]
+	if e.Kind != "land_waiting" {
+		return ""
+	}
+	out := ", waiting for " + Escape(Clip(str(e.Data, "waiting_for"), 120, ""))
+	if t, err := time.Parse(time.RFC3339, str(e.Data, "since")); err == nil {
+		out += " since " + t.UTC().Format("15:04") + " UTC"
+	}
+	return out
 }
 
 // repoText is the item's repo for a message, or why there is none: until triage has run, triage
@@ -449,6 +467,10 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 		text = fmt.Sprintf("Low prompt-cache hit ratio on this run (%s over %s turns).", Escape(str(e.Data, "cache_hit_ratio")), Escape(str(e.Data, "num_turns")))
 	case "approval_cancelled":
 		text = fmt.Sprintf("Reply approval cancelled by %s; still held.", who(e.Actor))
+	case "land_waiting":
+		return Message{}, false // pending CI does not post; the parent's stage line says it
+	case "main_ci":
+		text = b.mainCILine(e, id)
 	case "advanced":
 		switch pipeline.Outcome(e.Outcome) {
 		case pipeline.Reproduced:
@@ -474,8 +496,17 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 			text = fmt.Sprintf("Bounced back to build (%v): %s", e.Data["bounce_count"], f("notes", 600))
 		case pipeline.Merged:
 			text = fmt.Sprintf("Merged %s as `%s`. Done.", b.prLink(it), short(str(e.Data, "merge_sha")))
+			if str(e.Data, "main_ci") == "watching" {
+				where := ""
+				if str(e.Data, "merged_outside") == "true" {
+					where = " on GitHub, outside the loop"
+				}
+				text = fmt.Sprintf("Merged %s as `%s`%s; watching main's CI.", b.prLink(it), short(str(e.Data, "merge_sha")), where)
+			}
 		case pipeline.BackToBuild:
 			text = "Back to build: " + f("reason", 400)
+		case pipeline.BackToReview:
+			text = "Back to review: " + f("notes", 400)
 		default:
 			text = fmt.Sprintf("%s → %s.", Escape(e.Outcome), e.To)
 		}
@@ -483,6 +514,30 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 		text = Escape(e.Kind) + "."
 	}
 	return Message{Text: text}, true
+}
+
+// mainCILine is main's CI on an item's merge commit, as the land script recorded it.
+func (b *Bot) mainCILine(e store.Event, id int64) string {
+	sha := short(str(e.Data, "merge_sha"))
+	switch str(e.Data, "result") {
+	case "green":
+		return fmt.Sprintf("main green on `%s`.", sha)
+	case "red":
+		var names []string
+		if list, ok := e.Data["failing"].([]any); ok {
+			for _, x := range list {
+				names = append(names, fmt.Sprint(x))
+			}
+		}
+		failing := b.field(strings.Join(names, ", "), 300, id)
+		if p1, ok := e.Data["p1_item"].(float64); ok && p1 > 0 {
+			return fmt.Sprintf("main red on `%s` (failing: %s): filed #%d (P1).", sha, failing, int64(p1))
+		}
+		return fmt.Sprintf("main red on `%s` (failing: %s); no P1 item could be filed, see `loop show %d`.", sha, failing, id)
+	case "timeout":
+		return fmt.Sprintf("main's CI on `%s` did not finish in time; see the runs on GitHub.", sha)
+	}
+	return "main's CI: " + Escape(str(e.Data, "result")) + "."
 }
 
 // heldMessage asks the approver to decide a held merge, for the head the land stage reported.
@@ -665,16 +720,6 @@ func (b *Bot) HandleEnvelope(ctx context.Context, env Envelope) {
 	}
 }
 
-// refuse tells someone other than the approver that they cannot do this, and records who tried.
-func (b *Bot) refuse(ctx context.Context, channel, user string, itemID int64, action string) {
-	b.ephemeral(ctx, channel, user, "Sorry, only the approver can do that.")
-	err := b.c.Store.Record(ctx, store.Event{ItemID: itemID, Actor: actorPrefix + user, Kind: "refused",
-		Data: map[string]any{"action": action, "code": "not_approver", "message": "only the approver can do that"}})
-	if err != nil {
-		b.c.Log.Error("slack: record refusal", "err", err.Error())
-	}
-}
-
 func (b *Bot) threadReply(ctx context.Context, threadTS, text string) {
 	b.post(ctx, "reply", Message{Channel: ChannelLoop, ThreadTS: threadTS, Text: text})
 }
@@ -702,7 +747,7 @@ func (b *Bot) onMessage(ctx context.Context, m slackEvent) {
 	text := stripMentions(m.Text)
 	switch d.Item.Stage {
 	case pipeline.NeedsYou:
-		if m.User != Approver {
+		if !IsApprover(m.User) {
 			b.refuse(ctx, m.Channel, m.User, id, "answer")
 			return
 		}
@@ -713,7 +758,7 @@ func (b *Bot) onMessage(ctx context.Context, m slackEvent) {
 			b.threadReply(ctx, m.ThreadTS, "Could not record that answer: "+Escape(errMessage(err)))
 		}
 	case pipeline.Held:
-		if m.User != Approver {
+		if !IsApprover(m.User) {
 			b.refuse(ctx, m.Channel, m.User, id, "approve")
 			return
 		}
@@ -722,78 +767,6 @@ func (b *Bot) onMessage(ctx context.Context, m slackEvent) {
 			return
 		}
 		b.startApproval(ctx, d.Item, text, m.ThreadTS)
-	}
-}
-
-func newID() string {
-	b := make([]byte, 8)
-	rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-// startApproval echoes a reply approval with a Cancel button; it applies when the window ends.
-func (b *Bot) startApproval(ctx context.Context, it pipeline.Item, words, threadTS string) {
-	b.mu.Lock()
-	for _, p := range b.pending {
-		if p.itemID == it.ID {
-			b.mu.Unlock()
-			b.threadReply(ctx, threadTS, "An approval is already waiting to apply; use its Cancel button to stop it.")
-			return
-		}
-	}
-	p := &pendingApproval{id: newID(), itemID: it.ID, sha: it.HeadSHA, words: words, due: b.c.Clock.Now().Add(b.c.ApprovalDelay), channel: ChannelLoop}
-	b.pending[p.id] = p
-	b.mu.Unlock()
-
-	mins := int(b.c.ApprovalDelay.Round(time.Minute) / time.Minute)
-	text := fmt.Sprintf("Approved by you: '%s' for `%s`. Merging in %d minutes.", b.field(words, 500, it.ID), short(p.sha), mins)
-	ts, err := b.post(ctx, "approval echo", Message{Channel: ChannelLoop, ThreadTS: threadTS, Text: text, Blocks: []map[string]any{
-		section(text),
-		{"type": "actions", "block_id": "pending", "elements": []any{button("Cancel", "cancel_approval", p.id, "danger")}},
-	}})
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if err != nil {
-		// The user cannot see a Cancel button, so do not apply it behind their back.
-		delete(b.pending, p.id)
-		return
-	}
-	p.echoTS = ts
-}
-
-// takePending removes and returns pending approvals matching keep.
-func (b *Bot) takePending(keep func(*pendingApproval) bool) []*pendingApproval {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	var out []*pendingApproval
-	for id, p := range b.pending {
-		if keep(p) {
-			out = append(out, p)
-			delete(b.pending, id)
-		}
-	}
-	return out
-}
-
-func (b *Bot) applyDue(ctx context.Context) {
-	now := b.c.Clock.Now()
-	for _, p := range b.takePending(func(p *pendingApproval) bool { return !now.Before(p.due) }) {
-		_, ts, _ := b.c.Store.SlackThread(ctx, p.itemID)
-		_, err := b.c.Store.Approve(ctx, actorPrefix+Approver, p.itemID, p.sha, p.words)
-		var pe *pipeline.Error
-		switch {
-		case err == nil:
-			if p.echoTS != "" {
-				b.update(ctx, "approval echo", Message{Channel: p.channel, TS: p.echoTS,
-					Text: fmt.Sprintf("Approved by you: '%s' for `%s`. Applied.", b.field(p.words, 500, p.itemID), short(p.sha))})
-			}
-		case errors.As(err, &pe) && pe.Code == pipeline.CodeSHAMismatch:
-			d, _ := b.c.Store.GetItem(ctx, p.itemID)
-			b.threadReply(ctx, ts, fmt.Sprintf("Not approved: your reply was for `%s`, but the PR head is now `%s`. Approve again for the new commit.",
-				short(p.sha), short(d.Item.HeadSHA)))
-		default:
-			b.threadReply(ctx, ts, "Not approved: "+Escape(errMessage(err)))
-		}
 	}
 }
 
@@ -807,7 +780,7 @@ func (b *Bot) onMention(ctx context.Context, m slackEvent) {
 			return
 		}
 	}
-	if m.User != Approver {
+	if !IsApprover(m.User) {
 		b.refuse(ctx, m.Channel, m.User, 0, "add")
 		return
 	}
@@ -846,7 +819,7 @@ func (b *Bot) onActions(ctx context.Context, p interaction) {
 			}
 			b.mu.Unlock()
 		}
-		if user != Approver {
+		if !IsApprover(user) {
 			b.refuse(ctx, channel, user, itemID, a.ActionID)
 			continue
 		}
@@ -857,38 +830,14 @@ func (b *Bot) onActions(ctx context.Context, p interaction) {
 				b.ephemeral(ctx, channel, user, Escape(errMessage(err)))
 			}
 		case "approve":
-			_, sha, _ := strings.Cut(a.Value, ":")
-			b.cancelPending(itemID)
-			_, err := b.c.Store.Approve(ctx, actor, itemID, sha, "Approve merge")
-			var pe *pipeline.Error
-			switch {
-			case err == nil:
-				b.update(ctx, "held message", Message{Channel: channel, TS: msgTS,
-					Text: fmt.Sprintf("#%d: approved by you for `%s` (button).", itemID, short(sha))})
-			case errors.As(err, &pe) && pe.Code == pipeline.CodeSHAMismatch:
-				d, _ := b.c.Store.GetItem(ctx, itemID)
-				_, ts, _ := b.c.Store.SlackThread(ctx, itemID)
-				b.threadReply(ctx, ts, fmt.Sprintf("Not approved: that button was for `%s`, but the PR head is now `%s`. Use the latest held message.",
-					short(sha), short(d.Item.HeadSHA)))
-			default:
-				b.ephemeral(ctx, channel, user, "Not approved: "+Escape(errMessage(err)))
-			}
+			b.approveButton(ctx, channel, msgTS, user, itemID, a.Value)
 		case "keep_holding":
 			b.cancelPending(itemID)
 			if _, err := b.c.Store.Hold(ctx, actor, itemID, "Keep holding"); err != nil {
 				b.ephemeral(ctx, channel, user, Escape(errMessage(err)))
 			}
 		case "cancel_approval":
-			ps := b.takePending(func(pa *pendingApproval) bool { return pa.id == a.Value })
-			if len(ps) == 0 {
-				b.ephemeral(ctx, channel, user, "Nothing to cancel: that approval was already applied or cancelled.")
-				continue
-			}
-			pa := ps[0]
-			b.c.Store.Record(ctx, store.Event{ItemID: pa.itemID, Actor: actor, Kind: "approval_cancelled",
-				Data: map[string]any{"words": pa.words, "head_sha": pa.sha}})
-			b.update(ctx, "approval echo", Message{Channel: channel, TS: msgTS,
-				Text: fmt.Sprintf("Cancelled: '%s' was not applied. #%d stays held.", b.field(pa.words, 500, pa.itemID), pa.itemID)})
+			b.cancelApproval(ctx, channel, msgTS, user, a.Value)
 		case "agents_select", "agents_minus", "agents_plus":
 			ctl, err := b.c.Store.Control(ctx)
 			if err != nil {
@@ -915,11 +864,6 @@ func (b *Bot) onActions(ctx context.Context, p interaction) {
 			}
 		}
 	}
-}
-
-// cancelPending drops a reply approval waiting on an item (a button decided it instead).
-func (b *Bot) cancelPending(itemID int64) {
-	b.takePending(func(p *pendingApproval) bool { return p.itemID == itemID })
 }
 
 // actionItem finds the item an action is about: the parent's block_id "item:N", or a held

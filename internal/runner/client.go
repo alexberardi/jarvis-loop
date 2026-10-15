@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
 // Client talks to loopd with the runner's token. The agent never sees it.
@@ -44,6 +46,27 @@ type Control struct {
 	ActiveAgents  int  `json:"active_agents"`
 	Stopped       bool `json:"stopped"`
 	MaxRunMinutes int  `json:"max_run_minutes"`
+	// HoldRules are loopd's hold rules: land applies them to the paths it computed before it
+	// merges, as loopd does after.
+	HoldRules []pipeline.HoldRule `json:"hold_rules"`
+}
+
+// NewItem is an item the runner files (land's P1 for a red main).
+type NewItem struct {
+	Title    string `json:"title"`
+	Ask      string `json:"ask"`
+	Repo     string `json:"repo"`
+	Priority string `json:"priority"`
+	Source   string `json:"source"`
+}
+
+// AddItem files an item (POST /items) and returns its id.
+func (c *Client) AddItem(ctx context.Context, n NewItem) (int64, error) {
+	var out struct {
+		ID int64 `json:"id"`
+	}
+	_, err := c.json(ctx, "POST", "/items", n, &out)
+	return out.ID, err
 }
 
 func (c *Client) do(ctx context.Context, method, path, contentType string, body io.Reader, out any) (int, error) {
@@ -177,6 +200,8 @@ type EvidenceInfo struct {
 	Name  string `json:"name"`
 	Label string `json:"label"`
 	Size  int64  `json:"size"`
+	// LeaseID is the lease (the run) it was attached under.
+	LeaseID string `json:"lease_id"`
 }
 
 // EventInfo is one event in an item's history.

@@ -26,6 +26,7 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/api"
 	"github.com/alexberardi/jarvis-loop/internal/clock"
 	"github.com/alexberardi/jarvis-loop/internal/loopd"
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 	"github.com/alexberardi/jarvis-loop/internal/runner"
 	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/slackfake"
@@ -205,8 +206,10 @@ func StartStack(opts Options) (st *Stack, err error) {
 	if s.Store, err = store.Open(filepath.Join(dir, "loopd"), clk); err != nil {
 		return nil, err
 	}
-	// loopd's --repos.
+	// loopd's --repos, and the built-in hold rules pointed at the scratch repos: jarvis-server's
+	// at demo, jarvis-loop's at the stand-in for jarvis-loop.
 	s.Store.SetRepos([]string{RepoSlug, LoopSlug})
+	s.Store.SetDefaultHoldRules(SandboxHoldRules())
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -281,7 +284,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 	// and opens the PR through the fake (the runner's PR client), with its PR check on.
 	s.Runner = &runner.Runner{Cfg: rcfg, Client: &runner.Client{Base: s.LoopdURL, Token: runnerTok}, Clock: rclk,
 		Log: log.With("component", "runner"), Env: agentEnv(s.scripts, opts.Bin.Env), PRs: s.GitHub,
-		VerifyPR: s.GitHub.Verify, HeartbeatEvery: 60 * time.Second}
+		VerifyPR: s.GitHub.Verify, Land: s.GitHub, HeartbeatEvery: 60 * time.Second}
 	s.user = &apiClient{base: s.LoopdURL, token: userTok}
 	s.hand = &runner.Client{Base: s.LoopdURL, Token: handTok}
 	if opts.RealClock {
@@ -289,6 +292,20 @@ func StartStack(opts Options) (st *Stack, err error) {
 		go func() { defer s.bg.Done(); s.Runner.Run(s.ctx) }()
 	}
 	return s, nil
+}
+
+// SandboxHoldRules are the built-in hold rules with their repos swapped for the sandbox's: the
+// rules for jarvis-server apply to demo, jarvis-loop's to the sandbox's jarvis-loop.
+func SandboxHoldRules() []pipeline.HoldRule {
+	swap := map[string]string{pipeline.ServerRepo: RepoSlug, pipeline.LoopRepo: LoopSlug}
+	var out []pipeline.HoldRule
+	for _, r := range pipeline.DefaultHoldRules() {
+		if to, ok := swap[r.Repo]; ok {
+			r.Repo = to
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // agentEnv is the environment the fake claude (and the runner's helper commands) start with: the
@@ -311,7 +328,14 @@ func agentEnv(scripts string, extra []string) []string {
 func (s *Stack) Close() {
 	s.cancel()
 	done := make(chan struct{})
-	go func() { s.WaitRuns(2 * time.Minute); s.bg.Wait(); close(done) }()
+	go func() {
+		s.WaitRuns(2 * time.Minute)
+		if s.Runner != nil {
+			s.Runner.Wait()
+		}
+		s.bg.Wait()
+		close(done)
+	}()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Minute):
@@ -370,27 +394,30 @@ func (s *Stack) runEnded() {
 	s.runsDone = make(chan struct{})
 }
 
-// Inflight is how many runner claims are still working.
+// Inflight is how many runner claims are still working, plus the land script's watches of
+// main's CI after a merge (which outlive their claim).
 func (s *Stack) Inflight() int {
 	s.runsMu.Lock()
 	defer s.runsMu.Unlock()
-	return s.inflight
+	return s.inflight + s.Runner.Watching()
 }
 
-// WaitRuns waits until no runner claim is working.
+// WaitRuns waits until no runner claim is working and no main-CI watch is running.
 func (s *Stack) WaitRuns(timeout time.Duration) error {
 	deadline := time.After(timeout)
 	for {
 		s.runsMu.Lock()
 		n, ch := s.inflight, s.runsDone
 		s.runsMu.Unlock()
-		if n == 0 {
+		w := s.Runner.Watching()
+		if n == 0 && w == 0 {
 			return nil
 		}
 		select {
 		case <-ch:
+		case <-time.After(10 * time.Millisecond):
 		case <-deadline:
-			return fmt.Errorf("%d runner run(s) still working", n)
+			return fmt.Errorf("%d runner run(s) still working, %d main-CI watch(es)", n, w)
 		}
 	}
 }

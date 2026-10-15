@@ -1,0 +1,37 @@
+{
+  "name": "someone-else-land",
+  "about": "Scenario 4 through the land script: a held auth-path PR, with CI green. Someone other than the approver replies \"approve\" and presses Approve merge; both are refused, the item stays held, and the runner finds nothing to land. Nothing is merged.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Rotate the session signing key"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "good", "file": "internal/modules/auth/keys.go"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "held"}},
+    {"do": "reply", "item": "a", "as": "other", "text": "approve"},
+    {"do": "press", "item": "a", "as": "other", "button": "approve"},
+    {"do": "expect", "events": [{"item": "a", "kind": "refused", "actor": "other", "data": {"code": "^not_approver$"}, "count": 2}]},
+    {"do": "clock", "advance": "3m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "held"},
+    "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
+    "remote": {"branches": {"a": "^feat: add a feature$"}, "only": true},
+    "agent_runs": {"land": 0},
+    "no_events": [
+      {"item": "a", "kind": "approved"},
+      {"item": "a", "kind": "advanced", "outcome": "merged"}
+    ],
+    "no_messages": [
+      {"thread": "a", "text": "Merging in 2 minutes|Approved by|Merged"}
+    ]
+  }
+}

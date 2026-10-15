@@ -142,6 +142,8 @@ var statusByCode = map[string]int{
 	store.CodeNotYourLease:        http.StatusForbidden,
 	store.CodeNoLease:             http.StatusConflict,
 	store.CodeTooLarge:            http.StatusRequestEntityTooLarge,
+	store.CodeNotYourMerge:        http.StatusForbidden,
+	store.CodeAlreadyRecorded:     http.StatusConflict,
 	pipeline.CodeWrongStage:       http.StatusConflict,
 	pipeline.CodeSHAMismatch:      http.StatusConflict,
 	pipeline.CodeSameAgent:        http.StatusConflict,
@@ -374,8 +376,13 @@ func (s *server) advance(w http.ResponseWriter, r *http.Request) {
 }
 
 // RunnerEventKinds are the events a runner may record on an item it holds the lease on, besides
-// stage moves: what happened inside a run that the user should see in the item's history.
-var RunnerEventKinds = []string{"guard_refused", "low_cache_hit"}
+// stage moves: what happened inside a run that the user should see in the item's history
+// (land_waiting: the land script has waited on CI or GitHub's mergeability for a while).
+var RunnerEventKinds = []string{"guard_refused", "low_cache_hit", "land_waiting"}
+
+// KindMainCI is main's CI on an item's merge commit: recorded after the merge (the lease has
+// ended), only by the runner that merged it (store.MainCI).
+const KindMainCI = "main_ci"
 
 func (s *server) runnerEvent(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
@@ -389,11 +396,19 @@ func (s *server) runnerEvent(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if !slices.Contains(RunnerEventKinds, body.Kind) {
-		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kind must be one of " + strings.Join(RunnerEventKinds, ", ")})
+	var (
+		ev  store.Event
+		err error
+	)
+	switch {
+	case body.Kind == KindMainCI:
+		ev, err = s.st.MainCI(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Data)
+	case slices.Contains(RunnerEventKinds, body.Kind):
+		ev, err = s.st.RunnerEvent(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Kind, body.Data)
+	default:
+		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kind must be one of " + strings.Join(append(RunnerEventKinds, KindMainCI), ", ")})
 		return
 	}
-	ev, err := s.st.RunnerEvent(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Kind, body.Data)
 	if err != nil {
 		s.fail(w, err)
 		return

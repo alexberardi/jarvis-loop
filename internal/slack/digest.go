@@ -71,7 +71,8 @@ func (b *Bot) digestMessage(ctx context.Context, from, to time.Time, evs []store
 		name string
 		ids  []int64
 	}
-	secs := []*group{{name: "Merged"}, {name: "Held"}, {name: "Needs you"}, {name: "Failing"}, {name: "New"}}
+	secs := []*group{{name: "Merged"}, {name: "Main CI not green"}, {name: "Held"}, {name: "Needs you"}, {name: "Failing"}, {name: "New"}}
+	notes := map[string]string{} // "group/id" -> a suffix for that line
 	seen := map[string]bool{}
 	addTo := func(s *group, id int64) {
 		k := fmt.Sprintf("%s/%d", s.name, id)
@@ -86,17 +87,21 @@ func (b *Bot) digestMessage(ctx context.Context, from, to time.Time, evs []store
 		if e.Kind == "advanced" && out == pipeline.Merged {
 			addTo(secs[0], e.ItemID)
 		}
-		if e.To == string(pipeline.Held) && e.From == string(pipeline.Land) {
+		if e.Kind == "main_ci" && str(e.Data, "result") != "green" {
 			addTo(secs[1], e.ItemID)
+			notes[fmt.Sprintf("%s/%d", secs[1].name, e.ItemID)] = ": " + Escape(str(e.Data, "result"))
 		}
-		if e.To == string(pipeline.NeedsYou) && e.From != string(pipeline.NeedsYou) {
+		if e.To == string(pipeline.Held) && e.From == string(pipeline.Land) {
 			addTo(secs[2], e.ItemID)
 		}
-		if e.Kind == "usage_limit" || e.Kind == "advanced" && out == pipeline.Failed {
+		if e.To == string(pipeline.NeedsYou) && e.From != string(pipeline.NeedsYou) {
 			addTo(secs[3], e.ItemID)
 		}
-		if e.Kind == "created" {
+		if e.Kind == "usage_limit" || e.Kind == "advanced" && out == pipeline.Failed {
 			addTo(secs[4], e.ItemID)
+		}
+		if e.Kind == "created" {
+			addTo(secs[5], e.ItemID)
 		}
 	}
 	found := false
@@ -127,7 +132,7 @@ func (b *Bot) digestMessage(ctx context.Context, from, to time.Time, evs []store
 				}
 				titles[id] = title
 			}
-			fmt.Fprintf(&sb, "• #%d %s\n", id, b.field(title, 120, id))
+			fmt.Fprintf(&sb, "• #%d %s%s\n", id, b.field(title, 120, id), notes[fmt.Sprintf("%s/%d", s.name, id)])
 		}
 	}
 	if ctl, err := b.c.Store.Control(ctx); err == nil {

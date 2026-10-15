@@ -5,7 +5,6 @@ package slack
 
 import (
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -49,43 +48,6 @@ var wordRe = regexp.MustCompile(`[a-z0-9']+(?:-[a-z0-9']+)*`)
 func words(s string) []string {
 	s = strings.ToLower(strings.ReplaceAll(s, "’", "'"))
 	return wordRe.FindAllString(s, -1)
-}
-
-var (
-	approvalWords   = []string{"approve", "approved", "lgtm", "fine", "ok", "okay", "yes", "yep", "yea", "yeah", "sure"}
-	approvalPhrases = [][]string{{"ship", "it"}, {"go", "ahead"}, {"merge", "it"}, {"do", "it"}}
-	negationWords   = []string{"not", "don't", "dont", "no", "nope", "nah", "never", "wait", "hold", "holding", "stop", "cancel"}
-	questionStarts  = []string{"is", "are", "can", "could", "should", "would", "will", "does", "did", "why", "what", "how", "when", "where", "who", "which", "shall"}
-)
-
-// ClassifyReply decides whether a reply in a held item's thread approves the merge. It is
-// deliberately strict and has no model: consent is an approval word or phrase, with no question
-// mark, no question opening and no negation anywhere in the reply. Anything else is not an
-// approval, and the item stays held.
-func ClassifyReply(text string) bool {
-	text = stripMentions(text)
-	if strings.Contains(text, "?") {
-		return false
-	}
-	ws := words(text)
-	if len(ws) == 0 || slices.Contains(questionStarts, ws[0]) {
-		return false
-	}
-	consent := false
-	for i, w := range ws {
-		if slices.Contains(negationWords, w) || strings.HasSuffix(w, "n't") {
-			return false
-		}
-		if slices.Contains(approvalWords, w) {
-			consent = true
-		}
-		for _, p := range approvalPhrases {
-			if i+len(p) <= len(ws) && slices.Equal(ws[i:i+len(p)], p) {
-				consent = true
-			}
-		}
-	}
-	return consent
 }
 
 var tierOf = map[string]string{

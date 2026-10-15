@@ -29,6 +29,10 @@ bare mirrors under `~/.cache/jarvis-loop/work`, under
 deny rules, the auto-mode classifier, the `loop-guard` hook and Claude Code's OS sandbox. `--once`
 works one item; `--dry-run` skips the GitHub PR check, for runs with `tools/fakeclaude`. What is
 allowed and why: [docs/decisions/2026-10-15-runner-choices.md](docs/decisions/2026-10-15-runner-choices.md).
+With `"land"` in `stages` (phase 6, [docs/phases/06-land.md](docs/phases/06-land.md)) it also lands
+approved items itself, with no agent: the gates from GitHub and git, `gh pr merge --squash
+--match-head-commit`, then main's CI on the merge (`land_ci_wait`, `land_main_wait`, default
+`"30m"`). Why: [docs/decisions/2026-10-15-land.md](docs/decisions/2026-10-15-land.md).
 
 Harness (phase 4b, [docs/phases/04b-loop-harness.md](docs/phases/04b-loop-harness.md)):
 `scripts/loop-sandbox run` plays `scenarios/*.json` against the real loopd wiring, runner, bot and

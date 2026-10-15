@@ -207,11 +207,17 @@ func (p *player) problems(e Expect, negatives bool) []string {
 		if want.Repo != "" && pr.Repo != want.Repo {
 			add("%s's PR is on %s, want %s", alias, pr.Repo, want.Repo)
 		}
-		if pr.HeadSHA != p.s.GitHub.RemoteHead(pr.Repo, br) {
+		if pr.State == "OPEN" && pr.HeadSHA != p.s.GitHub.RemoteHead(pr.Repo, br) && len(pr.MergeCalls) == 0 && want.State == "" {
 			add("%s's PR head %s is not the branch's head", alias, pr.HeadSHA)
 		}
 		if want.Edits != nil && pr.Edits != *want.Edits {
 			add("%s's PR was updated %d time(s), want %d", alias, pr.Edits, *want.Edits)
+		}
+		if want.State != "" && pr.State != want.State {
+			add("%s's PR is %s, want %s", alias, pr.State, want.State)
+		}
+		if want.MergeCalls != nil && len(pr.MergeCalls) != *want.MergeCalls {
+			add("%s's PR got %d merge call(s) %v, want %d", alias, len(pr.MergeCalls), pr.MergeCalls, *want.MergeCalls)
 		}
 		if want.Comments != nil && len(pr.Comments) != *want.Comments {
 			add("%s's PR has %d comment(s), want %d", alias, len(pr.Comments), *want.Comments)
@@ -233,6 +239,12 @@ func (p *player) problems(e Expect, negatives bool) []string {
 	}
 	for _, stage := range e.SamePrefix {
 		out = append(out, p.prefixProblems(stage)...)
+	}
+	for _, stage := range sortedKeys(e.AgentRuns) {
+		runs, _ := filepath.Glob(filepath.Join(p.s.Dir, "work", "runs", "*-"+stage+"-*"))
+		if len(runs) != e.AgentRuns[stage] {
+			add("%d agent run(s) for %s, want %d", len(runs), stage, e.AgentRuns[stage])
+		}
 	}
 	for _, rel := range e.Absent {
 		if _, err := os.Lstat(filepath.Join(p.s.Dir, rel)); err == nil {
@@ -577,8 +589,26 @@ func (p *player) mustNot() []string {
 func (p *player) remoteProblems(rm RemoteMatch) []string {
 	var out []string
 	gh := p.s.GitHub
-	if h := gh.RemoteHead(RepoSlug, "main"); h != p.s.MainSHA {
-		out = append(out, fmt.Sprintf("main moved: %s, was %s", h, p.s.MainSHA))
+	if h, want := gh.RemoteHead(RepoSlug, "main"), gh.MainHead(RepoSlug); h != want {
+		out = append(out, fmt.Sprintf("main moved: %s, want %s (where it started, or the last merge or scripted push)", h, want))
+	}
+	if rm.Main != "" {
+		r, err := p.ref(rm.Main)
+		if err != nil {
+			out = append(out, err.Error())
+		} else {
+			var merge string
+			for _, x := range gh.PRs() {
+				if x.Head == ItemBranch(r.id, r.title) {
+					merge = x.MergeCommit
+				}
+			}
+			if h := gh.RemoteHead(RepoSlug, "main"); merge == "" || h != merge {
+				out = append(out, fmt.Sprintf("main is %s, want %s's squash commit %q", h, rm.Main, merge))
+			} else if parent := gh.Subject(RepoSlug, h); !strings.HasSuffix(parent, fmt.Sprintf("(#%d)", prNumber(gh, r))) {
+				out = append(out, fmt.Sprintf("main's head %q is not a squash of %s's PR", parent, rm.Main))
+			}
+		}
 	}
 	want := []string{"main"}
 	for _, alias := range sortedKeys(rm.Branches) {
@@ -646,4 +676,13 @@ func (p *player) prefixProblems(stage string) []string {
 		}
 	}
 	return out
+}
+
+func prNumber(gh *GitHub, r itemRef) int {
+	for _, x := range gh.PRs() {
+		if x.Head == ItemBranch(r.id, r.title) {
+			return x.Number
+		}
+	}
+	return 0
 }

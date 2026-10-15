@@ -119,6 +119,13 @@ func TestApplyAdvance(t *testing.T) {
 		{"hold no changed paths", Land, Hold, map[string]string{"reason": "r", "head_sha": sha1}, 0, "lander", "", "", CodeMissingField, true},
 		{"back to build", Land, BackToBuild, map[string]string{"reason": "conflict in internal/"}, 0, "lander", Build, "", "", false},
 		{"back to build from review", Review, BackToBuild, map[string]string{"reason": "r"}, 0, "lander", "", "", CodeWrongStage, false},
+		{"back to build no paths", Land, BackToBuild, map[string]string{"reason": "CI failed: test"}, 0, "lander", Build, "", "", true},
+		{"back to review", Land, BackToReview, map[string]string{"notes": "the head moved", "head_sha": sha2}, 0, "lander", Review, "", "", false},
+		{"back to review no notes", Land, BackToReview, map[string]string{"head_sha": sha2}, 0, "lander", "", "", CodeMissingField, false},
+		{"back to review no head", Land, BackToReview, map[string]string{"notes": "n"}, 0, "lander", "", "", CodeMissingField, false},
+		{"back to review bad head", Land, BackToReview, map[string]string{"notes": "n", "head_sha": "HEAD"}, 0, "lander", "", "", CodeInvalidField, false},
+		{"back to review no paths", Land, BackToReview, map[string]string{"notes": "n", "head_sha": sha2}, 0, "lander", "", "", CodeMissingField, true},
+		{"back to review from review", Review, BackToReview, map[string]string{"notes": "n", "head_sha": sha2}, 0, "lander", "", "", CodeWrongStage, false},
 		// usage_limit, any work stage
 		{"usage limit triage", Triage, UsageLimit, map[string]string{"error": "rate limited"}, 0, "a", Triage, "", "", false},
 		{"usage limit build", Build, UsageLimit, map[string]string{"error": "rate limited", "reset": "at 17:00"}, 0, "a", Build, "", "", false},
@@ -391,6 +398,71 @@ func TestLandHoldSameHeadKeepsApproval(t *testing.T) {
 	if tr.Item.Approval == nil || tr.Item.Risk != RiskHold || !strings.Contains(tr.Item.HoldReason, "land: merged main in") {
 		t.Fatalf("hold at the same head: %+v", tr.Item)
 	}
+}
+
+// Land's back_to_review: the PR's head moved since review (or land merged the base in). The new
+// head goes to a fresh review; an approval for another head is void; risk is recomputed on the
+// paths; the builder stays the builder, so review independence still holds.
+func TestBackToReview(t *testing.T) {
+	it := item(Land)
+	it.Approval = &Approval{By: "alex", HeadSHA: sha1, At: t0}
+	tr, err := ApplyAdvance(it, Advance{Outcome: BackToReview, Agent: "lander",
+		Fields: map[string]string{"notes": "head moved", "head_sha": sha2}, ChangedPaths: []string{"M internal/modules/auth/x.go"},
+		HoldRules: DefaultHoldRules()}, t0)
+	wantCode(t, err, "")
+	if tr.To != Review || tr.Item.HeadSHA != sha2 || tr.Item.Approval != nil || tr.Data["approval_voided"] != true {
+		t.Fatalf("back to review: %+v %+v", tr.Item, tr.Data)
+	}
+	if tr.Item.Risk != RiskHold || !strings.Contains(tr.Item.HoldReason, "auth: M internal/modules/auth/x.go") {
+		t.Fatalf("risk not recomputed: %q %q", tr.Item.Risk, tr.Item.HoldReason)
+	}
+	if tr.Item.BuilderAgent != "builder" {
+		t.Fatalf("builder changed to %q", tr.Item.BuilderAgent)
+	}
+	// The same head keeps the approval (nothing to re-approve).
+	tr, err = ApplyAdvance(it, Advance{Outcome: BackToReview, Fields: map[string]string{"notes": "n", "head_sha": sha1},
+		ChangedPaths: clean, HoldRules: DefaultHoldRules()}, t0)
+	wantCode(t, err, "")
+	if tr.Item.Approval == nil {
+		t.Fatalf("approval for the same head was voided")
+	}
+}
+
+// back_to_build from land may carry the changed paths; when it does, risk is recomputed.
+func TestBackToBuildRecomputesRisk(t *testing.T) {
+	tr, err := ApplyAdvance(item(Land), Advance{Outcome: BackToBuild, Fields: map[string]string{"reason": "CI failed"},
+		ChangedPaths: []string{"D x_test.go"}, HoldRules: DefaultHoldRules()}, t0)
+	wantCode(t, err, "")
+	if tr.Item.Risk != RiskHold {
+		t.Fatalf("risk %q", tr.Item.Risk)
+	}
+	_, err = ApplyAdvance(item(Land), Advance{Outcome: BackToBuild, Fields: map[string]string{"reason": "r"},
+		ChangedPaths: []string{"M /etc/passwd"}}, t0)
+	wantCode(t, err, CodeInvalidField)
+}
+
+// The rules applied are the item's repo's: pr_opened uses the repo it reports (the item may not
+// have had one), every other outcome the item's.
+func TestHoldRulesFollowTheItemsRepo(t *testing.T) {
+	loopPaths := []string{"M internal/pipeline/pipeline.go"}
+	a := prOpened(sha2, loopPaths, map[string]string{"repo": LoopRepo})
+	tr, err := ApplyAdvance(item(Build), a, t0)
+	wantCode(t, err, "")
+	if tr.Item.Risk != RiskHold || !strings.Contains(tr.Item.HoldReason, "approval: M internal/pipeline/pipeline.go") {
+		t.Fatalf("jarvis-loop pr_opened: %q %q", tr.Item.Risk, tr.Item.HoldReason)
+	}
+	tr, err = ApplyAdvance(item(Build), prOpened(sha2, loopPaths, map[string]string{"repo": ServerRepo}), t0)
+	wantCode(t, err, "")
+	if tr.Item.Risk != RiskNormal {
+		t.Fatalf("jarvis-server pr_opened held on a jarvis-loop rule: %q", tr.Item.HoldReason)
+	}
+	it := item(Land)
+	it.Repo = LoopRepo
+	_, err = ApplyAdvance(it, merged(sha1, loopPaths), t0)
+	wantCode(t, err, CodeApprovalRequired)
+	it.Repo = ServerRepo
+	_, err = ApplyAdvance(it, merged(sha1, loopPaths), t0)
+	wantCode(t, err, "")
 }
 
 func TestHumanTransitions(t *testing.T) {

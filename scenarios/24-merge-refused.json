@@ -1,0 +1,30 @@
+{
+  "name": "merge-refused",
+  "about": "GitHub refuses the land script's merge (the base moved under it): land runs the gates again from the top once and asks again; a second refusal goes to the user with GitHub's message. Answered, the item returns to land and merges on the next claim.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "github", "refuse_merges": 2},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}, "pr": {"a": {"state": "OPEN", "merge_calls": 2}},
+     "question": {"a": "^GitHub refused the merge of PR #101 twice; last: gh pr merge: Base branch was modified\\. Review and try the merge again\\.$"}},
+    {"do": "reply", "item": "a", "as": "approver", "text": "try again"},
+    {"do": "expect", "stage": {"a": "land"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "pr": {"a": {"state": "MERGED", "merge_calls": 3}},
+    "remote": {"main": "a", "only": true},
+    "events": [{"item": "a", "kind": "main_ci", "data": {"result": "^green$"}, "count": 1}]
+  }
+}

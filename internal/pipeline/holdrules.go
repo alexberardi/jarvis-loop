@@ -3,32 +3,81 @@ package pipeline
 import (
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 )
 
 // HoldRule puts a PR on the hold list when one of its changed paths matches Glob (and, when
 // Statuses is set, has one of those statuses). loopd computes hold risk from these rules; it does
-// not trust an agent's label (docs/decisions/2026-10-14-hold-rules.md).
+// not trust an agent's label (docs/decisions/2026-10-14-hold-rules.md). A rule with a Repo
+// (owner/name) applies only to that repo's items; one without, to every repo
+// (docs/decisions/2026-10-15-land.md).
 type HoldRule struct {
 	Name     string   `json:"name"`
 	Glob     string   `json:"glob"`
 	Statuses []string `json:"statuses,omitempty"` // A, M, D, R; empty = any
+	Repo     string   `json:"repo,omitempty"`     // owner/name; empty = every repo
 }
 
-// DefaultHoldRules is jarvis-server's CLAUDE.md hold list as path rules: auth and access, signing
-// and the update helper, CI checks, and weakened tests or contract checks.
+// The repos the default rules are for.
+const (
+	ServerRepo = "alexberardi/jarvis-server"
+	LoopRepo   = "alexberardi/jarvis-loop"
+)
+
+// DefaultHoldRules are each repo's CLAUDE.md hold list as path rules. jarvis-server: auth and
+// access, signing and the update helper, CI checks, and weakened tests or contract checks.
+// jarvis-loop: who may approve or merge (the stage rules and approvals, loopd's API auth, the Slack
+// approver check, the store that keeps approvals and hold rules, loopd's start-up wiring), token handling, the landing gates, the agents' guard, CI, and weakened tests or
+// scenarios.
 func DefaultHoldRules() []HoldRule {
+	s, l := ServerRepo, LoopRepo
 	return []HoldRule{
-		{Name: "auth", Glob: "internal/modules/auth/**"},
-		{Name: "authn", Glob: "internal/platform/authn/**"},
-		{Name: "update", Glob: "internal/update/**"},
-		{Name: "upgrade", Glob: "cmd/jarvisd/upgrade*.go"},
-		{Name: "release", Glob: ".github/workflows/release.yml"},
-		{Name: "ci", Glob: ".github/workflows/**"},
-		{Name: "deleted-test", Glob: "**/*_test.go", Statuses: []string{"D", "R"}},
-		{Name: "contract-removed", Glob: "contract/**", Statuses: []string{"D", "R"}},
+		{Name: "auth", Glob: "internal/modules/auth/**", Repo: s},
+		{Name: "authn", Glob: "internal/platform/authn/**", Repo: s},
+		{Name: "update", Glob: "internal/update/**", Repo: s},
+		{Name: "upgrade", Glob: "cmd/jarvisd/upgrade*.go", Repo: s},
+		{Name: "release", Glob: ".github/workflows/release.yml", Repo: s},
+		{Name: "ci", Glob: ".github/workflows/**", Repo: s},
+		{Name: "deleted-test", Glob: "**/*_test.go", Statuses: []string{"D", "R"}, Repo: s},
+		{Name: "contract-removed", Glob: "contract/**", Statuses: []string{"D", "R"}, Repo: s},
+
+		{Name: "approval", Glob: "internal/pipeline/**", Repo: l},
+		{Name: "land", Glob: "internal/runner/land*.go", Repo: l},
+		{Name: "land", Glob: "internal/runner/pr.go", Repo: l},
+		{Name: "land", Glob: "internal/runner/git.go", Repo: l},
+		{Name: "api-auth", Glob: "internal/api/**", Repo: l},
+		{Name: "store", Glob: "internal/store/**", Repo: l},
+		{Name: "loopd-wiring", Glob: "cmd/loopd/**", Repo: l},
+		{Name: "slack-approver", Glob: "internal/slack/approve*.go", Repo: l},
+		{Name: "tokens", Glob: "internal/slack/env.go", Repo: l},
+		{Name: "tokens", Glob: "internal/runner/config.go", Repo: l},
+		{Name: "tokens", Glob: "internal/runner/client.go", Repo: l},
+		{Name: "guard", Glob: "internal/guard/**", Repo: l},
+		{Name: "guard", Glob: "cmd/loop-guard/**", Repo: l},
+		{Name: "guard", Glob: "internal/runner/settings.go", Repo: l},
+		{Name: "ci", Glob: ".github/workflows/**", Repo: l},
+		{Name: "deleted-test", Glob: "**/*_test.go", Statuses: []string{"D", "R"}, Repo: l},
+		{Name: "scenario-removed", Glob: "scenarios/**", Statuses: []string{"D", "R"}, Repo: l},
 	}
+}
+
+var repoSlugRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+// ruleApplies says whether a rule for ruleRepo applies to an item of itemRepo. An unscoped rule
+// applies everywhere; an item whose repo is not known yet gets every rule (holding more is the
+// safe direction); an item whose repo is a bare name (a runner config key, before pr_opened
+// reports the slug) matches by the rule repo's name.
+func ruleApplies(ruleRepo, itemRepo string) bool {
+	if ruleRepo == "" || itemRepo == "" || ruleRepo == itemRepo {
+		return true
+	}
+	if !strings.Contains(itemRepo, "/") {
+		_, name, _ := strings.Cut(ruleRepo, "/")
+		return name == itemRepo
+	}
+	return false
 }
 
 var pathStatuses = []string{"A", "M", "D", "R"}
@@ -45,6 +94,9 @@ func (r HoldRule) Validate() error {
 		if !slices.Contains(pathStatuses, s) {
 			return errf(CodeInvalidField, "hold rule %q: status %q is not one of A, M, D, R", r.Name, s)
 		}
+	}
+	if r.Repo != "" && !repoSlugRe.MatchString(r.Repo) {
+		return errf(CodeInvalidField, "hold rule %q: repo must be owner/name, not %q", r.Name, r.Repo)
 	}
 	return nil
 }
@@ -164,11 +216,15 @@ type HoldMatch struct {
 
 func (m HoldMatch) String() string { return m.Rule + ": " + m.Path }
 
-// MatchHoldRules returns every (rule, path) hit. A rename matches on its old or its new path.
-func MatchHoldRules(rules []HoldRule, paths []ChangedPath) []HoldMatch {
+// MatchHoldRules returns every (rule, path) hit of the rules that apply to repo. A rename matches
+// on its old or its new path.
+func MatchHoldRules(rules []HoldRule, repo string, paths []ChangedPath) []HoldMatch {
 	var out []HoldMatch
 	for _, p := range paths {
 		for _, r := range rules {
+			if !ruleApplies(r.Repo, repo) {
+				continue
+			}
 			if len(r.Statuses) > 0 && !slices.Contains(r.Statuses, p.Status) {
 				continue
 			}

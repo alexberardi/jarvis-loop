@@ -243,3 +243,26 @@ func (g Git) RemoteHead(ctx context.Context, mirror, branch string) (string, err
 	}
 	return g.run(ctx, mirror, "rev-parse", "refs/remotes/origin/"+branch)
 }
+
+// DiffPaths are the files head changes against base (`git diff --name-status -M
+// origin/<base>...<head>`), from the runner's mirror. head must be in the mirror; when it is not
+// (a branch GitHub deleted after a merge), it is fetched from the PR's ref first.
+func (g Git) DiffPaths(ctx context.Context, mirror, base, head string, pr int) ([]string, error) {
+	if !g.hasRef(ctx, mirror, head+"^{commit}") && pr > 0 {
+		_, _ = g.run(ctx, mirror, "fetch", "--no-tags", "-q", "origin", fmt.Sprintf("+refs/pull/%d/head:refs/loop/pr/%d", pr, pr))
+	}
+	if !g.hasRef(ctx, mirror, head+"^{commit}") {
+		return nil, fmt.Errorf("the mirror has no commit %s", head)
+	}
+	out, err := g.run(ctx, mirror, "diff", "--name-status", "-M", "refs/remotes/origin/"+base+"..."+head)
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, l := range strings.Split(out, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			paths = append(paths, l)
+		}
+	}
+	return paths, nil
+}
