@@ -51,8 +51,9 @@ counts as not done), `DependencyCycle`, `ApplyDependencyClosed`. On a dependency
 **removes that id from the dependent's `depends_on`** (it can never be done, so "keep" would
 otherwise wait forever) and moves an open dependent to `needs_you` with the spec's question; one
 already in `needs_you` keeps its own question, and qa/done/closed ones are left alone. Ids are
-checked after the insert in the add's transaction, so naming the new item's own id is refused as a
-cycle; repeats are dropped. `GET /items/{id}` has `waiting_on`; `loop show` prints
+checked after the insert in the add's transaction: an unknown id, or the new item's own id, is
+refused as `no item #N`, and a **closed** id as `#N is closed` (it would wait forever; done and qa
+ones are allowed), all `invalid_field` (400); a cycle is refused too; repeats are dropped. `GET /items/{id}` has `waiting_on`; `loop show` prints
 `blocked:  waiting on #12`, `/loop show` and the thread header `· waiting on #12` / `· Waiting on
 #12`, the board card a `waiting on #12` label. The header updates on the dependent's own next event
 (its claim), not when the dependency finishes. Harness: `scenarios/35-deps.json` (`add` takes

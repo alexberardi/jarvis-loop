@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,19 +22,28 @@ func dedupeIDs(ids []int64) []int64 {
 	return out
 }
 
-// checkDependencies refuses an item whose dependencies name an item that does not exist or make
-// a cycle. it is already inserted (or saved) in tx.
+// checkDependencies refuses an item whose dependencies name an item that does not exist or is
+// closed, or make a cycle. it is already inserted (or saved) in tx.
 func checkDependencies(tx *sql.Tx, it pipeline.Item) error {
 	if len(it.DependsOn) == 0 {
 		return nil
 	}
 	for _, d := range it.DependsOn {
-		var n int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM items WHERE id = ?`, d).Scan(&n); err != nil {
+		// The new item's own id: to the user, that item does not exist yet.
+		if d == it.ID {
+			return errf(pipeline.CodeInvalidField, "depends_on: no item #%d", d)
+		}
+		var stage pipeline.Stage
+		err := tx.QueryRow(`SELECT stage FROM items WHERE id = ?`, d).Scan(&stage)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errf(pipeline.CodeInvalidField, "depends_on: no item #%d", d)
+		}
+		if err != nil {
 			return err
 		}
-		if n == 0 {
-			return errf(pipeline.CodeInvalidField, "depends_on: no item #%d", d)
+		// A closed item never becomes done, so the new item would wait forever.
+		if stage == pipeline.Closed {
+			return errf(pipeline.CodeInvalidField, "depends_on: #%d is closed", d)
 		}
 	}
 	rows, err := tx.Query(`SELECT id, depends_on FROM items WHERE depends_on != ''`)

@@ -1200,4 +1200,7 @@ func TestAddAfter(t *testing.T) {
 	if !asked {
 		t.Fatalf("no needs-you question in #2's thread: %+v", e.calls())
 	}
+	if out := e.command(Approver, "add more after #1"); !strings.Contains(out, "#1 is closed") {
+		t.Fatalf("closed dependency %q", out)
+	}
 }

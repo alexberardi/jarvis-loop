@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -46,10 +47,18 @@ func TestAddItemDependencies(t *testing.T) {
 	if code(err) != pipeline.CodeInvalidField || !strings.Contains(err.Error(), "no item #99") {
 		t.Fatalf("unknown id: %v", err)
 	}
-	// The next id is 3: naming it is the new item depending on itself.
+	// The next id is 3: naming it is the new item depending on itself, an item the user never saw.
 	_, err = s.AddItem(ctx, user, NewItem{Title: "c", DependsOn: []int64{3}})
-	if code(err) != pipeline.CodeInvalidField || !strings.Contains(err.Error(), "cycle: #3 → #3") {
+	if code(err) != pipeline.CodeInvalidField || !strings.Contains(err.Error(), "no item #3") {
 		t.Fatalf("self: %v", err)
+	}
+	// A closed item never becomes done: an item after it would wait forever.
+	if _, err := s.Drop(ctx, user, a.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.AddItem(ctx, user, NewItem{Title: "c", DependsOn: []int64{a.ID}})
+	if code(err) != pipeline.CodeInvalidField || !strings.Contains(err.Error(), fmt.Sprintf("#%d is closed", a.ID)) {
+		t.Fatalf("closed: %v", err)
 	}
 	rows, _ := s.ListItems(ctx, "", "")
 	if len(rows) != 2 {
@@ -72,11 +81,15 @@ func TestClaimWaitsForDependencies(t *testing.T) {
 	if c := claim(t, s, "x"); c == nil || c.Item.ID != b.ID {
 		t.Fatalf("claim after a is done: %+v", c)
 	}
+	// Adding after a done item stays allowed (only closed ones are refused).
+	if c := addAfter(t, s, "c", "", a.ID); len(c.DependsOn) != 1 {
+		t.Fatalf("after a done item: %+v", c)
+	}
 }
 
 func TestClaimSkipsADependencyInQA(t *testing.T) {
 	s, _ := open(t)
-	toMerged(t, s, runner, func(a pipeline.Item) {
+	a := toMerged(t, s, runner, func(a pipeline.Item) {
 		if _, err := s.SetQA(context.Background(), user, a.ID); err != nil {
 			t.Fatal(err)
 		}
@@ -85,6 +98,11 @@ func TestClaimSkipsADependencyInQA(t *testing.T) {
 	if c := claim(t, s, "x"); c != nil {
 		t.Fatalf("claimed %d while its dependency is in qa", c.Item.ID)
 	}
+	// Adding after an item in qa stays allowed.
+	if d, _ := s.GetItem(context.Background(), a.ID); d.Item.Stage != pipeline.QA {
+		t.Fatalf("a is %s", d.Item.Stage)
+	}
+	addAfter(t, s, "c", "", a.ID)
 }
 
 func TestDroppedDependencyAsksAboutDependents(t *testing.T) {

@@ -414,7 +414,7 @@ func (s *Store) AddItem(ctx context.Context, actor string, n NewItem) (pipeline.
 		if err := s.insertItem(tx, actor, &it); err != nil {
 			return err
 		}
-		// Checked once the item has its id, so naming the new item itself is the cycle it is.
+		// Checked once the item has its id, so naming the new item itself is refused.
 		return checkDependencies(tx, it)
 	})
 	return it, err

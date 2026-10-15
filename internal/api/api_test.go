@@ -305,6 +305,9 @@ func TestAddItemDependsOn(t *testing.T) {
 	if len(d.WaitingOn) != 1 || d.WaitingOn[0] != a {
 		t.Fatalf("waiting on: %+v", d)
 	}
+	// A closed item never becomes done: adding after it is refused.
+	e.do(userTok, "POST", fmt.Sprintf("/items/%d/drop", a), map[string]any{"words": "x"}, 200, nil)
+	e.refused(userTok, "POST", "/items", map[string]any{"title": "c", "depends_on": []int64{a}}, 400, "invalid_field")
 }
 
 // The spec's full walk: every stage, review independence, a bounce, the review's head-sha check,
