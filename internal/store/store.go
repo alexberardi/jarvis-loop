@@ -876,6 +876,32 @@ func heldLease(tx *sql.Tx, id int64, runnerName string) (Lease, error) {
 	return l, nil
 }
 
+// RunnerEvent records an event from inside a run (such as a guard refusal) on an item whose live
+// lease runnerName holds.
+func (s *Store) RunnerEvent(ctx context.Context, runnerName string, id int64, kind string, data map[string]any) (Event, error) {
+	var out Event
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		if err := s.sweep(tx); err != nil {
+			return err
+		}
+		if _, err := loadItem(tx, id); err != nil {
+			return err
+		}
+		l, err := heldLease(tx, id, runnerName)
+		if err != nil {
+			return err
+		}
+		if data == nil {
+			data = map[string]any{}
+		}
+		data["lease"] = l.ID
+		data["agent"] = l.Agent
+		out = Event{ItemID: id, At: s.clock.Now(), Actor: "runner:" + runnerName, Kind: kind, From: string(l.Stage), To: string(l.Stage), Data: data}
+		return s.event(tx, out)
+	})
+	return out, err
+}
+
 // Advance finishes the stage runnerName holds a lease on, with an outcome.
 // changedPaths are the PR's changed files, required by pr_opened, merged and land's hold.
 func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcome pipeline.Outcome, fields map[string]string, changedPaths []string) (pipeline.Item, error) {

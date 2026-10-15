@@ -418,6 +418,11 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 		text = strings.Join(parts, "; ") + fmt.Sprintf(" (%s).", who(e.Actor))
 	case "refused":
 		text = fmt.Sprintf("Refused %s from %s: %s", Escape(str(e.Data, "action")), who(e.Actor), f("message", 300))
+	case "guard_refused":
+		// The rule and the tool only: the refused command or path can hold anything.
+		text = fmt.Sprintf("Guard refused a %s call (%s); details on loopd (`loop show %d`).", Escape(str(e.Data, "tool")), Escape(str(e.Data, "rule")), id)
+	case "low_cache_hit":
+		text = fmt.Sprintf("Low prompt-cache hit ratio on this run (%s over %s turns).", Escape(str(e.Data, "cache_hit_ratio")), Escape(str(e.Data, "num_turns")))
 	case "approval_cancelled":
 		text = fmt.Sprintf("Reply approval cancelled by %s; still held.", who(e.Actor))
 	case "advanced":

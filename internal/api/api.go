@@ -54,6 +54,7 @@ func New(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
 	route("POST /leases/{id}/heartbeat", runner, s.heartbeat)
 	route("POST /items/{id}/advance", runner, s.advance)
 	route("POST /items/{id}/evidence", runner, s.uploadEvidence)
+	route("POST /items/{id}/events", runner, s.runnerEvent)
 	route("GET /items/{id}/evidence/{n}", both, s.downloadEvidence)
 	route("POST /items/{id}/answer", user, s.answer)
 	route("POST /items/{id}/approve", user, s.approve)
@@ -284,11 +285,20 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		Runner       string   `json:"runner"`
 		Agent        string   `json:"agent"`
 		Capabilities []string `json:"capabilities"`
+		Stages       []string `json:"stages"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	p := PrincipalFrom(r.Context())
+	var stages []pipeline.Stage
+	for _, st := range body.Stages {
+		if !pipeline.Stage(st).IsWork() {
+			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "stages must be work stages (triage, build, review, land), got " + strconv.Quote(st)})
+			return
+		}
+		stages = append(stages, pipeline.Stage(st))
+	}
 	if body.Runner != "" && body.Runner != p.Name {
 		writeErr(w, http.StatusForbidden, "runner_mismatch", "this token belongs to runner "+strconv.Quote(p.Name))
 		return
@@ -303,7 +313,7 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps})
+	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, Stages: stages})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -351,6 +361,34 @@ func (s *server) advance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, it)
+}
+
+// RunnerEventKinds are the events a runner may record on an item it holds the lease on, besides
+// stage moves: what happened inside a run that the user should see in the item's history.
+var RunnerEventKinds = []string{"guard_refused", "low_cache_hit"}
+
+func (s *server) runnerEvent(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Kind string         `json:"kind"`
+		Data map[string]any `json:"data"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if !slices.Contains(RunnerEventKinds, body.Kind) {
+		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kind must be one of " + strings.Join(RunnerEventKinds, ", ")})
+		return
+	}
+	ev, err := s.st.RunnerEvent(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Kind, body.Data)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, ev)
 }
 
 func (s *server) uploadEvidence(w http.ResponseWriter, r *http.Request) {

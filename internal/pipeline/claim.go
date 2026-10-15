@@ -76,6 +76,8 @@ type ClaimRequest struct {
 	Runner       string
 	Agent        string
 	Capabilities []string
+	// Stages, when set, limits the claim to these stages (a runner that only builds).
+	Stages []Stage
 }
 
 var stageOrder = map[Stage]int{Land: 0, Review: 1, Build: 2, Triage: 3}
@@ -107,6 +109,9 @@ func Choose(c Control, items []Item, live []LiveLease, req ClaimRequest) (Item, 
 		it := &items[i]
 		// 2. Eligible: waiting, in a work stage, resources ⊆ capabilities.
 		if !it.Stage.IsWork() || claimed[it.ID] {
+			continue
+		}
+		if len(req.Stages) > 0 && !slices.Contains(req.Stages, it.Stage) {
 			continue
 		}
 		if !subset(it.Resources, req.Capabilities) {

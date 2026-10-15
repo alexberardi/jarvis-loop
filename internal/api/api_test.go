@@ -698,3 +698,27 @@ func TestHoldRulesInControl(t *testing.T) {
 		t.Fatalf("custom rule: %+v", d.Item)
 	}
 }
+
+func TestClaimStagesAndRunnerEvents(t *testing.T) {
+	e := newEnv(t)
+	tri := e.addItem("still in triage")
+	e.refused(runnerTok, "POST", "/claim", map[string]any{"agent": "a1", "stages": []string{"held"}}, 400, "invalid_field")
+	// A build-only runner does not get the triage item.
+	e.do(runnerTok, "POST", "/claim", map[string]any{"agent": "a1", "stages": []string{"build"}}, 204, nil)
+	c := e.mustClaim("a1", tri, "triage")
+
+	ev := map[string]any{"kind": "guard_refused", "data": map[string]any{"rule": "git_push", "tool": "Bash", "reason": "only loop/1-x"}}
+	e.refused(otherTok, "POST", fmt.Sprintf("/items/%d/events", tri), ev, 403, "not_your_lease")
+	e.refused(runnerTok, "POST", fmt.Sprintf("/items/%d/events", tri), map[string]any{"kind": "advanced"}, 400, "invalid_field")
+	e.refused(userTok, "POST", fmt.Sprintf("/items/%d/events", tri), ev, 403, "forbidden")
+	e.do(runnerTok, "POST", fmt.Sprintf("/items/%d/events", tri), ev, 201, nil)
+	d := e.get(tri)
+	last := d.Events[len(d.Events)-1]
+	if last.Kind != "guard_refused" || last.Actor != "runner:devbox" || last.Data["rule"] != "git_push" || last.From != "triage" {
+		t.Fatalf("event %+v", last)
+	}
+	// Without a live lease, nothing is recorded.
+	e.do(runnerTok, "POST", "/leases/"+c.Lease.ID+"/heartbeat", map[string]any{}, 200, nil)
+	e.clock.Advance(10 * time.Minute)
+	e.refused(runnerTok, "POST", fmt.Sprintf("/items/%d/events", tri), ev, 409, "no_lease")
+}
