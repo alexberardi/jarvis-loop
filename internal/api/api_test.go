@@ -795,3 +795,35 @@ func TestMainCIEventRoute(t *testing.T) {
 		t.Fatalf("event %+v", last)
 	}
 }
+
+// A board token reads the web board only (docs/decisions/2026-10-15-board.md): the API refuses it
+// on every route, reads included.
+func TestBoardTokenRefusedByAPI(t *testing.T) {
+	const boardTok = "board-token-0123456789abcdef"
+	st, err := store.Open(t.TempDir(), clock.NewFake(t0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	toks, err := ParseTokens(strings.NewReader(userTok + "\tuser\talex\n" + boardTok + "\tboard\tphone\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr, ok := toks.Lookup(boardTok); !ok || pr.Kind != KindBoard || pr.Actor() != "board:phone" {
+		t.Fatalf("lookup: %+v %v", pr, ok)
+	}
+	srv := httptest.NewServer(New(st, toks, slog.New(slog.DiscardHandler)))
+	t.Cleanup(srv.Close)
+	e := &env{t: t, srv: srv, store: st}
+	var it struct{ ID int64 }
+	e.do(userTok, "POST", "/items", map[string]string{"title": "x"}, 201, &it)
+	for _, r := range []struct{ method, path string }{
+		{"POST", "/items"}, {"GET", "/items"}, {"GET", "/items/1"}, {"PATCH", "/items/1"},
+		{"POST", "/claim"}, {"POST", "/leases/x/heartbeat"}, {"POST", "/items/1/advance"},
+		{"POST", "/items/1/evidence"}, {"POST", "/items/1/events"}, {"GET", "/items/1/evidence/1"},
+		{"POST", "/items/1/answer"}, {"POST", "/items/1/approve"}, {"POST", "/items/1/hold"},
+		{"GET", "/control"}, {"PUT", "/control"},
+	} {
+		e.refused(boardTok, r.method, r.path, nil, 403, "forbidden")
+	}
+}
