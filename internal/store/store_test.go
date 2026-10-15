@@ -576,7 +576,7 @@ func TestListOpenItems(t *testing.T) {
 }
 
 // Migration 0004 tags the rules a user set before rules had a repo with jarvis-server's slug: they
-// were jarvis-server's hold list. The built-in defaults ('') stay untouched.
+// were jarvis-server's hold list. The built-in defaults (”) stay untouched.
 func TestHoldRulesMigrationTagsJarvisServer(t *testing.T) {
 	dir := t.TempDir()
 	clk := clock.NewFake(t0)
