@@ -1,0 +1,882 @@
+// Package store keeps loopd's state in SQLite (modernc.org/sqlite, no cgo) and applies the
+// pipeline rules inside its transactions. All writes go through one connection, so the rules see
+// a consistent snapshot and two claims can never interleave.
+package store
+
+import (
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"embed"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	_ "modernc.org/sqlite" // the database/sql driver "sqlite"
+
+	"github.com/alexberardi/jarvis-loop/internal/clock"
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
+)
+
+//go:embed migrations/*.sql
+var migrations embed.FS
+
+// LeaseTTL is how long a lease lives without a heartbeat.
+const LeaseTTL = 5 * time.Minute
+
+// Error codes the store adds to the pipeline's.
+const (
+	CodeNotFound     = "not_found"
+	CodeNoLease      = "no_lease"
+	CodeNotYourLease = "not_your_lease"
+	CodeTooLarge     = "too_large"
+)
+
+func errf(code, format string, args ...any) *pipeline.Error {
+	return &pipeline.Error{Code: code, Message: fmt.Sprintf(format, args...)}
+}
+
+// Store is loopd's database and evidence directory.
+type Store struct {
+	dir   string
+	w     *sql.DB // the one writer
+	r     *sql.DB // readers
+	clock clock.Clock
+}
+
+// Open opens (creating if needed) the data directory and its database, and applies migrations.
+func Open(dir string, clk clock.Clock) (*Store, error) {
+	if err := os.MkdirAll(filepath.Join(dir, "evidence"), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, "loop.db")
+	pragmas := "_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	dsn := "file:" + (&url.URL{Path: path}).EscapedPath() + "?" + pragmas
+	w, err := sql.Open("sqlite", dsn+"&_txlock=immediate")
+	if err != nil {
+		return nil, err
+	}
+	w.SetMaxOpenConns(1)
+	s := &Store{dir: dir, w: w, clock: clk}
+	if err := s.migrate(); err != nil {
+		w.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		w.Close()
+		return nil, err
+	}
+	r, err := sql.Open("sqlite", dsn+"&_pragma=query_only(1)")
+	if err != nil {
+		w.Close()
+		return nil, err
+	}
+	s.r = r
+	return s, nil
+}
+
+// Close closes the database.
+func (s *Store) Close() error {
+	errR := s.r.Close()
+	return errors.Join(s.w.Close(), errR)
+}
+
+func (s *Store) migrate() error {
+	if _, err := s.w.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`); err != nil {
+		return err
+	}
+	ents, err := migrations.ReadDir("migrations")
+	if err != nil {
+		return err
+	}
+	sort.Slice(ents, func(i, j int) bool { return ents[i].Name() < ents[j].Name() })
+	for _, e := range ents {
+		v, err := strconv.Atoi(strings.SplitN(e.Name(), "_", 2)[0])
+		if err != nil {
+			return fmt.Errorf("migration %s: name must start with a number", e.Name())
+		}
+		body, err := migrations.ReadFile("migrations/" + e.Name())
+		if err != nil {
+			return err
+		}
+		err = s.tx(context.Background(), func(tx *sql.Tx) error {
+			var n int
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, v).Scan(&n); err != nil || n > 0 {
+				return err
+			}
+			if _, err := tx.Exec(string(body)); err != nil {
+				return fmt.Errorf("%s: %w", e.Name(), err)
+			}
+			_, err := tx.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, v, s.clock.Now().UnixNano())
+			return err
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SchemaVersion is the highest applied migration.
+func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
+	var v int
+	err := s.w.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&v)
+	return v, err
+}
+
+func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+// Event is one entry of an item's history (or a control change, with ItemID 0).
+type Event struct {
+	ID      int64          `json:"id"`
+	ItemID  int64          `json:"item_id,omitempty"`
+	At      time.Time      `json:"at"`
+	Actor   string         `json:"actor"`
+	Kind    string         `json:"kind"`
+	From    string         `json:"from,omitempty"`
+	To      string         `json:"to,omitempty"`
+	Outcome string         `json:"outcome,omitempty"`
+	Data    map[string]any `json:"data,omitempty"`
+}
+
+func (s *Store) event(tx *sql.Tx, e Event) error {
+	if e.Data == nil {
+		e.Data = map[string]any{}
+	}
+	data, err := json.Marshal(e.Data)
+	if err != nil {
+		return err
+	}
+	var item any
+	if e.ItemID != 0 {
+		item = e.ItemID
+	}
+	_, err = tx.Exec(`INSERT INTO events (item_id, at, actor, kind, from_stage, to_stage, outcome, data) VALUES (?,?,?,?,?,?,?,?)`,
+		item, s.clock.Now().UnixNano(), e.Actor, e.Kind, e.From, e.To, e.Outcome, string(data))
+	return err
+}
+
+func transitionEvent(id int64, actor string, tr pipeline.Transition) Event {
+	return Event{ItemID: id, Actor: actor, Kind: tr.Kind, From: string(tr.From), To: string(tr.To), Outcome: string(tr.Outcome), Data: tr.Data}
+}
+
+// refuse records a refused action on an item, then returns err. Refusals of actions on items that
+// do not exist are not recorded (there is no history to add to).
+func (s *Store) refuse(ctx context.Context, actor string, id int64, action string, err error) error {
+	var pe *pipeline.Error
+	if !errors.As(err, &pe) || pe.Code == CodeNotFound {
+		return err
+	}
+	_ = s.tx(ctx, func(tx *sql.Tx) error {
+		return s.event(tx, Event{ItemID: id, Actor: actor, Kind: "refused",
+			Data: map[string]any{"action": action, "code": pe.Code, "message": pe.Message}})
+	})
+	return err
+}
+
+// ---- items ----
+
+const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
+	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason`
+
+type scanner interface{ Scan(...any) error }
+
+func scanItem(row scanner) (pipeline.Item, error) {
+	var (
+		it                  pipeline.Item
+		stage, ret          string
+		resources, approval string
+		created, updated    int64
+	)
+	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
+		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
+		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason)
+	if err != nil {
+		return it, err
+	}
+	it.Stage, it.ReturnStage = pipeline.Stage(stage), pipeline.Stage(ret)
+	it.Resources = splitList(resources)
+	if approval != "" {
+		it.Approval = &pipeline.Approval{}
+		if err := json.Unmarshal([]byte(approval), it.Approval); err != nil {
+			return it, err
+		}
+	}
+	it.CreatedAt, it.UpdatedAt = fromNanos(created), fromNanos(updated)
+	return it, nil
+}
+
+func splitList(s string) []string {
+	if s == "" {
+		return []string{}
+	}
+	return strings.Split(s, ",")
+}
+
+func fromNanos(n int64) time.Time { return time.Unix(0, n).UTC() }
+
+func loadItem(q interface {
+	QueryRow(string, ...any) *sql.Row
+}, id int64) (pipeline.Item, error) {
+	it, err := scanItem(q.QueryRow(`SELECT `+itemCols+` FROM items WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return it, errf(CodeNotFound, "no item %d", id)
+	}
+	return it, err
+}
+
+func saveItem(tx *sql.Tx, it pipeline.Item) error {
+	approval := ""
+	if it.Approval != nil {
+		b, err := json.Marshal(it.Approval)
+		if err != nil {
+			return err
+		}
+		approval = string(b)
+	}
+	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
+		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
+		summary=?, approval=?, updated_at=?, hold_reason=? WHERE id=?`,
+		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
+		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
+		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.ID)
+	return err
+}
+
+// NewItem is a request to add an item.
+type NewItem struct {
+	Title    string `json:"title"`
+	Ask      string `json:"ask"`
+	Repo     string `json:"repo"`
+	Priority string `json:"priority"`
+	Source   string `json:"source"`
+}
+
+// AddItem adds an item at triage.
+func (s *Store) AddItem(ctx context.Context, actor string, n NewItem) (pipeline.Item, error) {
+	it, err := pipeline.NewItem(n.Title, n.Ask, n.Repo, n.Priority, n.Source, s.clock.Now())
+	if err != nil {
+		return it, err
+	}
+	err = s.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.Exec(`INSERT INTO items (title, ask, repo, source, priority, stage, risk, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), it.Risk, it.CreatedAt.UnixNano(), it.UpdatedAt.UnixNano())
+		if err != nil {
+			return err
+		}
+		if it.ID, err = res.LastInsertId(); err != nil {
+			return err
+		}
+		return s.event(tx, Event{ItemID: it.ID, Actor: actor, Kind: "created", To: string(it.Stage),
+			Data: map[string]any{"title": it.Title, "priority": it.Priority, "source": it.Source, "repo": it.Repo}})
+	})
+	return it, err
+}
+
+// BoardRow is one line of the board.
+type BoardRow struct {
+	ID         int64     `json:"id"`
+	Title      string    `json:"title"`
+	Priority   string    `json:"priority"`
+	Stage      string    `json:"stage"`
+	Display    string    `json:"display"`
+	ClaimedBy  string    `json:"claimed_by,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	AgeSeconds int64     `json:"age_seconds"`
+}
+
+// ListItems is the board, highest priority first, then oldest. Empty filters match everything.
+func (s *Store) ListItems(ctx context.Context, stage, priority string) ([]BoardRow, error) {
+	q := `SELECT i.id, i.title, i.priority, i.stage, i.created_at, COALESCE(l.runner || '/' || l.agent, '')
+		FROM items i LEFT JOIN leases l ON l.item_id = i.id AND l.ended_at IS NULL WHERE 1=1`
+	var args []any
+	if stage != "" {
+		q += ` AND i.stage = ?`
+		args = append(args, stage)
+	}
+	if priority != "" {
+		q += ` AND i.priority = ?`
+		args = append(args, priority)
+	}
+	q += ` ORDER BY i.priority, i.created_at, i.id`
+	rows, err := s.r.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	now := s.clock.Now()
+	out := []BoardRow{}
+	for rows.Next() {
+		var b BoardRow
+		var created int64
+		if err := rows.Scan(&b.ID, &b.Title, &b.Priority, &b.Stage, &created, &b.ClaimedBy); err != nil {
+			return nil, err
+		}
+		b.CreatedAt = fromNanos(created)
+		b.AgeSeconds = int64(now.Sub(b.CreatedAt) / time.Second)
+		b.Display = pipeline.Display(pipeline.Stage(b.Stage), b.ClaimedBy != "")
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// Lease is a runner's hold on an item at a stage.
+type Lease struct {
+	ID        string         `json:"id"`
+	ItemID    int64          `json:"item_id"`
+	Stage     pipeline.Stage `json:"stage"`
+	Runner    string         `json:"runner"`
+	Agent     string         `json:"agent"`
+	Resources []string       `json:"resources"`
+	ClaimedAt time.Time      `json:"claimed_at"`
+	ExpiresAt time.Time      `json:"expires_at"`
+	Note      string         `json:"note,omitempty"`
+	EndedAt   *time.Time     `json:"ended_at,omitempty"`
+	EndReason string         `json:"end_reason,omitempty"`
+}
+
+const leaseCols = `id, item_id, stage, runner, agent, resources, claimed_at, expires_at, note, ended_at, end_reason`
+
+func scanLease(row scanner) (Lease, error) {
+	var (
+		l                Lease
+		stage, resources string
+		claimed, expires int64
+		ended            sql.NullInt64
+	)
+	if err := row.Scan(&l.ID, &l.ItemID, &stage, &l.Runner, &l.Agent, &resources, &claimed, &expires, &l.Note, &ended, &l.EndReason); err != nil {
+		return l, err
+	}
+	l.Stage, l.Resources = pipeline.Stage(stage), splitList(resources)
+	l.ClaimedAt, l.ExpiresAt = fromNanos(claimed), fromNanos(expires)
+	if ended.Valid {
+		t := fromNanos(ended.Int64)
+		l.EndedAt = &t
+	}
+	return l, nil
+}
+
+// Detail is one item with its history.
+type Detail struct {
+	Item     pipeline.Item `json:"item"`
+	Display  string        `json:"display"`
+	Lease    *Lease        `json:"lease,omitempty"`
+	Events   []Event       `json:"events"`
+	Evidence []Evidence    `json:"evidence"`
+}
+
+// GetItem returns an item, its live lease, events and evidence.
+func (s *Store) GetItem(ctx context.Context, id int64) (Detail, error) {
+	var d Detail
+	tx, err := s.r.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return d, err
+	}
+	defer tx.Rollback()
+	if d.Item, err = loadItem(tx, id); err != nil {
+		return d, err
+	}
+	l, err := scanLease(tx.QueryRow(`SELECT `+leaseCols+` FROM leases WHERE item_id = ? AND ended_at IS NULL`, id))
+	switch {
+	case err == nil:
+		d.Lease = &l
+	case !errors.Is(err, sql.ErrNoRows):
+		return d, err
+	}
+	d.Display = pipeline.Display(d.Item.Stage, d.Lease != nil)
+
+	rows, err := tx.Query(`SELECT id, at, actor, kind, from_stage, to_stage, outcome, data FROM events WHERE item_id = ? ORDER BY id`, id)
+	if err != nil {
+		return d, err
+	}
+	d.Events = []Event{}
+	for rows.Next() {
+		e := Event{ItemID: id}
+		var at int64
+		var data string
+		if err := rows.Scan(&e.ID, &at, &e.Actor, &e.Kind, &e.From, &e.To, &e.Outcome, &data); err != nil {
+			rows.Close()
+			return d, err
+		}
+		e.At = fromNanos(at)
+		if err := json.Unmarshal([]byte(data), &e.Data); err != nil {
+			rows.Close()
+			return d, err
+		}
+		d.Events = append(d.Events, e)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return d, err
+	}
+	d.Evidence, err = listEvidence(tx, id)
+	return d, err
+}
+
+// PatchItem changes priority or title.
+func (s *Store) PatchItem(ctx context.Context, actor string, id int64, priority, title *string) (pipeline.Item, error) {
+	return s.human(ctx, actor, id, "patch", func(it pipeline.Item) (pipeline.Transition, error) {
+		return pipeline.ApplyPatch(it, priority, title)
+	})
+}
+
+// Answer records the user's answer to a needs_you item.
+func (s *Store) Answer(ctx context.Context, actor string, id int64, text string) (pipeline.Item, error) {
+	return s.human(ctx, actor, id, "answer", func(it pipeline.Item) (pipeline.Transition, error) {
+		return pipeline.ApplyAnswer(it, text)
+	})
+}
+
+// Approve records the user's approval of a held merge for headSHA.
+func (s *Store) Approve(ctx context.Context, actor string, id int64, headSHA, words string) (pipeline.Item, error) {
+	return s.human(ctx, actor, id, "approve", func(it pipeline.Item) (pipeline.Transition, error) {
+		return pipeline.ApplyApprove(it, actor, headSHA, words, s.clock.Now())
+	})
+}
+
+// Hold records the user keeping a held merge held.
+func (s *Store) Hold(ctx context.Context, actor string, id int64, words string) (pipeline.Item, error) {
+	return s.human(ctx, actor, id, "hold", func(it pipeline.Item) (pipeline.Transition, error) {
+		return pipeline.ApplyHold(it, words)
+	})
+}
+
+func (s *Store) human(ctx context.Context, actor string, id int64, action string, rule func(pipeline.Item) (pipeline.Transition, error)) (pipeline.Item, error) {
+	var out pipeline.Item
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		it, err := loadItem(tx, id)
+		if err != nil {
+			return err
+		}
+		tr, err := rule(it)
+		if err != nil {
+			return err
+		}
+		tr.Item.UpdatedAt = s.clock.Now()
+		if err := saveItem(tx, tr.Item); err != nil {
+			return err
+		}
+		out = tr.Item
+		return s.event(tx, transitionEvent(id, actor, tr))
+	})
+	if err != nil {
+		return out, s.refuse(ctx, actor, id, action, err)
+	}
+	return out, nil
+}
+
+// ---- control ----
+
+func loadControl(q interface {
+	QueryRow(string, ...any) *sql.Row
+}) (pipeline.Control, error) {
+	var c pipeline.Control
+	var stopped int
+	var limits, rules string
+	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules FROM control WHERE id = 1`).
+		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules)
+	if err != nil {
+		return c, err
+	}
+	c.Stopped = stopped != 0
+	if err := json.Unmarshal([]byte(limits), &c.Limits); err != nil {
+		return c, err
+	}
+	if rules == "" {
+		c.HoldRules = pipeline.DefaultHoldRules()
+		return c, nil
+	}
+	err = json.Unmarshal([]byte(rules), &c.HoldRules)
+	return c, err
+}
+
+func saveControl(tx *sql.Tx, c pipeline.Control) error {
+	limits, err := json.Marshal(c.Limits)
+	if err != nil {
+		return err
+	}
+	if c.HoldRules == nil {
+		c.HoldRules = []pipeline.HoldRule{}
+	}
+	rules, err := json.Marshal(c.HoldRules)
+	if err != nil {
+		return err
+	}
+	stopped := 0
+	if c.Stopped {
+		stopped = 1
+	}
+	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=? WHERE id = 1`,
+		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules))
+	return err
+}
+
+// Control returns the current control row.
+func (s *Store) Control(ctx context.Context) (pipeline.Control, error) {
+	return loadControl(s.r)
+}
+
+// ControlPatch changes some of the control row; Limits are merged key by key, HoldRules
+// replace the whole list.
+type ControlPatch struct {
+	ActiveAgents  *int                 `json:"active_agents"`
+	Stopped       *bool                `json:"stopped"`
+	MaxRunMinutes *int                 `json:"max_run_minutes"`
+	Limits        map[string]int       `json:"limits"`
+	HoldRules     *[]pipeline.HoldRule `json:"hold_rules"`
+}
+
+// SetControl applies a patch to the control row and records it.
+func (s *Store) SetControl(ctx context.Context, actor string, p ControlPatch) (pipeline.Control, error) {
+	var out pipeline.Control
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		old, err := loadControl(tx)
+		if err != nil {
+			return err
+		}
+		c := old
+		c.Limits = map[string]int{}
+		for k, v := range old.Limits {
+			c.Limits[k] = v
+		}
+		if p.ActiveAgents != nil {
+			c.ActiveAgents = *p.ActiveAgents
+		}
+		if p.Stopped != nil {
+			c.Stopped = *p.Stopped
+		}
+		if p.MaxRunMinutes != nil {
+			c.MaxRunMinutes = *p.MaxRunMinutes
+		}
+		for k, v := range p.Limits {
+			c.Limits[k] = v
+		}
+		if p.HoldRules != nil {
+			c.HoldRules = *p.HoldRules
+		}
+		if err := c.Validate(); err != nil {
+			return err
+		}
+		if err := saveControl(tx, c); err != nil {
+			return err
+		}
+		out = c
+		return s.event(tx, Event{Actor: actor, Kind: "control", Data: map[string]any{"from": old, "to": c}})
+	})
+	return out, err
+}
+
+// ---- claims and leases ----
+
+// Claim is what a runner gets: the item, the stage it is to work, and the lease.
+type Claim struct {
+	Item  pipeline.Item  `json:"item"`
+	Stage pipeline.Stage `json:"stage"`
+	Lease Lease          `json:"lease"`
+}
+
+func newLeaseID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// Claim gives runnerName the best waiting item for req, or nil when there is nothing to do.
+func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.ClaimRequest) (*Claim, error) {
+	var out *Claim
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		now := s.clock.Now()
+		if err := s.sweep(tx); err != nil {
+			return err
+		}
+		caps := append([]string(nil), req.Capabilities...)
+		sort.Strings(caps)
+		if _, err := tx.Exec(`INSERT INTO runners (name, capabilities, last_seen) VALUES (?,?,?)
+			ON CONFLICT (name) DO UPDATE SET capabilities = excluded.capabilities, last_seen = excluded.last_seen`,
+			runnerName, strings.Join(caps, ","), now.UnixNano()); err != nil {
+			return err
+		}
+		ctl, err := loadControl(tx)
+		if err != nil {
+			return err
+		}
+		live, err := liveLeases(tx)
+		if err != nil {
+			return err
+		}
+		snap := make([]pipeline.LiveLease, len(live))
+		for i, l := range live {
+			snap[i] = pipeline.LiveLease{ItemID: l.ItemID, Stage: l.Stage, Resources: l.Resources}
+		}
+		waiting, err := waitingItems(tx)
+		if err != nil {
+			return err
+		}
+		it, ok := pipeline.Choose(ctl, waiting, snap, req)
+		if !ok {
+			return nil
+		}
+		id, err := newLeaseID()
+		if err != nil {
+			return err
+		}
+		l := Lease{ID: id, ItemID: it.ID, Stage: it.Stage, Runner: runnerName, Agent: req.Agent,
+			Resources: it.Resources, ClaimedAt: now, ExpiresAt: now.Add(LeaseTTL)}
+		if _, err := tx.Exec(`INSERT INTO leases (id, item_id, stage, runner, agent, resources, claimed_at, expires_at) VALUES (?,?,?,?,?,?,?,?)`,
+			l.ID, l.ItemID, string(l.Stage), l.Runner, l.Agent, strings.Join(l.Resources, ","), now.UnixNano(), l.ExpiresAt.UnixNano()); err != nil {
+			return err
+		}
+		out = &Claim{Item: it, Stage: it.Stage, Lease: l}
+		return s.event(tx, Event{ItemID: it.ID, Actor: "runner:" + runnerName, Kind: "claimed", From: string(it.Stage), To: string(it.Stage),
+			Data: map[string]any{"runner": runnerName, "agent": req.Agent, "lease": l.ID}})
+	})
+	return out, err
+}
+
+func liveLeases(tx *sql.Tx) ([]Lease, error) {
+	rows, err := tx.Query(`SELECT ` + leaseCols + ` FROM leases WHERE ended_at IS NULL ORDER BY claimed_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Lease
+	for rows.Next() {
+		l, err := scanLease(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+func waitingItems(tx *sql.Tx) ([]pipeline.Item, error) {
+	rows, err := tx.Query(`SELECT ` + itemCols + ` FROM items WHERE stage IN ('triage','build','review','land')
+		AND id NOT IN (SELECT item_id FROM leases WHERE ended_at IS NULL)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []pipeline.Item
+	for rows.Next() {
+		it, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+func endLease(tx *sql.Tx, id string, at time.Time, reason string) error {
+	_, err := tx.Exec(`UPDATE leases SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL`, at.UnixNano(), reason, id)
+	return err
+}
+
+// Sweep ends expired and overtime leases. loopd calls it on every request and once a minute.
+func (s *Store) Sweep(ctx context.Context) error {
+	// A cheap read first, so most requests do not take the write lock.
+	now := s.clock.Now()
+	ctl, err := loadControl(s.r)
+	if err != nil {
+		return err
+	}
+	var due int
+	err = s.r.QueryRowContext(ctx, `SELECT COUNT(*) FROM leases WHERE ended_at IS NULL AND (expires_at <= ? OR claimed_at <= ?)`,
+		now.UnixNano(), now.Add(-ctl.MaxRun()).UnixNano()).Scan(&due)
+	if err != nil || due == 0 {
+		return err
+	}
+	return s.tx(ctx, s.sweep)
+}
+
+func (s *Store) sweep(tx *sql.Tx) error {
+	now := s.clock.Now()
+	ctl, err := loadControl(tx)
+	if err != nil {
+		return err
+	}
+	live, err := liveLeases(tx)
+	if err != nil {
+		return err
+	}
+	for _, l := range live {
+		switch pipeline.JudgeLease(l.ClaimedAt, l.ExpiresAt, now, ctl.MaxRun()) {
+		case pipeline.LeaseExpired:
+			if err := endLease(tx, l.ID, now, "expired"); err != nil {
+				return err
+			}
+			if err := s.event(tx, Event{ItemID: l.ItemID, Actor: "loopd", Kind: "lease_expired", From: string(l.Stage), To: string(l.Stage),
+				Data: map[string]any{"lease": l.ID, "runner": l.Runner, "agent": l.Agent, "note": l.Note}}); err != nil {
+				return err
+			}
+		case pipeline.LeaseOvertime:
+			if err := endLease(tx, l.ID, now, "overtime"); err != nil {
+				return err
+			}
+			it, err := loadItem(tx, l.ItemID)
+			if err != nil {
+				return err
+			}
+			tr := pipeline.Overtime(it, l.Note, ctl.MaxRun())
+			tr.Item.UpdatedAt = now
+			if err := saveItem(tx, tr.Item); err != nil {
+				return err
+			}
+			tr.Data["lease"], tr.Data["runner"], tr.Data["agent"] = l.ID, l.Runner, l.Agent
+			if err := s.event(tx, transitionEvent(l.ItemID, "loopd", tr)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Heartbeat keeps a lease alive. stop is true when the runner should stop: control is stopped
+// (the lease then ends and the item returns to its queue), or the lease has already ended.
+func (s *Store) Heartbeat(ctx context.Context, runnerName, leaseID, note string) (stop bool, err error) {
+	err = s.tx(ctx, func(tx *sql.Tx) error {
+		if err := s.sweep(tx); err != nil {
+			return err
+		}
+		now := s.clock.Now()
+		l, err := scanLease(tx.QueryRow(`SELECT `+leaseCols+` FROM leases WHERE id = ?`, leaseID))
+		if errors.Is(err, sql.ErrNoRows) {
+			return errf(CodeNotFound, "no lease %s", leaseID)
+		}
+		if err != nil {
+			return err
+		}
+		if l.Runner != runnerName {
+			return errf(CodeNotYourLease, "lease %s is held by another runner", leaseID)
+		}
+		if _, err := tx.Exec(`UPDATE runners SET last_seen = ? WHERE name = ?`, now.UnixNano(), runnerName); err != nil {
+			return err
+		}
+		if l.EndedAt != nil {
+			stop = true
+			return nil
+		}
+		ctl, err := loadControl(tx)
+		if err != nil {
+			return err
+		}
+		if ctl.Stopped {
+			stop = true
+			if err := endLease(tx, l.ID, now, "stopped"); err != nil {
+				return err
+			}
+			return s.event(tx, Event{ItemID: l.ItemID, Actor: "loopd", Kind: "stopped", From: string(l.Stage), To: string(l.Stage),
+				Data: map[string]any{"lease": l.ID, "runner": l.Runner, "agent": l.Agent, "note": note}})
+		}
+		if note == "" {
+			note = l.Note
+		}
+		_, err = tx.Exec(`UPDATE leases SET expires_at = ?, note = ? WHERE id = ?`, now.Add(LeaseTTL).UnixNano(), note, l.ID)
+		return err
+	})
+	return stop, err
+}
+
+// heldLease returns the item's live lease if runnerName holds it.
+func heldLease(tx *sql.Tx, id int64, runnerName string) (Lease, error) {
+	l, err := scanLease(tx.QueryRow(`SELECT `+leaseCols+` FROM leases WHERE item_id = ? AND ended_at IS NULL`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return l, errf(CodeNoLease, "item %d has no live lease", id)
+	}
+	if err != nil {
+		return l, err
+	}
+	if l.Runner != runnerName {
+		return l, errf(CodeNotYourLease, "item %d is leased by another runner", id)
+	}
+	return l, nil
+}
+
+// Advance finishes the stage runnerName holds a lease on, with an outcome.
+// changedPaths are the PR's changed files, required by pr_opened, merged and land's hold.
+func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcome pipeline.Outcome, fields map[string]string, changedPaths []string) (pipeline.Item, error) {
+	var out pipeline.Item
+	actor := "runner:" + runnerName
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		if err := s.sweep(tx); err != nil {
+			return err
+		}
+		now := s.clock.Now()
+		it, err := loadItem(tx, id)
+		if err != nil {
+			return err
+		}
+		l, err := heldLease(tx, id, runnerName)
+		if err != nil {
+			return err
+		}
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM evidence WHERE lease_id = ?`, l.ID).Scan(&n); err != nil {
+			return err
+		}
+		ctl, err := loadControl(tx)
+		if err != nil {
+			return err
+		}
+		tr, err := pipeline.ApplyAdvance(it, pipeline.Advance{Outcome: outcome, Fields: fields, Evidence: n, Agent: l.Agent,
+			ChangedPaths: changedPaths, HoldRules: ctl.HoldRules}, now)
+		if err != nil {
+			return err
+		}
+		if err := saveItem(tx, tr.Item); err != nil {
+			return err
+		}
+		if err := endLease(tx, l.ID, now, "advanced"); err != nil {
+			return err
+		}
+		tr.Data["lease"] = l.ID
+		if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
+			return err
+		}
+		if tr.ActiveAgentsZero {
+			ctl, err := loadControl(tx)
+			if err != nil {
+				return err
+			}
+			before := ctl
+			ctl.ActiveAgents = 0
+			if err := saveControl(tx, ctl); err != nil {
+				return err
+			}
+			if err := s.event(tx, Event{Actor: "loopd", Kind: "control", Data: map[string]any{
+				"from": before, "to": ctl, "reason": "usage_limit", "item": id, "error": fields["error"], "reset": fields["reset"]}}); err != nil {
+				return err
+			}
+		}
+		out = tr.Item
+		return nil
+	})
+	if err != nil {
+		return out, s.refuse(ctx, actor, id, "advance "+string(outcome), err)
+	}
+	return out, nil
+}

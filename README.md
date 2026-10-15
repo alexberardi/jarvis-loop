@@ -10,4 +10,4 @@ through Slack.
 - `loop`: the CLI over the same API.
 
 Design: [docs/DESIGN.md](docs/DESIGN.md) (the living version, with drawings, is linked at its top).
-Status: rollout phase 1 (repo and design) done; phase 2 (loopd core) in progress.
+Status: rollout phase 1 (repo and design) done; phase 2 (loopd core) in review.
