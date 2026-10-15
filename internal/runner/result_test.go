@@ -45,6 +45,7 @@ func TestValidateResult(t *testing.T) {
 		{"good", goodResult(), nil, []string{"after.txt"}, ""},
 		{"good with the head it means", withField(`"head_sha":"` + headSHA + `"`), nil, []string{"after.txt"}, ""},
 		{"needs review", withField(`"needs_review":true`), nil, []string{"after.txt"}, ""},
+		{"needs qa is not a build field", withField(`"needs_qa":true`), nil, []string{"after.txt"}, `field "needs_qa" is not part of outcome ready_for_pr`},
 		{"question", `{"outcome":"question","question":"Which screen?"}`, nil, nil, ""},
 		{"question without text", `{"outcome":"question","question":"  "}`, nil, nil, "question is empty"},
 		{"question with a dirty worktree", `{"outcome":"question","question":"Which screen?"}`, func(f *GitFacts) { f.Dirty = []string{"?? x.go"} }, nil, ""},
@@ -158,6 +159,7 @@ func TestValidateTriage(t *testing.T) {
 		{"has a repo: none given", repro(``), "demo", "", ""},
 		{"has a repo: the same, dropped", repro(`"repo":"alexberardi/demo",`), "demo", "", ""},
 		{"has a repo: cannot change it", repro(`"repo":"jarvis-loop",`), "demo", "", "cannot change it"},
+		{"needs qa", repro(`"needs_qa":true,`), "demo", "", ""},
 		{"gpu", strings.Replace(repro(``), `"resources":[]`, `"resources":["gpu","voice"]`, 1), "demo", "", ""},
 		{"unknown resource", strings.Replace(repro(``), `"resources":[]`, `"resources":["tpu"]`, 1), "demo", "", "unknown resource"},
 		{"bad size", strings.Replace(repro(``), `"size":"S"`, `"size":"XL"`, 1), "demo", "", "size must be"},
@@ -198,6 +200,8 @@ func TestValidateReview(t *testing.T) {
 		review         string
 	}{
 		{"approved", `{"outcome":"approved","summary":"Tests fail without the fix.","review":"**Approved.** Ran the check."}`, "", "**Approved.** Ran the check."},
+		{"approved, needs qa", `{"outcome":"approved","summary":"s","review":"r","needs_qa":true}`, "", "r"},
+		{"needs qa on a bounce", `{"outcome":"bounce","notes":"n","needs_qa":true}`, `field "needs_qa"`, ""},
 		{"approved for the head", `{"outcome":"approved","summary":"s","review":"r","head_sha":"` + headSHA + `"}`, "", "r"},
 		{"approved for another head", `{"outcome":"approved","summary":"s","review":"r","head_sha":"` + otherSHA + `"}`, "not the reviewed commit", ""},
 		{"approved without a review", `{"outcome":"approved","summary":"s"}`, "review (the PR comment) is required", ""},

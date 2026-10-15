@@ -250,6 +250,9 @@ func TestAuth(t *testing.T) {
 	e.refused(runnerTok, "POST", "/items/1/approve", map[string]any{"head_sha": shaA}, 403, "forbidden")
 	e.refused(runnerTok, "POST", "/items/1/hold", map[string]any{}, 403, "forbidden")
 	e.refused(runnerTok, "POST", "/items/1/drop", map[string]any{"words": "x"}, 403, "forbidden")
+	e.refused(runnerTok, "POST", "/items/1/qa", map[string]any{}, 403, "forbidden")
+	e.refused(runnerTok, "POST", "/items/1/verified", map[string]any{}, 403, "forbidden")
+	e.refused(runnerTok, "POST", "/items/1/reopen", map[string]any{"words": "x"}, 403, "forbidden")
 	// Both.
 	id := e.addItem("from the user")
 	var it struct{ ID int64 }
@@ -841,4 +844,51 @@ func TestDropRoute(t *testing.T) {
 	if ids := toClose(); len(ids) != 0 {
 		t.Fatalf("after pr_closed: %v", ids)
 	}
+}
+
+// The QA lane: the user marks an item needs_qa before it lands; merged puts it in qa; Verified moves
+// it to done, Reopen files a linked P2 item (docs/decisions/2026-10-15-qa.md).
+func TestQARoutes(t *testing.T) {
+	e := newEnv(t)
+	merge := func(id int64) {
+		e.t.Helper()
+		e.mustClaim("lander", id, "land")
+		e.advance(id, "merged", map[string]string{"merge_sha": shaB, "head_sha": shaA}, 200)
+	}
+	a := e.toLand("normal", []string{"M internal/x.go"})
+	e.do(userTok, "POST", fmt.Sprintf("/items/%d/qa", a), map[string]any{}, 200, nil)
+	merge(a)
+	if d := e.get(a); d.Item.Stage != "qa" {
+		t.Fatalf("a after merged: %s", d.Item.Stage)
+	}
+	e.refused(userTok, "POST", fmt.Sprintf("/items/%d/qa", a), map[string]any{}, 409, "wrong_stage")
+	// b, from a repo with qa: true (the land script's needs_qa).
+	b := e.toLand("normal", []string{"M internal/x.go"})
+	e.mustClaim("lander", b, "land")
+	e.advance(b, "merged", map[string]string{"merge_sha": shaB, "head_sha": shaA, "needs_qa": "true"}, 200)
+	e.refused(userTok, "POST", fmt.Sprintf("/items/%d/reopen", a), map[string]any{"words": " "}, 400, "missing_field")
+	var out struct {
+		Item struct {
+			ID    int64
+			Stage string
+		}
+		Filed struct {
+			ID       int64  `json:"id"`
+			Priority string `json:"priority"`
+			ReopenOf int64  `json:"reopen_of"`
+			Ask      string `json:"ask"`
+		}
+	}
+	e.do(userTok, "POST", fmt.Sprintf("/items/%d/reopen", a), map[string]any{"words": "still broken"}, 200, &out)
+	if out.Item.Stage != "done" || out.Filed.ReopenOf != a || out.Filed.Priority != "P2" || out.Filed.Ask != "still broken" {
+		t.Fatalf("reopen: %+v", out)
+	}
+
+	e.do(userTok, "POST", fmt.Sprintf("/items/%d/verified", b), map[string]any{"words": "ok on the phone"}, 200, nil)
+	d := e.get(b)
+	last := d.Events[len(d.Events)-1]
+	if d.Item.Stage != "done" || last.Kind != "verified" || last.Data["words"] != "ok on the phone" {
+		t.Fatalf("verified: %s %+v", d.Item.Stage, last)
+	}
+	e.refused(userTok, "POST", fmt.Sprintf("/items/%d/verified", b), map[string]any{}, 409, "wrong_stage")
 }

@@ -258,6 +258,9 @@ func (r *Runner) landAdvance(ctx context.Context, lr *landRun, d Decision, paths
 		fields[k] = v
 	}
 	fields["runner_agent"] = lr.agent
+	if d.Outcome == "merged" && lr.repo.QA {
+		fields["needs_qa"] = "true" // the repo's default: loopd puts the item in qa
+	}
 	if d.Outcome == "failed" {
 		paths = nil
 	}

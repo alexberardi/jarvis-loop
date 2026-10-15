@@ -56,7 +56,7 @@ func (p *page) auth(next http.HandlerFunc) http.Handler {
 
 // order is the board's column order: what needs the user first, then work in flight, then history.
 var order = []string{
-	"needs-you", "held", "land", "land (queued)", "review", "review (queued)",
+	"needs-you", "held", "qa", "land", "land (queued)", "review", "review (queued)",
 	"build", "ready", "triage", "intake", "done", "closed",
 }
 

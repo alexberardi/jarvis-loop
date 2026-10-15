@@ -111,6 +111,14 @@ func (b *Bot) digestMessage(ctx context.Context, from, to time.Time, evs []store
 	if !found {
 		return Message{}, false
 	}
+	// The items waiting in qa now, whatever happened in the window (they alone post no digest).
+	if rows, err := b.c.Store.ListItems(ctx, string(pipeline.QA), ""); err == nil {
+		qa := &group{name: "Waiting for your check"}
+		for _, r := range rows {
+			addTo(qa, r.ID)
+		}
+		secs = append(secs, qa)
+	}
 	f, t := from.In(b.c.Location), to.In(b.c.Location)
 	window := fmt.Sprintf("%s %s–%s", t.Format("Mon Jan 2"), f.Format("15:04"), t.Format("15:04"))
 	if f.YearDay() != t.YearDay() || f.Year() != t.Year() {

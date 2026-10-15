@@ -113,6 +113,10 @@ type RepoConfig struct {
 	// Verify are the runner's own steps after a build, before it pushes (verify.go): they come
 	// from this config only, never from the agent or the repo's PR.
 	Verify []VerifyStep `json:"verify,omitempty"`
+	// QA: every item of this repo waits in qa for the user's own check once merged (land sends
+	// needs_qa with merged), as for the mobile app, which reaches TestFlight and Play only after
+	// merge (docs/decisions/2026-10-15-qa.md).
+	QA bool `json:"qa,omitempty"`
 }
 
 // Groups are the kinds of repo a config may name.

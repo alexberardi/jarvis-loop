@@ -300,7 +300,7 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 // ---- items ----
 
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
-	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason`
+	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of`
 
 type scanner interface{ Scan(...any) error }
 
@@ -313,7 +313,7 @@ func scanItem(row scanner) (pipeline.Item, error) {
 	)
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
-		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason)
+		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf)
 	if err != nil {
 		return it, err
 	}
@@ -359,10 +359,10 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 	}
 	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
-		summary=?, approval=?, updated_at=?, hold_reason=? WHERE id=?`,
+		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
-		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.ID)
+		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.ID)
 	return err
 }
 
@@ -382,18 +382,26 @@ func (s *Store) AddItem(ctx context.Context, actor string, n NewItem) (pipeline.
 		return it, err
 	}
 	err = s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.Exec(`INSERT INTO items (title, ask, repo, source, priority, stage, risk, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), it.Risk, it.CreatedAt.UnixNano(), it.UpdatedAt.UnixNano())
-		if err != nil {
-			return err
-		}
-		if it.ID, err = res.LastInsertId(); err != nil {
-			return err
-		}
-		return s.event(tx, Event{ItemID: it.ID, Actor: actor, Kind: "created", To: string(it.Stage),
-			Data: map[string]any{"title": it.Title, "priority": it.Priority, "source": it.Source, "repo": it.Repo}})
+		return s.insertItem(tx, actor, &it)
 	})
 	return it, err
+}
+
+// insertItem adds a new item and its created event, setting it.ID.
+func (s *Store) insertItem(tx *sql.Tx, actor string, it *pipeline.Item) error {
+	res, err := tx.Exec(`INSERT INTO items (title, ask, repo, source, priority, stage, risk, created_at, updated_at, reopen_of) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), it.Risk, it.CreatedAt.UnixNano(), it.UpdatedAt.UnixNano(), it.ReopenOf)
+	if err != nil {
+		return err
+	}
+	if it.ID, err = res.LastInsertId(); err != nil {
+		return err
+	}
+	data := map[string]any{"title": it.Title, "priority": it.Priority, "source": it.Source, "repo": it.Repo}
+	if it.ReopenOf != 0 {
+		data["reopen_of"] = it.ReopenOf
+	}
+	return s.event(tx, Event{ItemID: it.ID, Actor: actor, Kind: "created", To: string(it.Stage), Data: data})
 }
 
 // BoardRow is one line of the board.

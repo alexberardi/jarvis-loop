@@ -31,6 +31,9 @@ type Result struct {
 	Evidence    []Evidence `json:"evidence,omitempty"`
 	NeedsReview bool       `json:"needs_review,omitempty"`
 	Question    string     `json:"question,omitempty"`
+	// NeedsQA (triage's reproduced, review's approved): once merged, the item waits in qa for the
+	// user's own check (docs/decisions/2026-10-15-qa.md).
+	NeedsQA bool `json:"needs_qa,omitempty"`
 
 	// Triage's.
 	Repo      string   `json:"repo,omitempty"`
@@ -95,10 +98,10 @@ var StageOutcomes = map[string][]string{
 var outcomeFields = map[string][]string{
 	"question":         {"question"},
 	OutcomeReadyForPR:  {"pr_title", "pr_body", "head_sha", "summary", "not_verified", "evidence", "needs_review"},
-	"reproduced":       {"repo", "area", "size", "risk", "resources", "summary", "notes", "evidence", "not_verified"},
+	"reproduced":       {"repo", "area", "size", "risk", "resources", "summary", "notes", "evidence", "not_verified", "needs_qa"},
 	OutcomeRouted:      {"repo", "why"},
 	"not_reproducible": {"summary", "notes", "evidence", "not_verified"},
-	"approved":         {"summary", "review", "head_sha", "evidence", "not_verified", "needs_review"},
+	"approved":         {"summary", "review", "head_sha", "evidence", "not_verified", "needs_review", "needs_qa"},
 	"bounce":           {"notes", "review", "head_sha", "evidence"},
 }
 

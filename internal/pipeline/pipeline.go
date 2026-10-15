@@ -23,12 +23,15 @@ const (
 	Land     Stage = "land"
 	NeedsYou Stage = "needs_you"
 	Held     Stage = "held"
-	Done     Stage = "done"
-	Closed   Stage = "closed"
+	// QA is a merged item waiting for the user's own check (docs/decisions/2026-10-15-qa.md):
+	// nothing claims it; the user's Verified or Reopen moves it to done.
+	QA     Stage = "qa"
+	Done   Stage = "done"
+	Closed Stage = "closed"
 )
 
 // AllStages lists every stage, in pipeline order.
-var AllStages = []Stage{Triage, Build, Review, Land, NeedsYou, Held, Done, Closed}
+var AllStages = []Stage{Triage, Build, Review, Land, NeedsYou, Held, QA, Done, Closed}
 
 // IsWork reports whether runners can claim items in this stage.
 func (s Stage) IsWork() bool {
@@ -158,8 +161,12 @@ type Item struct {
 	MergeSHA     string    `json:"merge_sha,omitempty"`
 	Summary      string    `json:"summary,omitempty"`
 	Approval     *Approval `json:"approval,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	// NeedsQA: once merged, the item waits in qa for the user's check instead of going to done.
+	NeedsQA bool `json:"needs_qa"`
+	// ReopenOf is the qa item whose Reopen filed this one.
+	ReopenOf  int64     `json:"reopen_of,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ValidPriority reports whether p is P1–P5.
@@ -334,9 +341,14 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 			data["repo"] = repo
 		}
 		it.Area, it.Size, it.Resources = area, size, res
+		qa, err := f.needsQA()
+		if err != nil {
+			return Transition{}, err
+		}
 		if risk == RiskHold {
 			raiseRisk(&it, []string{"triage: risk hold"})
 		}
+		it.NeedsQA = it.NeedsQA || qa
 		it.Stage = Build
 	case Routed:
 		repo, err := f.need("repo")
@@ -437,6 +449,11 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		default:
 			return Transition{}, errf(CodeInvalidField, "needs_review must be true or false")
 		}
+		qa, err := f.needsQA()
+		if err != nil {
+			return Transition{}, err
+		}
+		it.NeedsQA = it.NeedsQA || qa
 		it.Summary = summary
 		it.Stage = Land
 	case Bounce:
@@ -469,6 +486,11 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if err != nil {
 			return Transition{}, err
 		}
+		// The land script sends needs_qa for a repo whose config has qa: true.
+		qa, err := f.needsQA()
+		if err != nil {
+			return Transition{}, err
+		}
 		// Risk is recomputed on what was actually merged; the approval must be for that head.
 		raiseRisk(&it, holdReasons(paths))
 		if it.Risk == RiskHold && (it.Approval == nil || it.Approval.HeadSHA != head) {
@@ -477,7 +499,11 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		}
 		it.HeadSHA = head
 		it.MergeSHA = sha
+		it.NeedsQA = it.NeedsQA || qa
 		it.Stage = Done
+		if it.NeedsQA {
+			it.Stage = QA
+		}
 	case Hold:
 		reason, err := f.need("reason")
 		if err != nil {
@@ -644,6 +670,59 @@ func ApplyDrop(it Item, words string) (Transition, error) {
 		Data: map[string]any{"reason": DropReason, "words": strings.TrimSpace(words)}}, nil
 }
 
+// ApplySetQA marks an item needs_qa at the user's word, before it lands: once merged it waits in
+// qa for the user's check.
+func ApplySetQA(it Item) (Transition, error) {
+	switch it.Stage {
+	case QA, Done, Closed:
+		return Transition{}, errf(CodeWrongStage, "item is %s; mark it before it lands", it.Stage)
+	}
+	it.NeedsQA = true
+	return Transition{Item: it, From: it.Stage, To: it.Stage, Kind: "qa_marked", Data: map[string]any{"needs_qa": true}}, nil
+}
+
+// ApplyVerified is the user's check of a merged item passing: qa → done.
+func ApplyVerified(it Item, words string) (Transition, error) {
+	if it.Stage != QA {
+		return Transition{}, errf(CodeWrongStage, "item is %s, not qa", it.Stage)
+	}
+	it.Stage = Done
+	return Transition{Item: it, From: QA, To: Done, Kind: "verified", Data: map[string]any{"words": strings.TrimSpace(words)}}, nil
+}
+
+// ApplyReopen is the user's check of a merged item failing: qa → done, and the caller files a new
+// item (NewReopen) with the user's words as its ask. The merged work is not undone.
+func ApplyReopen(it Item, words string) (Transition, error) {
+	if it.Stage != QA {
+		return Transition{}, errf(CodeWrongStage, "item is %s, not qa", it.Stage)
+	}
+	words = strings.TrimSpace(words)
+	if words == "" {
+		return Transition{}, errf(CodeMissingField, "say what is wrong: the words are the new item's ask")
+	}
+	it.Stage = Done
+	return Transition{Item: it, From: QA, To: Done, Kind: "reopened", Data: map[string]any{"words": words}}, nil
+}
+
+// ReopenPriority is a reopened item's priority: something merged is broken.
+const ReopenPriority = "P2"
+
+// NewReopen is the item a Reopen files: P2, the same repo, the user's words as the ask, linked to
+// the qa item.
+func NewReopen(it Item, words string, now time.Time) (Item, error) {
+	words = strings.TrimSpace(words)
+	title := fmt.Sprintf("Reopen #%d: %s", it.ID, strings.Join(strings.Fields(words), " "))
+	if r := []rune(title); len(r) > 100 {
+		title = string(r[:99]) + "…"
+	}
+	n, err := NewItem(title, words, it.Repo, ReopenPriority, "user", now)
+	if err != nil {
+		return n, err
+	}
+	n.ReopenOf = it.ID
+	return n, nil
+}
+
 // ApplyPatch changes an item's priority or title.
 func ApplyPatch(it Item, priority, title *string) (Transition, error) {
 	if it.Stage == Done || it.Stage == Closed {
@@ -690,6 +769,17 @@ func (f fields) need(k string) (string, error) {
 		return "", errf(CodeMissingField, "%s is required", k)
 	}
 	return v, nil
+}
+
+// needsQA reads an optional needs_qa: "" and "false" are false.
+func (f fields) needsQA() (bool, error) {
+	switch strings.TrimSpace(f["needs_qa"]) {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	}
+	return false, errf(CodeInvalidField, "needs_qa must be true or false")
 }
 
 func (f fields) oneOf(k string, allowed []string) (string, error) {

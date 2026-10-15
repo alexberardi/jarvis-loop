@@ -96,7 +96,8 @@ Write `.loop/result.json` as your last step, exactly one of:
 {"outcome": "reproduced", "repo": "owner/name (only when the item has no repo)",
  "area": "a short area name", "size": "S | M | L", "risk": "normal | hold", "resources": ["gpu", "voice", "emulator", "macos"],
  "summary": "one paragraph: what you found", "notes": "markdown: what to change, where, how to verify, what you could not check",
- "evidence": [{"file": "evidence/repro.log", "label": "the failing test on main"}]}
+ "evidence": [{"file": "evidence/repro.log", "label": "the failing test on main"}],
+ "needs_qa": false}
 ```
 
 ```json
@@ -114,4 +115,4 @@ When the item has no repo yet (no checkouts this run), name it first:
 {"outcome": "routed", "repo": "owner/name", "why": "one line: why this repo"}
 ```
 
-`resources` lists only what verifying the change needs (often `[]`). The runner checks `repo` against the configured repos and uploads your `notes` (as `triage-notes.md`) and the files in `.loop/evidence/` with the item. After `routed`, the item is triaged again with that repo checked out. No other fields.
+`resources` lists only what verifying the change needs (often `[]`). The runner checks `repo` against the configured repos and uploads your `notes` (as `triage-notes.md`) and the files in `.loop/evidence/` with the item. After `routed`, the item is triaged again with that repo checked out. Set `needs_qa` to true when only the user can check the change once it is merged (on their phone or hardware): the item then waits in qa after it lands. No other fields.

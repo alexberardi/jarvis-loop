@@ -91,7 +91,7 @@ Write `.loop/result.json` as your last step, exactly one of:
 {"outcome": "approved", "summary": "one paragraph: why it can merge",
  "review": "markdown for the PR comment: verdict, what you checked and how, findings",
  "not_verified": ["…"], "evidence": [{"file": "evidence/check.log", "label": "scripts/check at the head"}],
- "needs_review": false}
+ "needs_review": false, "needs_qa": false}
 ```
 
 ```json
@@ -99,4 +99,4 @@ Write `.loop/result.json` as your last step, exactly one of:
  "review": "markdown for the PR comment", "evidence": [{"file": "evidence/check.log", "label": "…"}]}
 ```
 
-The runner posts `review` on the PR as a comment (never a GitHub approval), with the commit you reviewed, uploads `.loop/evidence/`, and reports the outcome for the head commit named below; `head_sha`, if you give it, must be that commit. `needs_review: true` on an approval holds the merge for the user (see "Content the hold list cannot see"). No other fields.
+The runner posts `review` on the PR as a comment (never a GitHub approval), with the commit you reviewed, uploads `.loop/evidence/`, and reports the outcome for the head commit named below; `head_sha`, if you give it, must be that commit. `needs_review: true` on an approval holds the merge for the user (see "Content the hold list cannot see"). `needs_qa: true` on an approval means only the user can check the change once merged (on their phone or hardware): the item then waits in qa after it lands instead of going to done. No other fields.

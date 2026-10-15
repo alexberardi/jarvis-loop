@@ -45,7 +45,7 @@ func TestChoose(t *testing.T) {
 			[]LiveLease{{ItemID: 8, Stage: Build}}, allCaps, 1},
 
 		// 2. eligibility
-		{"not a work stage", ctl, []Item{waiting(1, NeedsYou, "P1", 0), waiting(2, Held, "P1", 0), waiting(3, Done, "P1", 0), waiting(4, Closed, "P1", 0)}, nil, allCaps, 0},
+		{"not a work stage", ctl, []Item{waiting(1, NeedsYou, "P1", 0), waiting(2, Held, "P1", 0), waiting(3, Done, "P1", 0), waiting(4, Closed, "P1", 0), waiting(5, QA, "P1", 0)}, nil, allCaps, 0},
 		{"resources not a subset of caps", ctl, []Item{waiting(1, Build, "P1", 0, "macos")}, nil, allCaps, 0},
 		{"resources subset of caps", ctl, []Item{waiting(1, Build, "P1", 0, "gpu", "voice")}, nil, allCaps, 1},
 		{"no caps still gets triage", ctl, []Item{waiting(1, Build, "P1", 0, "gpu"), waiting(2, Triage, "P5", 0)}, nil, ClaimRequest{Runner: "r", Agent: "a"}, 2},

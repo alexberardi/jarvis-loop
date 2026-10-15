@@ -203,3 +203,33 @@ func TestCLIDrop(t *testing.T) {
 		t.Fatalf("second drop: %d %q", code, errs)
 	}
 }
+
+func TestCLIQA(t *testing.T) {
+	st, err := store.Open(t.TempDir(), clock.NewFake(time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	toks, _ := api.ParseTokens(strings.NewReader(userTok + "\tuser\talex\n" + runnerTok + "\trunner\tdevbox\n"))
+	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler)))
+	defer srv.Close()
+	c := cli{t: t, url: srv.URL}
+
+	c.ok(userTok, "add", "bigger pairing code", "--repo", "jarvis-node-mobile")
+	if code, _, errs := c.run(runnerTok, "qa", "1"); code != 1 || !strings.Contains(errs, "forbidden") {
+		t.Fatalf("qa with a runner token: %d %q", code, errs)
+	}
+	if out := c.ok(userTok, "qa", "1"); !strings.Contains(out, "#1 waits in qa") {
+		t.Fatalf("qa: %q", out)
+	}
+	if out := c.ok(userTok, "show", "1"); !strings.Contains(out, "qa:       waits for your check") {
+		t.Fatalf("show after qa: %q", out)
+	}
+	// Verified and reopen only from qa.
+	if code, _, errs := c.run(userTok, "verified", "1"); code != 1 || !strings.Contains(errs, "wrong_stage") {
+		t.Fatalf("verified in triage: %d %q", code, errs)
+	}
+	if code, _, errs := c.run(userTok, "reopen", "1", "broken"); code != 1 || !strings.Contains(errs, "wrong_stage") {
+		t.Fatalf("reopen in triage: %d %q", code, errs)
+	}
+}

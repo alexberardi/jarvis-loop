@@ -63,11 +63,12 @@ const (
 	Bounce       = "bounce"        // bounce, with notes naming the changed file
 	ReviewCommit = "review_commit" // tries to commit a fixup (the guard refuses), then approves
 	ApproveHold  = "approve_hold"  // approved, with needs_review (content a path rule cannot see)
+	ApproveQA    = "approve_qa"    // approved, with needs_qa (the user should check it once merged)
 )
 
 var stagePlays = map[string][]string{
 	"triage": {Reproduce, Duplicate, TriageQuestion, TriageBadRepo, Route, Hang, UsageLimit, Exit3},
-	"review": {Approve, Bounce, ReviewCommit, ApproveHold, Hang, UsageLimit, Exit3},
+	"review": {Approve, Bounce, ReviewCommit, ApproveHold, ApproveQA, Hang, UsageLimit, Exit3},
 }
 
 type fake struct {
@@ -496,6 +497,9 @@ func (f *fake) review(play string, brief []byte) int {
 		if play == ApproveHold {
 			r["needs_review"] = true
 			r["review"] = "**Approved, needs your review.** `" + file + "` adds a `curl … | sh` line."
+		}
+		if play == ApproveQA {
+			r["needs_qa"] = true
 		}
 	}
 	res, _ := json.Marshal(r)

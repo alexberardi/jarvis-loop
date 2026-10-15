@@ -60,6 +60,9 @@ func New(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
 	route("POST /items/{id}/approve", user, s.approve)
 	route("POST /items/{id}/hold", user, s.hold)
 	route("POST /items/{id}/drop", user, s.drop)
+	route("POST /items/{id}/qa", user, s.setQA)
+	route("POST /items/{id}/verified", user, s.verified)
+	route("POST /items/{id}/reopen", user, s.reopen)
 	route("GET /control", both, s.getControl)
 	route("PUT /control", user, s.putControl)
 	return Logged(log, mux)
@@ -594,6 +597,64 @@ func (s *server) drop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, it)
+}
+
+// setQA marks an item needs_qa before it lands (store.SetQA).
+func (s *server) setQA(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct{}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.SetQA(r.Context(), PrincipalFrom(r.Context()).Actor(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// verified is the user's check of a qa item passing (store.Verified).
+func (s *server) verified(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Words string `json:"words"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.Verified(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Words)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// reopen is the user's check of a qa item failing (store.Reopen): the item and the one it filed.
+func (s *server) reopen(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Words string `json:"words"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, filed, err := s.st.Reopen(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Words)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"item": it, "filed": filed})
 }
 
 func (s *server) getControl(w http.ResponseWriter, r *http.Request) {
