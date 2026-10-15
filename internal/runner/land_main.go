@@ -28,7 +28,8 @@ func (r *Runner) Wait() { r.bg.Wait() }
 
 // watchMain polls the Actions runs on the merge commit until all complete, up to the config's
 // land_main_wait, then records main_ci on the item: green, red (and files a P1 item naming the
-// failing runs, which the bot posts with an @mention of the approver) or timeout.
+// failing runs, which the bot posts with an @mention of the approver), superseded (a run was
+// cancelled, none failed: no P1) or timeout.
 func (r *Runner) watchMain(ctx context.Context, lr *landRun, mergeSHA string) {
 	wait := r.Cfg.mainWait
 	if wait <= 0 {

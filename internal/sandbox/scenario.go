@@ -65,7 +65,7 @@ type Step struct {
 	// clock
 	Advance string `json:"advance,omitempty"`
 	// ci: the CI checks on the item's PR head (name -> pass, fail, pending, cancel, skip), and how
-	// the workflow runs on main's commits go (name -> pass, fail, pending)
+	// the workflow runs on main's commits go (name -> pass, fail, pending, cancel)
 	Checks map[string]string `json:"checks,omitempty"`
 	Main   map[string]string `json:"main,omitempty"`
 	// push: a commit by someone else to the item's branch, or to Branch ("main") of the demo

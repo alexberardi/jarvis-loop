@@ -339,19 +339,23 @@ func ParseRuns(raw []byte) ([]WorkflowRun, error) {
 }
 
 // MainResult is main's CI on a merge commit: "" while there are no runs yet or any is still going,
-// "green" when every run passed (success, neutral, skipped), else "red" with the failing runs'
-// names.
+// "green" when every run passed (success, neutral, skipped), "superseded" when none failed but some
+// were cancelled (a newer push to main, or by hand: the commit was never fully checked), else "red"
+// with the failing runs' names.
 func MainResult(runs []WorkflowRun) (string, []string) {
 	if len(runs) == 0 {
 		return "", nil
 	}
 	var failing []string
+	cancelled := false
 	for _, r := range runs {
 		if r.Status != "completed" {
 			return "", nil
 		}
 		switch r.Conclusion {
 		case "success", "neutral", "skipped":
+		case "cancelled":
+			cancelled = true
 		default:
 			name := r.Name
 			if name == "" {
@@ -362,6 +366,9 @@ func MainResult(runs []WorkflowRun) (string, []string) {
 	}
 	if len(failing) > 0 {
 		return "red", failing
+	}
+	if cancelled {
+		return "superseded", nil
 	}
 	return "green", nil
 }
