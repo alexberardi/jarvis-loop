@@ -68,6 +68,9 @@ func (s *Store) PRClosed(ctx context.Context, runnerName string, id int64, data 
 		if it.Stage != pipeline.Closed || it.PR == 0 {
 			return errf(pipeline.CodeWrongStage, "item %d is %s with no PR to close", id, it.Stage)
 		}
+		if pr := int(data["pr"].(float64)); pr != it.PR {
+			return errf(pipeline.CodeInvalidField, "item %d's PR is #%d, not #%d", id, it.PR, pr)
+		}
 		var dropped, closed int
 		if err := tx.QueryRow(`SELECT COUNT(*) FILTER (WHERE kind = 'dropped'), COUNT(*) FILTER (WHERE kind = 'pr_closed')
 			FROM events WHERE item_id = ?`, id).Scan(&dropped, &closed); err != nil {

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/alexberardi/jarvis-loop/internal/fakeclaude"
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
@@ -131,5 +132,82 @@ esac
 	want := "pr view 7 --repo o/r --json state\npr close 7 --repo o/r --comment Dropped by the owner"
 	if got := strings.TrimSpace(string(b)); got != want {
 		t.Fatalf("gh argv:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// fakeLand is GitHub for a land run: one PR whose checks the test sets, and the merges asked for.
+type fakeLand struct {
+	mu     sync.Mutex
+	pr     LandPR
+	views  int
+	merges []string
+}
+
+func (f *fakeLand) LandView(_ context.Context, slug string, pr int) (LandPR, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.views++
+	return f.pr, nil
+}
+
+func (f *fakeLand) Merge(_ context.Context, slug string, pr int, head string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.merges = append(f.merges, head)
+	return nil
+}
+
+func (f *fakeLand) CommitRuns(context.Context, string, string) ([]WorkflowRun, error) {
+	return nil, nil
+}
+
+func (f *fakeLand) setChecks(bucket string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pr.Checks = []Check{{Name: "check", Bucket: bucket, URL: "https://ci/1"}}
+}
+
+func (f *fakeLand) seen() (views, merges int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.views, len(f.merges)
+}
+
+// A drop while land waits for CI stops the run at its next look, before any merge: CI passing
+// after the drop, and before land's heartbeat, must not merge the PR.
+func TestDropDuringLandDoesNotMerge(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	id := g.toReview("Add a feature")
+	g.stages(StageReview)
+	if !g.runOnce() || g.item(id).Item.Stage != pipeline.Land {
+		t.Fatalf("review did not reach land; log:\n%s", g.logs.String())
+	}
+	it := g.item(id).Item
+	gh := &fakeLand{pr: LandPR{Number: it.PR, State: "OPEN", HeadRefName: it.Branch, HeadRefOid: it.HeadSHA, BaseRefName: "main",
+		Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN", Body: g.prs.bodies[it.PR]}}
+	gh.setChecks(BucketPending)
+	g.r.Land = gh
+	g.stages(StageLand)
+
+	wait := g.runAsync()
+	g.clk.BlockUntil(2) // the heartbeat and the first poll: land is waiting for CI
+	if v, m := gh.seen(); v != 1 || m != 0 {
+		t.Fatalf("before the drop: %d views, %d merges; log:\n%s", v, m, g.logs.String())
+	}
+	if _, err := g.st.Drop(g.ctx, "user:alex", id, "changed my mind"); err != nil {
+		t.Fatal(err)
+	}
+	gh.setChecks(BucketPass)
+	g.clk.Advance(LandPollEvery) // the next poll comes before the heartbeat
+	wait()
+
+	if _, m := gh.seen(); m != 0 {
+		t.Fatalf("the dropped item's PR was merged; log:\n%s", g.logs.String())
+	}
+	if !strings.Contains(g.logs.String(), "land stopped: the item is closed") {
+		t.Fatalf("no stop logged:\n%s", g.logs.String())
+	}
+	if d := g.item(id); d.Item.Stage != pipeline.Closed || g.lastEvent(id, "advanced").Outcome == "merged" {
+		t.Fatalf("stage %s, last advance %+v", d.Item.Stage, g.lastEvent(id, "advanced"))
 	}
 }

@@ -94,6 +94,9 @@ func TestDroppedPRToClose(t *testing.T) {
 	if _, err := s.PRClosed(ctx, runner, noPR.ID, map[string]any{"pr": float64(1), "state": "closed"}); code(err) != pipeline.CodeWrongStage {
 		t.Fatalf("pr_closed without a PR: %v", err)
 	}
+	if _, err := s.PRClosed(ctx, runner, held.ID, map[string]any{"pr": float64(3), "state": "closed"}); code(err) != pipeline.CodeInvalidField {
+		t.Fatalf("pr_closed for another PR: %v", err)
+	}
 	ev, err := s.PRClosed(ctx, runner, held.ID, map[string]any{"pr": float64(42), "state": "already_closed"})
 	if err != nil || ev.Kind != "pr_closed" || ev.Actor != "runner:"+runner || ev.From != "closed" {
 		t.Fatalf("pr_closed: %+v %v", ev, err)
