@@ -143,6 +143,8 @@ Claude Code gives a runner no reading of plan usage (`/usage` is interactive onl
 
 **Advisory, not enforced:** every digest shows the loop's estimated spend today (from each run's tokens and `total_cost_usd`) against about 1/7 of a week, learned when the weekly limit is hit and whenever the user posts `/loop usage 42%` from `/usage`. It tells the user when to turn the number down; it never changes it. The loop only sees its own spend, not interactive sessions.
 
+**Prompt caching** (user, 2026-10-14: a previous agent setup burned usage far faster than terminal use). Every agent run for a stage starts from a byte-identical system prompt, tool set and settings; the item's brief is the first user message, never the system prompt; no MCP servers in agent runs; nothing dynamic at the start. Conversational stages (the `#plan` threads) resume one Claude session per thread instead of replaying the thread. Every run records cache-read and cache-write tokens; the digest shows the loop's cache hit rate and flags runs below 50%.
+
 **Per run:** 45 minutes at most; then the item goes to needs-you with what it had so far.
 
 **Scout, when there is room:** if the queue is empty and the number allows another agent, a scout agent looks for work (open STATUS items, harness findings, flaky tests, gaps in scenario coverage) and posts up to three suggestions in `#loop` with **Accept** buttons. Accepted ones enter at P4; nothing starts that the user did not accept.
