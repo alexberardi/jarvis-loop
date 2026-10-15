@@ -1161,3 +1161,43 @@ func TestRepoText(t *testing.T) {
 		}
 	}
 }
+
+// "/loop add … after #1": the item waits on #1, says so in its thread header and /loop show, and
+// goes to needs-you when #1 is dropped. An unknown id is refused.
+func TestAddAfter(t *testing.T) {
+	e := newBotEnv(t)
+	e.add("a")
+	out := e.command(Approver, "add show the plan link after #1, high priority")
+	d := e.item(2)
+	if d.Item.Title != "show the plan link" || d.Item.Priority != "P2" || len(d.Item.DependsOn) != 1 || d.Item.DependsOn[0] != 1 {
+		t.Fatalf("add: %q %+v", out, d.Item)
+	}
+	if !strings.Contains(out, "Added #2 (P2, after #1)") {
+		t.Fatalf("answer %q", out)
+	}
+	if out := e.command(other, "show 2"); !strings.Contains(out, "waiting on #1") {
+		t.Fatalf("show %q", out)
+	}
+	posts := only(t, e.calls(), "chat.postMessage")
+	if len(posts) < 2 || !strings.Contains(allText(posts[1]), "Waiting on #1") || strings.Contains(allText(posts[0]), "Waiting on") {
+		t.Fatalf("parent lacks waiting on: %+v", posts)
+	}
+	if out := e.command(Approver, "add more after #9"); !strings.Contains(out, "no item #9") {
+		t.Fatalf("unknown dependency %q", out)
+	}
+
+	if _, err := e.st.Drop(e.ctx, "user:alex", 1, ""); err != nil {
+		t.Fatal(err)
+	}
+	e.drain()
+	ts := e.thread(2)
+	var asked bool
+	for _, c := range only(t, e.calls(), "chat.postMessage") {
+		if c.Body["thread_ts"] == ts && strings.Contains(allText(c), "#2 needs you: #1 it depends on was dropped: keep, change or drop this one?") {
+			asked = true
+		}
+	}
+	if !asked {
+		t.Fatalf("no needs-you question in #2's thread: %+v", e.calls())
+	}
+}

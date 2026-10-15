@@ -300,7 +300,8 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 // ---- items ----
 
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
-	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of`
+	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of,
+	depends_on, plan_id, plan_piece`
 
 type scanner interface{ Scan(...any) error }
 
@@ -309,16 +310,21 @@ func scanItem(row scanner) (pipeline.Item, error) {
 		it                  pipeline.Item
 		stage, ret          string
 		resources, approval string
+		dependsOn           string
 		created, updated    int64
 	)
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
-		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf)
+		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf,
+		&dependsOn, &it.PlanID, &it.PlanPiece)
 	if err != nil {
 		return it, err
 	}
 	it.Stage, it.ReturnStage = pipeline.Stage(stage), pipeline.Stage(ret)
 	it.Resources = splitList(resources)
+	if it.DependsOn, err = splitIDs(dependsOn); err != nil {
+		return it, err
+	}
 	if approval != "" {
 		it.Approval = &pipeline.Approval{}
 		if err := json.Unmarshal([]byte(approval), it.Approval); err != nil {
@@ -334,6 +340,26 @@ func splitList(s string) []string {
 		return []string{}
 	}
 	return strings.Split(s, ",")
+}
+
+func splitIDs(s string) ([]int64, error) {
+	out := []int64{}
+	for _, f := range splitList(s) {
+		id, err := strconv.ParseInt(f, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("depends_on %q: %w", s, err)
+		}
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+func joinIDs(ids []int64) string {
+	fs := make([]string, len(ids))
+	for i, id := range ids {
+		fs[i] = strconv.FormatInt(id, 10)
+	}
+	return strings.Join(fs, ",")
 }
 
 func fromNanos(n int64) time.Time { return time.Unix(0, n).UTC() }
@@ -359,10 +385,10 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 	}
 	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
-		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=? WHERE id=?`,
+		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, depends_on=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
-		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.ID)
+		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, joinIDs(it.DependsOn), it.ID)
 	return err
 }
 
@@ -373,6 +399,8 @@ type NewItem struct {
 	Repo     string `json:"repo"`
 	Priority string `json:"priority"`
 	Source   string `json:"source"`
+	// DependsOn are existing items this one waits for (loop add --after, "/loop add … after #12").
+	DependsOn []int64 `json:"depends_on"`
 }
 
 // AddItem adds an item at triage.
@@ -381,16 +409,26 @@ func (s *Store) AddItem(ctx context.Context, actor string, n NewItem) (pipeline.
 	if err != nil {
 		return it, err
 	}
+	it.DependsOn = dedupeIDs(n.DependsOn)
 	err = s.tx(ctx, func(tx *sql.Tx) error {
-		return s.insertItem(tx, actor, &it)
+		if err := s.insertItem(tx, actor, &it); err != nil {
+			return err
+		}
+		// Checked once the item has its id, so naming the new item itself is the cycle it is.
+		return checkDependencies(tx, it)
 	})
 	return it, err
 }
 
 // insertItem adds a new item and its created event, setting it.ID.
 func (s *Store) insertItem(tx *sql.Tx, actor string, it *pipeline.Item) error {
-	res, err := tx.Exec(`INSERT INTO items (title, ask, repo, source, priority, stage, risk, created_at, updated_at, reopen_of) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), it.Risk, it.CreatedAt.UnixNano(), it.UpdatedAt.UnixNano(), it.ReopenOf)
+	if it.DependsOn == nil {
+		it.DependsOn = []int64{}
+	}
+	res, err := tx.Exec(`INSERT INTO items (title, ask, repo, source, priority, stage, risk, created_at, updated_at, reopen_of,
+		depends_on, plan_id, plan_piece) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), it.Risk, it.CreatedAt.UnixNano(), it.UpdatedAt.UnixNano(), it.ReopenOf,
+		joinIDs(it.DependsOn), it.PlanID, it.PlanPiece)
 	if err != nil {
 		return err
 	}
@@ -400,6 +438,9 @@ func (s *Store) insertItem(tx *sql.Tx, actor string, it *pipeline.Item) error {
 	data := map[string]any{"title": it.Title, "priority": it.Priority, "source": it.Source, "repo": it.Repo}
 	if it.ReopenOf != 0 {
 		data["reopen_of"] = it.ReopenOf
+	}
+	if len(it.DependsOn) > 0 {
+		data["depends_on"] = it.DependsOn
 	}
 	return s.event(tx, Event{ItemID: it.ID, Actor: actor, Kind: "created", To: string(it.Stage), Data: data})
 }
@@ -514,11 +555,13 @@ func scanLease(row scanner) (Lease, error) {
 
 // Detail is one item with its history.
 type Detail struct {
-	Item     pipeline.Item `json:"item"`
-	Display  string        `json:"display"`
-	Lease    *Lease        `json:"lease,omitempty"`
-	Events   []Event       `json:"events"`
-	Evidence []Evidence    `json:"evidence"`
+	Item    pipeline.Item `json:"item"`
+	Display string        `json:"display"`
+	// WaitingOn is the items it depends on that are not done yet.
+	WaitingOn []int64    `json:"waiting_on"`
+	Lease     *Lease     `json:"lease,omitempty"`
+	Events    []Event    `json:"events"`
+	Evidence  []Evidence `json:"evidence"`
 }
 
 // GetItem returns an item, its live lease, events and evidence.
@@ -540,6 +583,11 @@ func (s *Store) GetItem(ctx context.Context, id int64) (Detail, error) {
 		return d, err
 	}
 	d.Display = pipeline.Display(d.Item.Stage, d.Lease != nil)
+	deps, err := dependencyStages(tx, []pipeline.Item{d.Item})
+	if err != nil {
+		return d, err
+	}
+	d.WaitingOn = waitingOn(d.Item, deps)
 
 	rows, err := tx.Query(`SELECT id, at, actor, kind, from_stage, to_stage, outcome, data FROM events WHERE item_id = ? ORDER BY id`, id)
 	if err != nil {
@@ -806,7 +854,11 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		if err != nil {
 			return err
 		}
-		it, ok := pipeline.Choose(ctl, waiting, snap, req)
+		deps, err := dependencyStages(tx, waiting)
+		if err != nil {
+			return err
+		}
+		it, ok := pipeline.Choose(ctl, waiting, deps, snap, req)
 		if !ok {
 			return nil
 		}
@@ -1053,6 +1105,11 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 		tr.Data["lease"] = l.ID
 		if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
 			return err
+		}
+		if tr.Item.Stage == pipeline.Closed {
+			if err := s.dependencyClosed(tx, id); err != nil {
+				return err
+			}
 		}
 		if tr.ActiveAgentsZero {
 			ctl, err := s.loadControl(tx)

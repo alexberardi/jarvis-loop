@@ -284,6 +284,29 @@ func TestBadRequests(t *testing.T) {
 	e.refused(userTok, "PUT", "/control", map[string]any{"active_agents": 7}, 400, "invalid_field")
 }
 
+// depends_on: unknown ids and cycles are refused (400); the item shows what it waits on.
+func TestAddItemDependsOn(t *testing.T) {
+	e := newEnv(t)
+	a := e.addItem("a")
+	e.refused(userTok, "POST", "/items", map[string]any{"title": "b", "depends_on": []int64{a, 42}}, 400, "invalid_field")
+	e.refused(userTok, "POST", "/items", map[string]any{"title": "b", "depends_on": []int64{a + 1}}, 400, "invalid_field")
+	var it struct {
+		ID        int64
+		DependsOn []int64 `json:"depends_on"`
+	}
+	e.do(userTok, "POST", "/items", map[string]any{"title": "b", "depends_on": []int64{a}}, 201, &it)
+	if len(it.DependsOn) != 1 || it.DependsOn[0] != a {
+		t.Fatalf("created: %+v", it)
+	}
+	var d struct {
+		WaitingOn []int64 `json:"waiting_on"`
+	}
+	e.do(userTok, "GET", fmt.Sprintf("/items/%d", it.ID), nil, 200, &d)
+	if len(d.WaitingOn) != 1 || d.WaitingOn[0] != a {
+		t.Fatalf("waiting on: %+v", d)
+	}
+}
+
 // The spec's full walk: every stage, review independence, a bounce, the review's head-sha check,
 // the hold, a wrong-sha approval refused, the approval for the right head, and the merge.
 func TestFullWalk(t *testing.T) {

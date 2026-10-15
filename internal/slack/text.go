@@ -6,6 +6,7 @@ package slack
 import (
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -253,4 +254,30 @@ func altGroup(m map[string]string) string {
 		alts[i] = strings.ReplaceAll(regexp.QuoteMeta(a), " ", `\s+`)
 	}
 	return "(" + strings.Join(alts, "|") + ")"
+}
+
+var afterMarker = regexp.MustCompile(`(?i)\bafter\s+(#\d+(?:\s*(?:,|and|&)\s*#\d+)*)\s*:?`)
+var itemRef = regexp.MustCompile(`#(\d+)`)
+
+// ParseAfter reads the dependencies of an add request, "after #12" or "after #12, #13" (also "and"),
+// and returns them with the text without those words. The "#" is required, so "retry after 5
+// minutes" stays as it is.
+func ParseAfter(text string) (after []int64, rest string) {
+	m := afterMarker.FindStringSubmatchIndex(text)
+	if m == nil {
+		return nil, text
+	}
+	for _, r := range itemRef.FindAllStringSubmatch(text[m[2]:m[3]], -1) {
+		id, err := strconv.ParseInt(r[1], 10, 64)
+		if err != nil {
+			return nil, text
+		}
+		after = append(after, id)
+	}
+	out := text[:m[0]] + " " + text[m[1]:]
+	out = emptyParens.ReplaceAllString(out, " ")
+	out = strings.Join(strings.Fields(out), " ")
+	out = strings.ReplaceAll(out, " ,", ",")
+	out = strings.Trim(out, " ,:;-–—")
+	return after, out
 }

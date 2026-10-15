@@ -43,6 +43,8 @@ type Step struct {
 	Title    string `json:"title,omitempty"`
 	Priority string `json:"priority,omitempty"`
 	Via      string `json:"via,omitempty"` // "cli" (default) or "slack"
+	// After: the aliases of the items it depends on (CLI: depends_on; Slack: "after #1, #2")
+	After []string `json:"after,omitempty"`
 	// script: how the fake claude plays the item's runs of a stage (default build), and the repo
 	// a triage run picks
 	For   string `json:"for,omitempty"` // the stage the script is for: triage, build (default), review
@@ -538,10 +540,20 @@ func (p *player) add(st Step) error {
 	if _, dup := p.items[st.Item]; dup {
 		return fmt.Errorf("item %q added twice", st.Item)
 	}
+	var after []int64
+	var refs []string
+	for _, a := range st.After {
+		r, err := p.ref(a)
+		if err != nil {
+			return err
+		}
+		after = append(after, r.id)
+		refs = append(refs, fmt.Sprintf("#%d", r.id))
+	}
 	switch st.Via {
 	case "", "cli":
 		var it pipeline.Item
-		if err := p.s.user.do("POST", "/items", store.NewItem{Title: st.Title, Ask: st.Title, Repo: RepoKey, Priority: st.Priority}, &it); err != nil {
+		if err := p.s.user.do("POST", "/items", store.NewItem{Title: st.Title, Ask: st.Title, Repo: RepoKey, Priority: st.Priority, DependsOn: after}, &it); err != nil {
 			return err
 		}
 		p.items[st.Item] = itemRef{id: it.ID, title: it.Title}
@@ -553,6 +565,9 @@ func (p *player) add(st Step) error {
 		text := "add " + st.Title
 		if st.Text != "" {
 			text = "add " + st.Text // the words as typed (repo and priority words); title is the alias's note
+		}
+		if len(refs) > 0 {
+			text += " after " + strings.Join(refs, ", ")
 		}
 		ans, err := p.s.Slack.Command(user, slack.ChannelLoop, "/loop", text)
 		if err != nil {

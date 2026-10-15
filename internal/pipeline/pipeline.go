@@ -164,7 +164,12 @@ type Item struct {
 	// NeedsQA: once merged, the item waits in qa for the user's check instead of going to done.
 	NeedsQA bool `json:"needs_qa"`
 	// ReopenOf is the qa item whose Reopen filed this one.
-	ReopenOf  int64     `json:"reopen_of,omitempty"`
+	ReopenOf int64 `json:"reopen_of,omitempty"`
+	// DependsOn are the items this one waits for: claim skips it until they are all done.
+	DependsOn []int64 `json:"depends_on"`
+	// PlanID and PlanPiece link an item filed from a plan to its piece (docs/phases/07-planning.md).
+	PlanID    int64     `json:"plan_id,omitempty"`
+	PlanPiece int       `json:"plan_piece,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -206,7 +211,7 @@ func NewItem(title, ask, repo, priority, source string, now time.Time) (Item, er
 	return Item{
 		Title: title, Ask: strings.TrimSpace(ask), Repo: strings.TrimSpace(repo),
 		Source: source, Priority: priority, Stage: Triage, Risk: RiskNormal,
-		Resources: []string{}, CreatedAt: now, UpdatedAt: now,
+		Resources: []string{}, DependsOn: []int64{}, CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
 

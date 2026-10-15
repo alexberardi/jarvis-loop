@@ -1,0 +1,55 @@
+{
+  "name": "deps",
+  "about": "Item dependencies (docs/phases/07-planning.md, scenario 1). b is added from Slack 'after #1': its thread header, /loop show and its board card say 'waiting on #1', and the runner never claims it while a is open (a asks a question: the runner has nothing to do). a is answered and goes through build, review and land to done; then b is claimed. c and d: d is added after c from the CLI; dropping c moves d to needs-you with the spec's question, recorded by loopd.",
+  "stages": ["triage", "build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Add the dependency columns"},
+    {"do": "add", "item": "b", "via": "slack", "title": "show waiting on in the header", "after": ["a"]},
+    {"do": "expect", "stage": {"a": "triage", "b": "triage"},
+     "messages": [{"kind": "response", "text": "^Added #2 \\(P3, after #1\\): show waiting on in the header\\."},
+                  {"parent": "b", "text": "· Waiting on #1"}],
+     "board": {"b": {"column": "Triage", "card": "waiting on #1"}}},
+    {"do": "command", "text": "show 2", "as": "other", "answer": "· waiting on #1"},
+    {"do": "script", "item": "a", "for": "triage", "play": "triage_question"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you", "b": "triage"}},
+    {"do": "runner", "claims": "none"},
+    {"do": "script", "item": "a", "for": "triage", "play": "reproduce"},
+    {"do": "script", "item": "a", "play": "good", "file": "internal/deps.go"},
+    {"do": "reply", "item": "a", "as": "approver", "text": "a list of ids is fine"},
+    {"do": "expect", "stage": {"a": "triage"}},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review", "b": "triage"}, "leased": {"b": false}},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "done", "b": "triage"}},
+
+    {"do": "add", "item": "c", "title": "Plans table"},
+    {"do": "add", "item": "d", "title": "Plan turns", "after": ["c"]},
+    {"do": "command", "as": "approver", "text": "drop 3 not now", "answer": "^#3 dropped \\(closed\\)\\.$"},
+    {"do": "expect", "stage": {"c": "closed", "d": "needs_you"},
+     "question": {"d": "^#3 it depends on was dropped: keep, change or drop this one\\?$"},
+     "events": [{"item": "d", "kind": "dependency_closed", "actor": "loopd", "data": {"question": "^#3 it depends on"}, "count": 1}],
+     "messages": [{"thread": "d", "from": "bot", "text": "#4 needs you: #3 it depends on was dropped: keep, change or drop this one\\?"}]},
+
+    {"do": "script", "item": "b", "for": "triage", "play": "reproduce", "picks": "jarvis-loop"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done", "b": "build", "c": "closed", "d": "needs_you"},
+    "agent_runs": {"triage": 3, "build": 1, "review": 1, "land": 0},
+    "pr": {"a": {"state": "MERGED", "merge_calls": 1}},
+    "messages": [
+      {"thread": "b", "text": "^Claimed for triage\\.$"}
+    ]
+  }
+}

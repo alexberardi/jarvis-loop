@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -231,5 +232,28 @@ func TestParseRepoAliases(t *testing.T) {
 	// An alias that is a configured repo's own name means that repo.
 	if repo, _ := ParseRepo("[jarvis-docs] x", repos, map[string]string{"jarvis-docs": node}); repo != docs {
 		t.Errorf("a name aliased elsewhere: %q", repo)
+	}
+}
+
+func TestParseAfter(t *testing.T) {
+	cases := []struct {
+		text, rest string
+		after      []int64
+	}{
+		{"rename the flag", "rename the flag", nil},
+		{"rename the flag after #12", "rename the flag", []int64{12}},
+		{"rename the flag after #12, #13", "rename the flag", []int64{12, 13}},
+		{"rename the flag after #12 and #13, urgent", "rename the flag, urgent", []int64{12, 13}},
+		{"After #4: rename the flag", "rename the flag", []int64{4}},
+		{"rename the flag (after #12,#13) in jarvis-loop", "rename the flag in jarvis-loop", []int64{12, 13}},
+		// Not a dependency: no "#".
+		{"retry after 5 minutes", "retry after 5 minutes", nil},
+		{"clear the cache after login", "clear the cache after login", nil},
+	}
+	for _, c := range cases {
+		after, rest := ParseAfter(c.text)
+		if rest != c.rest || !slices.Equal(after, c.after) {
+			t.Errorf("ParseAfter(%q) = %v, %q; want %v, %q", c.text, after, rest, c.after, c.rest)
+		}
 	}
 }
