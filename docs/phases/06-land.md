@@ -103,6 +103,7 @@ gates, or the land script would merge changes to itself.
   - `approval`: `internal/pipeline/**` (the stage rules, approvals, hold risk)
   - `land`: `internal/runner/land*.go`, `internal/runner/pr.go`, `internal/runner/git.go`
   - `api-auth`: `internal/api/**`
+  - `store`: `internal/store/**` (approvals, hold rules and their migrations are stored there); `loopd-wiring`: `cmd/loopd/**` (token loading, `--repos`) — added in review
   - `slack-approver`: `internal/slack/**` *only* where the approver check and the reply
     classifier live; if they are not in their own files yet, move them (`internal/slack/approve.go`)
     in this phase so the rule can be narrow (*as built: `internal/slack/approve*.go`*)

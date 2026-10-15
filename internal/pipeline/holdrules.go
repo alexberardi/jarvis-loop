@@ -29,7 +29,7 @@ const (
 // DefaultHoldRules are each repo's CLAUDE.md hold list as path rules. jarvis-server: auth and
 // access, signing and the update helper, CI checks, and weakened tests or contract checks.
 // jarvis-loop: who may approve or merge (the stage rules and approvals, loopd's API auth, the Slack
-// approver check), token handling, the landing gates, the agents' guard, CI, and weakened tests or
+// approver check, the store that keeps approvals and hold rules, loopd's start-up wiring), token handling, the landing gates, the agents' guard, CI, and weakened tests or
 // scenarios.
 func DefaultHoldRules() []HoldRule {
 	s, l := ServerRepo, LoopRepo
@@ -48,6 +48,8 @@ func DefaultHoldRules() []HoldRule {
 		{Name: "land", Glob: "internal/runner/pr.go", Repo: l},
 		{Name: "land", Glob: "internal/runner/git.go", Repo: l},
 		{Name: "api-auth", Glob: "internal/api/**", Repo: l},
+		{Name: "store", Glob: "internal/store/**", Repo: l},
+		{Name: "loopd-wiring", Glob: "cmd/loopd/**", Repo: l},
 		{Name: "slack-approver", Glob: "internal/slack/approve*.go", Repo: l},
 		{Name: "tokens", Glob: "internal/slack/env.go", Repo: l},
 		{Name: "tokens", Glob: "internal/runner/config.go", Repo: l},
