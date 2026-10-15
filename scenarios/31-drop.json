@@ -1,0 +1,54 @@
+{
+  "name": "drop",
+  "about": "The user drops two items they cannot land. a is held for approval; the Drop button closes it, the thread gets one line, and the runner's next poll closes its PR with a comment and keeps the branch. b's PR was already closed by hand on GitHub; /loop drop closes the item and the runner only records it (no second close, no comment). Someone else's Drop is refused.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Support Kasa plugs"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "good", "file": "internal/modules/auth/kasa.go"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "held"}, "pr": {"a": {"state": "OPEN"}},
+     "messages": [{"thread": "a", "text": "is held for your approval", "buttons": ["Approve merge", "Keep holding", "Drop"]}]},
+    {"do": "press", "item": "a", "button": "drop", "as": "other"},
+    {"do": "expect", "stage": {"a": "held"}, "events": [{"item": "a", "kind": "refused", "actor": "other", "data": {"action": "^drop$"}, "count": 1}]},
+    {"do": "press", "item": "a", "button": "drop", "as": "approver"},
+    {"do": "expect", "stage": {"a": "closed"}, "pr": {"a": {"state": "OPEN"}},
+     "events": [{"item": "a", "kind": "dropped", "actor": "approver", "data": {"reason": "^dropped by the user$", "words": "^Drop button$"}, "count": 1}],
+     "messages": [{"thread": "a", "from": "bot", "text": "^Dropped by you: 'Drop button'\\. Closed; the runner closes .*sandbox/demo#101> \\(the branch stays\\)\\.$"}]},
+
+    {"do": "add", "item": "b", "title": "Support LIFX bulbs"},
+    {"do": "triage", "item": "b"},
+    {"do": "script", "item": "b", "play": "good", "file": "internal/lifx.go"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "closed", "b": "review"}, "pr": {"a": {"state": "CLOSED", "comments": 2, "comment": "^Dropped by the owner$"}, "b": {"state": "OPEN"}},
+     "events": [{"item": "a", "kind": "pr_closed", "actor": "runner", "data": {"state": "^closed$"}, "count": 1}]},
+    {"do": "github", "item": "b", "close_by_hand": true},
+    {"do": "command", "as": "approver", "text": "drop 2 no bulb to test with", "answer": "^#2 dropped \\(closed\\)\\.$"},
+    {"do": "runner", "claims": "none"},
+    {"do": "runner", "claims": "none"}
+  ],
+  "expect": {
+    "stage": {"a": "closed", "b": "closed"},
+    "agent_runs": {"build": 2, "review": 1, "land": 0},
+    "pr": {"a": {"state": "CLOSED", "comments": 2, "comment": "^Dropped by the owner$", "merge_calls": 0},
+           "b": {"state": "CLOSED", "comments": 0, "merge_calls": 0}},
+    "remote": {"branches": {"a": ".", "b": "."}},
+    "events": [
+      {"item": "a", "kind": "pr_closed", "actor": "runner", "data": {"state": "^closed$"}, "count": 1},
+      {"item": "b", "kind": "dropped", "actor": "approver", "data": {"words": "^no bulb to test with$"}, "count": 1},
+      {"item": "b", "kind": "pr_closed", "actor": "runner", "data": {"state": "^already_closed$"}, "count": 1}
+    ],
+    "no_messages": [{"thread": "a", "text": "pr_closed"}, {"thread": "b", "text": "pr_closed"}],
+    "messages": [
+      {"thread": "b", "from": "bot", "text": "^Dropped by you: 'no bulb to test with'\\. Closed; the runner closes .*sandbox/demo#102> \\(the branch stays\\)\\.$"}
+    ]
+  }
+}

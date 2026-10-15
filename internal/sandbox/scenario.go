@@ -72,9 +72,10 @@ type Step struct {
 	// repo, changing File to Text
 	Branch string `json:"branch,omitempty"`
 	// github: GitHub refuses the next RefuseMerges merges; MergeByHand merges the item's PR
-	// outside the loop
+	// outside the loop, CloseByHand closes it
 	RefuseMerges *int `json:"refuse_merges,omitempty"`
 	MergeByHand  bool `json:"merge_by_hand,omitempty"`
+	CloseByHand  bool `json:"close_by_hand,omitempty"`
 	// control (as the CLI's PUT /control)
 	ActiveAgents  *int  `json:"active_agents,omitempty"`
 	MaxRunMinutes *int  `json:"max_run_minutes,omitempty"`
@@ -416,6 +417,17 @@ func (p *player) step(st Step) error {
 	case "github":
 		if st.RefuseMerges != nil {
 			s.GitHub.RefuseMerges(*st.RefuseMerges)
+		}
+		if st.CloseByHand {
+			r, err := p.ref(st.Item)
+			if err != nil {
+				return err
+			}
+			d, err := s.Store.GetItem(p.ctx, r.id)
+			if err != nil {
+				return err
+			}
+			return s.GitHub.CloseByHand(d.Item.Repo, ItemBranch(r.id, r.title))
 		}
 		if st.MergeByHand {
 			r, err := p.ref(st.Item)

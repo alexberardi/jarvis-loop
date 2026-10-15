@@ -44,6 +44,8 @@ type Runner struct {
 	VerifyPR func(ctx context.Context, slug string, pr int) (PRInfo, error)
 	// Land asks GitHub what the land gates need and merges (GH; nil: this runner cannot land).
 	Land LandGitHub
+	// Close closes dropped items' PRs (GH; nil: this runner leaves them to another).
+	Close PRCloser
 	// HeartbeatEvery and KillGrace default to 60 s and 10 s.
 	HeartbeatEvery time.Duration
 	KillGrace      time.Duration
@@ -87,6 +89,13 @@ func (r *Runner) Paused() string {
 // Run works items until ctx ends, in up to Cfg.Slots parallel slots.
 func (r *Runner) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
+	if r.Close != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.closeDroppedLoop(ctx)
+		}()
+	}
 	for i := 0; i < r.Cfg.Slots; i++ {
 		wg.Add(1)
 		go func() {

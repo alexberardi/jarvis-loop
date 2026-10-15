@@ -59,6 +59,7 @@ func New(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
 	route("POST /items/{id}/answer", user, s.answer)
 	route("POST /items/{id}/approve", user, s.approve)
 	route("POST /items/{id}/hold", user, s.hold)
+	route("POST /items/{id}/drop", user, s.drop)
 	route("GET /control", both, s.getControl)
 	route("PUT /control", user, s.putControl)
 	return Logged(log, mux)
@@ -242,7 +243,17 @@ func (s *server) listItems(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "open must be 1 or 0"})
 		return
 	}
-	rows, err := s.st.ListItemsFilter(r.Context(), store.ListFilter{Stage: stage, Priority: pri, Open: open})
+	toClose := false
+	switch r.URL.Query().Get("pr_to_close") {
+	case "":
+	case "1", "true":
+		toClose = true
+	case "0", "false":
+	default:
+		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "pr_to_close must be 1 or 0"})
+		return
+	}
+	rows, err := s.st.ListItemsFilter(r.Context(), store.ListFilter{Stage: stage, Priority: pri, Open: open, PRToClose: toClose})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -384,6 +395,10 @@ var RunnerEventKinds = []string{"guard_refused", "low_cache_hit", "land_waiting"
 // ended), only by the runner that merged it (store.MainCI).
 const KindMainCI = "main_ci"
 
+// KindPRClosed is a runner closing a dropped item's PR: recorded after the drop (there is no
+// lease), once, by any runner (store.PRClosed).
+const KindPRClosed = "pr_closed"
+
 func (s *server) runnerEvent(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	if !ok {
@@ -403,10 +418,12 @@ func (s *server) runnerEvent(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case body.Kind == KindMainCI:
 		ev, err = s.st.MainCI(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Data)
+	case body.Kind == KindPRClosed:
+		ev, err = s.st.PRClosed(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Data)
 	case slices.Contains(RunnerEventKinds, body.Kind):
 		ev, err = s.st.RunnerEvent(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Kind, body.Data)
 	default:
-		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kind must be one of " + strings.Join(append(RunnerEventKinds, KindMainCI), ", ")})
+		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kind must be one of " + strings.Join(append(RunnerEventKinds, KindMainCI, KindPRClosed), ", ")})
 		return
 	}
 	if err != nil {
@@ -552,6 +569,26 @@ func (s *server) hold(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, err := s.st.Hold(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Words)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// drop closes an open item at the user's word (store.Drop).
+func (s *server) drop(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Words string `json:"words"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.Drop(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Words)
 	if err != nil {
 		s.fail(w, err)
 		return

@@ -29,6 +29,7 @@ const usage = `usage: loop <command> [args]
   answer <id> "<text>"
   approve <id> --sha <head sha> [--words TEXT]
   hold <id> [--words TEXT]
+  drop <id> [--words TEXT]
   priority <id> <P1-P5>
   agents [<0-6>]
   stop | resume
@@ -157,6 +158,7 @@ var commands = map[string]command{
 	"answer":    {2, 2, nil, cmdAnswer},
 	"approve":   {1, 1, []string{"sha", "words"}, cmdApprove},
 	"hold":      {1, 1, []string{"words"}, cmdHold},
+	"drop":      {1, 1, []string{"words"}, cmdDrop},
 	"priority":  {2, 2, nil, cmdPriority},
 	"agents":    {0, 1, nil, cmdAgents},
 	"stop":      {0, 0, nil, cmdStop(true)},
@@ -502,6 +504,19 @@ func cmdHold(c *client, pos []string, f map[string][]string) error {
 		return err
 	}
 	fmt.Fprintf(c.out, "#%d still held\n", it.ID)
+	return nil
+}
+
+func cmdDrop(c *client, pos []string, f map[string][]string) error {
+	id, err := itemID(pos[0])
+	if err != nil {
+		return err
+	}
+	var it item
+	if _, err := c.json("POST", "/items/"+id+"/drop", map[string]string{"words": last(f, "words")}, &it); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "#%d dropped (closed)\n", it.ID)
 	return nil
 }
 

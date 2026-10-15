@@ -314,7 +314,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 	// and opens the PR through the fake (the runner's PR client), with its PR check on.
 	s.Runner = &runner.Runner{Cfg: rcfg, Client: &runner.Client{Base: s.LoopdURL, Token: runnerTok}, Clock: rclk,
 		Log: log.With("component", "runner"), Env: agentEnv(s.scripts, opts.Bin.Env), PRs: s.GitHub,
-		VerifyPR: s.GitHub.Verify, Land: s.GitHub, HeartbeatEvery: 60 * time.Second}
+		VerifyPR: s.GitHub.Verify, Land: s.GitHub, Close: s.GitHub, HeartbeatEvery: 60 * time.Second}
 	s.user = &apiClient{base: s.LoopdURL, token: userTok}
 	s.hand = &runner.Client{Base: s.LoopdURL, Token: handTok}
 	if opts.RealClock {
@@ -434,6 +434,10 @@ func (s *Stack) Poll(timeout time.Duration) (int64, error) {
 	go func() {
 		defer close(ended)
 		defer s.runEnded()
+		// As Run does each poll: close the PRs of dropped items, then claim.
+		if err := s.Runner.CloseDropped(s.ctx); err != nil {
+			s.log.Warn("close dropped PRs", "err", err)
+		}
 		if _, err := s.Runner.ClaimAndRun(s.ctx); err != nil {
 			s.log.Warn("claim", "err", err)
 		}

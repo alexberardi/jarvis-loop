@@ -95,7 +95,7 @@ cannot silently check nothing. Steps (`"do"`):
 | `triage` / `review` `item` | claim the stage by hand (a `hand` runner token, as `loop claim`/`loop advance`) and finish it: reproduced with evidence / approved for the PR head |
 | `land` `item`, `outcome` (`hold`\|`merged`\|`back_to_build`), [`reason`] | the land stage by hand, with the PR's changed paths (a scenario whose `stages` include `land` lets the runner's land script do it instead) |
 | `script` `item`, `play`, [`file`], [`for`], [`picks`] | how the fake claude plays the item's runs of a stage (`for`: `triage`, `build` (default), `review`). Build: `good`, `escape`, `hang`, `ignore_term`, `usage_limit`, `question`, `exit3`, …; `file`: the path it changes; after a bounce it addresses `.loop/review/`. Triage: `reproduce` (default; `picks`: the repo it names when the item has none), `duplicate`, `triage_question`, `triage_bad_repo`. Review: `approve` (default), `bounce`, `review_commit` |
-| `runner` [`claims`: alias\|`none`] | the runner polls once: claims (and works in the background) or finds nothing |
+| `runner` [`claims`: alias\|`none`] | the runner polls once: closes the PRs of dropped items (as `Run` does each poll), then claims (and works in the background) or finds nothing |
 | `agent_running` `item` | wait until the item's agent is mid-run (a hanging fake) |
 | `runner_idle` | wait until no run is working |
 | `clock` `advance` (`"2m"`, `"45m"`) | move the fake clock, in 30-second steps |
@@ -105,7 +105,7 @@ cannot silently check nothing. Steps (`"do"`):
 | `control` `active_agents`, `max_run_minutes`, `stopped` | `PUT /control` as the CLI |
 | `ci` [`item`, `checks`: {name: `pass`\|`fail`\|`pending`\|`cancel`\|`skip`}], [`main`: {name: `pass`\|`fail`\|`pending`}] | the CI checks on the item's PR head now (a new head has none), and how the workflow runs on main's merge commits go (phase 6) |
 | `push` `item` or `branch` (`main`), `file`, `text` | someone else's commit on the item's branch, or on demo's main |
-| `github` [`refuse_merges`: n], [`item` + `merge_by_hand`] | GitHub refuses the next n merges; the item's PR is merged on GitHub outside the loop |
+| `github` [`refuse_merges`: n], [`item` + `merge_by_hand`], [`item` + `close_by_hand`] | GitHub refuses the next n merges; the item's PR is merged (or closed) on GitHub outside the loop |
 | `expect` / `wait` + expectations | as below, at that point |
 
 Expectations (`expect`, in a step or at the end) are retried for `within` (default 10 s); the

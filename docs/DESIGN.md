@@ -83,6 +83,7 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | `POST /items/{id}/evidence` | upload a file |
 | `POST /items/{id}/ask`, `/answer` | put an item in needs-you with a question; record the answer |
 | `POST /items/{id}/approve`, `/hold` | the decision on a held merge |
+| `POST /items/{id}/drop` | the user closes an item they won't land, from any open stage; the runner then closes its PR |
 | `GET`, `PUT /control` | the active-agents number, stop and resume |
 | `GET /board`, `/board/items/{id}`, `/board/items/{id}/evidence/{n}` | the swim-lane web board (HTML, read-only), also on the optional LAN listener `--board-addr`, which serves nothing else ([decision](decisions/2026-10-15-board.md)) |
 
@@ -131,6 +132,7 @@ Slack is the user's whole interface: add work, answer questions and approve merg
 | follow an item | its one thread in `#loop`: every stage change, the PR, CI, the merge |
 | answer a question | reply in the item's thread; the bot @mentions the user when it asks |
 | decide a held merge | **Approve merge** / **Keep holding** buttons, or a plain reply (Landing) |
+| drop an item | **Drop** on a held or needs-you message, or `/loop drop <id> [why]` (`loop drop <id>` on the CLI); its PR is closed, the branch stays |
 | set priority | words when adding, or the dropdown on the item's first message |
 | see the board | `/loop status`; `/loop show <id>` for one item; on the LAN, the web board at `/board` (columns per stage, read-only, refreshes every 30 s) |
 | turn spending up or down | the pinned **Active agents** message, `/loop agents <n>`, `/loop stop` |

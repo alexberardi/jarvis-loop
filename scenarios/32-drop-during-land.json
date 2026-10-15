@@ -1,0 +1,38 @@
+{
+  "name": "drop-during-land",
+  "about": "The user drops an item while its land run waits for CI; CI then passes before land's next heartbeat. Land reads the item's stage before every pass of the gates, so it stops without merging; the runner's drop sweep then closes the PR.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pending"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "clock", "advance": "10m"},
+    {"do": "expect", "stage": {"a": "land"}, "leased": {"a": true}, "pr": {"a": {"merge_calls": 0}}},
+    {"do": "command", "as": "approver", "text": "drop 1 changed my mind", "answer": "^#1 dropped \\(closed\\)\\.$"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "clock", "advance": "1m"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "closed"}, "leased": {"a": false}, "pr": {"a": {"state": "OPEN", "merge_calls": 0}}},
+    {"do": "runner", "claims": "none"}
+  ],
+  "expect": {
+    "stage": {"a": "closed"},
+    "pr": {"a": {"state": "CLOSED", "comment": "^Dropped by the owner$", "merge_calls": 0}},
+    "remote": {"branches": {"a": "."}},
+    "events": [
+      {"item": "a", "kind": "dropped", "actor": "approver", "data": {"words": "^changed my mind$"}, "count": 1},
+      {"item": "a", "kind": "pr_closed", "actor": "runner", "data": {"state": "^closed$"}, "count": 1}
+    ],
+    "no_messages": [{"thread": "a", "text": "merged"}],
+    "messages": [
+      {"thread": "a", "from": "bot", "text": "^Dropped by you: 'changed my mind'\\. Closed; the runner closes .*sandbox/demo#101> \\(the branch stays\\)\\.$"}
+    ]
+  }
+}
