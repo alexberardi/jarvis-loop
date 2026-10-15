@@ -389,7 +389,15 @@ func cmdShow(c *client, pos []string, _ map[string][]string) error {
 	w := c.out
 	fmt.Fprintf(w, "#%d %s\n", it.ID, it.Title)
 	fmt.Fprintf(w, "stage:    %s (%s)\n", it.Stage, d.Display)
-	fmt.Fprintf(w, "priority: %s   source: %s   repo: %s\n", it.Priority, it.Source, it.Repo)
+	repo := it.Repo
+	switch {
+	case repo != "":
+	case it.Stage == "triage":
+		repo = "not set, triage will pick"
+	default:
+		repo = "not set"
+	}
+	fmt.Fprintf(w, "priority: %s   source: %s   repo: %s\n", it.Priority, it.Source, repo)
 	if it.Ask != "" {
 		fmt.Fprintf(w, "ask:      %s\n", it.Ask)
 	}

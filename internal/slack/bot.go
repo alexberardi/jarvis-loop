@@ -340,7 +340,7 @@ func selectMenu(actionID string, labels, values []string, current string) map[st
 func (b *Bot) parentMessage(d store.Detail) Message {
 	it := d.Item
 	head := fmt.Sprintf("#%d %s", it.ID, b.field(it.Title, 300, it.ID))
-	line := fmt.Sprintf("Priority *%s* · Stage *%s* · Source %s", it.Priority, d.Display, Escape(it.Source))
+	line := fmt.Sprintf("Priority *%s* · Stage *%s* · Source %s · Repo %s", it.Priority, d.Display, Escape(it.Source), repoText(it))
 	if pr := b.prLink(it); pr != "" {
 		line += " · " + pr
 	}
@@ -354,6 +354,18 @@ func (b *Bot) parentMessage(d store.Detail) Message {
 		sec["accessory"] = selectMenu("priority", priorityNames, []string{"P1", "P2", "P3", "P4", "P5"}, it.Priority)
 	}
 	return Message{Channel: ChannelLoop, Text: fmt.Sprintf("%s — %s, %s", head, it.Priority, d.Display), Blocks: []map[string]any{sec}}
+}
+
+// repoText is the item's repo for a message, or why there is none: until triage has run, triage
+// picks it.
+func repoText(it pipeline.Item) string {
+	switch {
+	case it.Repo != "":
+		return Escape(it.Repo)
+	case it.Stage == pipeline.Triage:
+		return "not set, triage will pick"
+	}
+	return "not set"
 }
 
 // who names an actor in a message without pinging anyone or naming a machine.

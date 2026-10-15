@@ -114,7 +114,7 @@ func TestCLISmoke(t *testing.T) {
 	}
 
 	out = c.ok(userTok, "show", "1")
-	for _, want := range []string{"#1 wake word misses", "stage:    done", "approval: user:alex", "triage:   area voice, size S, resources []", "risk:     hold (deleted-test: D internal/x_test.go; land: on the hold list)", "advanced", "pr_opened", "evidence", "repro.log"} {
+	for _, want := range []string{"#1 wake word misses", "stage:    done", "repo: jarvis-server\n", "approval: user:alex", "triage:   area voice, size S, resources []", "risk:     hold (deleted-test: D internal/x_test.go; land: on the hold list)", "advanced", "pr_opened", "evidence", "repro.log"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show lacks %q:\n%s", want, out)
 		}
@@ -122,6 +122,9 @@ func TestCLISmoke(t *testing.T) {
 
 	// The throttle.
 	c.ok(userTok, "add", "another")
+	if out := c.ok(userTok, "show", "2"); !strings.Contains(out, "repo: not set, triage will pick\n") {
+		t.Errorf("show without a repo:\n%s", out)
+	}
 	if out := c.ok(userTok, "agents", "0"); !strings.Contains(out, "active agents: 0") {
 		t.Fatalf("agents 0: %q", out)
 	}

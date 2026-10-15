@@ -290,7 +290,7 @@ func TestItemThread(t *testing.T) {
 		t.Fatalf("parent %+v", p.Body)
 	}
 	txt := allText(p)
-	for _, want := range []string{fmt.Sprintf("#%d", id), "P3", "intake", "user", "&lt;!channel&gt;"} {
+	for _, want := range []string{fmt.Sprintf("#%d", id), "P3", "intake", "user", "Repo jarvis-server", "&lt;!channel&gt;"} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("parent lacks %q: %s", want, txt)
 		}
@@ -832,7 +832,7 @@ func TestLoopCommands(t *testing.T) {
 	if out := e.command(other, "status"); !strings.Contains(out, "this is a feature") || !strings.Contains(out, "intake") {
 		t.Fatalf("status %q", out)
 	}
-	if out := e.command(other, "show 1"); !strings.Contains(out, "#1") || !strings.Contains(out, "P2") || !strings.Contains(out, "risk normal") {
+	if out := e.command(other, "show 1"); !strings.Contains(out, "#1") || !strings.Contains(out, "P2") || !strings.Contains(out, "risk normal") || !strings.Contains(out, "repo not set, triage will pick") {
 		t.Fatalf("show %q", out)
 	}
 	if out := e.command(other, "show 99"); !strings.Contains(out, "no item 99") {
@@ -1128,8 +1128,36 @@ func TestAddRepoWords(t *testing.T) {
 	if !strings.Contains(out, "Added #1 (P2, alexberardi/jarvis-loop)") {
 		t.Fatalf("answer %q", out)
 	}
+	if out := e.command(other, "show 1"); !strings.Contains(out, "repo alexberardi/jarvis-loop") {
+		t.Fatalf("show with a repo %q", out)
+	}
+	posts := only(t, e.calls(), "chat.postMessage")
+	if len(posts) == 0 || !strings.Contains(allText(posts[0]), "Repo alexberardi/jarvis-loop") {
+		t.Fatalf("parent lacks the repo: %+v", posts)
+	}
 	e.command(Approver, "add timers drift")
 	if d := e.item(2); d.Item.Repo != "" || d.Item.Title != "timers drift" {
 		t.Fatalf("no repo words: %+v", d.Item)
+	}
+	if posts := only(t, e.calls(), "chat.postMessage"); len(posts) == 0 || !strings.Contains(allText(posts[0]), "Repo not set, triage will pick") {
+		t.Fatalf("parent lacks the unset repo: %+v", posts)
+	}
+}
+
+func TestRepoText(t *testing.T) {
+	for _, c := range []struct {
+		repo  string
+		stage pipeline.Stage
+		want  string
+	}{
+		{"alexberardi/jarvis-loop", pipeline.Build, "alexberardi/jarvis-loop"},
+		{"a<b>", pipeline.Triage, "a&lt;b&gt;"},
+		{"", pipeline.Triage, "not set, triage will pick"},
+		{"", pipeline.NeedsYou, "not set"},
+		{"", pipeline.Closed, "not set"},
+	} {
+		if got := repoText(pipeline.Item{Repo: c.repo, Stage: c.stage}); got != c.want {
+			t.Errorf("repoText(%q, %s) = %q, want %q", c.repo, c.stage, got, c.want)
+		}
 	}
 }
