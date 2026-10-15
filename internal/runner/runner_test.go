@@ -119,7 +119,8 @@ func newRig(t *testing.T, scenario string) *rig {
 	r := &Runner{
 		Cfg: cfg, Client: &Client{Base: srv.URL, Token: runnerToken}, Clock: clk,
 		Log: slog.New(slog.NewTextHandler(logs, nil)),
-		Env: append(os.Environ(), "LOOP_TEST_AS=claude", "FAKE_CLAUDE_SCENARIO="+scenario, "LOOP_TOKEN=must-not-leak"),
+		// GORACE: a -race binary sleeps 1 s at exit by default, and every guard call is one.
+		Env: append(os.Environ(), "LOOP_TEST_AS=claude", "FAKE_CLAUDE_SCENARIO="+scenario, "LOOP_TOKEN=must-not-leak", "GORACE=atexit_sleep_ms=0"),
 	}
 	// "GitHub": PRs are a test double; the PR check reads the bare remote.
 	prs := &fakePRs{next: 7}

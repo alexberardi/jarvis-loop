@@ -3,6 +3,12 @@
 // the --settings file the way Claude Code does (SessionStart, then PreToolUse before every tool
 // call, honouring a deny), and plays a scripted scenario chosen by FAKE_CLAUDE_SCENARIO. It never
 // talks to a model, GitHub or loopd.
+//
+// For the loop's harness (internal/sandbox) it also takes a script per item: with
+// FAKE_CLAUDE_SCRIPTS=<dir>, the file <dir>/<item id>.json ({"play": "<scenario>", "file":
+// "<path to change>"}) overrides the scenario for that item's runs, and the fake appends its
+// progress ("started", "hanging") to <dir>/<item id>.state, so the harness knows when a hanging
+// agent is really running. These files are the harness's plumbing, not tool calls.
 package fakeclaude
 
 import (
@@ -74,11 +80,29 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if scenario == "" {
 		scenario = Good
 	}
-	f.scenario = scenario
 	f.cwd, _ = os.Getwd()
 	brief, _ := io.ReadAll(stdin)
 	branch := find("Branch: `([^`]+)`", brief)
 	base := find("base branch `([^`]+)`", brief)
+	item := find(`Item: #(\d+)`, brief)
+	sc := loadScript(os.Getenv("FAKE_CLAUDE_SCRIPTS"), item)
+	if sc.Play != "" {
+		scenario = sc.Play
+	}
+	f.scenario = scenario
+	change := "feature.txt"
+	if sc.File != "" {
+		change = sc.File
+	}
+	progress := func(what string) {
+		if d := os.Getenv("FAKE_CLAUDE_SCRIPTS"); d != "" && item != "" {
+			if fh, err := os.OpenFile(filepath.Join(d, item+".state"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+				fmt.Fprintln(fh, what)
+				fh.Close()
+			}
+		}
+	}
+	progress("started")
 	if b, err := os.ReadFile(settings); err == nil {
 		var s struct {
 			Hooks map[string][]struct {
@@ -115,6 +139,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case Hang, IgnoreTerm:
 		f.write("wip.txt", "half done\n")
 		f.say("working on it")
+		progress("hanging")
 		for {
 			time.Sleep(time.Hour)
 		}
@@ -143,8 +168,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	// The common path: a change, committed on the item's branch (a resumed run finds it there).
-	f.write("feature.txt", "a feature for "+branch+"\n")
-	f.bash("git add feature.txt && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'feat: add a feature'")
+	f.write(change, "a feature for "+branch+"\n")
+	f.bash("git add " + shellQuote(change) + " && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'feat: add a feature'")
 	if scenario == NoArm {
 		f.result("done without hooks")
 		return 0
@@ -177,7 +202,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f.bash("git status --short") // one more turn: a run long enough to count
 	}
 	res, _ := json.Marshal(map[string]any{"outcome": "ready_for_pr", "pr_title": "Add a feature",
-		"pr_body": fmt.Sprintf("Adds `feature.txt` (%s commits).\n\nTests: see `after.txt`.", commits), "head_sha": head,
+		"pr_body": fmt.Sprintf("Adds `%s` (%s commits).\n\nTests: see `after.txt`.", change, commits), "head_sha": head,
 		"summary": "Added a feature, test first.", "not_verified": []string{"nothing on a phone"},
 		"evidence": []any{map[string]string{"file": "evidence/after.txt", "label": "tests"}}})
 	f.write(".loop/result.json", string(res))
@@ -289,3 +314,22 @@ func (f *fake) bash(command string) {
 		return string(out), err
 	})
 }
+
+// script is one item's play in the harness.
+type script struct {
+	Play string `json:"play"`
+	File string `json:"file"`
+}
+
+func loadScript(dir, item string) script {
+	var s script
+	if dir == "" || item == "" {
+		return s
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, item+".json")); err == nil {
+		json.Unmarshal(b, &s)
+	}
+	return s
+}
+
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

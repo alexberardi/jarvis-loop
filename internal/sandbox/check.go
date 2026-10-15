@@ -1,0 +1,585 @@
+package sandbox
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/alexberardi/jarvis-loop/internal/slack"
+	"github.com/alexberardi/jarvis-loop/internal/slackfake"
+	"github.com/alexberardi/jarvis-loop/internal/store"
+)
+
+// check waits until every positive expectation holds, then until the loop is quiet, and then
+// checks the negative ones (no_events, no_messages), which would otherwise hold vacuously before
+// anything was posted.
+func (p *player) check(e Expect) error {
+	within := 10 * time.Second
+	if e.Within != "" {
+		d, err := time.ParseDuration(e.Within)
+		if err != nil {
+			return fmt.Errorf("within: %w", err)
+		}
+		within = d
+	}
+	var problems []string
+	err := eventually(within, func() error {
+		problems = p.problems(e, false)
+		if len(problems) > 0 {
+			return fmt.Errorf("%d unmet", len(problems))
+		}
+		return nil
+	})
+	if err == nil {
+		p.settle()
+		problems = p.problems(e, true)
+		if len(problems) == 0 {
+			return nil
+		}
+	}
+	return fmt.Errorf("after %s:\n  - %s", within, strings.Join(problems, "\n  - "))
+}
+
+// settle waits until neither loopd nor Slack has seen anything new for a moment (at most 3 s).
+func (p *player) settle() {
+	const quiet = 150 * time.Millisecond
+	state := func() string {
+		id, _ := p.s.lastEventID()
+		return fmt.Sprintf("%d/%d/%d", id, len(p.s.Slack.Calls()), len(p.s.Slack.Messages()))
+	}
+	last, since := state(), time.Now()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && time.Since(since) < quiet {
+		time.Sleep(10 * time.Millisecond)
+		if cur := state(); cur != last {
+			last, since = cur, time.Now()
+		}
+	}
+}
+
+func (p *player) problems(e Expect, negatives bool) []string {
+	var out []string
+	add := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
+	for _, alias := range sortedKeys(e.Stage) {
+		r, err := p.ref(alias)
+		if err != nil {
+			add("%v", err)
+			continue
+		}
+		d, err := p.s.Store.GetItem(p.ctx, r.id)
+		if err != nil {
+			add("%s: %v", alias, err)
+			continue
+		}
+		if string(d.Item.Stage) != e.Stage[alias] {
+			add("%s (#%d) is %s, want %s%s", alias, r.id, d.Item.Stage, e.Stage[alias], questionNote(d))
+		}
+	}
+	for _, alias := range sortedKeys(e.Question) {
+		r, err := p.ref(alias)
+		if err != nil {
+			add("%v", err)
+			continue
+		}
+		d, _ := p.s.Store.GetItem(p.ctx, r.id)
+		if ok, err := matches(e.Question[alias], d.Item.Question); err != nil || !ok {
+			add("%s's question is %q, want /%s/ %v", alias, d.Item.Question, e.Question[alias], errOrNil(err))
+		}
+	}
+	for _, alias := range sortedKeys(e.Leased) {
+		r, err := p.ref(alias)
+		if err != nil {
+			add("%v", err)
+			continue
+		}
+		d, _ := p.s.Store.GetItem(p.ctx, r.id)
+		if (d.Lease != nil) != e.Leased[alias] {
+			add("%s leased = %v, want %v", alias, d.Lease != nil, e.Leased[alias])
+		}
+	}
+	evs, err := p.s.Events()
+	if err != nil {
+		add("events: %v", err)
+	}
+	for _, m := range e.Events {
+		n, err := p.countEvents(evs, m)
+		switch {
+		case err != nil:
+			add("%v", err)
+		case m.Count != nil && n != *m.Count:
+			add("%d event(s) %s, want %d%s", n, m, *m.Count, p.eventsNote(evs, m))
+		case m.Count == nil && n == 0:
+			add("no event %s%s", m, p.eventsNote(evs, m))
+		}
+	}
+	for _, m := range e.NoEvents {
+		if !negatives {
+			break
+		}
+		if n, err := p.countEvents(evs, m); err != nil {
+			add("%v", err)
+		} else if n > 0 {
+			add("%d event(s) %s, want none", n, m)
+		}
+	}
+	msgs := p.s.Slack.Messages()
+	after := 0
+	for i, m := range e.Messages {
+		idx, err := p.findMessage(msgs, m, after)
+		if err != nil {
+			add("%v", err)
+			continue
+		}
+		if idx < 0 {
+			add("message %d %s not found after the previous one%s", i+1, m, p.messagesNote(msgs, m))
+			continue
+		}
+		after = idx + 1
+	}
+	for _, m := range e.NoMessages {
+		if !negatives {
+			break
+		}
+		if idx, err := p.findMessage(msgs, m, 0); err != nil {
+			add("%v", err)
+		} else if idx >= 0 {
+			add("message %s exists, want none: %q", m, Body(msgs[idx]))
+		}
+	}
+	if c := e.Control; c != nil {
+		ctl, err := p.s.Store.Control(p.ctx)
+		if err != nil {
+			add("control: %v", err)
+		} else {
+			if c.ActiveAgents != nil && ctl.ActiveAgents != *c.ActiveAgents {
+				add("active agents %d, want %d", ctl.ActiveAgents, *c.ActiveAgents)
+			}
+			if c.Stopped != nil && ctl.Stopped != *c.Stopped {
+				add("stopped %v, want %v", ctl.Stopped, *c.Stopped)
+			}
+		}
+	}
+	if e.PRs != nil {
+		if n := len(p.s.GitHub.PRs()); n != *e.PRs {
+			add("%d PR(s) on the fake GitHub, want %d", n, *e.PRs)
+		}
+	}
+	for _, alias := range sortedKeys(e.PR) {
+		r, err := p.ref(alias)
+		if err != nil {
+			add("%v", err)
+			continue
+		}
+		want, br := e.PR[alias], ItemBranch(r.id, r.title)
+		var pr *PR
+		for _, x := range p.s.GitHub.PRs() {
+			if x.Head == br {
+				x := x
+				pr = &x
+			}
+		}
+		if pr == nil {
+			add("no PR for %s (%s)", alias, br)
+			continue
+		}
+		if want.Number != 0 && pr.Number != want.Number {
+			add("%s's PR is #%d, want #%d", alias, pr.Number, want.Number)
+		}
+		if pr.HeadSHA != p.s.GitHub.RemoteHead(RepoSlug, br) {
+			add("%s's PR head %s is not the branch's head", alias, pr.HeadSHA)
+		}
+		for _, kv := range [][3]string{{"title", want.Title, pr.Title}, {"body", want.Body, pr.Body}} {
+			if ok, err := matches(kv[1], kv[2]); err != nil || !ok {
+				add("%s's PR %s is %q, want /%s/ %s", alias, kv[0], clip(kv[2], 300), kv[1], errOrNil(err))
+			}
+		}
+	}
+	if rm := e.Remote; rm != nil {
+		out = append(out, p.remoteProblems(*rm)...)
+	}
+	for _, rel := range e.Absent {
+		if _, err := os.Lstat(filepath.Join(p.s.Dir, rel)); err == nil {
+			add("%s exists, want it absent", rel)
+		}
+	}
+	return out
+}
+
+func errOrNil(err error) string {
+	if err != nil {
+		return "(" + err.Error() + ")"
+	}
+	return ""
+}
+
+func questionNote(d store.Detail) string {
+	if d.Item.Question != "" {
+		return fmt.Sprintf(" (question: %q)", clip(d.Item.Question, 200))
+	}
+	return ""
+}
+
+func clip(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:n]) + "…"
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func matches(pattern, s string) (bool, error) {
+	if pattern == "" {
+		return true, nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return false, fmt.Errorf("bad regexp %q: %w", pattern, err)
+	}
+	return re.MatchString(s), nil
+}
+
+func (m EventMatch) String() string {
+	var parts []string
+	for _, kv := range [][2]string{{"item", m.Item}, {"kind", m.Kind}, {"actor", m.Actor}, {"outcome", m.Outcome}} {
+		if kv[1] != "" {
+			parts = append(parts, kv[0]+"="+kv[1])
+		}
+	}
+	for _, k := range sortedKeys(m.Data) {
+		parts = append(parts, "data."+k+"=~/"+m.Data[k]+"/")
+	}
+	return "{" + strings.Join(parts, " ") + "}"
+}
+
+// actor resolves the aliases used in scenarios to loopd's actor strings.
+func actor(a string) string {
+	switch a {
+	case "approver":
+		return "slack:" + slack.Approver
+	case "other":
+		return "slack:" + Other
+	case "runner":
+		return "runner:" + RunnerName
+	case "hand":
+		return "runner:" + HandRunner
+	case "user":
+		return "user:" + UserName
+	}
+	return a
+}
+
+func (p *player) countEvents(evs []store.Event, m EventMatch) (int, error) {
+	var id int64 = -1
+	if m.Item != "" {
+		r, err := p.ref(m.Item)
+		if err != nil {
+			return 0, err
+		}
+		id = r.id
+	}
+	n := 0
+	for _, e := range evs {
+		if id >= 0 && e.ItemID != id || m.Kind != "" && e.Kind != m.Kind || m.Actor != "" && e.Actor != actor(m.Actor) ||
+			m.Outcome != "" && e.Outcome != m.Outcome {
+			continue
+		}
+		ok := true
+		for k, pat := range m.Data {
+			v, present := e.Data[k]
+			if !present {
+				ok = false
+				break
+			}
+			s := fmt.Sprint(v)
+			if _, isStr := v.(string); !isStr {
+				b, _ := json.Marshal(v)
+				s = string(b)
+			}
+			hit, err := matches(pat, s)
+			if err != nil {
+				return 0, err
+			}
+			ok = ok && hit
+		}
+		if ok {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// eventsNote lists the item's events, to show what happened instead.
+func (p *player) eventsNote(evs []store.Event, m EventMatch) string {
+	var id int64 = -1
+	if r, err := p.ref(m.Item); err == nil {
+		id = r.id
+	}
+	var lines []string
+	for _, e := range evs {
+		if id >= 0 && e.ItemID != id {
+			continue
+		}
+		l := e.Kind
+		if e.Outcome != "" {
+			l += "(" + e.Outcome + ")"
+		}
+		lines = append(lines, l+" by "+e.Actor)
+	}
+	if len(lines) > 30 {
+		lines = lines[len(lines)-30:]
+	}
+	return "; events: " + strings.Join(lines, ", ")
+}
+
+func (m MsgMatch) String() string {
+	var parts []string
+	for _, kv := range [][2]string{{"thread", m.Thread}, {"parent", m.Parent}, {"channel", m.Channel}, {"from", m.From},
+		{"kind", m.Kind}, {"to", m.To}, {"text", m.Text}} {
+		if kv[1] != "" {
+			parts = append(parts, kv[0]+"="+quote(kv[1]))
+		}
+	}
+	if len(m.Buttons) > 0 {
+		parts = append(parts, "buttons="+strings.Join(m.Buttons, "|"))
+	}
+	if m.Pinned != nil {
+		parts = append(parts, fmt.Sprintf("pinned=%v", *m.Pinned))
+	}
+	return "{" + strings.Join(parts, " ") + "}"
+}
+
+func quote(s string) string { return fmt.Sprintf("%q", s) }
+
+func channelID(name string) string {
+	switch name {
+	case "loop", "#loop":
+		return slack.ChannelLoop
+	case "digest", "loop-digest", "#loop-digest":
+		return slack.ChannelDigest
+	}
+	return name
+}
+
+func userOf(name string) string {
+	switch name {
+	case "bot":
+		return slackfake.BotUser
+	case "approver", "you":
+		return slack.Approver
+	case "other":
+		return Other
+	}
+	return name
+}
+
+// findMessage returns the index of the first message at or after `from` that matches, or -1.
+func (p *player) findMessage(msgs []slackfake.Message, m MsgMatch, from int) (int, error) {
+	var thread, parent string
+	if m.Thread != "" {
+		r, err := p.ref(m.Thread)
+		if err != nil {
+			return -1, err
+		}
+		if thread = p.s.Thread(r.id); thread == "" {
+			return -1, nil
+		}
+	}
+	if m.Parent != "" {
+		r, err := p.ref(m.Parent)
+		if err != nil {
+			return -1, err
+		}
+		if parent = p.s.Thread(r.id); parent == "" {
+			return -1, nil
+		}
+	}
+	for i := from; i < len(msgs); i++ {
+		x := msgs[i]
+		if thread != "" && x.ThreadTS != thread || parent != "" && (x.TS != parent || x.Channel != slack.ChannelLoop) ||
+			m.Channel != "" && x.Channel != channelID(m.Channel) || m.From != "" && x.User != userOf(m.From) ||
+			m.Kind != "" && x.Kind != m.Kind || m.To != "" && x.To != userOf(m.To) || m.Pinned != nil && x.Pinned != *m.Pinned {
+			continue
+		}
+		hit, err := matches(m.Text, x.Text)
+		if err != nil {
+			return -1, err
+		}
+		if !hit {
+			hit, _ = matches(m.Text, Body(x))
+		}
+		if !hit {
+			continue
+		}
+		btns := Buttons(x)
+		ok := true
+		for _, b := range m.Buttons {
+			ok = ok && slices.Contains(btns, b)
+		}
+		if ok {
+			return i, nil
+		}
+	}
+	return -1, nil
+}
+
+// messagesNote shows the thread (or channel) the message was looked for in.
+func (p *player) messagesNote(msgs []slackfake.Message, m MsgMatch) string {
+	var thread string
+	alias := m.Thread
+	if alias == "" {
+		alias = m.Parent
+	}
+	if r, err := p.ref(alias); err == nil {
+		thread = p.s.Thread(r.id)
+	}
+	var sub []slackfake.Message
+	for _, x := range msgs {
+		if thread != "" && x.TS != thread && x.ThreadTS != thread {
+			continue
+		}
+		if thread == "" && m.Channel != "" && x.Channel != channelID(m.Channel) {
+			continue
+		}
+		sub = append(sub, x)
+	}
+	if len(sub) > 25 {
+		sub = sub[len(sub)-25:]
+	}
+	return "; there:\n" + Render(sub, "")
+}
+
+// mustNot checks what must never happen, whatever the scenario: a bot message outside the two
+// channels, a token in anything sent to Slack, a broadcast or a mention of anyone but the
+// approver, an over-long message, a token in a PR, and an event from an unexpected actor (someone other than the
+// approver only ever appears on a refusal).
+func (p *player) mustNot() []string {
+	var out []string
+	allowed := []string{slack.ChannelLoop, slack.ChannelDigest}
+	for _, c := range p.s.Slack.Calls() {
+		raw, _ := json.Marshal(c.Body)
+		for _, sec := range p.s.Secrets {
+			if strings.Contains(string(raw), sec) {
+				out = append(out, fmt.Sprintf("%s carries a token", c.Method))
+			}
+		}
+		switch c.Method {
+		case "chat.postMessage", "chat.update", "chat.postEphemeral", "pins.add":
+			ch, _ := c.Body["channel"].(string)
+			if !slices.Contains(allowed, ch) {
+				out = append(out, fmt.Sprintf("%s to %s, outside #loop and #loop-digest", c.Method, ChannelName(ch)))
+			}
+			if c.Auth != "Bearer "+p.s.Secrets[3] {
+				out = append(out, c.Method+" without the bot token")
+			}
+		case "apps.connections.open":
+			if c.Auth != "Bearer "+p.s.Secrets[4] {
+				out = append(out, c.Method+" without the app token")
+			}
+		}
+	}
+	mention := regexp.MustCompile(`<@([A-Z0-9]+)>`)
+	for _, m := range p.s.Slack.Messages() {
+		if m.User != slackfake.BotUser {
+			continue
+		}
+		body := m.Text + "\n" + Body(m)
+		for _, sec := range p.s.Secrets {
+			if strings.Contains(body, sec) {
+				out = append(out, fmt.Sprintf("a message in %s shows a token", ChannelName(m.Channel)))
+			}
+		}
+		for _, bad := range []string{"<!channel>", "<!here>", "<!everyone>"} {
+			if strings.Contains(body, bad) {
+				out = append(out, fmt.Sprintf("a message pings %s: %q", bad, clip(m.Text, 120)))
+			}
+		}
+		for _, mm := range mention.FindAllStringSubmatch(body, -1) {
+			if mm[1] != slack.Approver {
+				out = append(out, fmt.Sprintf("a message mentions %s, not the approver: %q", mm[1], clip(m.Text, 120)))
+			}
+		}
+		if n := utf8.RuneCountInString(m.Text); n > slack.MaxChars {
+			out = append(out, fmt.Sprintf("a message has %d characters (max %d)", n, slack.MaxChars))
+		}
+		for _, b := range m.Blocks {
+			if n := utf8.RuneCountInString(plainText(b["text"])); n > slack.MaxChars {
+				out = append(out, fmt.Sprintf("a block has %d characters (max %d)", n, slack.MaxChars))
+			}
+		}
+	}
+	for _, pr := range p.s.GitHub.PRs() {
+		for _, sec := range p.s.Secrets {
+			if strings.Contains(pr.Title+pr.Body, sec) {
+				out = append(out, fmt.Sprintf("PR #%d shows a token", pr.Number))
+			}
+		}
+	}
+	evs, _ := p.s.Events()
+	known := []string{"loopd", actor("approver"), actor("runner"), actor("hand"), actor("user")}
+	for _, e := range evs {
+		if slices.Contains(known, e.Actor) {
+			continue
+		}
+		if e.Kind == "refused" && strings.HasPrefix(e.Actor, "slack:") {
+			continue // someone else tried, and was refused: that is the point of recording it
+		}
+		out = append(out, fmt.Sprintf("event %s (#%d) by unexpected actor %q", e.Kind, e.ItemID, e.Actor))
+	}
+	return out
+}
+
+func (p *player) remoteProblems(rm RemoteMatch) []string {
+	var out []string
+	gh := p.s.GitHub
+	if h := gh.RemoteHead(RepoSlug, "main"); h != p.s.MainSHA {
+		out = append(out, fmt.Sprintf("main moved: %s, was %s", h, p.s.MainSHA))
+	}
+	want := []string{"main"}
+	for _, alias := range sortedKeys(rm.Branches) {
+		r, err := p.ref(alias)
+		if err != nil {
+			out = append(out, err.Error())
+			continue
+		}
+		br := ItemBranch(r.id, r.title)
+		want = append(want, br)
+		head := gh.RemoteHead(RepoSlug, br)
+		if head == "" {
+			out = append(out, fmt.Sprintf("no branch %s on the remote", br))
+			continue
+		}
+		subj := gh.Subject(RepoSlug, head)
+		if ok, err := matches(rm.Branches[alias], subj); err != nil || !ok {
+			out = append(out, fmt.Sprintf("%s's head is %q, want /%s/ %s", br, subj, rm.Branches[alias], errOrNil(err)))
+		}
+		if files, ok := rm.Files[alias]; ok {
+			if got := gh.Files(RepoSlug, head); !slices.Equal(got, files) {
+				out = append(out, fmt.Sprintf("%s's head changed %v, want %v", br, got, files))
+			}
+		}
+	}
+	if rm.Only {
+		for _, b := range gh.Branches(RepoSlug) {
+			if !slices.Contains(want, b) {
+				out = append(out, fmt.Sprintf("unexpected branch %s on the remote", b))
+			}
+		}
+	}
+	return out
+}

@@ -1,0 +1,130 @@
+{
+  "name": "not-an-approval",
+  "about": "A question is not consent: \"looks fine?\" leaves the item held and the bot says how to approve; no echo, no window.",
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Rotate the session signing key"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "good",
+      "file": "internal/modules/auth/keys.go"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "wait",
+      "stage": {
+        "a": "review"
+      },
+      "within": "30s"
+    },
+    {
+      "do": "review",
+      "item": "a"
+    },
+    {
+      "do": "land",
+      "item": "a",
+      "outcome": "hold",
+      "reason": "auth path"
+    },
+    {
+      "do": "wait",
+      "stage": {
+        "a": "held"
+      },
+      "messages": [
+        {
+          "thread": "a",
+          "text": "is held for your approval",
+          "buttons": [
+            "Approve merge",
+            "Keep holding"
+          ]
+        }
+      ]
+    },
+    {
+      "do": "reply",
+      "item": "a",
+      "as": "approver",
+      "text": "looks fine?"
+    },
+    {
+      "do": "expect",
+      "messages": [
+        {
+          "thread": "a",
+          "from": "approver",
+          "text": "^looks fine\\?$"
+        },
+        {
+          "thread": "a",
+          "from": "bot",
+          "text": "^Not taken as an approval; the item stays held\\. Reply 'approve' or use the button\\.$"
+        }
+      ]
+    },
+    {
+      "do": "reply",
+      "item": "a",
+      "as": "approver",
+      "text": "don't merge yet"
+    },
+    {
+      "do": "clock",
+      "advance": "3m"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "held"
+    },
+    "events": [
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "hold",
+        "count": 1
+      }
+    ],
+    "no_events": [
+      {
+        "item": "a",
+        "kind": "approved"
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "text": "Not taken as an approval"
+      },
+      {
+        "thread": "a",
+        "from": "approver",
+        "text": "^don't merge yet$"
+      },
+      {
+        "thread": "a",
+        "from": "bot",
+        "text": "Not taken as an approval"
+      }
+    ],
+    "no_messages": [
+      {
+        "thread": "a",
+        "text": "Merging in 2 minutes"
+      }
+    ]
+  }
+}

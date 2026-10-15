@@ -1,0 +1,151 @@
+{
+  "name": "cancel",
+  "about": "A reply approval is echoed with a Cancel button; the approver cancels within the 2-minute window, so nothing is approved and the item stays held, even after the window has passed.",
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Rotate the session signing key"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "good",
+      "file": "internal/modules/auth/keys.go"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "wait",
+      "stage": {
+        "a": "review"
+      },
+      "within": "30s"
+    },
+    {
+      "do": "review",
+      "item": "a"
+    },
+    {
+      "do": "land",
+      "item": "a",
+      "outcome": "hold",
+      "reason": "auth path"
+    },
+    {
+      "do": "wait",
+      "stage": {
+        "a": "held"
+      },
+      "messages": [
+        {
+          "thread": "a",
+          "text": "is held for your approval",
+          "buttons": [
+            "Approve merge",
+            "Keep holding"
+          ]
+        }
+      ]
+    },
+    {
+      "do": "reply",
+      "item": "a",
+      "as": "approver",
+      "text": "approve"
+    },
+    {
+      "do": "expect",
+      "messages": [
+        {
+          "thread": "a",
+          "from": "bot",
+          "text": "^Approved by you: 'approve' for `[0-9a-f]{7}`\\. Merging in 2 minutes\\.",
+          "buttons": [
+            "Cancel"
+          ]
+        }
+      ]
+    },
+    {
+      "do": "clock",
+      "advance": "1m"
+    },
+    {
+      "do": "press",
+      "item": "a",
+      "as": "approver",
+      "button": "cancel_approval"
+    },
+    {
+      "do": "expect",
+      "events": [
+        {
+          "item": "a",
+          "kind": "approval_cancelled",
+          "actor": "approver",
+          "data": {
+            "words": "^approve$"
+          }
+        }
+      ]
+    },
+    {
+      "do": "clock",
+      "advance": "3m"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "held"
+    },
+    "no_events": [
+      {
+        "item": "a",
+        "kind": "approved"
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "text": "is held for your approval",
+        "buttons": [
+          "Approve merge",
+          "Keep holding"
+        ]
+      },
+      {
+        "thread": "a",
+        "from": "approver",
+        "text": "^approve$"
+      },
+      {
+        "thread": "a",
+        "from": "bot",
+        "text": "^Cancelled: 'approve' was not applied\\. #\\d+ stays held\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "^Reply approval cancelled by you; still held\\.$"
+      }
+    ],
+    "no_messages": [
+      {
+        "thread": "a",
+        "text": "Applied\\.|→ land\\.$"
+      },
+      {
+        "thread": "a",
+        "buttons": [
+          "Cancel"
+        ]
+      }
+    ]
+  }
+}

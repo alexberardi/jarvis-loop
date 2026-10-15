@@ -773,6 +773,50 @@ func TestControlMessageDeletedIsPostedAgain(t *testing.T) {
 
 // ---- /loop and mentions ----
 
+// A usage limit turns the active agents to 0; the user hears about it in #loop-digest with the
+// reset time and a mention (DESIGN.md, Usage control), and the control message shows 0.
+func TestUsageLimitIsAnnouncedInTheDigestChannel(t *testing.T) {
+	e := newBotEnv(t)
+	if err := e.b.EnsureControl(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	id := e.add("limited")
+	e.calls()
+	e.runner(id, "a1", pipeline.UsageLimit, map[string]string{"error": "You've hit your session limit", "reset": "3:45pm"})
+	cs := e.calls()
+	var digest []call
+	for _, c := range only(t, cs, "chat.postMessage") {
+		if c.Body["channel"] == ChannelDigest {
+			digest = append(digest, c)
+		}
+	}
+	if len(digest) != 1 {
+		t.Fatalf("digest-channel posts %+v", digest)
+	}
+	txt := allText(digest[0])
+	for _, want := range []string{"<@" + Approver + ">", "Usage limit", "session limit", "resets 3:45pm", fmt.Sprintf("#%d", id), "0"} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("usage-limit post lacks %q: %s", want, txt)
+		}
+	}
+	st, _ := e.st.SlackState(e.ctx)
+	var shown bool
+	for _, u := range only(t, cs, "chat.update") {
+		if u.Body["ts"] == st.ControlTS && strings.Contains(allText(u), "Active agents: 0 of 6") {
+			shown = true
+		}
+	}
+	if !shown {
+		t.Fatalf("the control message does not show 0: %+v", only(t, cs, "chat.update"))
+	}
+	// Other control changes are not announced.
+	two := 2
+	e.st.SetControl(e.ctx, "user:alex", store.ControlPatch{ActiveAgents: &two})
+	for _, c := range only(t, e.calls(), "chat.postMessage") {
+		t.Fatalf("a plain control change posted %+v", c.Body)
+	}
+}
+
 func TestLoopCommands(t *testing.T) {
 	e := newBotEnv(t)
 	out := e.command(Approver, "add this is a high priority feature")

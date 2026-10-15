@@ -1,0 +1,183 @@
+{
+  "name": "someone-else",
+  "about": "Someone other than the approver replies \"approve\", presses Approve merge and types /loop stop: each is refused with an ephemeral only they see and a refused event; the item stays held and nothing stops.",
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Rotate the session signing key"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "good",
+      "file": "internal/modules/auth/keys.go"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "wait",
+      "stage": {
+        "a": "review"
+      },
+      "within": "30s"
+    },
+    {
+      "do": "review",
+      "item": "a"
+    },
+    {
+      "do": "land",
+      "item": "a",
+      "outcome": "hold",
+      "reason": "auth path"
+    },
+    {
+      "do": "wait",
+      "stage": {
+        "a": "held"
+      },
+      "messages": [
+        {
+          "thread": "a",
+          "text": "is held for your approval",
+          "buttons": [
+            "Approve merge",
+            "Keep holding"
+          ]
+        }
+      ]
+    },
+    {
+      "do": "reply",
+      "item": "a",
+      "as": "other",
+      "text": "approve"
+    },
+    {
+      "do": "expect",
+      "messages": [
+        {
+          "channel": "loop",
+          "kind": "ephemeral",
+          "to": "other",
+          "text": "^Sorry, only the approver can do that\\.$"
+        },
+        {
+          "thread": "a",
+          "text": "^Refused approve from someone else \\(U0SANDBOXOTHER\\): only the approver can do that$"
+        }
+      ],
+      "events": [
+        {
+          "item": "a",
+          "kind": "refused",
+          "actor": "other",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "do": "press",
+      "item": "a",
+      "as": "other",
+      "button": "approve"
+    },
+    {
+      "do": "expect",
+      "events": [
+        {
+          "item": "a",
+          "kind": "refused",
+          "actor": "other",
+          "data": {
+            "action": "^approve$"
+          },
+          "count": 2
+        }
+      ]
+    },
+    {
+      "do": "command",
+      "as": "other",
+      "text": "stop",
+      "answer": "^Sorry, only the approver can do that\\.$"
+    },
+    {
+      "do": "clock",
+      "advance": "3m"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "held"
+    },
+    "control": {
+      "stopped": false
+    },
+    "events": [
+      {
+        "item": "a",
+        "kind": "refused",
+        "actor": "other",
+        "data": {
+          "action": "^approve$",
+          "code": "^not_approver$"
+        },
+        "count": 2
+      },
+      {
+        "kind": "refused",
+        "actor": "other",
+        "data": {
+          "action": "^/loop stop$"
+        },
+        "count": 1
+      }
+    ],
+    "no_events": [
+      {
+        "item": "a",
+        "kind": "approved"
+      },
+      {
+        "kind": "control"
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "from": "other",
+        "text": "^approve$"
+      },
+      {
+        "thread": "a",
+        "text": "^Refused approve from someone else"
+      },
+      {
+        "thread": "a",
+        "text": "^Refused approve from someone else"
+      }
+    ],
+    "no_messages": [
+      {
+        "thread": "a",
+        "text": "Merging in 2 minutes|Approved by"
+      },
+      {
+        "kind": "ephemeral",
+        "to": "approver"
+      },
+      {
+        "kind": "response",
+        "to": "approver"
+      }
+    ]
+  }
+}

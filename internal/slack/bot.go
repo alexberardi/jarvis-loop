@@ -40,6 +40,9 @@ type Config struct {
 	Location    *time.Location
 	// ApprovalDelay is the window in which a reply approval can be cancelled (default 2 minutes).
 	ApprovalDelay time.Duration
+	// TickEvery is how often Run applies due reply approvals and checks the digest (default 5 s).
+	// The loop's harness, on a fake clock, makes it short so a moved clock takes effect at once.
+	TickEvery time.Duration
 }
 
 // Bot turns pipeline events into Slack messages and Slack actions into pipeline calls.
@@ -97,6 +100,9 @@ func New(c Config) (*Bot, error) {
 	if c.ApprovalDelay == 0 {
 		c.ApprovalDelay = 2 * time.Minute
 	}
+	if c.TickEvery <= 0 {
+		c.TickEvery = 5 * time.Second
+	}
 	c.LinkBase = strings.TrimRight(c.LinkBase, "/")
 	return &Bot{c: c, events: make(chan store.Event, eventsBuffer), pending: map[string]*pendingApproval{}}, nil
 }
@@ -119,7 +125,7 @@ func (b *Bot) Run(ctx context.Context) {
 	if err := b.EnsureControl(ctx); err != nil {
 		b.c.Log.Error("slack: control message", "err", err.Error())
 	}
-	t := time.NewTicker(5 * time.Second)
+	t := time.NewTicker(b.c.TickEvery)
 	defer t.Stop()
 	for {
 		select {
@@ -211,6 +217,9 @@ func (b *Bot) handleEvent(ctx context.Context, e store.Event) {
 		if e.Kind == "control" {
 			if err := b.updateControl(ctx); err != nil {
 				b.c.Log.Error("slack: control message", "err", err.Error())
+			}
+			if str(e.Data, "reason") == "usage_limit" {
+				b.post(ctx, "usage limit", b.usageLimitMessage(e))
 			}
 		}
 		return
@@ -472,6 +481,30 @@ func (b *Bot) heldMessage(e store.Event, d store.Detail) Message {
 			button("Keep holding", "keep_holding", value, ""),
 		}},
 	}}
+}
+
+// usageLimitMessage tells the approver in #loop-digest that a usage limit set the active agents
+// to 0, with the reset time when the run reported one. Nothing raises the number again on its own.
+func (b *Bot) usageLimitMessage(e store.Event) Message {
+	var id int64
+	switch v := e.Data["item"].(type) {
+	case float64:
+		id = int64(v)
+	case int64:
+		id = v
+	case int:
+		id = int64(v)
+	}
+	text := fmt.Sprintf("<@%s> Usage limit hit", Approver)
+	if id != 0 {
+		text += fmt.Sprintf(" on #%d", id)
+	}
+	text += ": " + b.field(str(e.Data, "error"), 300, id)
+	if r := str(e.Data, "reset"); r != "" {
+		text += " (resets " + b.field(r, 100, id) + ")"
+	}
+	text += ".\nActive agents set to 0. Raise it with `/loop agents <n>` or the control message once the limit resets."
+	return Message{Channel: ChannelDigest, Text: text, Blocks: []map[string]any{section(text)}}
 }
 
 // ---- the control message ----

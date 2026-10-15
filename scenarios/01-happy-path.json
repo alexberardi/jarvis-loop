@@ -1,0 +1,265 @@
+{
+  "name": "happy-path",
+  "about": "Intake, triage by hand, the runner's build (the agent commits; the runner pushes and opens the PR) touches an auth path, review by hand, land holds it, the approver approves by thread reply, the 2-minute window passes on the fake clock, land merges it.",
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Shorten the session timeout"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "triage"
+      },
+      "messages": [
+        {
+          "parent": "a",
+          "text": "#\\d+ Shorten the session timeout.*\\n.*Priority \\*P3\\* · Stage \\*intake\\*",
+          "buttons": [
+            "priority"
+          ]
+        }
+      ]
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "good",
+      "file": "internal/modules/auth/session.go"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "wait",
+      "stage": {
+        "a": "review"
+      },
+      "within": "30s"
+    },
+    {
+      "do": "expect",
+      "prs": 1,
+      "events": [
+        {
+          "item": "a",
+          "kind": "advanced",
+          "outcome": "pr_opened",
+          "actor": "runner",
+          "data": {
+            "pr": "^101$",
+            "pr_verified": "^true$",
+            "changed_paths": "internal/modules/auth/session.go"
+          }
+        }
+      ]
+    },
+    {
+      "do": "review",
+      "item": "a"
+    },
+    {
+      "do": "land",
+      "item": "a",
+      "outcome": "hold",
+      "reason": "auth path"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "held"
+      },
+      "messages": [
+        {
+          "thread": "a",
+          "text": "<@U0C9AFPAMD4> #\\d+ is held for your approval: .*sandbox/demo#101.* at `[0-9a-f]{7}`",
+          "buttons": [
+            "Approve merge",
+            "Keep holding"
+          ]
+        }
+      ]
+    },
+    {
+      "do": "reply",
+      "item": "a",
+      "as": "approver",
+      "text": "yea, this auth change is fine"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "held"
+      },
+      "messages": [
+        {
+          "thread": "a",
+          "from": "approver",
+          "text": "yea, this auth change is fine"
+        },
+        {
+          "thread": "a",
+          "from": "bot",
+          "text": "^Approved by you: 'yea, this auth change is fine' for `[0-9a-f]{7}`\\. Merging in 2 minutes\\.",
+          "buttons": [
+            "Cancel"
+          ]
+        }
+      ],
+      "no_events": [
+        {
+          "item": "a",
+          "kind": "approved"
+        }
+      ]
+    },
+    {
+      "do": "clock",
+      "advance": "1m"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "held"
+      },
+      "no_events": [
+        {
+          "item": "a",
+          "kind": "approved"
+        }
+      ]
+    },
+    {
+      "do": "clock",
+      "advance": "1m"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "land"
+      },
+      "events": [
+        {
+          "item": "a",
+          "kind": "approved",
+          "actor": "approver",
+          "data": {
+            "words": "^yea, this auth change is fine$"
+          }
+        }
+      ]
+    },
+    {
+      "do": "land",
+      "item": "a",
+      "outcome": "merged"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "done"
+    },
+    "messages": [
+      {
+        "parent": "a",
+        "text": "Stage \\*done\\* · Source user · <https://github.com/sandbox/demo/pull/101\\|sandbox/demo#101>"
+      },
+      {
+        "thread": "a",
+        "text": "^Claimed for triage\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "^Evidence \\d attached"
+      },
+      {
+        "thread": "a",
+        "text": "^Reproduced: area sandbox, size S, risk normal → ready\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "^Claimed for build\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "^Evidence \\d attached"
+      },
+      {
+        "thread": "a",
+        "text": "sandbox/demo#101> opened, head `[0-9a-f]{7}` → review\\.\\nOn the hold list: auth"
+      },
+      {
+        "thread": "a",
+        "text": "^Claimed for review\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "^Review approved → land: The tests cover the change"
+      },
+      {
+        "thread": "a",
+        "text": "^Claimed for land\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "is held for your approval",
+        "buttons": [
+          "Approve merge",
+          "Keep holding"
+        ]
+      },
+      {
+        "thread": "a",
+        "from": "approver",
+        "text": "^yea, this auth change is fine$"
+      },
+      {
+        "thread": "a",
+        "text": "^Approved by you: 'yea, this auth change is fine' for `[0-9a-f]{7}`\\. Applied\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "^Approved by you for `[0-9a-f]{7}`: 'yea, this auth change is fine' → land\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "^Claimed for land\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "^Merged <https://github.com/sandbox/demo/pull/101\\|sandbox/demo#101> as `[0-9a-f]{7}`\\. Done\\.$"
+      }
+    ],
+    "no_messages": [
+      {
+        "channel": "loop",
+        "kind": "ephemeral"
+      }
+    ],
+    "remote": {
+      "branches": {
+        "a": "^feat: add a feature$"
+      },
+      "files": {
+        "a": [
+          "internal/modules/auth/session.go"
+        ]
+      },
+      "only": true
+    },
+    "prs": 1,
+    "pr": {
+      "a": {
+        "number": 101,
+        "title": "^Add a feature$",
+        "body": "(?s)^Adds `internal/modules/auth/session.go` \\(1 commits\\)\\..*### Verification.*`after.txt`: tests.*pushed and opened by the runner"
+      }
+    }
+  }
+}

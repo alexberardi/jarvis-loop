@@ -34,7 +34,11 @@ unsure, stop and ask (outcome `question`) instead of guessing.
    (`--name <sandbox>`), never `default`. In a fresh jarvis-server worktree, the runner has
    already fetched the sherpa libs; put Go's temp dir in the scratch dir if `/tmp` is short
    (`GOTMPDIR=$PWD/.loop/scratch`). Screenshots for a PR come only from seeded sandboxes, never the real
-   install.
+   install. **In jarvis-loop itself** the harness is `scripts/loop-sandbox run --name <sandbox>` (one
+   command: the whole loop against a fake Slack, claude and GitHub, in about 10 s); its evidence is
+   the scenario results (`.sandbox/<sandbox>/runs/latest/results.md`) plus the `transcript.md` of
+   each scenario your change touches (copy them into `.loop/evidence/`), and before/after
+   transcripts when it changes what the bot says. New behaviour gets a new scenario in `scenarios/`.
 4. Commit everything with clear messages on the item's branch. **Do not push**: you hold no
    GitHub credentials, and the runner pushes the branch (only it, never forced) after you finish.
 5. **Do not open a PR** either: the runner opens it (or updates the open one) from your
