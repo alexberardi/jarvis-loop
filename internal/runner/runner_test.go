@@ -1,0 +1,609 @@
+package runner
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/alexberardi/jarvis-loop/internal/api"
+	"github.com/alexberardi/jarvis-loop/internal/clock"
+	"github.com/alexberardi/jarvis-loop/internal/fakeclaude"
+	"github.com/alexberardi/jarvis-loop/internal/guard"
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
+	"github.com/alexberardi/jarvis-loop/internal/store"
+)
+
+// The test binary doubles as the fake claude and as loop-guard (LOOP_TEST_AS), so the runner
+// starts real processes in their own group, and the fake runs the real guard as its hook.
+func TestMain(m *testing.M) {
+	switch os.Getenv("LOOP_TEST_AS") {
+	case "claude":
+		os.Exit(fakeclaude.Main(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	case "guard":
+		path, err := guard.ConfigPath(os.Args[1:], os.Getenv)
+		if err != nil {
+			os.Exit(2)
+		}
+		os.Exit(guard.Hook(path, os.Stdin, os.Stdout, os.Stderr, time.Now))
+	}
+	os.Exit(m.Run())
+}
+
+const (
+	runnerToken = "runner-token-0123456789abcdef"
+	userToken   = "user-token-0123456789abcdef"
+)
+
+var t0 = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+
+type rig struct {
+	t        *testing.T
+	ctx      context.Context
+	st       *store.Store
+	loopdClk *clock.Fake
+	clk      *FakeClock
+	r        *Runner
+	remote   string // the "GitHub" bare repo
+	local    string // the user's own clone
+	localRef string // its HEAD before the run
+	logs     *bytes.Buffer
+}
+
+func gitT(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func newRig(t *testing.T, scenario string) *rig {
+	t.Helper()
+	root := t.TempDir()
+	root, _ = filepath.EvalSymlinks(root)
+	ctx := context.Background()
+	// A "GitHub" remote with one commit on main, and the user's clone of it.
+	remote := filepath.Join(root, "github", "demo.git")
+	os.MkdirAll(remote, 0o755)
+	gitT(t, remote, "init", "--bare", "-q", "-b", "main", ".")
+	seed := filepath.Join(root, "seed")
+	os.MkdirAll(seed, 0o755)
+	gitT(t, seed, "init", "-q", "-b", "main", ".")
+	os.WriteFile(filepath.Join(seed, "README.md"), []byte("demo\n"), 0o644)
+	gitT(t, seed, "add", ".")
+	gitT(t, seed, "commit", "-q", "-m", "init")
+	gitT(t, seed, "push", "-q", remote, "main")
+	local := filepath.Join(root, "home", "jarvis", "demo")
+	gitT(t, root, "clone", "-q", remote, local)
+
+	loopdClk := clock.NewFake(t0)
+	st, err := store.Open(filepath.Join(root, "loopd"), loopdClk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	toks, err := api.ParseTokens(strings.NewReader(runnerToken + "\trunner\tdevbox\n" + userToken + "\tuser\talex\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	t.Cleanup(srv.Close)
+
+	self, _ := os.Executable()
+	verify := false
+	cfg := &Config{
+		LoopdURL: srv.URL, Token: runnerToken, Name: "devbox", Slots: 1, WorkRoot: filepath.Join(root, "work"),
+		Claude: self, Guard: self, Mode: ModeAuto, PollSeconds: 30, UserEmulator: "emulator-5554", VerifyPR: &verify,
+		Repos: map[string]RepoConfig{"demo": {Local: local, Remote: remote, Slug: "alex/demo", Base: "main"}},
+	}
+	if err := cfg.normalize(); err != nil {
+		t.Fatal(err)
+	}
+	logs := &bytes.Buffer{}
+	clk := NewFakeClock(t0)
+	r := &Runner{
+		Cfg: cfg, Client: &Client{Base: srv.URL, Token: runnerToken}, Clock: clk,
+		Log: slog.New(slog.NewTextHandler(logs, nil)),
+		Env: append(os.Environ(), "LOOP_TEST_AS=claude", "FAKE_CLAUDE_SCENARIO="+scenario, "LOOP_TOKEN=must-not-leak"),
+	}
+	return &rig{t: t, ctx: ctx, st: st, loopdClk: loopdClk, clk: clk, r: r, remote: remote, local: local,
+		localRef: gitT(t, local, "rev-parse", "HEAD"), logs: logs}
+}
+
+// toBuild adds an item and walks it through triage by hand, as phase 4 does.
+func (g *rig) toBuild(title string) int64 {
+	g.t.Helper()
+	it, err := g.st.AddItem(g.ctx, "user:alex", store.NewItem{Title: title, Ask: "Add a feature file.", Repo: "demo"})
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	c, err := g.st.Claim(g.ctx, "devbox", pipeline.ClaimRequest{Runner: "devbox", Agent: "triager", Stages: []pipeline.Stage{pipeline.Triage}})
+	if err != nil || c == nil || c.Item.ID != it.ID {
+		g.t.Fatalf("triage claim %v %v", c, err)
+	}
+	if _, err := g.st.AddEvidence(g.ctx, "devbox", it.ID, "repro", "repro.txt", strings.NewReader("seen")); err != nil {
+		g.t.Fatal(err)
+	}
+	if _, err := g.st.Advance(g.ctx, "devbox", it.ID, pipeline.Reproduced,
+		map[string]string{"area": "demo", "size": "S", "risk": "normal", "resources": ""}, nil); err != nil {
+		g.t.Fatal(err)
+	}
+	return it.ID
+}
+
+func (g *rig) item(id int64) store.Detail {
+	g.t.Helper()
+	d, err := g.st.GetItem(g.ctx, id)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	return d
+}
+
+func (g *rig) runOnce() bool {
+	g.t.Helper()
+	ok, err := g.r.ClaimAndRun(g.ctx)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	return ok
+}
+
+// runAsync runs ClaimAndRun in the background; the returned func waits for it.
+func (g *rig) runAsync() func() {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		g.r.ClaimAndRun(g.ctx)
+	}()
+	return func() {
+		g.t.Helper()
+		select {
+		case <-done:
+		case <-time.After(60 * time.Second):
+			g.t.Fatalf("the run did not end; log:\n%s", g.logs.String())
+		}
+	}
+}
+
+func (g *rig) lastEvent(id int64, kind string) *store.Event {
+	for _, e := range g.item(id).Events {
+		if e.Kind == kind {
+			e := e
+			defer func() {}()
+			return &e
+		}
+	}
+	return nil
+}
+
+func (g *rig) events(id int64, kind string) []store.Event {
+	var out []store.Event
+	for _, e := range g.item(id).Events {
+		if e.Kind == kind {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func (g *rig) advanced(id int64) store.Event {
+	g.t.Helper()
+	evs := g.events(id, "advanced")
+	if len(evs) < 2 { // the first is triage's reproduced
+		g.t.Fatalf("no advance from the runner; log:\n%s", g.logs.String())
+	}
+	return evs[len(evs)-1]
+}
+
+func (g *rig) remoteHead(branch string) string {
+	out, err := exec.Command("git", "-C", g.remote, "rev-parse", "--verify", "-q", "refs/heads/"+branch).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// userUntouched checks the user's clone is exactly as before.
+func (g *rig) userUntouched() {
+	g.t.Helper()
+	if h := gitT(g.t, g.local, "rev-parse", "HEAD"); h != g.localRef {
+		g.t.Fatalf("the user's clone moved: %s", h)
+	}
+	if s := gitT(g.t, g.local, "status", "--porcelain"); s != "" {
+		g.t.Fatalf("the user's clone changed:\n%s", s)
+	}
+	if b := gitT(g.t, g.local, "branch", "--list"); strings.Contains(b, "loop/") {
+		g.t.Fatalf("a loop branch in the user's clone:\n%s", b)
+	}
+}
+
+func (g *rig) cleanedUp(id int64) {
+	g.t.Helper()
+	wt := filepath.Join(g.r.Cfg.WorkRoot, fmt.Sprintf("%d-build", id))
+	for _, p := range []string{wt} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			g.t.Fatalf("%s left behind", p)
+		}
+	}
+}
+
+func TestGoodRunOpensPR(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	id := g.toBuild("Add a feature")
+	if !g.runOnce() {
+		t.Fatal("nothing claimed")
+	}
+	d := g.item(id)
+	if d.Item.Stage != pipeline.Review {
+		t.Fatalf("stage %s; log:\n%s", d.Item.Stage, g.logs.String())
+	}
+	branch := fmt.Sprintf("loop/%d-add-a-feature", id)
+	head := g.remoteHead(branch)
+	if head == "" || d.Item.HeadSHA != head || d.Item.Branch != branch || d.Item.PR != 1 || d.Item.Repo != "alex/demo" {
+		t.Fatalf("item %+v, remote head %s", d.Item, head)
+	}
+	ev := g.advanced(id)
+	if ev.Outcome != "pr_opened" {
+		t.Fatalf("outcome %s", ev.Outcome)
+	}
+	paths, _ := ev.Data["changed_paths"].([]any)
+	if len(paths) != 1 || paths[0] != "A\tfeature.txt" {
+		t.Fatalf("changed paths %v (from git, not the agent)", paths)
+	}
+	for _, k := range []string{"num_turns", "duration_ms", "total_cost_usd", "run_seconds"} {
+		if ev.Data[k] == nil || ev.Data[k] == "" {
+			t.Errorf("advance lacks %s: %v", k, ev.Data)
+		}
+	}
+	if ev.Data["permission_mode"] != "auto" || ev.Data["total_cost_usd"] != "0.4200" {
+		t.Errorf("data %v", ev.Data)
+	}
+	// Token use per run, for the digest: the fake reports 1,000 input, 20,000 cache creation and
+	// 79,000 cache read tokens.
+	for k, want := range map[string]string{"usage_input": "1000", "usage_output": "4000", "usage_cache_creation": "20000",
+		"usage_cache_read": "79000", "cache_hit_ratio": "0.79", "session_id": "fake-session-good"} {
+		if ev.Data[k] != want {
+			t.Errorf("%s = %v, want %s", k, ev.Data[k], want)
+		}
+	}
+	if len(g.events(id, "low_cache_hit")) != 0 {
+		t.Error("a 0.79 hit ratio is not low")
+	}
+	if len(d.Evidence) != 2 || d.Evidence[1].Name != "after.txt" || d.Evidence[1].Label != "tests" {
+		t.Fatalf("evidence %+v", d.Evidence)
+	}
+	if len(g.events(id, "guard_refused")) != 0 {
+		t.Fatal("nothing should have been refused")
+	}
+	if g.remoteHead("main") == head {
+		t.Fatal("main moved")
+	}
+	g.userUntouched()
+	g.cleanedUp(id)
+	// The run left its log, and the agent never saw the runner's token.
+	runs, _ := filepath.Glob(filepath.Join(g.r.Cfg.WorkRoot, "runs", fmt.Sprintf("%d-build-*", id), "stream.jsonl"))
+	if len(runs) != 1 {
+		t.Fatalf("run log %v", runs)
+	}
+	for _, kv := range g.r.agentEnv() {
+		if strings.HasPrefix(kv, "LOOP_TOKEN=") {
+			t.Fatal("LOOP_TOKEN reaches the agent")
+		}
+	}
+}
+
+func TestOnlyBuildIsClaimed(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	if _, err := g.st.AddItem(g.ctx, "user:alex", store.NewItem{Title: "still in triage", Repo: "demo"}); err != nil {
+		t.Fatal(err)
+	}
+	if g.runOnce() {
+		t.Fatal("a build runner claimed a triage item")
+	}
+}
+
+func TestGuardRefusalIsReported(t *testing.T) {
+	g := newRig(t, fakeclaude.Escape)
+	id := g.toBuild("Escape artist")
+	g.runOnce()
+	refs := g.events(id, "guard_refused")
+	if len(refs) != 2 {
+		t.Fatalf("guard_refused events %d; log:\n%s", len(refs), g.logs.String())
+	}
+	if refs[0].Data["rule"] != guard.RuleWriteOutside || refs[0].Data["tool"] != "Write" || refs[1].Data["rule"] != guard.RuleGitPush {
+		t.Fatalf("refusals %v / %v", refs[0].Data, refs[1].Data)
+	}
+	if _, err := os.Stat(filepath.Join(g.r.Cfg.WorkRoot, "escaped.txt")); !os.IsNotExist(err) {
+		t.Fatal("the write outside the worktree happened")
+	}
+	if g.remoteHead("main") != g.localRef {
+		t.Fatal("main was pushed")
+	}
+	if g.item(id).Item.Stage != pipeline.Review || g.advanced(id).Data["guard_refusals"] != "2" {
+		t.Fatalf("the run should still finish: %+v", g.advanced(id).Data)
+	}
+}
+
+func TestBadResultsFail(t *testing.T) {
+	cases := map[string]string{
+		fakeclaude.Lying:     "head_sha",
+		fakeclaude.Malformed: "not valid JSON",
+		fakeclaude.NoResult:  "without a usable .loop/result.json",
+		fakeclaude.Exit3:     "code 3",
+		fakeclaude.SymlinkEv: "not a regular file",
+		fakeclaude.NoArm:     "guard_not_armed",
+	}
+	for scenario, want := range cases {
+		t.Run(scenario, func(t *testing.T) {
+			g := newRig(t, scenario)
+			id := g.toBuild("Bad " + scenario)
+			g.runOnce()
+			d := g.item(id)
+			if d.Item.Stage != pipeline.NeedsYou || !strings.Contains(d.Item.Question, want) {
+				t.Fatalf("stage %s, question %q, want it to mention %q; log:\n%s", d.Item.Stage, d.Item.Question, want, g.logs.String())
+			}
+			if scenario == fakeclaude.Exit3 && !strings.Contains(d.Item.Question, "the tests do not compile") {
+				t.Fatalf("the agent's last output belongs in the question: %q", d.Item.Question)
+			}
+			g.userUntouched()
+			g.cleanedUp(id)
+		})
+	}
+}
+
+func TestQuestion(t *testing.T) {
+	g := newRig(t, fakeclaude.Question)
+	id := g.toBuild("Ask me")
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.NeedsYou || d.Item.Question != "Should the timer round up or down?" || d.Item.ReturnStage != pipeline.Build {
+		t.Fatalf("%+v", d.Item)
+	}
+}
+
+func TestWrongModePausesTheRunner(t *testing.T) {
+	g := newRig(t, fakeclaude.WrongMode)
+	id := g.toBuild("Mode check")
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.NeedsYou || !strings.Contains(d.Item.Question, `started in "default", not "auto"`) {
+		t.Fatalf("%s %q", d.Item.Stage, d.Item.Question)
+	}
+	if g.r.Paused() == "" {
+		t.Fatal("the runner should stop claiming")
+	}
+	g.toBuild("Next one")
+	if g.runOnce() {
+		t.Fatal("a paused runner claimed")
+	}
+}
+
+func TestUsageLimit(t *testing.T) {
+	g := newRig(t, fakeclaude.UsageLimit)
+	id := g.toBuild("Limited")
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.Build || d.Lease != nil {
+		t.Fatalf("back in the build queue: %s %v", d.Item.Stage, d.Lease)
+	}
+	ev := g.lastEvent(id, "usage_limit")
+	if ev == nil || !strings.Contains(fmt.Sprint(ev.Data["error"]), "rate limit") || ev.Data["reset"] == "" {
+		t.Fatalf("usage_limit event %+v", ev)
+	}
+	ctl, _ := g.st.Control(g.ctx)
+	if ctl.ActiveAgents != 0 {
+		t.Fatalf("active agents %d", ctl.ActiveAgents)
+	}
+}
+
+// waitFile polls (real time) for a file the fake agent writes before it hangs.
+func waitFile(t *testing.T, p string) {
+	t.Helper()
+	for i := 0; i < 600; i++ {
+		if _, err := os.Stat(p); err == nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("%s never appeared", p)
+}
+
+func TestHeartbeatsThenStop(t *testing.T) {
+	g := newRig(t, fakeclaude.Hang)
+	id := g.toBuild("Hang on")
+	wait := g.runAsync()
+	g.clk.BlockUntil(2) // heartbeat + time cap armed: the agent is running
+	waitFile(t, filepath.Join(g.r.Cfg.WorkRoot, fmt.Sprintf("%d-build", id), "wip.txt"))
+	for i := 0; i < 2; i++ {
+		g.loopdClk.Advance(2 * time.Minute)
+		g.clk.Advance(60 * time.Second)
+		g.clk.BlockUntil(2) // re-armed after the heartbeat
+		l := g.item(id).Lease
+		if l == nil || !l.ExpiresAt.Equal(g.loopdClk.Now().Add(store.LeaseTTL)) {
+			t.Fatalf("heartbeat %d did not extend the lease: %+v", i, l)
+		}
+	}
+	// The user stops everything: the next heartbeat says stop.
+	stop := true
+	if _, err := g.st.SetControl(g.ctx, "user:alex", store.ControlPatch{Stopped: &stop}); err != nil {
+		t.Fatal(err)
+	}
+	g.clk.Advance(60 * time.Second)
+	wait()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.Build || d.Lease != nil || len(g.events(id, "advanced")) != 1 {
+		t.Fatalf("a stopped item returns to its queue without a report: %s", d.Item.Stage)
+	}
+	branch := fmt.Sprintf("loop/%d-hang-on", id)
+	head := g.remoteHead(branch)
+	if head == "" {
+		t.Fatalf("no WIP push; log:\n%s", g.logs.String())
+	}
+	if msg := gitT(t, g.remote, "log", "-1", "--format=%s", head); !strings.HasPrefix(msg, "WIP: loop item") {
+		t.Fatalf("WIP commit %q", msg)
+	}
+	if files := gitT(t, g.remote, "show", "--name-only", "--format=", head); files != "wip.txt" {
+		t.Fatalf("WIP files %q (never .loop/)", files)
+	}
+	if g.remoteHead("main") != g.localRef {
+		t.Fatal("main moved")
+	}
+	g.userUntouched()
+	g.cleanedUp(id)
+}
+
+func TestStopKillsAnAgentThatIgnoresSIGTERM(t *testing.T) {
+	g := newRig(t, fakeclaude.IgnoreTerm)
+	id := g.toBuild("Stubborn")
+	wait := g.runAsync()
+	g.clk.BlockUntil(2)
+	waitFile(t, filepath.Join(g.r.Cfg.WorkRoot, fmt.Sprintf("%d-build", id), "wip.txt"))
+	stop := true
+	g.st.SetControl(g.ctx, "user:alex", store.ControlPatch{Stopped: &stop})
+	g.clk.Advance(60 * time.Second) // heartbeat → stop → SIGTERM, ignored
+	g.clk.BlockUntil(2)             // time cap + the 10 s kill timer
+	g.clk.Advance(10 * time.Second) // SIGKILL
+	wait()
+	if g.remoteHead(fmt.Sprintf("loop/%d-stubborn", id)) == "" {
+		t.Fatal("no WIP push after the kill")
+	}
+	if !strings.Contains(g.logs.String(), "reason=stopped") {
+		t.Fatalf("log:\n%s", g.logs.String())
+	}
+	g.cleanedUp(id)
+}
+
+func TestTimeCap(t *testing.T) {
+	g := newRig(t, fakeclaude.Hang)
+	one := 1
+	g.st.SetControl(g.ctx, "user:alex", store.ControlPatch{MaxRunMinutes: &one})
+	id := g.toBuild("Too slow")
+	wait := g.runAsync()
+	g.clk.BlockUntil(2)
+	waitFile(t, filepath.Join(g.r.Cfg.WorkRoot, fmt.Sprintf("%d-build", id), "wip.txt"))
+	g.clk.Advance(30 * time.Second) // 1 minute minus the runner's 30 s margin
+	wait()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.NeedsYou || !strings.Contains(d.Item.Question, "time cap (1 minutes)") {
+		t.Fatalf("%s %q", d.Item.Stage, d.Item.Question)
+	}
+	if g.remoteHead(fmt.Sprintf("loop/%d-too-slow", id)) == "" {
+		t.Fatal("the work so far should be saved")
+	}
+}
+
+func TestShutdownSavesWorkWithoutReporting(t *testing.T) {
+	g := newRig(t, fakeclaude.Hang)
+	id := g.toBuild("Shut down")
+	ctx, cancel := context.WithCancel(g.ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); g.r.ClaimAndRun(ctx) }()
+	g.clk.BlockUntil(2)
+	waitFile(t, filepath.Join(g.r.Cfg.WorkRoot, fmt.Sprintf("%d-build", id), "wip.txt"))
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(60 * time.Second):
+		t.Fatal("no shutdown")
+	}
+	if len(g.events(id, "advanced")) != 1 || g.remoteHead(fmt.Sprintf("loop/%d-shut-down", id)) == "" {
+		t.Fatalf("log:\n%s", g.logs.String())
+	}
+}
+
+func TestUnknownRepoFails(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	g.r.Cfg.Repos = map[string]RepoConfig{"other": g.r.Cfg.Repos["demo"]}
+	id := g.toBuild("Wrong repo")
+	g.runOnce()
+	if q := g.item(id).Item.Question; !strings.Contains(q, `no repo "demo"`) {
+		t.Fatalf("%q", q)
+	}
+}
+
+func TestLowCacheHitIsRecorded(t *testing.T) {
+	g := newRig(t, fakeclaude.LowCache)
+	id := g.toBuild("Cold cache")
+	g.runOnce()
+	evs := g.events(id, "low_cache_hit")
+	if len(evs) != 1 || evs[0].Data["cache_hit_ratio"] != "0.10" || evs[0].Data["num_turns"] != "6" {
+		t.Fatalf("low_cache_hit %+v; log:\n%s", evs, g.logs.String())
+	}
+	if g.item(id).Item.Stage != pipeline.Review {
+		t.Fatal("a cold cache is a warning, not a failure")
+	}
+}
+
+// Two items' agent runs differ only in the prompt's item part, the cwd and the per-run env values
+// (golden compare of the rest): the same argv, settings bytes, tool set and system prompt, so the
+// prompt cache carries across runs of the stage.
+func TestAgentRunsShareTheirPrefix(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	var runs []*run
+	var cmds []*exec.Cmd
+	for _, title := range []string{"First item", "Second, quite different item"} {
+		id := g.toBuild(title)
+		cl, err := g.r.Client.Claim(g.ctx, "a-"+title[:5], nil, Stages)
+		if err != nil || cl == nil || cl.Item.ID != id {
+			t.Fatalf("claim %v %v", cl, err)
+		}
+		ru, err := g.r.newRun(cl, "a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := g.r.prepare(g.ctx, ru); err != nil {
+			t.Fatal(err)
+		}
+		runs = append(runs, ru)
+		cmds = append(cmds, g.r.agentCommand(ru))
+	}
+	a, b := cmds[0], cmds[1]
+	if !slices.Equal(a.Args, b.Args) {
+		t.Fatalf("argv differs:\n%q\n%q", a.Args, b.Args)
+	}
+	if a.Dir == b.Dir {
+		t.Fatal("each item has its own worktree")
+	}
+	sa, _ := os.ReadFile(a.Args[slices.Index(a.Args, "--settings")+1])
+	sb, _ := os.ReadFile(b.Args[slices.Index(b.Args, "--settings")+1])
+	if len(sa) == 0 || !bytes.Equal(sa, sb) {
+		t.Fatal("settings differ between items")
+	}
+	var diff []string
+	for i := range a.Env {
+		if a.Env[i] != b.Env[i] {
+			diff = append(diff, strings.SplitN(a.Env[i], "=", 2)[0])
+		}
+	}
+	if len(a.Env) != len(b.Env) || !slices.Equal(diff, []string{"LOOP_GUARD_CONFIG"}) {
+		t.Fatalf("env differs in %v", diff)
+	}
+	for _, kv := range []string{"CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "ENABLE_CLAUDEAI_MCP_SERVERS=false"} {
+		if !slices.Contains(a.Env, kv) {
+			t.Errorf("agent env lacks %s", kv)
+		}
+	}
+	ba, _ := os.ReadFile(filepath.Join(runs[0].wt, ".loop", "brief.md"))
+	bb, _ := os.ReadFile(filepath.Join(runs[1].wt, ".loop", "brief.md"))
+	cut := bytes.Index(ba, []byte("## The item"))
+	if cut < 1000 || !bytes.Equal(ba[:cut], bb[:cut]) {
+		t.Fatalf("the briefs' static part differs (cut %d)", cut)
+	}
+	for _, ru := range runs {
+		g.r.cleanup(g.ctx, ru, g.r.Log)
+	}
+}

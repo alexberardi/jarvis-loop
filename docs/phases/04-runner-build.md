@@ -5,6 +5,10 @@ brief with a headless `claude -p`, unattended, producing a PR with evidence. Tri
 still moved by hand with the `loop` CLI; landing is still by hand. **Proves:** an unattended agent
 produces a PR with evidence, inside hard boundaries.
 
+**As built (2026-10-15):** `docs/decisions/2026-10-15-claude-headless-facts.md` (what the installed
+CLI really offers, and where this spec was wrong), `2026-10-15-runner-choices.md` (the layers as
+implemented, and the harness/sandbox conflict) and `2026-10-15-prompt-caching.md`.
+
 ## The boundaries (the point of this phase)
 
 An unattended agent on the user's own machine gets four independent layers. Each must hold on its

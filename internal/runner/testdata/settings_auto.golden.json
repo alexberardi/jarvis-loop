@@ -1,0 +1,151 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "'/opt/loop/loop-guard'",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "*"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "'/opt/loop/loop-guard'",
+            "timeout": 30,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "defaultMode": "auto",
+    "deny": [
+      "Bash(gh pr merge *)",
+      "Bash(gh pr review *)",
+      "Bash(gh repo delete *)",
+      "Bash(gh repo edit *)",
+      "Bash(gh repo rename *)",
+      "Bash(gh repo archive *)",
+      "Bash(gh auth *)",
+      "Bash(gh secret *)",
+      "Bash(gh ruleset *)",
+      "Bash(gh workflow *)",
+      "Bash(gh api *-X DELETE*)",
+      "Bash(gh api *-XDELETE*)",
+      "Bash(gh api *--method DELETE*)",
+      "Bash(gh api *--method=DELETE*)",
+      "Bash(gh api *-X PUT*)",
+      "Bash(gh api *-XPUT*)",
+      "Bash(gh api *--method PUT*)",
+      "Bash(gh api *--method=PUT*)",
+      "Bash(gh api *-X PATCH*)",
+      "Bash(gh api *-XPATCH*)",
+      "Bash(gh api *--method PATCH*)",
+      "Bash(gh api *--method=PATCH*)",
+      "Bash(git push *--force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * -f)",
+      "Bash(git push * -f *)",
+      "Bash(git push *+*)",
+      "Bash(git push *--mirror*)",
+      "Bash(git push *--all*)",
+      "Bash(git push *--delete*)",
+      "Bash(git push * -d *)",
+      "Bash(git push * main)",
+      "Bash(git push * main *)",
+      "Bash(git push * master)",
+      "Bash(git push * master *)",
+      "Bash(git push *:main*)",
+      "Bash(git push *:master*)",
+      "Bash(git push *refs/heads/main*)",
+      "Bash(git push *refs/heads/master*)",
+      "Bash(adb)",
+      "Bash(adb *)",
+      "Bash(sudo *)",
+      "Bash(pkexec *)",
+      "Bash(doas *)",
+      "Bash(systemctl *)",
+      "Bash(kill *)",
+      "Bash(pkill *)",
+      "Bash(killall *)",
+      "Bash(ssh *)",
+      "Bash(scp *)",
+      "Bash(sftp *)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~*)",
+      "Bash(rm -rf ..*)",
+      "Bash(rm -rf $HOME*)",
+      "Bash(rm -fr /*)",
+      "Bash(rm -fr ~*)",
+      "Bash(rm -fr ..*)",
+      "Bash(curl *127.0.0.1:7780*)",
+      "Bash(wget *127.0.0.1:7780*)",
+      "Bash(curl *localhost:7780*)",
+      "Bash(wget *localhost:7780*)",
+      "WebFetch",
+      "WebSearch",
+      "mcp__*",
+      "Read(//home/u/.config/jarvis-harness)",
+      "Read(//home/u/.config/jarvis-harness/**)",
+      "Read(//home/u/.ssh)",
+      "Read(//home/u/.ssh/**)",
+      "Read(//home/u/.config/jarvis-loop/runner.json)",
+      "Read(//home/u/.config/jarvis-loop/runner.json/**)",
+      "Edit(//home/u/.config/jarvis-harness)",
+      "Edit(//home/u/.config/jarvis-harness/**)",
+      "Edit(//home/u/.ssh)",
+      "Edit(//home/u/.ssh/**)",
+      "Edit(//home/u/jarvis/jarvis-server)",
+      "Edit(//home/u/jarvis/jarvis-server/**)"
+    ],
+    "disableBypassPermissionsMode": "disable"
+  },
+  "sandbox": {
+    "allowUnsandboxedCommands": false,
+    "autoAllowBashIfSandboxed": false,
+    "enabled": true,
+    "failIfUnavailable": true,
+    "filesystem": {
+      "allowWrite": [
+        "/home/u/.cache/go-build",
+        "/home/u/go/pkg/mod",
+        "/home/u/.npm",
+        "/home/u/.cache/jarvis-harness"
+      ],
+      "denyRead": [
+        "/home/u/.config/jarvis-harness",
+        "/home/u/.ssh",
+        "/home/u/.config/jarvis-loop/runner.json"
+      ],
+      "denyWrite": [
+        "/home/u/.config/jarvis-harness",
+        "/home/u/.ssh",
+        "/home/u/jarvis/jarvis-server"
+      ]
+    },
+    "network": {
+      "allowedDomains": [
+        "github.com",
+        "api.github.com",
+        "codeload.github.com",
+        "objects.githubusercontent.com",
+        "raw.githubusercontent.com",
+        "proxy.golang.org",
+        "sum.golang.org",
+        "registry.npmjs.org"
+      ],
+      "deniedDomains": [
+        "127.0.0.1:7780",
+        "localhost:7780"
+      ],
+      "strictAllowlist": true
+    }
+  }
+}
