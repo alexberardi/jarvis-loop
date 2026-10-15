@@ -4,8 +4,8 @@
   "steps": [
     {"do": "add", "item": "a", "via": "slack", "title": "show the item's repo in loop show"},
     {"do": "expect", "stage": {"a": "triage"}, "repo": {"a": ""},
-     "messages": [{"kind": "response", "text": "^Added #\\d+ \\(P3\\): show the item's repo in loop show\\."},
-                  {"parent": "a", "text": "· Repo not set, triage will pick"}]},
+     "messages": [{"kind": "response", "text": "^Added #\\d+ \\(P3\\): show the item's repo in loop show\\."}]},
+    {"do": "expect", "messages": [{"parent": "a", "text": "· Repo not set, triage will pick"}]},
     {"do": "command", "text": "show 1", "as": "other", "answer": "· repo not set, triage will pick · risk normal"},
     {"do": "script", "item": "a", "for": "triage", "play": "reproduce", "picks": "jarvis-loop"},
     {"do": "runner", "claims": "a"},
