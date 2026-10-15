@@ -100,7 +100,8 @@ exec 3<>/dev/tcp/127.0.0.1/` + port + ` && printf 'GET / HTTP/1.0\r\nHost: x\r\n
 func TestFencedEnv(t *testing.T) {
 	in := []string{"PATH=/bin", "HOME=/h", "GH_TOKEN=a", "GITHUB_TOKEN=b", "GH_ENTERPRISE_TOKEN=c", "GIT_ASKPASS=d", "SSH_ASKPASS=d2",
 		"SSH_AUTH_SOCK=e", "ANTHROPIC_API_KEY=f", "AWS_SECRET=g", "X_SECRET_KEY=h", "LOOP_TOKEN=i", "SLACK_BOT_TOKEN=j",
-		"GIT_CONFIG_GLOBAL=/home/u/.gitconfig", "TOKEN_COUNT=7", "KEYBOARD=us", "GIT_TERMINAL_PROMPT=1"}
+		"GIT_CONFIG_GLOBAL=/home/u/.gitconfig", "TOKEN_COUNT=7", "KEYBOARD=us", "GIT_TERMINAL_PROMPT=1",
+		"TMPDIR=/home/u/tmp", "GOTMPDIR=/x", "GOCACHE=/home/u/.cache/go-build", "GOMODCACHE=/home/u/go/pkg/mod", "npm_config_cache=/home/u/.npm", "GOFLAGS=-x"}
 	got := fencedEnv(in, "/w/fenced.gitconfig")
 	want := []string{"PATH=/bin", "HOME=/h", "TOKEN_COUNT=7", "KEYBOARD=us",
 		"GIT_CONFIG_GLOBAL=/w/fenced.gitconfig", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0"}
@@ -166,5 +167,63 @@ func TestDefaultVerifyMask(t *testing.T) {
 	}
 	if c.Bwrap != "/usr/bin/bwrap" {
 		t.Fatalf("bwrap %q", c.Bwrap)
+	}
+}
+
+// Inside the fence HOME is read-only but for a writable allowlist: fenced code cannot plant
+// anything that later runs unfenced (shell rc files, user services, autostart, ~/.local/bin,
+// Claude Code's settings and hooks, git templates), but can write its working dir, the allowed
+// caches and a private /tmp.
+func TestFenceHomeIsReadOnly(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	if err := g.r.ProbeFence(); err != nil {
+		t.Fatalf("bubblewrap cannot run here (the runner needs it): %v", err)
+	}
+	home := g.fakeHome()
+	for _, d := range []string{".config/systemd/user", ".local/bin", ".claude", ".config/autostart", ".config/mise", ".git-templates/hooks",
+		".cache/jarvis-harness", ".android"} {
+		os.MkdirAll(filepath.Join(home, d), 0o700)
+	}
+	os.WriteFile(filepath.Join(home, ".bashrc"), []byte("# rc\n"), 0o600)
+	g.r.Cfg.VerifyWritable = DefaultVerifyWritable(home)
+	tries := []string{"~/.bashrc", "~/.profile", "~/.config/systemd/user/x.service", "~/.config/autostart/x.desktop", "~/.local/bin/x",
+		"~/.claude/settings.json", "~/.config/mise/config.toml", "~/.git-templates/hooks/pre-commit", "$LOOP_MIRROR/config",
+		"$LOOP_MIRROR/hooks/post-checkout", "./in-worktree.txt", "~/.cache/jarvis-harness/model.bin", "~/.android/adbkey",
+		"$LOOP_EVIDENCE_DIR/shot.png", "/tmp/fence-private-" + filepath.Base(home), "$GOCACHE/x", "$GOMODCACHE/x", "$npm_config_cache/x"}
+	var script strings.Builder
+	for _, p := range tries {
+		fmt.Fprintf(&script, "if (echo pwned >> %s) 2>/dev/null; then echo 'wrote %s'; else echo 'denied %s'; fi\n", p, p, p)
+	}
+	script.WriteString("git status --short >/dev/null && echo 'git status ok'\n")
+	g.verifyRepo(VerifyStep{Name: "writes", Run: script.String()})
+	id := g.toBuild("Add a feature")
+	g.runOnce()
+	if d := g.item(id); d.Item.Stage != pipeline.Review {
+		t.Fatalf("stage %s (question %q); log:\n%s", d.Item.Stage, d.Item.Question, g.logs.String())
+	}
+	out := g.read(filepath.Join(g.lastRun(id, StageBuild), "verify", "verify-1-writes", "output.log"))
+	for i, p := range tries {
+		want := "denied "
+		if i >= 10 {
+			want = "wrote "
+		}
+		if !strings.Contains(out, want+p+"\n") {
+			t.Errorf("want %s%s:\n%s", want, p, out)
+		}
+	}
+	if !strings.Contains(out, "git status ok") {
+		t.Errorf("git does not work in the worktree:\n%s", out)
+	}
+	for _, p := range []string{".bashrc", ".profile", ".config/systemd/user/x.service", ".local/bin/x", ".claude/settings.json"} {
+		b, _ := os.ReadFile(filepath.Join(home, p))
+		if strings.Contains(string(b), "pwned") {
+			t.Errorf("%s was written", p)
+		}
+	}
+	if _, err := os.Stat("/tmp/fence-private-" + filepath.Base(home)); err == nil {
+		t.Error("/tmp is not private")
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, ".cache/jarvis-harness/model.bin")); string(b) != "pwned\n" {
+		t.Error("the harness cache was not writable")
 	}
 }

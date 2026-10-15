@@ -434,7 +434,7 @@ func writeAtomic(path string, b []byte) error {
 func (r *Runner) shell(ctx context.Context, dir, command string, limit time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
-	fc, err := r.fence(dir, command, r.agentEnv())
+	fc, err := r.fence(dir, command, r.agentEnv(), nil)
 	if err != nil {
 		return "", err
 	}

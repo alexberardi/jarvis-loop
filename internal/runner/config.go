@@ -66,7 +66,11 @@ type Config struct {
 	// loopd's tokens and data, the Slack tokens and this config (fence.go). Missing paths are
 	// skipped. Bwrap is the bubblewrap binary (default /usr/bin/bwrap).
 	VerifyMask []string `json:"verify_mask,omitempty"`
-	Bwrap      string   `json:"bwrap,omitempty"`
+	// VerifyWritable are the paths under HOME those commands may write besides their working dir,
+	// the runner's fence caches and a private /tmp (fence.go): default ~/.cache/jarvis-harness and
+	// ~/.android. The rest of HOME is read-only to them.
+	VerifyWritable []string `json:"verify_writable,omitempty"`
+	Bwrap          string   `json:"bwrap,omitempty"`
 
 	path             string
 	ciWait, mainWait time.Duration
@@ -259,6 +263,12 @@ func (c *Config) normalize() error {
 		c.VerifyMask[i] = Expand(p)
 	}
 	c.VerifyMask = uniq(append(c.VerifyMask, c.ownSecrets()...))
+	if c.VerifyWritable == nil {
+		c.VerifyWritable = DefaultVerifyWritable(Home())
+	}
+	for i, p := range c.VerifyWritable {
+		c.VerifyWritable[i] = Expand(p)
+	}
 	if c.UserEmulator == "" {
 		c.UserEmulator = "emulator-5554"
 	}

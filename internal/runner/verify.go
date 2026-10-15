@@ -297,7 +297,7 @@ func (r *Runner) verifyStep(ctx context.Context, ru *run, n int, st VerifyStep, 
 	cmd, err := r.fence(cwd, st.Run, append(r.agentEnv(),
 		"LOOP_ITEM="+strconv.FormatInt(ru.item.ID, 10), "LOOP_HEAD="+head, "LOOP_WORKTREE="+ru.wt,
 		"LOOP_EVIDENCE_DIR="+evDir, "LOOP_SANDBOX="+ru.sandbox, "LOOP_REPO="+ru.repo.Slug, "LOOP_BASE="+ru.repo.Base,
-		"LOOP_MIRROR="+ru.mirror))
+		"LOOP_MIRROR="+ru.mirror), []string{dir})
 	if err != nil {
 		logf.Close()
 		return res, fmt.Errorf("verify %q cannot run fenced: %w", st.Name, err)
