@@ -7,3 +7,13 @@ import _ "embed"
 //
 //go:embed build/SKILL.md
 var Build string
+
+// Triage is the triage stage's skill (skills/triage/SKILL.md).
+//
+//go:embed triage/SKILL.md
+var Triage string
+
+// Review is the review stage's skill (skills/review/SKILL.md).
+//
+//go:embed review/SKILL.md
+var Review string

@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/alexberardi/jarvis-loop/internal/runner"
 	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/slackfake"
 	"github.com/alexberardi/jarvis-loop/internal/store"
@@ -80,6 +81,17 @@ func (p *player) problems(e Expect, negatives bool) []string {
 		}
 		if string(d.Item.Stage) != e.Stage[alias] {
 			add("%s (#%d) is %s, want %s%s", alias, r.id, d.Item.Stage, e.Stage[alias], questionNote(d))
+		}
+	}
+	for _, alias := range sortedKeys(e.Repo) {
+		r, err := p.ref(alias)
+		if err != nil {
+			add("%v", err)
+			continue
+		}
+		d, _ := p.s.Store.GetItem(p.ctx, r.id)
+		if d.Item.Repo != e.Repo[alias] {
+			add("%s's repo is %q, want %q", alias, d.Item.Repo, e.Repo[alias])
 		}
 	}
 	for _, alias := range sortedKeys(e.Question) {
@@ -192,10 +204,25 @@ func (p *player) problems(e Expect, negatives bool) []string {
 		if want.Number != 0 && pr.Number != want.Number {
 			add("%s's PR is #%d, want #%d", alias, pr.Number, want.Number)
 		}
-		if pr.HeadSHA != p.s.GitHub.RemoteHead(RepoSlug, br) {
+		if want.Repo != "" && pr.Repo != want.Repo {
+			add("%s's PR is on %s, want %s", alias, pr.Repo, want.Repo)
+		}
+		if pr.HeadSHA != p.s.GitHub.RemoteHead(pr.Repo, br) {
 			add("%s's PR head %s is not the branch's head", alias, pr.HeadSHA)
 		}
-		for _, kv := range [][3]string{{"title", want.Title, pr.Title}, {"body", want.Body, pr.Body}} {
+		if want.Edits != nil && pr.Edits != *want.Edits {
+			add("%s's PR was updated %d time(s), want %d", alias, pr.Edits, *want.Edits)
+		}
+		if want.Comments != nil && len(pr.Comments) != *want.Comments {
+			add("%s's PR has %d comment(s), want %d", alias, len(pr.Comments), *want.Comments)
+		}
+		newest := ""
+		if len(pr.Comments) > 0 {
+			newest = pr.Comments[len(pr.Comments)-1]
+		} else if want.Comment != "" {
+			add("%s's PR has no comment, want one matching /%s/", alias, want.Comment)
+		}
+		for _, kv := range [][3]string{{"title", want.Title, pr.Title}, {"body", want.Body, pr.Body}, {"newest comment", want.Comment, newest}} {
 			if ok, err := matches(kv[1], kv[2]); err != nil || !ok {
 				add("%s's PR %s is %q, want /%s/ %s", alias, kv[0], clip(kv[2], 300), kv[1], errOrNil(err))
 			}
@@ -203,6 +230,9 @@ func (p *player) problems(e Expect, negatives bool) []string {
 	}
 	if rm := e.Remote; rm != nil {
 		out = append(out, p.remoteProblems(*rm)...)
+	}
+	for _, stage := range e.SamePrefix {
+		out = append(out, p.prefixProblems(stage)...)
 	}
 	for _, rel := range e.Absent {
 		if _, err := os.Lstat(filepath.Join(p.s.Dir, rel)); err == nil {
@@ -579,6 +609,40 @@ func (p *player) remoteProblems(rm RemoteMatch) []string {
 			if !slices.Contains(want, b) {
 				out = append(out, fmt.Sprintf("unexpected branch %s on the remote", b))
 			}
+		}
+	}
+	return out
+}
+
+// prefixProblems checks that the runner's runs of a stage share their prompt prefix: each run's
+// brief starts with the stage's static brief (byte for byte) and every run has the same argv.
+func (p *player) prefixProblems(stage string) []string {
+	runs, _ := filepath.Glob(filepath.Join(p.s.Dir, "work", "runs", "*-"+stage+"-*"))
+	if len(runs) < 2 {
+		return []string{fmt.Sprintf("%d %s run(s), want at least 2 to compare prefixes", len(runs), stage)}
+	}
+	var out []string
+	static := runner.StaticBrief(stage)
+	var argv0 []byte
+	for i, r := range runs {
+		brief, err := os.ReadFile(filepath.Join(r, "brief.md"))
+		if err != nil {
+			out = append(out, err.Error())
+			continue
+		}
+		cut := strings.Index(string(brief), runner.ItemHeading)
+		if cut < 0 || string(brief[:cut]) != static {
+			out = append(out, fmt.Sprintf("%s: the brief's start is not the %s stage's static brief", filepath.Base(r), stage))
+		}
+		argv, err := os.ReadFile(filepath.Join(r, "argv.json"))
+		if err != nil {
+			out = append(out, err.Error())
+			continue
+		}
+		if i == 0 {
+			argv0 = argv
+		} else if string(argv) != string(argv0) {
+			out = append(out, fmt.Sprintf("%s: argv %s differs from %s", filepath.Base(r), argv, argv0))
 		}
 	}
 	return out

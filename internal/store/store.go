@@ -60,6 +60,24 @@ type Store struct {
 	pending []Event
 	subsMu  sync.RWMutex
 	subs    []func(Event)
+
+	reposMu sync.RWMutex
+	repos   []string
+}
+
+// SetRepos sets the repo slugs (owner/name) loopd is configured with (loopd's --repos): the only
+// repos triage may give an item that has none.
+func (s *Store) SetRepos(slugs []string) {
+	s.reposMu.Lock()
+	defer s.reposMu.Unlock()
+	s.repos = append([]string(nil), slugs...)
+}
+
+// Repos are the configured repo slugs.
+func (s *Store) Repos() []string {
+	s.reposMu.RLock()
+	defer s.reposMu.RUnlock()
+	return append([]string(nil), s.repos...)
 }
 
 // Subscribe registers fn to receive every event after the transaction that wrote it commits, in
@@ -361,23 +379,41 @@ type BoardRow struct {
 	Priority   string    `json:"priority"`
 	Stage      string    `json:"stage"`
 	Display    string    `json:"display"`
+	Repo       string    `json:"repo,omitempty"`
+	PR         int       `json:"pr,omitempty"`
 	ClaimedBy  string    `json:"claimed_by,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	AgeSeconds int64     `json:"age_seconds"`
 }
 
+// ListFilter selects board rows. Empty fields match everything.
+type ListFilter struct {
+	Stage    string
+	Priority string
+	// Open leaves out done and closed items (the runner's snapshot for triage's dedupe).
+	Open bool
+}
+
 // ListItems is the board, highest priority first, then oldest. Empty filters match everything.
 func (s *Store) ListItems(ctx context.Context, stage, priority string) ([]BoardRow, error) {
-	q := `SELECT i.id, i.title, i.priority, i.stage, i.created_at, COALESCE(l.runner || '/' || l.agent, '')
+	return s.ListItemsFilter(ctx, ListFilter{Stage: stage, Priority: priority})
+}
+
+// ListItemsFilter is ListItems with every filter.
+func (s *Store) ListItemsFilter(ctx context.Context, f ListFilter) ([]BoardRow, error) {
+	q := `SELECT i.id, i.title, i.priority, i.stage, i.repo, i.pr, i.created_at, COALESCE(l.runner || '/' || l.agent, '')
 		FROM items i LEFT JOIN leases l ON l.item_id = i.id AND l.ended_at IS NULL WHERE 1=1`
 	var args []any
-	if stage != "" {
+	if f.Stage != "" {
 		q += ` AND i.stage = ?`
-		args = append(args, stage)
+		args = append(args, f.Stage)
 	}
-	if priority != "" {
+	if f.Priority != "" {
 		q += ` AND i.priority = ?`
-		args = append(args, priority)
+		args = append(args, f.Priority)
+	}
+	if f.Open {
+		q += ` AND i.stage NOT IN ('done','closed')`
 	}
 	q += ` ORDER BY i.priority, i.created_at, i.id`
 	rows, err := s.r.QueryContext(ctx, q, args...)
@@ -390,7 +426,7 @@ func (s *Store) ListItems(ctx context.Context, stage, priority string) ([]BoardR
 	for rows.Next() {
 		var b BoardRow
 		var created int64
-		if err := rows.Scan(&b.ID, &b.Title, &b.Priority, &b.Stage, &created, &b.ClaimedBy); err != nil {
+		if err := rows.Scan(&b.ID, &b.Title, &b.Priority, &b.Stage, &b.Repo, &b.PR, &created, &b.ClaimedBy); err != nil {
 			return nil, err
 		}
 		b.CreatedAt = fromNanos(created)
@@ -929,7 +965,7 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 			return err
 		}
 		tr, err := pipeline.ApplyAdvance(it, pipeline.Advance{Outcome: outcome, Fields: fields, Evidence: n, Agent: l.Agent,
-			ChangedPaths: changedPaths, HoldRules: ctl.HoldRules}, now)
+			ChangedPaths: changedPaths, HoldRules: ctl.HoldRules, Repos: s.Repos()}, now)
 		if err != nil {
 			return err
 		}

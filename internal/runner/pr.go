@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -27,6 +28,45 @@ type PRs interface {
 	Find(ctx context.Context, slug, branch string) (int, error)
 	Create(ctx context.Context, s PRSpec) (int, error)
 	Edit(ctx context.Context, pr int, s PRSpec) error
+	// View is one PR's title, body and head, for a review run's context.
+	View(ctx context.Context, slug string, pr int) (PRView, error)
+	// Comment posts a comment on the PR (a review's verdict; never a GitHub approval).
+	Comment(ctx context.Context, slug string, pr int, bodyFile string) error
+	// Comments are the PR's conversation comments, reviews and inline review comments, oldest
+	// first, for a build run after a bounce.
+	Comments(ctx context.Context, slug string, pr int) ([]PRComment, error)
+	// MergedPRs are the repo's last n merged PRs, newest first, for triage's dedupe.
+	MergedPRs(ctx context.Context, slug string, n int) ([]MergedPR, error)
+}
+
+// PRView is what a review run is told about its PR.
+type PRView struct {
+	Number      int    `json:"number"`
+	Title       string `json:"title"`
+	Body        string `json:"body"`
+	HeadRefName string `json:"headRefName"`
+	HeadRefOid  string `json:"headRefOid"`
+	BaseRefName string `json:"baseRefName"`
+	State       string `json:"state"`
+}
+
+// PRComment is one comment on a PR: Path and Line are set for an inline review comment, State for
+// a review.
+type PRComment struct {
+	Author string `json:"author"`
+	At     string `json:"at"`
+	Body   string `json:"body"`
+	Path   string `json:"path,omitempty"`
+	Line   int    `json:"line,omitempty"`
+	State  string `json:"state,omitempty"`
+}
+
+// MergedPR is one recently merged PR.
+type MergedPR struct {
+	Number   int      `json:"number"`
+	Title    string   `json:"title"`
+	MergedAt string   `json:"merged_at"`
+	Files    []string `json:"files"`
 }
 
 // GH is PRs through the gh CLI (the runner's own login).
@@ -92,12 +132,127 @@ func (g GH) Edit(ctx context.Context, pr int, s PRSpec) error {
 	return err
 }
 
+// View reads the PR (gh pr view).
+func (g GH) View(ctx context.Context, slug string, pr int) (PRView, error) {
+	out, err := g.run(ctx, "pr", "view", strconv.Itoa(pr), "--repo", slug, "--json", "number,title,body,headRefName,headRefOid,baseRefName,state")
+	if err != nil {
+		return PRView{}, err
+	}
+	var v PRView
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		return PRView{}, fmt.Errorf("gh pr view: %w", err)
+	}
+	return v, nil
+}
+
+// Comment posts a comment (gh pr comment): a review's verdict, never an approval.
+func (g GH) Comment(ctx context.Context, slug string, pr int, bodyFile string) error {
+	_, err := g.run(ctx, "pr", "comment", strconv.Itoa(pr), "--repo", slug, "--body-file", bodyFile)
+	return err
+}
+
+// Comments reads the PR's comments and reviews (gh pr view) and its inline review comments
+// (gh api, read only).
+func (g GH) Comments(ctx context.Context, slug string, pr int) ([]PRComment, error) {
+	out, err := g.run(ctx, "pr", "view", strconv.Itoa(pr), "--repo", slug, "--json", "comments,reviews")
+	if err != nil {
+		return nil, err
+	}
+	var v struct {
+		Comments []struct {
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+			Body      string `json:"body"`
+			CreatedAt string `json:"createdAt"`
+		} `json:"comments"`
+		Reviews []struct {
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+			Body        string `json:"body"`
+			State       string `json:"state"`
+			SubmittedAt string `json:"submittedAt"`
+		} `json:"reviews"`
+	}
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		return nil, fmt.Errorf("gh pr view: %w", err)
+	}
+	var cs []PRComment
+	for _, c := range v.Comments {
+		cs = append(cs, PRComment{Author: c.Author.Login, At: c.CreatedAt, Body: c.Body})
+	}
+	for _, r := range v.Reviews {
+		if strings.TrimSpace(r.Body) != "" || r.State == "CHANGES_REQUESTED" {
+			cs = append(cs, PRComment{Author: r.Author.Login, At: r.SubmittedAt, Body: r.Body, State: r.State})
+		}
+	}
+	// One page of 100 (a --paginate'd array answer is several JSON arrays back to back).
+	out, err = g.run(ctx, "api", "--method", "GET", fmt.Sprintf("repos/%s/pulls/%d/comments?per_page=100", slug, pr))
+	if err != nil {
+		return nil, err
+	}
+	var inline []struct {
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Body      string `json:"body"`
+		Path      string `json:"path"`
+		Line      int    `json:"line"`
+		CreatedAt string `json:"created_at"`
+	}
+	if err := json.Unmarshal([]byte(out), &inline); err != nil {
+		return nil, fmt.Errorf("gh api pulls comments: %w", err)
+	}
+	for _, c := range inline {
+		cs = append(cs, PRComment{Author: c.User.Login, At: c.CreatedAt, Body: c.Body, Path: c.Path, Line: c.Line})
+	}
+	sort.SliceStable(cs, func(i, j int) bool { return cs[i].At < cs[j].At })
+	return cs, nil
+}
+
+// MergedPRs lists the last n merged PRs with their files (gh pr list).
+func (g GH) MergedPRs(ctx context.Context, slug string, n int) ([]MergedPR, error) {
+	out, err := g.run(ctx, "pr", "list", "--repo", slug, "--state", "merged", "--limit", strconv.Itoa(n), "--json", "number,title,mergedAt,files")
+	if err != nil {
+		return nil, err
+	}
+	var prs []struct {
+		Number   int    `json:"number"`
+		Title    string `json:"title"`
+		MergedAt string `json:"mergedAt"`
+		Files    []struct {
+			Path string `json:"path"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal([]byte(out), &prs); err != nil {
+		return nil, fmt.Errorf("gh pr list: %w", err)
+	}
+	var res []MergedPR
+	for _, p := range prs {
+		m := MergedPR{Number: p.Number, Title: p.Title, MergedAt: p.MergedAt}
+		for _, f := range p.Files {
+			m.Files = append(m.Files, f.Path)
+		}
+		res = append(res, m)
+	}
+	return res, nil
+}
+
 // DryRunPRs opens nothing: every branch gets "PR" 1 (the dry run, with a local remote).
 type DryRunPRs struct{}
 
 func (DryRunPRs) Find(context.Context, string, string) (int, error) { return 0, nil }
 func (DryRunPRs) Create(context.Context, PRSpec) (int, error)       { return 1, nil }
 func (DryRunPRs) Edit(context.Context, int, PRSpec) error           { return nil }
+func (DryRunPRs) View(_ context.Context, _ string, pr int) (PRView, error) {
+	return PRView{Number: pr, State: "OPEN"}, nil
+}
+func (DryRunPRs) Comment(context.Context, string, int, string) error { return nil }
+func (DryRunPRs) Comments(context.Context, string, int) ([]PRComment, error) {
+	return nil, nil
+}
+func (DryRunPRs) MergedPRs(context.Context, string, int) ([]MergedPR, error) { return nil, nil }
 
 // RunStats are the numbers the PR's footer shows.
 type RunStats struct {

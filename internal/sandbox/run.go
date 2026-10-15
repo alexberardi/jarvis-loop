@@ -37,7 +37,7 @@ func RunScenario(sc *Scenario, dir string, bin Binaries) Result {
 	if logf != nil {
 		logw = logf
 	}
-	s, err := StartStack(Options{Dir: filepath.Join(dir, "stack"), Bin: bin, Log: logw})
+	s, err := StartStack(Options{Dir: filepath.Join(dir, "stack"), Bin: bin, Log: logw, Stages: sc.Stages})
 	if err != nil {
 		res.Failures = []string{"starting the stack: " + err.Error()}
 		res.Seconds = time.Since(start).Seconds()
@@ -183,8 +183,14 @@ func PRsMD(prs []PR) string {
 	var b strings.Builder
 	b.WriteString("\nPRs the runner opened on the fake GitHub:\n")
 	for _, p := range prs {
-		fmt.Fprintf(&b, "\n#%d %s (%s → %s, head `%.7s`)\n\n```markdown\n%s\n```\n", p.Number, p.Title, p.Head, p.Base, p.HeadSHA,
-			strings.TrimRight(p.Body, "\n"))
+		fmt.Fprintf(&b, "\n%s#%d %s (%s → %s, head `%.7s`", p.Repo, p.Number, p.Title, p.Head, p.Base, p.HeadSHA)
+		if p.Edits > 0 {
+			fmt.Fprintf(&b, ", updated %d×", p.Edits)
+		}
+		fmt.Fprintf(&b, ")\n\n```markdown\n%s\n```\n", strings.TrimRight(p.Body, "\n"))
+		for i, c := range p.Comments {
+			fmt.Fprintf(&b, "\nComment %d by the runner:\n\n```markdown\n%s\n```\n", i+1, strings.TrimRight(c, "\n"))
+		}
 	}
 	return b.String()
 }

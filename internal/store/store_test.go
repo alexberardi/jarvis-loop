@@ -519,3 +519,58 @@ func TestHoldRulesPersist(t *testing.T) {
 		t.Fatalf("risk %q reason %q", d.Item.Risk, d.Item.HoldReason)
 	}
 }
+
+// Triage sets the repo of an item that has none, from loopd's configured slugs only.
+func TestReproducedRepoUsesConfiguredSlugs(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	it, err := s.AddItem(ctx, "slack:U1", NewItem{Title: "from slack, no repo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": "", "repo": "alexberardi/jarvis-loop"}
+	claim(t, s, "triager")
+	evidence(t, s, it.ID)
+	if _, err := s.Advance(ctx, runner, it.ID, pipeline.Reproduced, f, nil); code(err) != pipeline.CodeInvalidField {
+		t.Fatalf("no configured repos, but the repo was taken: %v", err)
+	}
+	s.SetRepos([]string{"alexberardi/jarvis-loop"})
+	got, err := s.Advance(ctx, runner, it.ID, pipeline.Reproduced, f, nil)
+	if err != nil || got.Repo != "alexberardi/jarvis-loop" {
+		t.Fatalf("advance: %+v %v", got, err)
+	}
+	d, _ := s.GetItem(ctx, it.ID)
+	if d.Item.Repo != "alexberardi/jarvis-loop" {
+		t.Fatalf("stored repo %q", d.Item.Repo)
+	}
+}
+
+// The open list (the runner's triage snapshot) leaves out done and closed items and shows each
+// item's repo and PR.
+func TestListOpenItems(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	a := add(t, s, "open one", "")
+	b := add(t, s, "closed one", "")
+	claim(t, s, "triager") // a (oldest first)
+	evidence(t, s, a.ID)
+	if _, err := s.Advance(ctx, runner, a.ID, pipeline.Reproduced, map[string]string{"area": "x", "size": "S", "risk": "normal", "resources": ""}, nil); err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.Claim(ctx, runner, pipeline.ClaimRequest{Runner: runner, Agent: "triager-2", Stages: []pipeline.Stage{pipeline.Triage}})
+	if err != nil || c == nil || c.Item.ID != b.ID {
+		t.Fatalf("claim %+v", c)
+	}
+	evidence(t, s, b.ID)
+	if _, err := s.Advance(ctx, runner, b.ID, pipeline.NotReproducible, map[string]string{"summary": "dup"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	all, _ := s.ListItems(ctx, "", "")
+	open, err := s.ListItemsFilter(ctx, ListFilter{Open: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 || len(open) != 1 || open[0].ID != a.ID || open[0].Repo != "jarvis-server" || open[0].Stage != "build" {
+		t.Fatalf("all %+v\nopen %+v", all, open)
+	}
+}

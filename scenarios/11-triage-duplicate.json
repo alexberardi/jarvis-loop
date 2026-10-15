@@ -1,0 +1,28 @@
+{
+  "name": "triage-duplicate",
+  "about": "An item is already in review with PR #101. The same ask arrives again from Slack, naming its repo and priority in words ('[demo] …, high priority'): the repo words set the repo, and the runner's triage agent finds the open item and its PR in the runner's snapshot and closes the new one as a duplicate; the thread says why.",
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review"}},
+    {"do": "add", "item": "b", "via": "slack", "title": "Fix the digest wording", "text": "[demo] Fix the digest wording, high priority"},
+    {"do": "expect", "stage": {"b": "triage"}, "repo": {"b": "sandbox/demo"},
+     "messages": [{"kind": "response", "text": "^Added #2 \\(P2, sandbox/demo\\): Fix the digest wording\\."}]},
+    {"do": "script", "item": "b", "for": "triage", "play": "duplicate"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review", "b": "closed"},
+    "events": [{"item": "b", "kind": "advanced", "outcome": "not_reproducible", "actor": "runner",
+                "data": {"summary": "^duplicate of #1 / PR #101: "}}],
+    "messages": [
+      {"parent": "b", "text": "Priority \\*P2\\*"},
+      {"thread": "b", "text": "^Claimed for triage\\.$"},
+      {"thread": "b", "text": "^Closed, not reproducible: duplicate of #1 / PR #101: the same ask is already in flight\\.$"}
+    ],
+    "prs": 1
+  }
+}

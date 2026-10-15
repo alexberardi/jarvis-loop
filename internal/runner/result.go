@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
 // Result is .loop/result.json, what the agent says it did. Nothing in it is trusted for the
@@ -29,6 +31,17 @@ type Result struct {
 	Evidence    []Evidence `json:"evidence,omitempty"`
 	NeedsReview bool       `json:"needs_review,omitempty"`
 	Question    string     `json:"question,omitempty"`
+
+	// Triage's.
+	Repo      string   `json:"repo,omitempty"`
+	Area      string   `json:"area,omitempty"`
+	Size      string   `json:"size,omitempty"`
+	Risk      string   `json:"risk,omitempty"`
+	Resources []string `json:"resources,omitempty"`
+	// Notes are triage's notes for the build agent, or review's list for a bounce.
+	Notes string `json:"notes,omitempty"`
+	// Review is the review's text for the PR comment.
+	Review string `json:"review,omitempty"`
 }
 
 // Evidence names a file under .loop/evidence and what it shows.
@@ -65,7 +78,53 @@ const OutcomeReadyForPR = "ready_for_pr"
 
 // StageOutcomes are the outcomes an agent may return per stage (the runner itself reports
 // pr_opened, failed and usage_limit).
-var StageOutcomes = map[string][]string{"build": {OutcomeReadyForPR, "question"}}
+var StageOutcomes = map[string][]string{
+	StageTriage: {"reproduced", "not_reproducible", "question"},
+	StageBuild:  {OutcomeReadyForPR, "question"},
+	StageReview: {"approved", "bounce"},
+}
+
+// outcomeFields are the fields each outcome may carry (besides "outcome"): a field of another
+// outcome is refused, so an agent cannot slip, say, a repo into a build result.
+var outcomeFields = map[string][]string{
+	"question":         {"question"},
+	OutcomeReadyForPR:  {"pr_title", "pr_body", "head_sha", "summary", "not_verified", "evidence", "needs_review"},
+	"reproduced":       {"repo", "area", "size", "risk", "resources", "summary", "notes", "evidence", "not_verified"},
+	"not_reproducible": {"summary", "notes", "evidence", "not_verified"},
+	"approved":         {"summary", "review", "head_sha", "evidence", "not_verified"},
+	"bounce":           {"notes", "review", "head_sha", "evidence"},
+}
+
+// Limits on what the agent's triage and review text may be.
+const (
+	MaxNotes   = 20000
+	MaxReview  = 60000
+	MaxSummary = 4000
+)
+
+// decodeResult parses result.json strictly and checks the outcome is one of the stage's and the
+// fields are the outcome's.
+func decodeResult(raw []byte, stage string) (Result, error) {
+	var r Result
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&r); err != nil {
+		return r, fmt.Errorf("result.json is not valid JSON for the contract: %v", err)
+	}
+	if !slices.Contains(StageOutcomes[stage], r.Outcome) {
+		return r, fmt.Errorf("outcome %q is not an outcome of %s (want one of %s)", r.Outcome, stage, strings.Join(StageOutcomes[stage], ", "))
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		return r, fmt.Errorf("result.json is not a JSON object: %v", err)
+	}
+	for k := range keys {
+		if k != "outcome" && !slices.Contains(outcomeFields[r.Outcome], k) {
+			return r, fmt.Errorf("field %q is not part of outcome %s", k, r.Outcome)
+		}
+	}
+	return r, nil
+}
 
 var shaRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
@@ -81,14 +140,9 @@ const (
 // ValidateResult parses and checks a result against the stage and git. loopDir is the worktree's
 // .loop directory.
 func ValidateResult(raw []byte, want Expect, facts GitFacts, loopDir string) (Valid, error) {
-	var r Result
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&r); err != nil {
-		return Valid{}, fmt.Errorf("result.json is not valid JSON for the contract: %v", err)
-	}
-	if !slices.Contains(StageOutcomes[want.Stage], r.Outcome) {
-		return Valid{}, fmt.Errorf("outcome %q is not an outcome of %s (want one of %s)", r.Outcome, want.Stage, strings.Join(StageOutcomes[want.Stage], ", "))
+	r, err := decodeResult(raw, want.Stage)
+	if err != nil {
+		return Valid{}, err
 	}
 	if r.Outcome == "question" {
 		if strings.TrimSpace(r.Question) == "" {
@@ -200,4 +254,117 @@ func EvidenceFiles(loopDir string) ([]EvidenceFile, error) {
 		out = append(out, EvidenceFile{Name: e.Name(), Path: p, Size: fi.Size()})
 	}
 	return out, nil
+}
+
+// checkEvidenceEntries checks the result's evidence entries name files directly in evidence/.
+func checkEvidenceEntries(r Result) error {
+	for _, e := range r.Evidence {
+		c := path.Clean(e.File)
+		if !strings.HasPrefix(c, "evidence/") || strings.Count(c, "/") != 1 {
+			return fmt.Errorf("evidence entry %q must name a file directly in evidence/", e.File)
+		}
+	}
+	return nil
+}
+
+func textOK(s string, max int) bool {
+	return strings.TrimSpace(s) != "" && utf8.RuneCountInString(s) <= max
+}
+
+func oneLineOK(s string, max int) bool {
+	return textOK(s, max) && !strings.ContainsAny(s, "\r\n")
+}
+
+// TriageExpect is what a triage result is checked against: the item's repo ("" when it has none)
+// and how to resolve a repo the agent names (by config key or slug) to its slug.
+type TriageExpect struct {
+	ItemRepo string
+	Resolve  func(name string) (slug string, ok bool)
+}
+
+// ValidateTriage checks a triage result. A reproduced result for an item with no repo must name a
+// configured repo (the runner reports its slug); for an item with one, it may only repeat it (and
+// the runner drops it). Nothing the agent says reaches loopd unchecked.
+func ValidateTriage(raw []byte, want TriageExpect) (Result, error) {
+	r, err := decodeResult(raw, StageTriage)
+	if err != nil {
+		return r, err
+	}
+	switch r.Outcome {
+	case "question":
+		if strings.TrimSpace(r.Question) == "" {
+			return r, fmt.Errorf("outcome question but the question is empty")
+		}
+		return r, nil
+	case "reproduced":
+		switch {
+		case !oneLineOK(r.Area, 100):
+			return r, fmt.Errorf("area must be one line of 1 to 100 characters")
+		case !slices.Contains([]string{"S", "M", "L"}, r.Size):
+			return r, fmt.Errorf("size must be S, M or L")
+		case r.Risk != "normal" && r.Risk != "hold":
+			return r, fmt.Errorf("risk must be normal or hold")
+		}
+		for _, res := range r.Resources {
+			if !slices.Contains(pipeline.Resources, res) {
+				return r, fmt.Errorf("unknown resource %q (have %s)", res, strings.Join(pipeline.Resources, ", "))
+			}
+		}
+		repo := strings.TrimSpace(r.Repo)
+		switch {
+		case want.ItemRepo == "" && repo == "":
+			return r, fmt.Errorf("the item has no repo: reproduced must name one of the configured repos in repo")
+		case repo != "":
+			slug, ok := want.Resolve(repo)
+			if !ok {
+				return r, fmt.Errorf("repo %q is not a configured repo", repo)
+			}
+			if want.ItemRepo != "" {
+				if itemSlug, _ := want.Resolve(want.ItemRepo); itemSlug != slug {
+					return r, fmt.Errorf("the item's repo is %s; triage cannot change it to %s", want.ItemRepo, repo)
+				}
+				slug = "" // already set: nothing to report
+			}
+			r.Repo = slug
+		}
+	}
+	switch {
+	case !textOK(r.Summary, MaxSummary):
+		return r, fmt.Errorf("summary is required (at most %d characters)", MaxSummary)
+	case !textOK(r.Notes, MaxNotes):
+		return r, fmt.Errorf("notes are required: what you checked, and for the build agent what to change and how to verify (at most %d characters)", MaxNotes)
+	}
+	return r, checkEvidenceEntries(r)
+}
+
+// ValidateReview checks a review result for the head the run reviewed.
+func ValidateReview(raw []byte, head string) (Result, error) {
+	r, err := decodeResult(raw, StageReview)
+	if err != nil {
+		return r, err
+	}
+	if r.HeadSHA != "" && r.HeadSHA != head {
+		return r, fmt.Errorf("head_sha %q is not the reviewed commit %s", r.HeadSHA, head)
+	}
+	r.HeadSHA = head
+	switch r.Outcome {
+	case "approved":
+		if !textOK(r.Summary, MaxSummary) {
+			return r, fmt.Errorf("summary is required (at most %d characters)", MaxSummary)
+		}
+		if !textOK(r.Review, MaxReview) {
+			return r, fmt.Errorf("review (the PR comment) is required (at most %d characters)", MaxReview)
+		}
+	case "bounce":
+		if !textOK(r.Notes, MaxNotes) {
+			return r, fmt.Errorf("notes are required: what the build agent must change (at most %d characters)", MaxNotes)
+		}
+		if strings.TrimSpace(r.Review) == "" {
+			r.Review = r.Notes
+		}
+		if utf8.RuneCountInString(r.Review) > MaxReview {
+			return r, fmt.Errorf("review is at most %d characters", MaxReview)
+		}
+	}
+	return r, checkEvidenceEntries(r)
 }

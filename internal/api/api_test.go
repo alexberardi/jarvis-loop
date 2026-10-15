@@ -722,3 +722,35 @@ func TestClaimStagesAndRunnerEvents(t *testing.T) {
 	e.clock.Advance(10 * time.Minute)
 	e.refused(runnerTok, "POST", fmt.Sprintf("/items/%d/events", tri), ev, 409, "no_lease")
 }
+
+// GET /items?open=1 is the runner's snapshot for triage: open items only, with repo and PR.
+func TestOpenItemsList(t *testing.T) {
+	e := newEnv(t)
+	b := e.addItem("will close")
+	a := e.addItem("still open")
+	for _, id := range []int64{b, a} {
+		e.mustClaim("triager", id, "triage")
+		e.upload(runnerTok, id, "repro.txt", []byte("seen"), 201)
+		if id == b {
+			e.advance(id, "not_reproducible", map[string]string{"summary": "duplicate of #1"}, 200)
+		} else {
+			e.advance(id, "reproduced", map[string]string{"area": "x", "size": "S", "risk": "normal", "resources": ""}, 200)
+		}
+	}
+	var out struct {
+		Items []struct {
+			ID    int64  `json:"id"`
+			Stage string `json:"stage"`
+			Repo  string `json:"repo"`
+		} `json:"items"`
+	}
+	e.do(runnerTok, "GET", "/items?open=1", nil, 200, &out)
+	if len(out.Items) != 1 || out.Items[0].ID != a || out.Items[0].Repo != "jarvis-server" {
+		t.Fatalf("open items %+v", out.Items)
+	}
+	e.do(userTok, "GET", "/items", nil, 200, &out)
+	if len(out.Items) != 2 {
+		t.Fatalf("all items %+v", out.Items)
+	}
+	e.refused(userTok, "GET", "/items?open=maybe", nil, 400, "invalid_field")
+}

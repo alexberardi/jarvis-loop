@@ -32,6 +32,9 @@ type Config struct {
 	// LinkBase, when set, is loopd's address as seen from where the user reads Slack (LAN); long
 	// text then links to the item on it. Empty: long text points at `loop show <id>`.
 	LinkBase string
+	// Repos are the configured repo slugs (loopd's --repos): /loop add sets one when the text
+	// names it.
+	Repos []string
 	// GitHubOwner owns the repos PR links point at (default alexberardi).
 	GitHubOwner string
 	// DigestHours is the digest interval in hours, a divisor of 24 (default 4), aligned to
@@ -439,10 +442,17 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 		case pipeline.Reproduced:
 			// From the event, not the item: the item may have moved on by the time this posts.
 			text = fmt.Sprintf("Reproduced: area %s, size %s, risk %s → ready.", f("area", 100), f("size", 10), f("risk", 10))
+			if r := str(e.Data, "repo"); r != "" {
+				text = fmt.Sprintf("Reproduced in %s: area %s, size %s, risk %s → ready.", f("repo", 100), f("area", 100), f("size", 10), f("risk", 10))
+			}
 		case pipeline.NotReproducible:
 			text = "Closed, not reproducible: " + f("summary", 600)
 		case pipeline.PROpened:
-			text = fmt.Sprintf("%s opened, head `%s` → review.", b.prLink(it), short(str(e.Data, "head_sha")))
+			verb := "opened"
+			if str(e.Data, "pr_action") == "updated" {
+				verb = "updated" // a re-run after a bounce: the same PR
+			}
+			text = fmt.Sprintf("%s %s, head `%s` → review.", b.prLink(it), verb, short(str(e.Data, "head_sha")))
 			if it.Risk == pipeline.RiskHold {
 				text += "\nOn the hold list: " + b.field(it.HoldReason, 400, id)
 			}
@@ -796,11 +806,12 @@ func (b *Bot) onMention(ctx context.Context, m slackEvent) {
 }
 
 func (b *Bot) add(ctx context.Context, user, text string) (pipeline.Item, error) {
-	pri, title := ParsePriority(text)
+	repo, rest := ParseRepo(text, b.c.Repos)
+	pri, title := ParsePriority(rest)
 	if title == "" {
 		return pipeline.Item{}, &pipeline.Error{Code: pipeline.CodeMissingField, Message: "Say what to add."}
 	}
-	return b.c.Store.AddItem(ctx, actorPrefix+user, store.NewItem{Title: title, Ask: text, Priority: pri, Source: "user"})
+	return b.c.Store.AddItem(ctx, actorPrefix+user, store.NewItem{Title: title, Ask: text, Repo: repo, Priority: pri, Source: "user"})
 }
 
 func (b *Bot) onActions(ctx context.Context, p interaction) {

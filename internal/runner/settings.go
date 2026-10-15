@@ -33,6 +33,8 @@ type SettingsInput struct {
 	LoopdAddrs       []string
 	AllowedDomains   []string
 	ExcludedCommands []string
+	// ReadOnly is a triage or review run: no commits (loop-guard checks every spelling too).
+	ReadOnly bool
 }
 
 // DefaultDomains are the hosts sandboxed commands may reach: GitHub (Go modules, reading), the Go module
@@ -64,6 +66,12 @@ func DenyRules(in SettingsInput) []string {
 		"Bash(adb)", "Bash(adb *)", "Bash(sudo *)", "Bash(pkexec *)", "Bash(doas *)", "Bash(systemctl *)",
 		"Bash(pkill *)", "Bash(killall *)", "Bash(ssh *)", "Bash(scp *)", "Bash(sftp *)",
 	)
+	if in.ReadOnly {
+		// Triage and review never commit or rewrite history; review reports, build changes.
+		for _, sub := range []string{"commit", "commit-tree", "merge", "rebase", "cherry-pick", "revert", "am", "update-ref"} {
+			rules = append(rules, "Bash(git "+sub+")", "Bash(git "+sub+" *)")
+		}
+	}
 	rules = append(rules, killRules()...)
 	rules = append(rules,
 		// Recursive removal of anything absolute or above the worktree (the guard resolves paths).

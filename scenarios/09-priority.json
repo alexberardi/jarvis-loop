@@ -1,6 +1,7 @@
 {
   "name": "priority",
-  "about": "Two items are ready: a P3 added first, then a P1. Triage and the runner both take the P1 first, then the P3.",
+  "about": "Two items are ready: a P3 added first, then a P1. Triage and the runner both take the P1 first, then the P3. The runner builds only here: a runner that also reviews would take the P1's review before the P3's build, which is the same rule.",
+  "stages": ["build"],
   "steps": [
     {
       "do": "add",

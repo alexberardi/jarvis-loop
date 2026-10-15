@@ -343,3 +343,56 @@ func TestReasonsNameTheRule(t *testing.T) {
 		t.Fatalf("reason %q should say what and who", d.Reason)
 	}
 }
+
+// Triage and review runs are read-only for git history: no commit, merge or rewrite, in any
+// spelling; reading, diffing and checking out (to compare against the base) stay allowed. A build
+// run commits as before.
+func TestReadOnlyRuns(t *testing.T) {
+	f := newFixture(t)
+	ro := *f.cfg
+	ro.ReadOnly = true
+	cases := []struct {
+		cmd  string
+		rule string
+	}{
+		{"git status && git diff origin/main...HEAD", ""},
+		{"git log --oneline -5", ""},
+		{"git show HEAD --stat", ""},
+		{"git checkout origin/main -- internal/x_test.go && go test ./internal/... ; git checkout HEAD -- internal/x_test.go", ""},
+		{"git stash && go test ./... ; git stash pop", ""},
+		{"git tag -l", ""},
+		{"git commit -m 'fix'", RuleGitCommit},
+		{"git add -A && git commit -qm x", RuleGitCommit},
+		{"git -c user.name=x commit --amend --no-edit", RuleGitCommit},
+		{"git -C . commit -m x", RuleGitCommit},
+		{"bash -c 'git commit -m x'", RuleGitCommit},
+		{"echo $(git commit -m x)", RuleGitCommit},
+		{"/usr/bin/git commit -m x", RuleGitCommit},
+		{"git commit-tree HEAD^{tree} -m x", RuleGitCommit},
+		{"git merge origin/main", RuleGitCommit},
+		{"git rebase origin/main", RuleGitCommit},
+		{"git cherry-pick abc123", RuleGitCommit},
+		{"git revert HEAD", RuleGitCommit},
+		{"git am < x.patch", RuleGitCommit},
+		{"git tag v1", RuleGitCommit},
+		{"git update-ref refs/heads/x HEAD", RuleGitCommit},
+		{"git push origin HEAD", RuleGitPush},
+	}
+	for _, c := range cases {
+		t.Run(c.cmd, func(t *testing.T) {
+			d := ro.Check(bash(f, c.cmd))
+			if d.Rule != c.rule || d.Deny != (c.rule != "") {
+				t.Fatalf("rule = %q (%s), want %q", d.Rule, d.Reason, c.rule)
+			}
+			if c.rule == RuleGitCommit && !strings.Contains(d.Reason, "never commits") {
+				t.Fatalf("reason %q should say why", d.Reason)
+			}
+		})
+	}
+	// The same commands in a build run: commits are the build's job.
+	for _, cmd := range []string{"git commit -m x", "git merge origin/main", "git rebase origin/main"} {
+		if d := f.cfg.Check(bash(f, cmd)); d.Deny {
+			t.Errorf("build run refused %q: %+v", cmd, d)
+		}
+	}
+}

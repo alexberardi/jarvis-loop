@@ -1114,3 +1114,22 @@ func TestGuardRefusedLineHidesTheCommand(t *testing.T) {
 		t.Fatalf("got %q", m.Text)
 	}
 }
+
+// /loop add sets the repo when the text names a configured one, with the priority words too;
+// otherwise the repo stays empty for triage.
+func TestAddRepoWords(t *testing.T) {
+	e := newBotEnv(t)
+	e.b.c.Repos = []string{"alexberardi/jarvis-loop", "alexberardi/jarvis-server"}
+	out := e.command(Approver, "add jarvis-loop: show the repo in /loop show, high priority")
+	d := e.item(1)
+	if d.Item.Repo != "alexberardi/jarvis-loop" || d.Item.Title != "show the repo in /loop show" || d.Item.Priority != "P2" {
+		t.Fatalf("add: %q %+v", out, d.Item)
+	}
+	if !strings.Contains(out, "Added #1 (P2, alexberardi/jarvis-loop)") {
+		t.Fatalf("answer %q", out)
+	}
+	e.command(Approver, "add timers drift")
+	if d := e.item(2); d.Item.Repo != "" || d.Item.Title != "timers drift" {
+		t.Fatalf("no repo words: %+v", d.Item)
+	}
+}

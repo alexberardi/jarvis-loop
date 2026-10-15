@@ -178,6 +178,47 @@ func TestReproducedSetsTriageResult(t *testing.T) {
 	}
 }
 
+// Triage may name the repo of an item that has none (items added from Slack), and only a repo
+// loopd is configured with.
+func TestReproducedRepo(t *testing.T) {
+	repos := []string{"alexberardi/jarvis-loop", "alexberardi/jarvis-server"}
+	base := map[string]string{"area": "loopd", "size": "S", "risk": "normal", "resources": ""}
+	cases := []struct {
+		name, itemRepo, repo string
+		repos                []string
+		want                 string // the item's repo after
+		code                 string
+	}{
+		{"no repo, none given", "", "", repos, "", ""},
+		{"no repo, a configured one", "", "alexberardi/jarvis-loop", repos, "alexberardi/jarvis-loop", ""},
+		{"no repo, spaces trimmed", "", " alexberardi/jarvis-server ", repos, "alexberardi/jarvis-server", ""},
+		{"no repo, not configured", "", "alexberardi/other", repos, "", CodeInvalidField},
+		{"no repo, a short name is not a slug", "", "jarvis-loop", repos, "", CodeInvalidField},
+		{"no repo, loopd has no repos configured", "", "alexberardi/jarvis-loop", nil, "", CodeInvalidField},
+		{"already has one, none given", "demo", "", repos, "demo", ""},
+		{"already has one, even the same", "alexberardi/jarvis-loop", "alexberardi/jarvis-loop", repos, "", CodeInvalidField},
+		{"already has one, another", "demo", "alexberardi/jarvis-loop", repos, "", CodeInvalidField},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			it := item(Triage)
+			it.Repo = c.itemRepo
+			f := map[string]string{}
+			for k, v := range base {
+				f[k] = v
+			}
+			if c.repo != "" {
+				f["repo"] = c.repo
+			}
+			tr, err := ApplyAdvance(it, Advance{Outcome: Reproduced, Evidence: 1, Fields: f, Repos: c.repos}, t0)
+			wantCode(t, err, c.code)
+			if c.code == "" && tr.Item.Repo != c.want {
+				t.Fatalf("repo %q, want %q", tr.Item.Repo, c.want)
+			}
+		})
+	}
+}
+
 var clean = []string{"M internal/modules/cc/turn.go"}
 
 func prOpened(head string, paths []string, extra map[string]string) Advance {

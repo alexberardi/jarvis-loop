@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,7 +25,7 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/guard"
 )
 
-// Runner claims build items and runs one agent per item.
+// Runner claims triage, build and review items (config stages) and runs one agent per item.
 type Runner struct {
 	Cfg    *Config
 	Client *Client
@@ -54,9 +55,6 @@ type PRInfo struct {
 	HeadRefOid  string `json:"headRefOid"`
 	State       string `json:"state"`
 }
-
-// Stages this runner claims (phase 4: build only).
-var Stages = []string{"build"}
 
 func (r *Runner) heartbeatEvery() time.Duration {
 	if r.HeartbeatEvery > 0 {
@@ -112,13 +110,14 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// ClaimAndRun claims one build item and works it to the end. It reports whether it claimed one.
+// ClaimAndRun claims one item in the stages this runner runs and works it to the end. It reports
+// whether it claimed one.
 func (r *Runner) ClaimAndRun(ctx context.Context) (bool, error) {
 	if why := r.Paused(); why != "" {
 		return false, nil
 	}
 	agent := r.Cfg.Name + "-" + randHex(4)
-	cl, err := r.Client.Claim(ctx, agent, r.Cfg.Capabilities, Stages)
+	cl, err := r.Client.Claim(ctx, agent, r.Cfg.Capabilities, r.Cfg.Stages)
 	if err != nil || cl == nil {
 		return false, err
 	}
@@ -142,19 +141,26 @@ func Slug(title string) string {
 
 // run is one item's run: where things are.
 type run struct {
-	item     Item
-	lease    string
-	agent    string
-	repoKey  string
-	repo     RepoConfig
-	branch   string
-	wt       string
-	scratch  string
-	dir      string // the run's own dir: settings, guard config, logs (never writable by the agent)
-	mirror   string
-	sandbox  string
-	settings string
-	started  time.Time
+	item    Item
+	stage   string
+	lease   string
+	agent   string
+	repoKey string // "" for a triage run of an item with no repo: every configured repo is checked out
+	repo    RepoConfig
+	branch  string
+	// wt is the agent's working directory: the item's worktree (build), the PR's head (review),
+	// or a plain directory with the repos checked out under repos/<key>/ (triage).
+	wt string
+	// repoDir is where the item's repo is checked out (wt, or wt/repos/<key> in triage; "" when
+	// triage has several).
+	repoDir   string
+	checkouts []Checkout
+	scratch   string
+	dir       string // the run's own dir: settings, guard config, logs (never writable by the agent)
+	mirror    string
+	sandbox   string
+	settings  string
+	started   time.Time
 
 	reported int // refusals already sent
 	refusals int
@@ -170,25 +176,44 @@ func (r *Runner) lockMirror(path string) func() {
 // newRun works out where an item's run happens.
 func (r *Runner) newRun(cl *Claim, agent string) (*run, error) {
 	it := cl.Item
-	ru := &run{item: it, lease: cl.Lease.ID, agent: agent, started: r.Clock.Now()}
+	stage := cl.Stage
+	if stage == "" {
+		stage = it.Stage
+	}
+	ru := &run{item: it, stage: stage, lease: cl.Lease.ID, agent: agent, started: r.Clock.Now()}
+	if !slices.Contains(AgentStages, stage) {
+		return ru, fmt.Errorf("runner %s does not run %q agents", r.Cfg.Name, stage)
+	}
 	key, repo, ok := r.Cfg.Repo(it.Repo)
-	if !ok {
+	switch {
+	case ok:
+		ru.repoKey, ru.repo = key, repo
+	case stage == StageTriage && it.Repo == "":
+		// Triage decides the repo: every configured repo is checked out.
+	default:
 		return ru, fmt.Errorf("runner %s has no repo %q configured", r.Cfg.Name, it.Repo)
 	}
-	ru.repoKey, ru.repo = key, repo
 	ru.branch = it.Branch
 	if !strings.HasPrefix(ru.branch, "loop/") {
 		ru.branch = fmt.Sprintf("loop/%d-%s", it.ID, Slug(it.Title))
 	}
-	ru.wt = filepath.Join(r.Cfg.WorkRoot, fmt.Sprintf("%d-build", it.ID))
+	ru.wt = filepath.Join(r.Cfg.WorkRoot, fmt.Sprintf("%d-%s", it.ID, stage))
 	// Inside the worktree (ignored by git), so the agent needs no extra directory: an --add-dir
 	// would differ per item.
 	ru.scratch = filepath.Join(ru.wt, ".loop", "scratch")
-	ru.dir = filepath.Join(r.Cfg.WorkRoot, "runs", fmt.Sprintf("%d-build-%s", it.ID, ru.started.Format("20060102T150405Z")))
-	ru.mirror = filepath.Join(r.Cfg.WorkRoot, "mirrors", Slug(key)+".git")
-	ru.settings = filepath.Join(r.Cfg.WorkRoot, "settings", Slug(key)+"-build.json")
+	ru.dir = filepath.Join(r.Cfg.WorkRoot, "runs", fmt.Sprintf("%d-%s-%s", it.ID, stage, ru.started.Format("20060102T150405Z")))
+	// One settings file per repo and stage, the same bytes for every item (prompt caching).
+	ru.settings = filepath.Join(r.Cfg.WorkRoot, "settings", stage+".json")
+	if ru.repoKey != "" {
+		ru.mirror = r.mirrorPath(ru.repoKey)
+		ru.settings = filepath.Join(r.Cfg.WorkRoot, "settings", Slug(ru.repoKey)+"-"+stage+".json")
+	}
 	ru.sandbox = fmt.Sprintf("loop-%d", it.ID)
 	return ru, nil
+}
+
+func (r *Runner) mirrorPath(key string) string {
+	return filepath.Join(r.Cfg.WorkRoot, "mirrors", Slug(key)+".git")
 }
 
 func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
@@ -214,19 +239,23 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 	r.report(cleanupCtx, ru, out, log)
 }
 
-// prepare makes the worktree, the brief, the guard config and the settings.
+// prepare makes the working directory (per stage), the context files, the brief, the guard
+// config and the settings.
 func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 	os.RemoveAll(ru.dir)
 	if err := os.MkdirAll(ru.dir, 0o700); err != nil {
 		return "", err
 	}
-	unlock := r.lockMirror(ru.mirror)
-	err := r.Git.EnsureMirror(ctx, ru.mirror, ru.repo)
-	ahead := 0
-	if err == nil {
-		ahead, err = r.Git.AddWorktree(ctx, ru.mirror, ru.wt, ru.branch, ru.repo.Base)
+	info := RunInfo{Slug: ru.repo.Slug, Base: ru.repo.Base, Branch: ru.branch, Worktree: ru.wt, Scratch: ru.scratch, Sandbox: ru.sandbox}
+	var err error
+	switch ru.stage {
+	case StageTriage:
+		err = r.prepareTriage(ctx, ru, &info)
+	case StageReview:
+		err = r.prepareReview(ctx, ru, &info)
+	default:
+		err = r.prepareBuild(ctx, ru, &info)
 	}
-	unlock()
 	if err != nil {
 		return "", err
 	}
@@ -235,36 +264,49 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 			return "", err
 		}
 	}
-	info := RunInfo{Slug: ru.repo.Slug, Base: ru.repo.Base, Branch: ru.branch, Worktree: ru.wt, Scratch: ru.scratch, Sandbox: ru.sandbox, Resumed: ahead}
-	info.Triage, info.TriageErr = r.fetchTriage(ctx, ru)
-	brief := BuildBrief(ru.item, info)
+	brief := Brief(ru.stage, ru.item, info)
 	for _, p := range []string{filepath.Join(ru.wt, ".loop", "brief.md"), filepath.Join(ru.dir, "brief.md")} {
 		if err := os.WriteFile(p, []byte(brief), 0o644); err != nil {
 			return "", err
 		}
 	}
-	for _, c := range ru.repo.Prepare {
-		if out, err := r.shell(ctx, ru.wt, c, 20*time.Minute); err != nil {
-			return "", fmt.Errorf("prepare %q: %v: %s", c, err, clip(out, 500))
+	if ru.repoDir != "" {
+		for _, c := range ru.repo.Prepare {
+			if out, err := r.shell(ctx, ru.repoDir, c, 20*time.Minute); err != nil {
+				return "", fmt.Errorf("prepare %q: %v: %s", c, err, clip(out, 500))
+			}
 		}
 	}
 	home := Home()
+	deny := ru.repo.DenyWrite
+	if ru.stage == StageTriage {
+		// The checkouts sit under repos/<key>/: their git files and the repos' own deny paths.
+		deny = nil
+		for _, c := range ru.checkouts {
+			deny = append(deny, c.Dir+"/.git")
+			for _, d := range r.Cfg.Repos[c.Key].DenyWrite {
+				deny = append(deny, c.Dir+"/"+d)
+			}
+		}
+	}
 	gc := guard.Config{
 		Item: ru.item.ID, Worktree: ru.wt, Scratch: ru.scratch, SandboxDir: filepath.Join(ru.wt, ".sandbox", ru.sandbox),
 		Branch: ru.branch, Remote: "origin", Home: home,
 		Protected: r.Cfg.Protected(), Secrets: r.Cfg.Secrets(), Words: []string{r.Cfg.UserEmulator},
-		LoopdAddrs: r.Cfg.LoopdAddrs(), DenyWrite: ru.repo.DenyWrite,
+		LoopdAddrs: r.Cfg.LoopdAddrs(), DenyWrite: deny, ReadOnly: ru.stage != StageBuild,
 		Report: filepath.Join(ru.dir, "refusals.jsonl"), Armed: filepath.Join(ru.dir, "armed"),
 	}
 	b, _ := json.MarshalIndent(gc, "", "  ")
 	if err := os.WriteFile(filepath.Join(ru.dir, "guard.json"), b, 0o600); err != nil {
 		return "", err
 	}
-	// The same bytes for every item of the repo (see docs/decisions/2026-10-15-prompt-caching.md);
-	// written atomically, as parallel slots share the file.
+	// The same bytes for every item of the repo and stage (see
+	// docs/decisions/2026-10-15-prompt-caching.md); written atomically, as parallel slots share
+	// the file.
 	settings, err := GenerateSettings(SettingsInput{
 		Mode: r.Cfg.Mode, Guard: r.Cfg.Guard, Home: home, Protected: r.Cfg.Protected(), Secrets: r.Cfg.Secrets(),
 		LoopdAddrs: r.Cfg.LoopdAddrs(), AllowedDomains: r.Cfg.AllowedDomains, ExcludedCommands: ru.repo.ExcludedCommands,
+		ReadOnly: ru.stage != StageBuild,
 	})
 	if err != nil {
 		return "", err
@@ -275,7 +317,35 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 	if _, err := os.Stat(r.Cfg.Guard); err != nil {
 		return "", fmt.Errorf("the guard binary %s: %w", r.Cfg.Guard, err)
 	}
+	// The run's command line, kept with its log (the harness checks it is the same for every run
+	// of a stage).
+	argv, _ := json.Marshal(r.agentCommand(ru).Args[1:])
+	if err := os.WriteFile(filepath.Join(ru.dir, "argv.json"), argv, 0o600); err != nil {
+		return "", err
+	}
 	return brief, nil
+}
+
+// prepareBuild makes the item's worktree on its branch (continuing an earlier run's commits),
+// with triage's notes and, after a bounce, the review's in .loop/review/.
+func (r *Runner) prepareBuild(ctx context.Context, ru *run, info *RunInfo) error {
+	unlock := r.lockMirror(ru.mirror)
+	err := r.Git.EnsureMirror(ctx, ru.mirror, ru.repo)
+	ahead := 0
+	if err == nil {
+		ahead, err = r.Git.AddWorktree(ctx, ru.mirror, ru.wt, ru.branch, ru.repo.Base)
+	}
+	unlock()
+	if err != nil {
+		return err
+	}
+	ru.repoDir = ru.wt
+	info.Resumed = ahead
+	info.Triage, info.TriageErr = r.fetchEvidence(ctx, ru, filepath.Join(".loop", "triage"))
+	if ru.item.BounceCount > 0 {
+		r.reviewContext(ctx, ru, info, filepath.Join(".loop", "review", "notes.md"), filepath.Join(".loop", "review", "pr-comments.md"))
+	}
+	return nil
 }
 
 func writeAtomic(path string, b []byte) error {
@@ -713,11 +783,17 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 	case endStopped, endShutdown:
 		// The item returns to its queue (loopd ended the lease, or it will expire); keep the work.
 		r.flushRefusals(ctx, ru)
-		r.saveWIP(ctx, ru, out.reason, log)
+		if ru.stage == StageBuild {
+			r.saveWIP(ctx, ru, out.reason, log)
+		}
 		return
 	case endTimeCap:
-		r.saveWIP(ctx, ru, "time cap", log)
-		r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{"error": out.detail + "; work so far is on " + ru.branch + ". Last output: " + out.lastOutput()}), nil)
+		detail := out.detail
+		if ru.stage == StageBuild {
+			r.saveWIP(ctx, ru, "time cap", log)
+			detail += "; work so far is on " + ru.branch
+		}
+		r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{"error": detail + ". Last output: " + out.lastOutput()}), nil)
 		return
 	case endModeMismatch:
 		r.paused.Store(out.detail)
@@ -737,14 +813,30 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 		r.advance(ctx, ru, "usage_limit", r.metrics(ru, out, f), nil)
 		return
 	}
-	fail := func(msg string) {
-		r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{"error": clip(msg, 1200) + ". Last output: " + out.lastOutput()}), nil)
-	}
 	raw, err := readResult(filepath.Join(ru.wt, ".loop", "result.json"))
 	if err != nil {
-		fail(fmt.Sprintf("the agent exited (code %d) without a usable .loop/result.json (%v)", out.exitCode, err))
+		r.fail(ctx, ru, out, fmt.Sprintf("the agent exited (code %d) without a usable .loop/result.json (%v)", out.exitCode, err))
 		return
 	}
+	switch ru.stage {
+	case StageTriage:
+		r.reportTriage(ctx, ru, out, raw)
+	case StageReview:
+		r.reportReview(ctx, ru, out, raw)
+	default:
+		r.reportBuild(ctx, ru, out, raw)
+	}
+}
+
+// fail reports a run that ended without a usable result: the item goes to the user.
+func (r *Runner) fail(ctx context.Context, ru *run, out outcome, msg string) {
+	r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{"error": clip(msg, 1200) + ". Last output: " + out.lastOutput()}), nil)
+}
+
+// reportBuild checks a build result against git, pushes the branch, opens or updates the PR and
+// reports pr_opened (or the agent's question).
+func (r *Runner) reportBuild(ctx context.Context, ru *run, out outcome, raw []byte) {
+	fail := func(msg string) { r.fail(ctx, ru, out, msg) }
 	unlock := r.lockMirror(ru.mirror)
 	facts, ferr := r.Git.Facts(ctx, ru.mirror, ru.wt, ru.repo.Base, ru.branch)
 	unlock()
@@ -752,7 +844,7 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 		fail("the runner could not read git: " + ferr.Error())
 		return
 	}
-	v, err := ValidateResult(raw, Expect{Stage: "build"}, facts, filepath.Join(ru.wt, ".loop"))
+	v, err := ValidateResult(raw, Expect{Stage: StageBuild}, facts, filepath.Join(ru.wt, ".loop"))
 	if err != nil {
 		fail("result rejected: " + err.Error())
 		return
@@ -766,7 +858,7 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 		fail("evidence: " + err.Error())
 		return
 	}
-	pr, err := r.publish(ctx, ru, v, files, out)
+	pr, action, err := r.publish(ctx, ru, v, files, out)
 	if err != nil {
 		fail(err.Error())
 		return
@@ -784,7 +876,7 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 		}
 		prVerified = "true"
 	}
-	labels := evidenceLabels(v)
+	labels := evidenceLabels(v.Result)
 	for _, f := range files {
 		if err := r.Client.Upload(ctx, ru.item.ID, f.Path, f.Name, labels[f.Name]); err != nil {
 			fail("uploading evidence " + f.Name + ": " + err.Error())
@@ -794,6 +886,7 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 	fields := map[string]string{
 		"repo": ru.repo.Slug, "pr": strconv.Itoa(pr), "branch": ru.branch, "head_sha": facts.HeadSHA,
 		"summary": clip(v.Summary, 2000), "not_verified": clip(strings.Join(v.NotVerified, "; "), 1000), "pr_verified": prVerified,
+		"pr_action": action,
 	}
 	if v.NeedsReview {
 		fields["needs_review"] = "true"
@@ -801,7 +894,7 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 	r.advance(ctx, ru, "pr_opened", r.metrics(ru, out, fields), facts.ChangedPaths)
 }
 
-func evidenceLabels(v Valid) map[string]string {
+func evidenceLabels(v Result) map[string]string {
 	labels := map[string]string{}
 	for _, e := range v.Evidence {
 		labels[filepath.Base(e.File)] = e.Label
@@ -810,10 +903,11 @@ func evidenceLabels(v Valid) map[string]string {
 }
 
 // publish pushes the item's branch (only it, never forced) and opens its PR, or updates the open
-// one, with the runner's own credentials; it returns the PR number. The agent did neither.
-func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []EvidenceFile, out outcome) (int, error) {
+// one, with the runner's own credentials; it returns the PR number and "opened" or "updated". The
+// agent did neither.
+func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []EvidenceFile, out outcome) (int, string, error) {
 	if r.PRs == nil {
-		return 0, errors.New("the runner has no way to open PRs (configuration)")
+		return 0, "", errors.New("the runner has no way to open PRs (configuration)")
 	}
 	push := r.Push
 	if push == nil {
@@ -827,45 +921,52 @@ func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []Evidence
 	}
 	unlock()
 	if err != nil {
-		return 0, fmt.Errorf("the runner could not push %s: %v", ru.branch, err)
+		return 0, "", fmt.Errorf("the runner could not push %s: %v", ru.branch, err)
 	}
 	if remote != v.HeadSHA {
-		return 0, fmt.Errorf("after the push, %s on the remote is %q, not HEAD %s", ru.branch, remote, v.HeadSHA)
+		return 0, "", fmt.Errorf("after the push, %s on the remote is %q, not HEAD %s", ru.branch, remote, v.HeadSHA)
 	}
+	st := r.runStats(ru, out)
+	body := filepath.Join(ru.dir, "pr-body.md")
+	if err := os.WriteFile(body, []byte(PRBody(v.PRBody, ru.item.ID, files, evidenceLabels(v.Result), st)), 0o600); err != nil {
+		return 0, "", err
+	}
+	spec := PRSpec{Slug: ru.repo.Slug, Head: ru.branch, Base: ru.repo.Base, Title: v.PRTitle, BodyFile: body}
+	pr, err := r.PRs.Find(ctx, ru.repo.Slug, ru.branch)
+	if err != nil {
+		return 0, "", fmt.Errorf("could not look for an open PR for %s: %v", ru.branch, err)
+	}
+	if pr > 0 {
+		if err := r.PRs.Edit(ctx, pr, spec); err != nil {
+			return 0, "", fmt.Errorf("could not update PR #%d: %v", pr, err)
+		}
+		return pr, "updated", nil
+	}
+	pr, err = r.PRs.Create(ctx, spec)
+	if err != nil {
+		return 0, "", fmt.Errorf("could not open the PR for %s: %v", ru.branch, err)
+	}
+	if pr <= 0 {
+		return 0, "", fmt.Errorf("opening the PR for %s returned no number", ru.branch)
+	}
+	return pr, "opened", nil
+}
+
+// runStats are the run's numbers for a PR footer or a review comment.
+func (r *Runner) runStats(ru *run, out outcome) RunStats {
 	st := RunStats{Seconds: int(r.Clock.Now().Sub(ru.started).Seconds())}
 	if res := out.stats.result; res != nil {
 		u := res.Usage
 		st = RunStats{Turns: res.NumTurns, CacheHit: CacheHitRatio(u.Input, u.CacheCreation, u.CacheRead), Seconds: st.Seconds,
 			CostUSD: res.CostUSD, HasResult: true}
 	}
-	body := filepath.Join(ru.dir, "pr-body.md")
-	if err := os.WriteFile(body, []byte(PRBody(v.PRBody, ru.item.ID, files, evidenceLabels(v), st)), 0o600); err != nil {
-		return 0, err
-	}
-	spec := PRSpec{Slug: ru.repo.Slug, Head: ru.branch, Base: ru.repo.Base, Title: v.PRTitle, BodyFile: body}
-	pr, err := r.PRs.Find(ctx, ru.repo.Slug, ru.branch)
-	if err != nil {
-		return 0, fmt.Errorf("could not look for an open PR for %s: %v", ru.branch, err)
-	}
-	if pr > 0 {
-		if err := r.PRs.Edit(ctx, pr, spec); err != nil {
-			return 0, fmt.Errorf("could not update PR #%d: %v", pr, err)
-		}
-		return pr, nil
-	}
-	pr, err = r.PRs.Create(ctx, spec)
-	if err != nil {
-		return 0, fmt.Errorf("could not open the PR for %s: %v", ru.branch, err)
-	}
-	if pr <= 0 {
-		return 0, fmt.Errorf("opening the PR for %s returned no number", ru.branch)
-	}
-	return pr, nil
+	return st
 }
 
-// fetchTriage copies the item's evidence so far (triage's notes and repro first) into
-// .loop/triage/ for the agent to read. A failure is reported in the brief, not fatal.
-func (r *Runner) fetchTriage(ctx context.Context, ru *run) ([]TriageFile, string) {
+// fetchEvidence copies the item's evidence so far (triage's notes and repro first) into rel (a
+// directory under the working directory) for the agent to read. A failure is reported in the
+// brief, not fatal.
+func (r *Runner) fetchEvidence(ctx context.Context, ru *run, rel string) ([]TriageFile, string) {
 	evs, err := r.Client.Evidence(ctx, ru.item.ID)
 	if err != nil {
 		return nil, err.Error()
@@ -873,7 +974,7 @@ func (r *Runner) fetchTriage(ctx context.Context, ru *run) ([]TriageFile, string
 	if len(evs) == 0 {
 		return nil, ""
 	}
-	dir := filepath.Join(ru.wt, ".loop", "triage")
+	dir := filepath.Join(ru.wt, rel)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err.Error()
 	}
@@ -923,11 +1024,11 @@ func readResult(p string) ([]byte, error) {
 // worktree and the scratch dir. The run dir stays as the run's log. It never touches anything
 // else.
 func (r *Runner) cleanup(ctx context.Context, ru *run, log *slog.Logger) {
-	if _, err := os.Stat(ru.wt); err == nil && len(ru.repo.Cleanup) > 0 {
+	if _, err := os.Stat(ru.repoDir); ru.repoDir != "" && err == nil && len(ru.repo.Cleanup) > 0 {
 		restored := true
 		if len(ru.repo.CleanupRestore) > 0 {
 			args := append([]string{"checkout", "refs/remotes/origin/" + ru.repo.Base, "--"}, ru.repo.CleanupRestore...)
-			if _, err := r.Git.run(ctx, ru.wt, args...); err != nil {
+			if _, err := r.Git.run(ctx, ru.repoDir, args...); err != nil {
 				log.Error("cleanup: restoring the harness files failed; not running cleanup commands", "err", err)
 				restored = false
 			}
@@ -937,14 +1038,24 @@ func (r *Runner) cleanup(ctx context.Context, ru *run, log *slog.Logger) {
 				break
 			}
 			c = strings.ReplaceAll(c, "{sandbox}", ru.sandbox)
-			if out, err := r.shell(ctx, ru.wt, c, 5*time.Minute); err != nil {
+			if out, err := r.shell(ctx, ru.repoDir, c, 5*time.Minute); err != nil {
 				log.Warn("cleanup command", "cmd", c, "err", err, "out", clip(out, 300))
 			}
 		}
 	}
-	unlock := r.lockMirror(ru.mirror)
-	r.Git.RemoveWorktree(ctx, ru.mirror, ru.wt)
-	unlock()
+	if ru.stage == StageTriage {
+		for _, c := range ru.checkouts {
+			mirror := r.mirrorPath(c.Key)
+			unlock := r.lockMirror(mirror)
+			r.Git.RemoveWorktree(ctx, mirror, filepath.Join(ru.wt, c.Dir))
+			unlock()
+		}
+		os.RemoveAll(ru.wt)
+	} else if ru.mirror != "" {
+		unlock := r.lockMirror(ru.mirror)
+		r.Git.RemoveWorktree(ctx, ru.mirror, ru.wt)
+		unlock()
+	}
 	log.Info("cleaned up", "worktree", ru.wt)
 }
 

@@ -22,16 +22,19 @@ type PR struct {
 	HeadSHA string `json:"head_sha"` // the branch's head in the remote when the PR was opened or edited
 	State   string `json:"state"`
 	Edits   int    `json:"edits,omitempty"`
+	// Comments are what the runner posted on the PR (the review stage's verdicts), oldest first.
+	Comments []string `json:"comments,omitempty"`
 }
 
 // GitHub is the fake GitHub: bare repositories on disk are the remotes the runner pushes to, and
 // the runner's PR client (runner.PRs) and PR check (Runner.VerifyPR) are answered here instead of
 // by gh. It records each PR (number, head branch and sha, title, body); numbers start at 101.
 type GitHub struct {
-	mu    sync.Mutex
-	prs   []PR
-	next  int
-	repos map[string]string // slug -> bare repo path
+	mu     sync.Mutex
+	prs    []PR
+	next   int
+	repos  map[string]string // slug -> bare repo path
+	merged map[string][]runner.MergedPR
 }
 
 var _ runner.PRs = (*GitHub)(nil)
@@ -160,4 +163,82 @@ func (g *GitHub) Verify(_ context.Context, slug string, number int) (runner.PRIn
 		}
 	}
 	return runner.PRInfo{}, fmt.Errorf("no pull request %s#%d", slug, number)
+}
+
+// SetMerged sets a repo's recently merged PRs (newest first), what triage sees for dedupe.
+func (g *GitHub) SetMerged(slug string, prs []runner.MergedPR) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.merged == nil {
+		g.merged = map[string][]runner.MergedPR{}
+	}
+	g.merged[slug] = prs
+}
+
+// MergedPRs answers gh pr list --state merged.
+func (g *GitHub) MergedPRs(_ context.Context, slug string, n int) ([]runner.MergedPR, error) {
+	if _, ok := g.repos[slug]; !ok {
+		return nil, fmt.Errorf("no repository %s", slug)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	prs := g.merged[slug]
+	if len(prs) > n {
+		prs = prs[:n]
+	}
+	return append([]runner.MergedPR(nil), prs...), nil
+}
+
+func (g *GitHub) find(slug string, number int) (int, bool) {
+	for i, p := range g.prs {
+		if p.Repo == slug && p.Number == number {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// View answers gh pr view.
+func (g *GitHub) View(_ context.Context, slug string, number int) (runner.PRView, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	i, ok := g.find(slug, number)
+	if !ok {
+		return runner.PRView{}, fmt.Errorf("no pull request %s#%d", slug, number)
+	}
+	p := g.prs[i]
+	return runner.PRView{Number: p.Number, Title: p.Title, Body: p.Body, HeadRefName: p.Head, HeadRefOid: g.RemoteHead(slug, p.Head),
+		BaseRefName: p.Base, State: p.State}, nil
+}
+
+// Comment records a comment (gh pr comment).
+func (g *GitHub) Comment(_ context.Context, slug string, number int, bodyFile string) error {
+	body, err := os.ReadFile(bodyFile)
+	if err != nil {
+		return fmt.Errorf("body file: %w", err)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	i, ok := g.find(slug, number)
+	if !ok {
+		return fmt.Errorf("no pull request %s#%d", slug, number)
+	}
+	g.prs[i].Comments = append(g.prs[i].Comments, string(body))
+	return nil
+}
+
+// Comments answers the runner's read of a PR's comments: the ones it posted, as the user's
+// account (gh's login) would show them.
+func (g *GitHub) Comments(_ context.Context, slug string, number int) ([]runner.PRComment, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	i, ok := g.find(slug, number)
+	if !ok {
+		return nil, fmt.Errorf("no pull request %s#%d", slug, number)
+	}
+	var out []runner.PRComment
+	for n, c := range g.prs[i].Comments {
+		out = append(out, runner.PRComment{Author: "sandbox", At: fmt.Sprintf("comment %d", n+1), Body: c})
+	}
+	return out, nil
 }

@@ -14,6 +14,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -44,11 +46,16 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	lan := fs.Bool("lan", false, "allow listening on a non-loopback address")
 	slackEnv := fs.String("slack-env", "", "Slack env file, 0600, with SLACK_BOT_TOKEN and SLACK_APP_TOKEN; Slack is off without it")
 	slackLink := fs.String("slack-link", "", "loopd's address as the Slack reader reaches it (LAN), for links to long text; default: point at `loop show`")
+	reposFlag := fs.String("repos", "", "the repos the loop works on, as owner/name slugs, comma-separated: the only repos triage may give an item that has none, and the ones `/loop add` recognises by name")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if err := checkAddr(*addr, *lan); err != nil {
 		return err
+	}
+	repos, err := parseRepos(*reposFlag)
+	if err != nil {
+		return fmt.Errorf("--repos: %w", err)
 	}
 	log := slog.New(slog.NewJSONHandler(stderr, nil))
 
@@ -67,6 +74,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		return fmt.Errorf("store: %w", err)
 	}
 	defer st.Close()
+	st.SetRepos(repos)
 
 	srv := &http.Server{
 		Addr:              *addr,
@@ -89,7 +97,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	defer stopSlack()
 	if *slackEnv != "" {
 		if _, err := loopd.StartSlack(sctx, &bg, st, loopd.Slack{BaseURL: slack.DefaultBaseURL, Tokens: slackToks,
-			LinkBase: *slackLink, Clock: clock.Real{}, Log: log}); err != nil {
+			LinkBase: *slackLink, Repos: repos, Clock: clock.Real{}, Log: log}); err != nil {
 			ln.Close()
 			return err
 		}
@@ -133,6 +141,26 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 // handler serves the API, plus the status page at / and its form at /ui/control.
 func handler(st *store.Store, toks *api.Tokens, log *slog.Logger) http.Handler {
 	return loopd.Handler(st, toks, log)
+}
+
+var slugRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+// parseRepos reads --repos: owner/name slugs, comma-separated, deduplicated.
+func parseRepos(s string) ([]string, error) {
+	var out []string
+	for _, r := range strings.Split(s, ",") {
+		r = strings.TrimSpace(r)
+		if r == "" {
+			continue
+		}
+		if !slugRe.MatchString(r) {
+			return nil, fmt.Errorf("%q is not an owner/name slug", r)
+		}
+		if !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }
 
 // checkAddr refuses a non-loopback listen address unless --lan says it is deliberate.

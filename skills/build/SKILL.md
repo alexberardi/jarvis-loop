@@ -29,6 +29,9 @@ unsure, stop and ask (outcome `question`) instead of guessing.
 1. Read the item below and the target repo's `CLAUDE.md` (and the docs it says to read first).
    Follow the repo's own rules and skills. In jarvis-server that includes `land-pr`'s gate
    (`scripts/check` and the race suite), **but not its merge step**.
+   **If review bounced the item**, the brief lists `.loop/review/`: the review notes (from loopd)
+   and the PR's comments. Read them first and fix each point on the same branch (the worktree
+   continues it); the runner then updates the open PR instead of opening another.
 2. Write the failing test first, then the fix; keep the change as small as the item asks.
 3. Verify with the repo's harness where the item needs it, under the sandbox name given below
    (`--name <sandbox>`), never `default`. In a fresh jarvis-server worktree, the runner has

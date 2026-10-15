@@ -1,7 +1,8 @@
-// Package runner is the loop runner (docs/phases/04-runner-build.md): it claims build items from
-// loopd, prepares a worktree of a bare mirror it owns, runs one headless `claude -p` per item
-// inside four boundary layers, validates what the agent claims against git, and reports. The
-// agent never holds a loopd credential.
+// Package runner is the loop runner (docs/phases/04-runner-build.md, 05-triage-review.md): it
+// claims triage, build and review items from loopd, prepares a working directory from bare
+// mirrors it owns (triage: the repos checked out; build: the item's branch; review: the PR's
+// head), runs one headless `claude -p` per item inside four boundary layers, validates what the
+// agent claims against git, and reports. The agent never holds a loopd or GitHub credential.
 package runner
 
 import (
@@ -23,8 +24,11 @@ type Config struct {
 	Capabilities []string `json:"capabilities"`
 	// Slots is how many items this runner works at once; loopd's active-agents number still caps
 	// the total.
-	Slots    int    `json:"slots"`
-	WorkRoot string `json:"work_root"`
+	Slots int `json:"slots"`
+	// Stages are the stages this runner claims: triage, build and review (the default, all
+	// three), or a subset.
+	Stages   []string `json:"stages,omitempty"`
+	WorkRoot string   `json:"work_root"`
 	// Claude and Guard are the binaries; Guard defaults to loop-guard next to the runner.
 	Claude string `json:"claude"`
 	Guard  string `json:"guard"`
@@ -59,6 +63,8 @@ type RepoConfig struct {
 	// Slug is owner/name, what the agent's result must name.
 	Slug string `json:"slug"`
 	Base string `json:"base"`
+	// Description is one line on what the repo is for: triage picks an item's repo from these.
+	Description string `json:"description,omitempty"`
 	// Prepare commands run by the runner in the fresh worktree before the agent (from the base
 	// branch's own files), e.g. fetching the sherpa libs.
 	Prepare []string `json:"prepare,omitempty"`
@@ -149,6 +155,15 @@ func (c *Config) normalize() error {
 	if c.Mode == "" {
 		c.Mode = ModeAuto
 	}
+	if len(c.Stages) == 0 {
+		c.Stages = append([]string(nil), AgentStages...)
+	}
+	for _, st := range c.Stages {
+		if !slices.Contains(AgentStages, st) {
+			return fmt.Errorf("config: stages may be %s, not %q", strings.Join(AgentStages, ", "), st)
+		}
+	}
+	c.Stages = uniq(c.Stages)
 	if c.UserEmulator == "" {
 		c.UserEmulator = "emulator-5554"
 	}

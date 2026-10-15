@@ -59,6 +59,7 @@ type rig struct {
 	local    string // the user's own clone
 	localRef string // its HEAD before the run
 	logs     *bytes.Buffer
+	scripts  string // the fake claude's per-item scripts
 }
 
 func gitT(t *testing.T, dir string, args ...string) string {
@@ -109,7 +110,12 @@ func newRig(t *testing.T, scenario string) *rig {
 	cfg := &Config{
 		LoopdURL: srv.URL, Token: runnerToken, Name: "devbox", Slots: 1, WorkRoot: filepath.Join(root, "work"),
 		Claude: self, Guard: self, Mode: ModeAuto, PollSeconds: 30, UserEmulator: "emulator-5554", VerifyPR: &verify,
-		Repos: map[string]RepoConfig{"demo": {Local: local, Remote: remote, Slug: "alex/demo", Base: "main"}},
+		// The build tests' runner builds only; the triage and review tests set the stages.
+		Stages: []string{StageBuild},
+		Repos: map[string]RepoConfig{
+			"demo":  {Local: local, Remote: remote, Slug: "alex/demo", Base: "main", Description: "the demo repo"},
+			"other": {Remote: remote, Slug: "alex/other", Base: "main", Description: "another repo (the same remote)"},
+		},
 	}
 	if err := cfg.normalize(); err != nil {
 		t.Fatal(err)
@@ -120,8 +126,11 @@ func newRig(t *testing.T, scenario string) *rig {
 		Cfg: cfg, Client: &Client{Base: srv.URL, Token: runnerToken}, Clock: clk,
 		Log: slog.New(slog.NewTextHandler(logs, nil)),
 		// GORACE: a -race binary sleeps 1 s at exit by default, and every guard call is one.
-		Env: append(os.Environ(), "LOOP_TEST_AS=claude", "FAKE_CLAUDE_SCENARIO="+scenario, "LOOP_TOKEN=must-not-leak", "GORACE=atexit_sleep_ms=0"),
+		Env: append(os.Environ(), "LOOP_TEST_AS=claude", "FAKE_CLAUDE_SCENARIO="+scenario, "LOOP_TOKEN=must-not-leak", "GORACE=atexit_sleep_ms=0",
+			"FAKE_CLAUDE_SCRIPTS="+filepath.Join(root, "scripts")),
 	}
+	os.MkdirAll(filepath.Join(root, "scripts"), 0o755)
+	st.SetRepos([]string{"alex/demo", "alex/other"})
 	// "GitHub": PRs are a test double; the PR check reads the bare remote.
 	prs := &fakePRs{next: 7}
 	r.PRs = prs
@@ -134,18 +143,61 @@ func newRig(t *testing.T, scenario string) *rig {
 		return PRInfo{HeadRefName: spec.Head, HeadRefOid: strings.TrimSpace(string(out)), State: "OPEN"}, nil
 	}
 	return &rig{t: t, ctx: ctx, st: st, loopdClk: loopdClk, clk: clk, r: r, prs: prs, remote: remote, local: local,
-		localRef: gitT(t, local, "rev-parse", "HEAD"), logs: logs}
+		localRef: gitT(t, local, "rev-parse", "HEAD"), logs: logs, scripts: filepath.Join(root, "scripts")}
 }
 
 // fakePRs is GitHub's PRs for the tests: it records what the runner asked for.
 type fakePRs struct {
-	mu      sync.Mutex
-	next    int
-	open    map[string]int // branch -> PR
-	specs   map[int]PRSpec
-	bodies  map[int]string
-	created []int
-	edited  []int
+	mu       sync.Mutex
+	next     int
+	open     map[string]int // branch -> PR
+	specs    map[int]PRSpec
+	bodies   map[int]string
+	created  []int
+	edited   []int
+	comments map[int][]string // PR -> comment bodies the runner posted
+	merged   []MergedPR
+}
+
+func (f *fakePRs) View(_ context.Context, slug string, pr int) (PRView, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.specs[pr]
+	if !ok {
+		return PRView{}, fmt.Errorf("no PR #%d", pr)
+	}
+	return PRView{Number: pr, Title: s.Title, Body: f.bodies[pr], HeadRefName: s.Head, BaseRefName: s.Base, State: "OPEN"}, nil
+}
+
+func (f *fakePRs) Comment(_ context.Context, slug string, pr int, bodyFile string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, err := os.ReadFile(bodyFile)
+	if err != nil {
+		return err
+	}
+	if f.comments == nil {
+		f.comments = map[int][]string{}
+	}
+	f.comments[pr] = append(f.comments[pr], string(b))
+	return nil
+}
+
+func (f *fakePRs) Comments(_ context.Context, slug string, pr int) ([]PRComment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []PRComment
+	for i, c := range f.comments[pr] {
+		out = append(out, PRComment{Author: "alex", At: fmt.Sprintf("2026-10-15T12:0%d:00Z", i), Body: c})
+	}
+	out = append(out, PRComment{Author: "alex", At: "2026-10-15T12:09:00Z", Body: "Name the test after the case.", Path: "feature.txt", Line: 1})
+	return out, nil
+}
+
+func (f *fakePRs) MergedPRs(_ context.Context, slug string, n int) ([]MergedPR, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.merged, nil
 }
 
 func (f *fakePRs) Find(_ context.Context, slug, branch string) (int, error) {
@@ -342,7 +394,7 @@ func TestGoodRunOpensPR(t *testing.T) {
 		}
 	}
 	ev := g.advanced(id)
-	if ev.Outcome != "pr_opened" || ev.Data["pr_verified"] != "true" {
+	if ev.Outcome != "pr_opened" || ev.Data["pr_verified"] != "true" || ev.Data["pr_action"] != "opened" {
 		t.Fatalf("outcome %s %v", ev.Outcome, ev.Data)
 	}
 	paths, _ := ev.Data["changed_paths"].([]any)
@@ -391,7 +443,8 @@ func TestGoodRunOpensPR(t *testing.T) {
 	}
 }
 
-func TestOnlyBuildIsClaimed(t *testing.T) {
+// A runner claims only the stages in its config.
+func TestOnlyConfiguredStagesAreClaimed(t *testing.T) {
 	g := newRig(t, fakeclaude.Good)
 	if _, err := g.st.AddItem(g.ctx, "user:alex", store.NewItem{Title: "still in triage", Repo: "demo"}); err != nil {
 		t.Fatal(err)
@@ -468,6 +521,9 @@ func TestExistingPRIsUpdated(t *testing.T) {
 	d := g.item(id)
 	if d.Item.Stage != pipeline.Review || d.Item.PR != 5 || len(g.prs.created) != 0 || !slices.Equal(g.prs.edited, []int{5}) {
 		t.Fatalf("stage %s pr %d created %v edited %v; log:\n%s", d.Item.Stage, d.Item.PR, g.prs.created, g.prs.edited, g.logs.String())
+	}
+	if a := g.advanced(id).Data["pr_action"]; a != "updated" {
+		t.Fatalf("pr_action %v", a)
 	}
 	if spec, _ := g.prs.byNumber(5); spec.Title != "Add a feature" || !strings.Contains(g.prs.bodies[5], "### Verification") {
 		t.Fatalf("PR 5 not updated: %+v", spec)
@@ -721,7 +777,7 @@ func TestAgentRunsShareTheirPrefix(t *testing.T) {
 	var cmds []*exec.Cmd
 	for _, title := range []string{"First item", "Second, quite different item"} {
 		id := g.toBuild(title)
-		cl, err := g.r.Client.Claim(g.ctx, "a-"+title[:5], nil, Stages)
+		cl, err := g.r.Client.Claim(g.ctx, "a-"+title[:5], nil, []string{StageBuild})
 		if err != nil || cl == nil || cl.Item.ID != id {
 			t.Fatalf("claim %v %v", cl, err)
 		}

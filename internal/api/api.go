@@ -230,7 +230,17 @@ func (s *server) listItems(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "priority must be P1 to P5"})
 		return
 	}
-	rows, err := s.st.ListItems(r.Context(), stage, pri)
+	open := false
+	switch r.URL.Query().Get("open") {
+	case "":
+	case "1", "true":
+		open = true
+	case "0", "false":
+	default:
+		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "open must be 1 or 0"})
+		return
+	}
+	rows, err := s.st.ListItemsFilter(r.Context(), store.ListFilter{Stage: stage, Priority: pri, Open: open})
 	if err != nil {
 		s.fail(w, err)
 		return

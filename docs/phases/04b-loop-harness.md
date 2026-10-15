@@ -84,16 +84,17 @@ a forbidden message), with a readable failure. The fake Slack's injection and re
 
 ## Scenario format (as built)
 
-A scenario file is `{"name", "about", "steps": [...], "expect": {...}}`. Items are named by an
+A scenario file is `{"name", "about", ["stages"], "steps": [...], "expect": {...}}`; `stages` are
+the stages the runner claims (default triage, build and review, as a real runner). Items are named by an
 alias (`"a"`) given when added; ids are the stack's own. Unknown fields are refused, so a typo
 cannot silently check nothing. Steps (`"do"`):
 
 | Step | Does |
 | --- | --- |
-| `add` `item`, `title`, [`priority`], [`via`: `cli`\|`slack`] | add an item (CLI: `POST /items` with repo `demo`; Slack: `/loop add`) |
+| `add` `item`, `title`, [`priority`], [`via`: `cli`\|`slack`], [`text`] | add an item (CLI: `POST /items` with repo `demo`; Slack: `/loop add <title>`, or `/loop add <text>` as typed, repo and priority words included) |
 | `triage` / `review` `item` | claim the stage by hand (a `hand` runner token, as `loop claim`/`loop advance`) and finish it: reproduced with evidence / approved for the PR head |
 | `land` `item`, `outcome` (`hold`\|`merged`\|`back_to_build`), [`reason`] | the land stage by hand, with the PR's changed paths |
-| `script` `item`, `play`, [`file`] | how the fake claude plays the item's runs (`good`, `escape`, `hang`, `ignore_term`, `usage_limit`, `question`, `exit3`, …; `file`: the path it changes) |
+| `script` `item`, `play`, [`file`], [`for`], [`picks`] | how the fake claude plays the item's runs of a stage (`for`: `triage`, `build` (default), `review`). Build: `good`, `escape`, `hang`, `ignore_term`, `usage_limit`, `question`, `exit3`, …; `file`: the path it changes; after a bounce it addresses `.loop/review/`. Triage: `reproduce` (default; `picks`: the repo it names when the item has none), `duplicate`, `triage_question`, `triage_bad_repo`. Review: `approve` (default), `bounce`, `review_commit` |
 | `runner` [`claims`: alias\|`none`] | the runner polls once: claims (and works in the background) or finds nothing |
 | `agent_running` `item` | wait until the item's agent is mid-run (a hanging fake) |
 | `runner_idle` | wait until no run is working |
@@ -109,12 +110,13 @@ negative ones are checked once the loop has gone quiet:
 
 | Field | Holds when |
 | --- | --- |
-| `stage`: {alias: stage}, `question`: {alias: regexp}, `leased`: {alias: bool} | the item is there |
+| `stage`: {alias: stage}, `question`: {alias: regexp}, `leased`: {alias: bool}, `repo`: {alias: slug} | the item is there (its repo exactly; `""` for none) |
 | `events` / `no_events`: [{`item`, `kind`, `actor` (`approver`, `other`, `runner`, `hand`, `user`, `loopd`), `outcome`, `data`: {key: regexp}, `count`}] | such events exist (exactly `count`) / none do |
 | `messages` (in this order) / `no_messages`: [{`thread` or `parent`: alias, `channel` (`loop`\|`digest`), `from` (`bot`, `approver`, `other`), `kind` (`message`, `ephemeral`, `command`, `response`), `to`, `text` regexp, `buttons`: [labels], `pinned`}] | such messages exist, as they stand after edits / none do |
 | `control`: {`active_agents`, `stopped`} | loopd's control |
 | `prs`: n | PRs opened on the fake GitHub |
-| `pr`: {alias: {`number`, `title` regexp, `body` regexp}} | the PR the runner opened for the item, at its branch's head |
+| `pr`: {alias: {`number`, `repo`, `title` regexp, `body` regexp, `edits`, `comments`, `comment` regexp}} | the PR the runner opened for the item, at its branch's head: how often it updated it, how many comments (review verdicts) it posted, the newest |
+| `same_prefix`: [stages] | each stage ran at least twice, and every run's prompt starts with that stage's static brief and has the same argv |
 | `remote`: {`branches`: {alias: head-subject regexp}, `files`: {alias: [paths]}, `only`} | the remote's branches; `main` never moved |
 | `absent`: [paths under the stack dir] | they do not exist |
 
