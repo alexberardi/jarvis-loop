@@ -492,3 +492,45 @@ func (g *GitHub) MergeByHand(slug, branch string) error {
 	}
 	return g.Merge(context.Background(), slug, n, g.RemoteHead(slug, branch))
 }
+
+// PRState answers gh pr view --json state.
+func (g *GitHub) PRState(_ context.Context, slug string, number int) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	i, ok := g.find(slug, number)
+	if !ok {
+		return "", fmt.Errorf("no pull request %s#%d", slug, number)
+	}
+	return g.prs[i].State, nil
+}
+
+// ClosePR closes an open PR with a comment, as gh pr close does; the branch stays. Closing a
+// closed or merged PR is GitHub's refusal, which the runner must never cause (it reads the state
+// first).
+func (g *GitHub) ClosePR(_ context.Context, slug string, number int, comment string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	i, ok := g.find(slug, number)
+	if !ok {
+		return fmt.Errorf("no pull request %s#%d", slug, number)
+	}
+	if g.prs[i].State != "OPEN" {
+		return fmt.Errorf("pull request %s#%d is already %s", slug, number, strings.ToLower(g.prs[i].State))
+	}
+	g.prs[i].State = "CLOSED"
+	g.prs[i].Comments = append(g.prs[i].Comments, comment)
+	return nil
+}
+
+// CloseByHand closes an item's open PR as someone on GitHub would, with no comment.
+func (g *GitHub) CloseByHand(slug, branch string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for i, p := range g.prs {
+		if p.Repo == slug && p.Head == branch && p.State == "OPEN" {
+			g.prs[i].State = "CLOSED"
+			return nil
+		}
+	}
+	return fmt.Errorf("no open PR for %s", branch)
+}
