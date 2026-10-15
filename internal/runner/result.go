@@ -11,22 +11,24 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // Result is .loop/result.json, what the agent says it did. Nothing in it is trusted for the
-// pipeline's rules: the runner reports git's head and paths, and only after they agree.
+// pipeline's rules: the runner reports git's head and paths, pushes the branch and opens the PR
+// itself (docs/decisions/2026-10-15-runner-pushes.md).
 type Result struct {
-	Outcome      string     `json:"outcome"`
-	Repo         string     `json:"repo,omitempty"`
-	PR           int        `json:"pr,omitempty"`
-	Branch       string     `json:"branch,omitempty"`
-	HeadSHA      string     `json:"head_sha,omitempty"`
-	ChangedPaths []string   `json:"changed_paths,omitempty"`
-	Summary      string     `json:"summary,omitempty"`
-	NotVerified  []string   `json:"not_verified,omitempty"`
-	Evidence     []Evidence `json:"evidence,omitempty"`
-	NeedsReview  bool       `json:"needs_review,omitempty"`
-	Question     string     `json:"question,omitempty"`
+	Outcome string `json:"outcome"`
+	// PRTitle and PRBody are what the runner opens (or updates) the PR with.
+	PRTitle string `json:"pr_title,omitempty"`
+	PRBody  string `json:"pr_body,omitempty"`
+	// HeadSHA is optional: when given, it must be HEAD (what the agent meant to hand over).
+	HeadSHA     string     `json:"head_sha,omitempty"`
+	Summary     string     `json:"summary,omitempty"`
+	NotVerified []string   `json:"not_verified,omitempty"`
+	Evidence    []Evidence `json:"evidence,omitempty"`
+	NeedsReview bool       `json:"needs_review,omitempty"`
+	Question    string     `json:"question,omitempty"`
 }
 
 // Evidence names a file under .loop/evidence and what it shows.
@@ -38,35 +40,42 @@ type Evidence struct {
 // GitFacts are what the runner computed itself.
 type GitFacts struct {
 	HeadSHA string
-	// RemoteHead is the item branch's head on the remote ("" when it was not pushed).
+	// RemoteHead is the item branch's head on the remote ("" when it is not there).
 	RemoteHead string
 	// ChangedPaths are `git diff --name-status base...HEAD` lines.
 	ChangedPaths []string
+	// Dirty are `git status --porcelain` lines: changes in the worktree that are not committed.
+	Dirty []string
 }
 
 // Expect is what the run allows.
 type Expect struct {
-	Stage  string
-	Slug   string
-	Branch string
+	Stage string
 }
 
-// Valid is a result the runner will report, with git's values.
+// Valid is a result the runner will act on, with git's values.
 type Valid struct {
 	Result
 	Paths []string
 }
 
+// OutcomeReadyForPR is the build agent's "done": committed on the item's branch, for the runner
+// to push and open the PR. The runner then reports loopd's pr_opened.
+const OutcomeReadyForPR = "ready_for_pr"
+
 // StageOutcomes are the outcomes an agent may return per stage (the runner itself reports
-// failed and usage_limit).
-var StageOutcomes = map[string][]string{"build": {"pr_opened", "question"}}
+// pr_opened, failed and usage_limit).
+var StageOutcomes = map[string][]string{"build": {OutcomeReadyForPR, "question"}}
 
 var shaRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
-// Limits on evidence (loopd's per-file cap, and a count).
+// Limits on evidence (loopd's per-file cap, and a count) and on the PR text (GitHub's are 256
+// and 65,536 characters; the runner adds a footer to the body).
 const (
 	MaxEvidenceFiles = 20
 	MaxEvidenceBytes = 20 << 20
+	MaxPRTitle       = 256
+	MaxPRBody        = 60000
 )
 
 // ValidateResult parses and checks a result against the stage and git. loopDir is the worktree's
@@ -87,37 +96,35 @@ func ValidateResult(raw []byte, want Expect, facts GitFacts, loopDir string) (Va
 		}
 		return Valid{Result: r}, nil
 	}
+	title := strings.TrimSpace(r.PRTitle)
 	switch {
-	case r.Repo != want.Slug:
-		return Valid{}, fmt.Errorf("repo %q, but this item is %s", r.Repo, want.Slug)
-	case r.PR <= 0:
-		return Valid{}, fmt.Errorf("pr must be the PR number")
-	case r.Branch != want.Branch:
-		return Valid{}, fmt.Errorf("branch %q, but this item's branch is %s", r.Branch, want.Branch)
+	case title == "" || strings.ContainsAny(title, "\r\n") || utf8.RuneCountInString(title) > MaxPRTitle:
+		return Valid{}, fmt.Errorf("pr_title must be one line of 1 to %d characters", MaxPRTitle)
+	case strings.TrimSpace(r.PRBody) == "" || utf8.RuneCountInString(r.PRBody) > MaxPRBody:
+		return Valid{}, fmt.Errorf("pr_body must be markdown of 1 to %d characters", MaxPRBody)
 	case strings.TrimSpace(r.Summary) == "":
 		return Valid{}, fmt.Errorf("summary is required")
-	case !shaRe.MatchString(r.HeadSHA) || r.HeadSHA != facts.HeadSHA:
+	case r.HeadSHA != "" && (!shaRe.MatchString(r.HeadSHA) || r.HeadSHA != facts.HeadSHA):
 		return Valid{}, fmt.Errorf("head_sha %q disagrees with git (HEAD is %s)", r.HeadSHA, facts.HeadSHA)
-	case facts.RemoteHead != facts.HeadSHA:
-		return Valid{}, fmt.Errorf("HEAD %s is not what was pushed to %s (remote has %q)", facts.HeadSHA, want.Branch, facts.RemoteHead)
+	case len(facts.Dirty) > 0:
+		return Valid{}, fmt.Errorf("the worktree has uncommitted changes (%s); ready_for_pr means everything is committed, and the runner pushes only commits",
+			clip(strings.Join(facts.Dirty, ", "), 400))
 	case len(facts.ChangedPaths) == 0:
-		return Valid{}, fmt.Errorf("no changes against the base branch")
+		return Valid{}, fmt.Errorf("no commits change anything against the base branch")
 	}
-	gitPaths := normPaths(facts.ChangedPaths)
-	for _, p := range gitPaths {
+	r.PRTitle = title
+	r.HeadSHA = facts.HeadSHA
+	for _, p := range normPaths(facts.ChangedPaths) {
 		if strings.Contains(p, "\t.loop/") {
-			return Valid{}, fmt.Errorf("the PR contains the runner's .loop/ files (%s)", p)
+			return Valid{}, fmt.Errorf("the commits contain the runner's .loop/ files (%s)", p)
 		}
-	}
-	if !slices.Equal(gitPaths, normPaths(r.ChangedPaths)) {
-		return Valid{}, fmt.Errorf("changed_paths %q disagree with git %q", r.ChangedPaths, facts.ChangedPaths)
 	}
 	files, err := EvidenceFiles(loopDir)
 	if err != nil {
 		return Valid{}, err
 	}
 	if len(files) == 0 {
-		return Valid{}, fmt.Errorf("pr_opened needs at least one evidence file in .loop/evidence")
+		return Valid{}, fmt.Errorf("ready_for_pr needs at least one evidence file in .loop/evidence")
 	}
 	for _, e := range r.Evidence {
 		c := path.Clean(e.File)

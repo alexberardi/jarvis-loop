@@ -13,12 +13,11 @@ const (
 )
 
 func facts() GitFacts {
-	return GitFacts{HeadSHA: headSHA, RemoteHead: headSHA, ChangedPaths: []string{"M\tinternal/x.go", "A\tinternal/x_test.go"}}
+	return GitFacts{HeadSHA: headSHA, ChangedPaths: []string{"M\tinternal/x.go", "A\tinternal/x_test.go"}}
 }
 
 func goodResult() string {
-	return `{"outcome":"pr_opened","repo":"alexberardi/jarvis-server","pr":161,"branch":"loop/12-fix-x",
- "head_sha":"` + headSHA + `","changed_paths":["A internal/x_test.go","M internal/x.go"],
+	return `{"outcome":"ready_for_pr","pr_title":"Fix the timer","pr_body":"## What\nThe timer.\n\nEvidence: after.txt",
  "summary":"one paragraph","not_verified":["the phone"],"evidence":[{"file":"evidence/after.txt","label":"after"}]}`
 }
 
@@ -33,7 +32,9 @@ func evidenceDir(t *testing.T, files ...string) string {
 }
 
 func TestValidateResult(t *testing.T) {
-	want := Expect{Stage: "build", Slug: "alexberardi/jarvis-server", Branch: "loop/12-fix-x"}
+	want := Expect{Stage: "build"}
+	withField := func(field string) string { return strings.Replace(goodResult(), `"summary"`, field+`,"summary"`, 1) }
+	without := func(field string) string { return strings.Replace(goodResult(), field, ``, 1) }
 	cases := []struct {
 		name  string
 		raw   string
@@ -42,21 +43,25 @@ func TestValidateResult(t *testing.T) {
 		err   string // "" = valid
 	}{
 		{"good", goodResult(), nil, []string{"after.txt"}, ""},
+		{"good with the head it means", withField(`"head_sha":"` + headSHA + `"`), nil, []string{"after.txt"}, ""},
+		{"needs review", withField(`"needs_review":true`), nil, []string{"after.txt"}, ""},
 		{"question", `{"outcome":"question","question":"Which screen?"}`, nil, nil, ""},
 		{"question without text", `{"outcome":"question","question":"  "}`, nil, nil, "question is empty"},
+		{"question with a dirty worktree", `{"outcome":"question","question":"Which screen?"}`, func(f *GitFacts) { f.Dirty = []string{"?? x.go"} }, nil, ""},
 		{"not json", `{"outcome":`, nil, nil, "not valid JSON"},
-		{"unknown field", strings.Replace(goodResult(), `"summary"`, `"approve":true,"summary"`, 1), nil, []string{"after.txt"}, "unknown field"},
+		{"unknown field", withField(`"approve":true`), nil, []string{"after.txt"}, "unknown field"},
+		{"the old contract", withField(`"pr":161`), nil, []string{"after.txt"}, "unknown field"},
+		{"pr_opened is the runner's to report", strings.Replace(goodResult(), "ready_for_pr", "pr_opened", 1), nil, []string{"after.txt"}, "not an outcome of build"},
 		{"outcome the stage does not allow", `{"outcome":"approved","summary":"lgtm"}`, nil, nil, "not an outcome of build"},
-		{"missing pr", strings.Replace(goodResult(), `"pr":161,`, ``, 1), nil, []string{"after.txt"}, "pr"},
-		{"missing summary", strings.Replace(goodResult(), `"summary":"one paragraph",`, ``, 1), nil, []string{"after.txt"}, "summary"},
-		{"other repo", strings.Replace(goodResult(), "alexberardi/jarvis-server", "evil/fork", 1), nil, []string{"after.txt"}, "repo"},
-		{"other branch", strings.Replace(goodResult(), `"loop/12-fix-x"`, `"main"`, 1), nil, []string{"after.txt"}, "branch"},
-		{"agent sha disagrees with git", strings.Replace(goodResult(), headSHA, otherSHA, 1), nil, []string{"after.txt"}, "head_sha"},
-		{"pushed head is not HEAD", goodResult(), func(f *GitFacts) { f.RemoteHead = otherSHA }, []string{"after.txt"}, "pushed"},
-		{"not pushed", goodResult(), func(f *GitFacts) { f.RemoteHead = "" }, []string{"after.txt"}, "pushed"},
-		{"agent paths disagree with git", strings.Replace(goodResult(), `"M internal/x.go"`, `"M README.md"`, 1), nil, []string{"after.txt"}, "changed_paths"},
-		{"agent leaves a path out", strings.Replace(goodResult(), `"A internal/x_test.go",`, ``, 1), nil, []string{"after.txt"}, "changed_paths"},
-		{"no change at all", goodResult(), func(f *GitFacts) { f.ChangedPaths = nil }, []string{"after.txt"}, "no changes"},
+		{"missing title", without(`"pr_title":"Fix the timer",`), nil, []string{"after.txt"}, "pr_title"},
+		{"two-line title", strings.Replace(goodResult(), "Fix the timer", `Fix\nthe timer`, 1), nil, []string{"after.txt"}, "pr_title"},
+		{"long title", strings.Replace(goodResult(), "Fix the timer", strings.Repeat("x", 257), 1), nil, []string{"after.txt"}, "pr_title"},
+		{"missing body", strings.Replace(goodResult(), `"pr_body":"## What\nThe timer.\n\nEvidence: after.txt",`, ``, 1), nil, []string{"after.txt"}, "pr_body"},
+		{"body too long", strings.Replace(goodResult(), "The timer.", strings.Repeat("é", MaxPRBody), 1), nil, []string{"after.txt"}, "pr_body"},
+		{"missing summary", without(`"summary":"one paragraph",`), nil, []string{"after.txt"}, "summary"},
+		{"agent sha disagrees with git", withField(`"head_sha":"` + otherSHA + `"`), nil, []string{"after.txt"}, "head_sha"},
+		{"uncommitted changes", goodResult(), func(f *GitFacts) { f.Dirty = []string{" M internal/x.go", "?? notes.md"} }, []string{"after.txt"}, "uncommitted"},
+		{"no change at all", goodResult(), func(f *GitFacts) { f.ChangedPaths = nil }, []string{"after.txt"}, "no commits"},
 		{"brief committed", goodResult(), func(f *GitFacts) { f.ChangedPaths = append(f.ChangedPaths, "A\t.loop/brief.md") }, []string{"after.txt"}, ".loop"},
 		{"no evidence", goodResult(), nil, nil, "evidence"},
 		{"evidence entry outside the folder", strings.Replace(goodResult(), "evidence/after.txt", "../../etc/passwd", 1), nil, []string{"after.txt"}, "evidence"},
@@ -72,7 +77,7 @@ func TestValidateResult(t *testing.T) {
 				if err != nil {
 					t.Fatalf("rejected: %v", err)
 				}
-				if res.Outcome == "pr_opened" && (res.HeadSHA != headSHA || len(res.Paths) != 2) {
+				if res.Outcome == OutcomeReadyForPR && (res.HeadSHA != headSHA || len(res.Paths) != 2) {
 					t.Fatalf("the runner reports git's values: %+v", res)
 				}
 				return

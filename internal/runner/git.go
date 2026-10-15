@@ -7,20 +7,31 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 // Git runs git for the runner. Every call turns hooks and signing off: the worktree is the
 // agent's, so a hook it planted must never run with the runner's (unsandboxed) rights.
 type Git struct {
+	// Env is git's environment; nil means the runner's own (the user's git credentials, which the
+	// runner's push needs), minus loopd's and Slack's secrets.
 	Env []string
+}
+
+func (g Git) env() []string {
+	src := g.Env
+	if src == nil {
+		src = scrubEnv(os.Environ())
+	}
+	return append(append([]string{}, src...), "GIT_TERMINAL_PROMPT=0")
 }
 
 func (g Git) run(ctx context.Context, dir string, args ...string) (string, error) {
 	full := append([]string{"-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
-	cmd.Env = append(append([]string{}, g.Env...), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = g.env()
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
@@ -74,19 +85,56 @@ func (g Git) hasRef(ctx context.Context, dir, ref string) bool {
 	return err == nil
 }
 
-// AddWorktree makes a fresh worktree on branch: from the remote branch when an earlier run pushed
-// one, else from the base.
-func (g Git) AddWorktree(ctx context.Context, mirror, path, branch, base string) error {
+// AddWorktree makes a fresh worktree on branch and says how many commits the branch already has
+// over the base. It continues the item's branch when an earlier run left one: in the mirror (the
+// agent's commits, pushed or not) or on the remote (a WIP push, or a bounced PR), whichever
+// contains the other. If they diverged, it refuses: one of them would be lost.
+func (g Git) AddWorktree(ctx context.Context, mirror, path, branch, base string) (int, error) {
 	g.RemoveWorktree(ctx, mirror, path)
-	start := "refs/remotes/origin/" + base
-	if g.hasRef(ctx, mirror, "refs/remotes/origin/"+branch) {
-		start = "refs/remotes/origin/" + branch
+	baseRef := "refs/remotes/origin/" + base
+	if !g.hasRef(ctx, mirror, baseRef) {
+		return 0, fmt.Errorf("the remote has no branch %s", base)
 	}
-	if !g.hasRef(ctx, mirror, start) {
-		return fmt.Errorf("the remote has no branch %s", base)
+	local, remote := "refs/heads/"+branch, "refs/remotes/origin/"+branch
+	hasLocal, hasRemote := g.hasRef(ctx, mirror, local), g.hasRef(ctx, mirror, remote)
+	start := baseRef
+	switch {
+	case hasLocal && hasRemote:
+		switch {
+		case g.isAncestor(ctx, mirror, remote, local):
+			start = local
+		case g.isAncestor(ctx, mirror, local, remote):
+			start = remote
+		default:
+			return 0, fmt.Errorf("%s in the runner's mirror and on the remote have diverged; reconcile them by hand", branch)
+		}
+	case hasLocal:
+		start = local
+	case hasRemote:
+		start = remote
+	}
+	ahead := 0
+	if start != baseRef {
+		n, err := g.run(ctx, mirror, "rev-list", "--count", baseRef+".."+start)
+		if err != nil {
+			return 0, err
+		}
+		ahead, _ = strconv.Atoi(n)
+		if ahead == 0 {
+			start = baseRef // nothing of its own: start fresh from the base
+		}
+	}
+	if start == local {
+		_, err := g.run(ctx, mirror, "worktree", "add", "-q", path, branch)
+		return ahead, err
 	}
 	_, err := g.run(ctx, mirror, "worktree", "add", "-q", "-B", branch, path, start)
-	return err
+	return ahead, err
+}
+
+func (g Git) isAncestor(ctx context.Context, dir, a, b string) bool {
+	_, err := g.run(ctx, dir, "merge-base", "--is-ancestor", a, b)
+	return err == nil
 }
 
 // RemoveWorktree removes a worktree the runner made (and nothing else).
@@ -107,6 +155,15 @@ func (g Git) Facts(ctx context.Context, mirror, wt, base, branch string) (GitFac
 		return f, err
 	}
 	f.HeadSHA = head
+	st, err := g.run(ctx, wt, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return f, err
+	}
+	for _, l := range strings.Split(st, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			f.Dirty = append(f.Dirty, l)
+		}
+	}
 	if rh, err := g.run(ctx, mirror, "rev-parse", "--verify", "-q", "refs/remotes/origin/"+branch); err == nil {
 		f.RemoteHead = rh
 	}
@@ -142,4 +199,33 @@ func (g Git) SaveWIP(ctx context.Context, wt, branch, base, msg string) (bool, e
 		return false, err
 	}
 	return true, nil
+}
+
+// PushBranch pushes the item's branch from the runner's mirror to its remote, with the runner's
+// (the user's) credentials: only refs/heads/loop/..., to the same name, never forced. A push the
+// remote refuses as not a fast-forward fails; nothing is overwritten.
+func (g Git) PushBranch(ctx context.Context, mirror, branch string) error {
+	if !strings.HasPrefix(branch, "loop/") || strings.ContainsAny(branch, ":+ \t\n*?[\\^~") || strings.HasPrefix(branch, "-") {
+		return fmt.Errorf("the runner pushes only an item's loop/ branch, not %q", branch)
+	}
+	ref := "refs/heads/" + branch
+	if _, err := g.run(ctx, mirror, "check-ref-format", ref); err != nil {
+		return fmt.Errorf("%q is not a branch name: %w", branch, err)
+	}
+	if !g.hasRef(ctx, mirror, ref) {
+		return fmt.Errorf("the mirror has no branch %s", branch)
+	}
+	_, err := g.run(ctx, mirror, "push", "-q", "--no-verify", "origin", ref+":"+ref)
+	return err
+}
+
+// RemoteHead fetches and returns the remote's head of branch ("" when it has none).
+func (g Git) RemoteHead(ctx context.Context, mirror, branch string) (string, error) {
+	if _, err := g.run(ctx, mirror, "fetch", "--no-tags", "-q", "origin", "+refs/heads/"+branch+":refs/remotes/origin/"+branch); err != nil {
+		if !g.hasRef(ctx, mirror, "refs/remotes/origin/"+branch) {
+			return "", nil
+		}
+		return "", err
+	}
+	return g.run(ctx, mirror, "rev-parse", "refs/remotes/origin/"+branch)
 }

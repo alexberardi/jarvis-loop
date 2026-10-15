@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,6 +54,7 @@ type rig struct {
 	loopdClk *clock.Fake
 	clk      *FakeClock
 	r        *Runner
+	prs      *fakePRs
 	remote   string // the "GitHub" bare repo
 	local    string // the user's own clone
 	localRef string // its HEAD before the run
@@ -119,8 +121,78 @@ func newRig(t *testing.T, scenario string) *rig {
 		Log: slog.New(slog.NewTextHandler(logs, nil)),
 		Env: append(os.Environ(), "LOOP_TEST_AS=claude", "FAKE_CLAUDE_SCENARIO="+scenario, "LOOP_TOKEN=must-not-leak"),
 	}
-	return &rig{t: t, ctx: ctx, st: st, loopdClk: loopdClk, clk: clk, r: r, remote: remote, local: local,
+	// "GitHub": PRs are a test double; the PR check reads the bare remote.
+	prs := &fakePRs{next: 7}
+	r.PRs = prs
+	r.VerifyPR = func(ctx context.Context, slug string, pr int) (PRInfo, error) {
+		spec, ok := prs.byNumber(pr)
+		if !ok || slug != "alex/demo" {
+			return PRInfo{}, fmt.Errorf("no PR #%d on %s", pr, slug)
+		}
+		out, _ := exec.Command("git", "-C", remote, "rev-parse", "refs/heads/"+spec.Head).Output()
+		return PRInfo{HeadRefName: spec.Head, HeadRefOid: strings.TrimSpace(string(out)), State: "OPEN"}, nil
+	}
+	return &rig{t: t, ctx: ctx, st: st, loopdClk: loopdClk, clk: clk, r: r, prs: prs, remote: remote, local: local,
 		localRef: gitT(t, local, "rev-parse", "HEAD"), logs: logs}
+}
+
+// fakePRs is GitHub's PRs for the tests: it records what the runner asked for.
+type fakePRs struct {
+	mu      sync.Mutex
+	next    int
+	open    map[string]int // branch -> PR
+	specs   map[int]PRSpec
+	bodies  map[int]string
+	created []int
+	edited  []int
+}
+
+func (f *fakePRs) Find(_ context.Context, slug, branch string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.open[branch], nil
+}
+
+func (f *fakePRs) record(pr int, s PRSpec) {
+	if f.open == nil {
+		f.open, f.specs, f.bodies = map[string]int{}, map[int]PRSpec{}, map[int]string{}
+	}
+	b, _ := os.ReadFile(s.BodyFile)
+	f.open[s.Head], f.specs[pr], f.bodies[pr] = pr, s, string(b)
+}
+
+func (f *fakePRs) Create(_ context.Context, s PRSpec) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.open[s.Head]; ok {
+		return 0, fmt.Errorf("a PR for %s already exists", s.Head)
+	}
+	pr := f.next
+	f.next++
+	f.record(pr, s)
+	f.created = append(f.created, pr)
+	return pr, nil
+}
+
+func (f *fakePRs) Edit(_ context.Context, pr int, s PRSpec) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record(pr, s)
+	f.edited = append(f.edited, pr)
+	return nil
+}
+
+func (f *fakePRs) byNumber(pr int) (PRSpec, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.specs[pr]
+	return s, ok
+}
+
+func (f *fakePRs) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.created) + len(f.edited)
 }
 
 // toBuild adds an item and walks it through triage by hand, as phase 4 does.
@@ -252,13 +324,25 @@ func TestGoodRunOpensPR(t *testing.T) {
 		t.Fatalf("stage %s; log:\n%s", d.Item.Stage, g.logs.String())
 	}
 	branch := fmt.Sprintf("loop/%d-add-a-feature", id)
-	head := g.remoteHead(branch)
-	if head == "" || d.Item.HeadSHA != head || d.Item.Branch != branch || d.Item.PR != 1 || d.Item.Repo != "alex/demo" {
+	head := g.remoteHead(branch) // pushed by the runner, not the agent
+	if head == "" || d.Item.HeadSHA != head || d.Item.Branch != branch || d.Item.PR != 7 || d.Item.Repo != "alex/demo" {
 		t.Fatalf("item %+v, remote head %s", d.Item, head)
 	}
+	// The runner opened the PR from the agent's title and body, plus its Verification footer.
+	spec, _ := g.prs.byNumber(7)
+	if len(g.prs.created) != 1 || spec.Slug != "alex/demo" || spec.Head != branch || spec.Base != "main" || spec.Title != "Add a feature" {
+		t.Fatalf("PR %+v (created %v)", spec, g.prs.created)
+	}
+	body := g.prs.bodies[7]
+	for _, want := range []string{"Adds `feature.txt` (1 commits).", "### Verification", "- `after.txt`: tests", "on loop item #",
+		"Run: 5 turns, prompt-cache hit 79%", "about $0.42"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("PR body lacks %q:\n%s", want, body)
+		}
+	}
 	ev := g.advanced(id)
-	if ev.Outcome != "pr_opened" {
-		t.Fatalf("outcome %s", ev.Outcome)
+	if ev.Outcome != "pr_opened" || ev.Data["pr_verified"] != "true" {
+		t.Fatalf("outcome %s %v", ev.Outcome, ev.Data)
 	}
 	paths, _ := ev.Data["changed_paths"].([]any)
 	if len(paths) != 1 || paths[0] != "A\tfeature.txt" {
@@ -324,6 +408,9 @@ func TestGuardRefusalIsReported(t *testing.T) {
 	if len(refs) != 2 {
 		t.Fatalf("guard_refused events %d; log:\n%s", len(refs), g.logs.String())
 	}
+	if !strings.Contains(fmt.Sprint(refs[1].Data["reason"]), "ready_for_pr") {
+		t.Errorf("the push refusal should say who pushes: %v", refs[1].Data["reason"])
+	}
 	if refs[0].Data["rule"] != guard.RuleWriteOutside || refs[0].Data["tool"] != "Write" || refs[1].Data["rule"] != guard.RuleGitPush {
 		t.Fatalf("refusals %v / %v", refs[0].Data, refs[1].Data)
 	}
@@ -346,6 +433,7 @@ func TestBadResultsFail(t *testing.T) {
 		fakeclaude.Exit3:     "code 3",
 		fakeclaude.SymlinkEv: "not a regular file",
 		fakeclaude.NoArm:     "guard_not_armed",
+		fakeclaude.Dirty:     "uncommitted changes (?? notes.txt)",
 	}
 	for scenario, want := range cases {
 		t.Run(scenario, func(t *testing.T) {
@@ -359,9 +447,84 @@ func TestBadResultsFail(t *testing.T) {
 			if scenario == fakeclaude.Exit3 && !strings.Contains(d.Item.Question, "the tests do not compile") {
 				t.Fatalf("the agent's last output belongs in the question: %q", d.Item.Question)
 			}
+			if g.prs.calls() != 0 || g.remoteHead(fmt.Sprintf("loop/%d-bad-%s", id, Slug(scenario))) != "" {
+				t.Fatalf("a rejected result is neither pushed nor opened as a PR")
+			}
 			g.userUntouched()
 			g.cleanedUp(id)
 		})
+	}
+}
+
+// An open PR for the branch (a bounced item) is updated, not opened again.
+func TestExistingPRIsUpdated(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	id := g.toBuild("Bounced")
+	branch := fmt.Sprintf("loop/%d-bounced", id)
+	g.prs.record(5, PRSpec{Head: branch, BodyFile: os.DevNull})
+	g.prs.specs[5] = PRSpec{Head: branch}
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.Review || d.Item.PR != 5 || len(g.prs.created) != 0 || !slices.Equal(g.prs.edited, []int{5}) {
+		t.Fatalf("stage %s pr %d created %v edited %v; log:\n%s", d.Item.Stage, d.Item.PR, g.prs.created, g.prs.edited, g.logs.String())
+	}
+	if spec, _ := g.prs.byNumber(5); spec.Title != "Add a feature" || !strings.Contains(g.prs.bodies[5], "### Verification") {
+		t.Fatalf("PR 5 not updated: %+v", spec)
+	}
+}
+
+// A push the runner cannot make fails the item with the reason; no PR is opened.
+func TestPushFailureFails(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	var pushed []string
+	g.r.Push = func(ctx context.Context, mirror, branch string) error {
+		pushed = append(pushed, branch)
+		return fmt.Errorf("rejected: non-fast-forward")
+	}
+	id := g.toBuild("No push")
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.NeedsYou || !strings.Contains(d.Item.Question, "could not push loop/") || !strings.Contains(d.Item.Question, "non-fast-forward") {
+		t.Fatalf("%s %q", d.Item.Stage, d.Item.Question)
+	}
+	if !slices.Equal(pushed, []string{fmt.Sprintf("loop/%d-no-push", id)}) || g.prs.calls() != 0 {
+		t.Fatalf("pushed %v, PR calls %d", pushed, g.prs.calls())
+	}
+}
+
+// A question leaves the agent's commits in the runner's mirror; the next run continues the branch
+// and is told so, and the runner pushes both runs' work.
+func TestResumeContinuesTheBranch(t *testing.T) {
+	g := newRig(t, fakeclaude.CommitAsk)
+	id := g.toBuild("Two runs")
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.NeedsYou || d.Item.Question != "Is one feature file enough?" {
+		t.Fatalf("%s %q", d.Item.Stage, d.Item.Question)
+	}
+	branch := fmt.Sprintf("loop/%d-two-runs", id)
+	if g.remoteHead(branch) != "" || g.prs.calls() != 0 {
+		t.Fatal("a question pushes nothing")
+	}
+	mirror := filepath.Join(g.r.Cfg.WorkRoot, "mirrors", "demo.git")
+	first := gitT(t, mirror, "rev-parse", "refs/heads/"+branch)
+	if _, err := g.st.Answer(g.ctx, "user:alex", id, "Yes."); err != nil {
+		t.Fatal(err)
+	}
+	g.r.Env = append(g.r.Env, "FAKE_CLAUDE_SCENARIO="+fakeclaude.Good)
+	g.runOnce()
+	d = g.item(id)
+	if d.Item.Stage != pipeline.Review {
+		t.Fatalf("stage %s %q; log:\n%s", d.Item.Stage, d.Item.Question, g.logs.String())
+	}
+	head := g.remoteHead(branch)
+	if head != first || d.Item.HeadSHA != first {
+		t.Fatalf("the second run should continue from %s, the remote has %s", first, head)
+	}
+	briefs, _ := filepath.Glob(filepath.Join(g.r.Cfg.WorkRoot, "runs", fmt.Sprintf("%d-build-*", id), "brief.md"))
+	b, _ := os.ReadFile(briefs[len(briefs)-1])
+	if !strings.Contains(string(b), "this branch already has 1 commit from a previous run") {
+		t.Fatalf("the brief does not say the branch has work:\n%s", b)
 	}
 }
 
@@ -602,6 +765,16 @@ func TestAgentRunsShareTheirPrefix(t *testing.T) {
 	cut := bytes.Index(ba, []byte("## The item"))
 	if cut < 1000 || !bytes.Equal(ba[:cut], bb[:cut]) {
 		t.Fatalf("the briefs' static part differs (cut %d)", cut)
+	}
+	// The item's triage evidence is in the worktree and named in the brief.
+	if b, err := os.ReadFile(filepath.Join(runs[0].wt, ".loop", "triage", "1-repro.txt")); err != nil || string(b) != "seen" {
+		t.Fatalf("triage evidence %q %v", b, err)
+	}
+	if !bytes.Contains(ba, []byte("`.loop/triage/1-repro.txt` (repro)")) {
+		t.Fatalf("the brief does not list the triage evidence:\n%s", ba[cut:])
+	}
+	if s := gitT(t, runs[0].wt, "status", "--porcelain"); s != "" {
+		t.Fatalf("the runner's files show in git status:\n%s", s)
 	}
 	for _, ru := range runs {
 		g.r.cleanup(g.ctx, ru, g.r.Log)
