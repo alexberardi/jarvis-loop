@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="refresh" content="30">
+<title>Jarvis Loop board</title>
+<style>
+:root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --card: #fff; --lane: #f5f5f4; --accent: #2563eb; --warn: #b45309; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --card: #292524; --lane: #231f1d; --accent: #60a5fa; --warn: #fbbf24; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+a { color: var(--accent); }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+.muted { color: var(--muted); }
+.reason { color: var(--warn); }
+</style>
+<style>
+.lanes { display: flex; gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 8px; align-items: flex-start; }
+.lane { flex: 0 0 min(85vw, 300px); scroll-snap-align: start; background: var(--lane); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.lane h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 4px 8px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+.card .title { font-weight: 600; text-decoration: none; color: var(--fg); display: block; }
+.meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.card .reason { font-size: 13px; margin-top: 4px; }
+.label { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.note { color: var(--muted); font-size: 13px; margin: 4px; }
+</style>
+</head>
+<body>
+<h1>Jarvis Loop</h1>
+<p class="sub">10 items · 2026-10-15 12:00 UTC · refreshes every 30 s · <a href="/board">hide closed</a></p>
+<div class="lanes">
+<section class="lane">
+<h2>Planning · 0</h2>
+<p class="note">No planning stages yet.</p>
+</section>
+<section class="lane">
+<h2>Triage · 2</h2>
+<article class="card">
+<a class="title" href="/board/items/1">#1 Wake word &lt;misses&gt; at night</a>
+<div class="meta">
+<span>P0</span>
+<span>5m</span><span class="label">intake</span>
+</div>
+</article>
+<article class="card">
+<a class="title" href="/board/items/2">#2 Route to the right repo</a>
+<div class="meta"><span>jarvis-loop</span>
+<span>P1</span>
+<span>2h</span><span class="label">triage</span><span>devbox/triage-1</span>
+</div>
+</article>
+</section>
+<section class="lane">
+<h2>Build · 2</h2>
+<article class="card">
+<a class="title" href="/board/items/3">#3 Mobile settings crash</a>
+<div class="meta"><span>jarvis-node-mobile</span>
+<span>P1</span>
+<span>3d</span><span class="label">build</span><span>devbox/builder-2</span><a href="https://jarvis.slack.com/archives/C0LOOP/p1760000000000100">thread</a>
+</div>
+</article>
+<article class="card">
+<a class="title" href="/board/items/4">#4 Retry the TTS call</a>
+<div class="meta"><span>jarvis-server</span>
+<span>P2</span>
+<span>26h</span><span class="label">ready</span>
+</div>
+</article>
+</section>
+<section class="lane">
+<h2>Review · 2</h2>
+<article class="card">
+<a class="title" href="/board/items/5">#5 Board page</a>
+<div class="meta"><span>jarvis-loop</span>
+<span>P2</span>
+<span>2d</span><span class="label">review</span><span>devbox/reviewer-1</span><a href="https://github.com/alexberardi/jarvis-loop/pull/14">PR #14</a>
+</div>
+</article>
+<article class="card">
+<a class="title" href="/board/items/6">#6 Bump sqlite</a>
+<div class="meta"><span>jarvis-server</span>
+<span>P3</span>
+<span>4d</span><span class="label">land (queued)</span><a href="https://github.com/alexberardi/jarvis-server/pull/31">PR #31</a>
+</div>
+</article>
+</section>
+<section class="lane">
+<h2>Needs you · 1</h2>
+<article class="card">
+<a class="title" href="/board/items/7">#7 Which emulator?</a>
+<div class="meta"><span>jarvis-server</span>
+<span>P1</span>
+<span>24h</span><a href="https://jarvis.slack.com/archives/C0LOOP/p1760000001000200">thread</a>
+</div>
+<div class="reason">Should the test use the sandbox emulator or a fake?</div>
+</article>
+</section>
+<section class="lane">
+<h2>Approval · 1</h2>
+<article class="card">
+<a class="title" href="/board/items/8">#8 Token rotation</a>
+<div class="meta"><span>jarvis-loop</span>
+<span>P2</span>
+<span>6d</span><a href="https://github.com/alexberardi/jarvis-loop/pull/12">PR #12</a>
+</div>
+<div class="reason">triage: risk hold; touches internal/api/auth.go</div>
+</article>
+</section>
+<section class="lane">
+<h2>QA · 0</h2>
+<p class="note">No QA stage yet.</p>
+</section>
+<section class="lane">
+<h2>Done · 2</h2>
+<article class="card">
+<a class="title" href="/board/items/9">#9 Fix the digest time</a>
+<div class="meta"><span>jarvis-loop</span>
+<span>P2</span>
+<span>10d</span><span class="label">done</span><a href="https://github.com/alexberardi/jarvis-loop/pull/9">PR #9</a>
+</div>
+</article>
+<article class="card">
+<a class="title" href="/board/items/11">#11 Not worth it</a>
+<div class="meta">
+<span>P3</span>
+<span>8d</span><span class="label">closed</span>
+</div>
+</article>
+</section>
+</div>
+</body>
+</html>

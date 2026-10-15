@@ -1,0 +1,43 @@
+{
+  "name": "board",
+  "about": "The web board on loopd's board listener, read with a board token through the ?t= cookie flow: an untriaged item sits in Triage (intake), a held PR in Approval with its hold reason, PR and Slack thread links, a question in Needs you with the question; once approved and merged, the item moves to Done.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Shorten the session timeout"},
+    {"do": "add", "item": "c", "title": "Not triaged yet", "priority": "P3"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "good", "file": "internal/modules/auth/session.go"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "held"},
+     "board": {
+       "a": {"column": "Approval", "card": "(?s)Shorten the session timeout.*<span>demo</span>.*href=\"https://github\\.com/sandbox/demo/pull/101\">PR #101</a>.*href=\"https://sandbox\\.slack\\.com/archives/[A-Z0-9]+/p\\d+\">thread</a>.*class=\"reason\">auth: A internal/modules/auth/session\\.go; land: on the hold list<"},
+       "c": {"column": "Triage", "card": "<span class=\"label\">intake</span>"}
+     }},
+    {"do": "add", "item": "b", "title": "Pick the emulator", "priority": "P1"},
+    {"do": "triage", "item": "b"},
+    {"do": "script", "item": "b", "play": "question"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"b": "needs_you"}, "board": {"b": {"column": "Needs you", "card": "class=\"reason\">[^<]+<"}}},
+    {"do": "reply", "item": "a", "as": "approver", "text": "approve"},
+    {"do": "clock", "advance": "2m"},
+    {"do": "expect", "stage": {"a": "land"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done", "b": "needs_you", "c": "triage"},
+    "board": {
+      "a": {"column": "Done", "card": "PR #101"},
+      "b": {"column": "Needs you"},
+      "c": {"column": "Triage"}
+    }
+  }
+}

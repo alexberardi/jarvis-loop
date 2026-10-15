@@ -249,6 +249,9 @@ func (p *player) problems(e Expect, negatives bool) []string {
 	for _, m := range e.RunFiles {
 		out = append(out, p.runFileProblems(m)...)
 	}
+	if len(e.Board) > 0 {
+		out = append(out, p.boardProblems(e.Board)...)
+	}
 	for _, rel := range e.Absent {
 		if _, err := os.Lstat(filepath.Join(p.s.Dir, rel)); err == nil {
 			add("%s exists, want it absent", rel)

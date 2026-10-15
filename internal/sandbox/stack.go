@@ -31,6 +31,7 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/slackfake"
 	"github.com/alexberardi/jarvis-loop/internal/store"
+	"github.com/alexberardi/jarvis-loop/internal/web"
 )
 
 // The sandbox's names. The repo is a scratch repo the sandbox creates; the slug only ever names
@@ -52,6 +53,8 @@ const (
 	UserName   = "sandbox"
 	// Other is the Slack member who is not the approver.
 	Other = "U0SANDBOXOTHER"
+	// SlackWorkspace is loopd's --slack-workspace in the sandbox, for the board's thread links.
+	SlackWorkspace = "https://sandbox.slack.com"
 )
 
 // Start is where the fake clock starts: 2026-10-15 13:00 UTC, 09:00 in New York, three hours
@@ -91,6 +94,8 @@ type Stack struct {
 	Runner   *runner.Runner
 	Bot      *slack.Bot
 	LoopdURL string
+	// BoardURL is loopd's board listener (--board-addr), on its own loopback port.
+	BoardURL string
 	Remote   string
 	MainSHA  string // the remote's main when the stack started
 	// LoopRemote is the second repo's remote (LoopSlug), MobileRemote the third's.
@@ -108,6 +113,9 @@ type Stack struct {
 	cancel context.CancelFunc
 	bg     sync.WaitGroup
 	srv    *http.Server
+	board  *http.Server
+	// boardTok is the board token (kind board) the board expectation signs in with.
+	boardTok string
 
 	runsMu   sync.Mutex
 	inflight int
@@ -196,10 +204,12 @@ func StartStack(opts Options) (st *Stack, err error) {
 
 	// Tokens, as loopd reads them: a 0600 file.
 	userTok, runnerTok, handTok := randToken("sbx-user-"), randToken("sbx-runner-"), randToken("sbx-hand-")
+	s.boardTok = randToken("sbx-board-")
 	slackToks := slack.Tokens{Bot: randToken("xoxb-sandbox-"), App: randToken("xapp-sandbox-")}
-	s.Secrets = []string{userTok, runnerTok, handTok, slackToks.Bot, slackToks.App}
+	s.Secrets = []string{userTok, runnerTok, handTok, slackToks.Bot, slackToks.App, s.boardTok}
 	tokPath := filepath.Join(dir, "tokens")
-	tokText := fmt.Sprintf("%s\tuser\t%s\n%s\trunner\t%s\n%s\trunner\t%s\n", userTok, UserName, runnerTok, RunnerName, handTok, HandRunner)
+	tokText := fmt.Sprintf("%s\tuser\t%s\n%s\trunner\t%s\n%s\trunner\t%s\n%s\tboard\tphone\n",
+		userTok, UserName, runnerTok, RunnerName, handTok, HandRunner, s.boardTok)
 	if err := os.WriteFile(tokPath, []byte(tokText), 0o600); err != nil {
 		return nil, err
 	}
@@ -221,8 +231,16 @@ func StartStack(opts Options) (st *Stack, err error) {
 		return nil, err
 	}
 	s.LoopdURL = "http://" + ln.Addr().String()
-	s.srv = &http.Server{Handler: loopd.Handler(s.Store, toks, log.With("component", "api")), ReadHeaderTimeout: 10 * time.Second}
+	boardCfg := web.BoardConfig{SlackWorkspace: SlackWorkspace, Clock: clk}
+	s.srv = &http.Server{Handler: loopd.Handler(s.Store, toks, log.With("component", "api"), boardCfg), ReadHeaderTimeout: 10 * time.Second}
 	go s.srv.Serve(ln)
+	bln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	s.BoardURL = "http://" + bln.Addr().String()
+	s.board = &http.Server{Handler: loopd.BoardHandler(s.Store, toks, log.With("component", "board"), boardCfg), ReadHeaderTimeout: 10 * time.Second}
+	go s.board.Serve(bln)
 	if opts.RealClock {
 		s.bg.Add(1)
 		go func() {
@@ -390,6 +408,9 @@ func (s *Stack) Close() {
 	}
 	if s.srv != nil {
 		s.srv.Close()
+	}
+	if s.board != nil {
+		s.board.Close()
 	}
 	if s.Slack != nil {
 		s.Slack.Close()

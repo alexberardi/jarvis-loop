@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>#8 Token rotation · Jarvis Loop</title>
+<style>
+:root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --card: #fff; --lane: #f5f5f4; --accent: #2563eb; --warn: #b45309; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --card: #292524; --lane: #231f1d; --accent: #60a5fa; --warn: #fbbf24; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+a { color: var(--accent); }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+.muted { color: var(--muted); }
+.reason { color: var(--warn); }
+</style>
+<style>
+main { max-width: 960px; margin: 0 auto; }
+h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 20px 0 6px; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; overflow-wrap: anywhere; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 0; font: 13px/1.45 ui-monospace, monospace; }
+figure { margin: 0 0 12px; }
+figure img { max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; }
+figcaption, .files { font-size: 13px; color: var(--muted); }
+.events { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); font-size: 13px; }
+td { padding: 4px 8px; border-top: 1px solid var(--line); vertical-align: top; }
+td.when { white-space: nowrap; color: var(--muted); }
+td.data { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<main>
+<p class="sub"><a href="/board">← board</a></p>
+<h1>#8 Token rotation</h1>
+<dl>
+<dt>Stage</dt><dd>held</dd>
+<dt>Repo</dt><dd>jarvis-loop</dd>
+<dt>Priority</dt><dd>P2</dd>
+<dt>Age</dt><dd>2h</dd>
+<dt>PR</dt><dd><a href="https://github.com/alexberardi/jarvis-loop/pull/12">#12</a></dd>
+<dt>Slack</dt><dd><a href="https://jarvis.slack.com/archives/C0LOOP/p1760000001000200">thread</a></dd>
+<dt>Held</dt><dd class="reason">triage: risk hold</dd>
+</dl>
+<h2>Ask</h2>
+<pre>Rotate the tokens &lt;weekly&gt;.
+Keep the old one a day.</pre>
+<h2>Summary</h2>
+<pre>Adds a rotate command.</pre>
+<h2>Evidence · 2</h2>
+<figure><img src="/board/items/8/evidence/1" alt="after, phone" loading="lazy"><figcaption><a href="/board/items/8/evidence/1" download>after.png</a> · after, phone · 20 KB</figcaption></figure>
+<p class="files"><a href="/board/items/8/evidence/2" download>results.md</a> · 912 B</p>
+<h2>Events · 2</h2>
+<div class="events">
+<table>
+<tr><td class="when">2026-10-15 10:00 UTC</td><td>user:alex</td><td>created →triage</td><td class="data">{&#34;priority&#34;:&#34;P2&#34;,&#34;title&#34;:&#34;Token rotation&#34;}</td></tr>
+<tr><td class="when">2026-10-15 12:00 UTC</td><td>runner:devbox</td><td>advanced land→held (pr_opened)</td><td class="data">{&#34;pr&#34;:12}</td></tr>
+</table>
+</div>
+</main>
+</body>
+</html>

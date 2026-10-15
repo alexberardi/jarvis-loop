@@ -15,6 +15,9 @@ import (
 const (
 	KindUser   = "user"
 	KindRunner = "runner"
+	// KindBoard reads the web board and nothing else: the API refuses it on every route
+	// (docs/decisions/2026-10-15-board.md).
+	KindBoard = "board"
 )
 
 // MinTokenLen is the shortest token loopd accepts.
@@ -75,8 +78,8 @@ func ParseTokens(r io.Reader) (*Tokens, error) {
 		if len(tok) < MinTokenLen {
 			return nil, fmt.Errorf("tokens line %d: token shorter than %d characters", line, MinTokenLen)
 		}
-		if kind != KindUser && kind != KindRunner {
-			return nil, fmt.Errorf("tokens line %d: kind must be user or runner", line)
+		if kind != KindUser && kind != KindRunner && kind != KindBoard {
+			return nil, fmt.Errorf("tokens line %d: kind must be user, runner or board", line)
 		}
 		if name == "" {
 			return nil, fmt.Errorf("tokens line %d: name is empty", line)

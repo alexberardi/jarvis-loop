@@ -14,7 +14,9 @@ import (
 
 	"github.com/alexberardi/jarvis-loop/internal/api"
 	"github.com/alexberardi/jarvis-loop/internal/clock"
+	"github.com/alexberardi/jarvis-loop/internal/loopd"
 	"github.com/alexberardi/jarvis-loop/internal/store"
+	"github.com/alexberardi/jarvis-loop/internal/web"
 )
 
 func TestCheckAddr(t *testing.T) {
@@ -47,9 +49,9 @@ func TestHandlerRouting(t *testing.T) {
 	}
 	defer st.Close()
 	toks, _ := api.ParseTokens(strings.NewReader("user-token-0123456789abcdef\tuser\talex\n"))
-	srv := httptest.NewServer(handler(st, toks, slog.New(slog.DiscardHandler)))
+	srv := httptest.NewServer(handler(st, toks, slog.New(slog.DiscardHandler), web.BoardConfig{}))
 	defer srv.Close()
-	for path, want := range map[string]string{"/": "Basic", "/items": "Bearer", "/control": "Bearer"} {
+	for path, want := range map[string]string{"/": "Basic", "/items": "Bearer", "/control": "Bearer", "/board": "", "/board/items/1": ""} {
 		resp, err := http.Get(srv.URL + path)
 		if err != nil {
 			t.Fatal(err)
@@ -57,6 +59,66 @@ func TestHandlerRouting(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != 401 || !strings.HasPrefix(resp.Header.Get("WWW-Authenticate"), want) {
 			t.Errorf("%s: %d %q, want 401 %s", path, resp.StatusCode, resp.Header.Get("WWW-Authenticate"), want)
+		}
+	}
+}
+
+// The board listener serves the board and nothing else, whatever the token.
+func TestBoardHandlerRouting(t *testing.T) {
+	st, err := store.Open(t.TempDir(), clock.NewFake(time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	const userTok, boardTok = "user-token-0123456789abcdef", "board-token-0123456789abcdef"
+	toks, _ := api.ParseTokens(strings.NewReader(userTok + "\tuser\talex\n" + boardTok + "\tboard\tphone\n"))
+	srv := httptest.NewServer(loopd.BoardHandler(st, toks, slog.New(slog.DiscardHandler), web.BoardConfig{}))
+	defer srv.Close()
+	do := func(method, path string) int {
+		req, _ := http.NewRequest(method, srv.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+userTok)
+		req.SetBasicAuth("alex", userTok)
+		req.AddCookie(&http.Cookie{Name: web.BoardCookie, Value: boardTok})
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, path := range []string{"/", "/items", "/items/1", "/control", "/claim", "/ui/control"} {
+		for _, method := range []string{"GET", "POST", "PUT"} {
+			if got := do(method, path); got != 404 && got != 405 {
+				t.Errorf("%s %s on the board listener: %d", method, path, got)
+			}
+		}
+	}
+	if got := do("GET", "/board"); got != 200 {
+		t.Errorf("GET /board: %d", got)
+	}
+	if got := do("POST", "/board"); got != 405 {
+		t.Errorf("POST /board: %d", got)
+	}
+}
+
+// --board-addr starts a second listener; both stop when loopd does.
+func TestRunWithBoardAddr(t *testing.T) {
+	dir := t.TempDir()
+	tokens := filepath.Join(dir, "tokens")
+	os.WriteFile(tokens, []byte("user-token-0123456789abcdef\tuser\talex\n"), 0o600)
+	args := []string{"--addr", "127.0.0.1:0", "--data", filepath.Join(dir, "data"), "--tokens", tokens}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var stderr strings.Builder
+	if err := run(ctx, append(args, "--board-addr", "127.0.0.1:0", "--slack-workspace", "https://jarvis.slack.com"), &stderr); err != nil {
+		t.Fatalf("run: %v\n%s", err, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), `"msg":"board listening"`) {
+		t.Errorf("no board listener in the log: %s", stderr.String())
+	}
+	for _, bad := range [][]string{{"--board-addr", "nonsense"}, {"--slack-workspace", "jarvis.slack.com"}, {"--slack-workspace", "http://jarvis.slack.com"}} {
+		if err := run(ctx, append(args[:len(args):len(args)], bad...), &stderr); err == nil {
+			t.Errorf("run accepted %v", bad)
 		}
 	}
 }
