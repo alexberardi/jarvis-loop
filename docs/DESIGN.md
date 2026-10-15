@@ -41,6 +41,20 @@ Every item has a priority, and the ready queue is worked strictly by it: all P1s
 
 Set in words when adding ("this is a high priority feature") or with the dropdown on the item's first message in `#loop`, which also changes it later. Work the loop files itself (a finding, a nightly failure) starts at P3, a red `main` at P1, an accepted scout suggestion at P4.
 
+## Planning, before the loop
+
+New features start in `#plan`, not in the loop: two planning stages turn an idea into loop-sized items that each carry a blueprint, so build agents implement a plan instead of guessing one (decided 2026-10-14).
+
+| Stage | Who | Produces | Leaves when |
+| --- | --- | --- | --- |
+| **P1 Product** | a product-persona agent, in conversation with the user in the feature's `#plan` thread | a **feature brief**: who it is for, the problem, what they would actually want, success criteria, out of scope | the user approves the brief (button or reply, as for held merges) |
+| **P2 Engineering** | an engineering-persona agent that reads the brief and the real code | a **feasibility note and blueprint**: approach, affected modules, interfaces, test plan, a harness verification plan (which scenarios and shots prove it), risks, and a split into loop-sized pieces | the user approves the blueprint; not feasible or much bigger than expected → back to P1 in the thread |
+| **Hand-off** | `loopd` | one loop item per piece, at the feature's priority, each with its section of the blueprint and **dependencies** (piece 2 waits until piece 1 is merged) | the items are in intake |
+
+**Where briefs and blueprints live:** as pages (like the living design doc) while they are written, so the user can read and comment from a phone; a final copy is committed to the target repo (`docs/plans/<feature>.md`) when the first item starts, so agents read it in their worktree. Every item, thread and PR links back to its plan.
+
+**What the loop gains:** item dependencies; a plan link on items; and conversational stages, where the runner starts a short agent per message in a `#plan` thread with the thread as context, instead of one agent per stage. Triage checks that the blueprint still matches the code; review and the harness gate check the work against the blueprint's own verification plan.
+
 ## loopd
 
 One Go binary with SQLite and a small embedded web page, in this repo. It owns the pipeline's state and enforces its rules: stage order, limits, the review-by-another-agent rule and the bounce limit. Agents and the user only ask it to move things.
@@ -176,6 +190,7 @@ Each phase is usable on its own and proves one thing before the next builds on i
 2. **loopd core on the dev box.** Items, events, the stage rules, priority, the active-agents number, the API and the `loop` CLI, with stages moved by hand. *Proves:* the state machine and limits, with no agents involved.
 3. **Slack.** Item threads, `/loop`, questions and answers, the buttons and reply approvals, the digest, the active-agents control. *Proves:* the pipeline runs from a phone.
 4. **Runner and the build stage.** One runner on the dev box claims items and runs the build brief; landing still by hand. *Proves:* an unattended agent produces a PR with evidence.
+   Then **the planning stages** in `#plan`: product and engineering personas, briefs and blueprints as pages, item dependencies. *Proves:* an idea becomes loop-ready items without hand-written specs.
 5. **Triage and review.** The two agent stages around build; bounce and needs-you. *Proves:* bad fixes and stale reports get caught before the user sees them.
 6. **Land.** The landing script, held merges through Slack. *Proves:* end to end without a human in the middle.
 7. **Move to the prod box.** `loopd` runs there as its own service; the dev box becomes just a runner. *Proves:* the split, and survives the dev box rebooting.
@@ -188,4 +203,5 @@ Each phase is usable on its own and proves one thing before the next builds on i
 - Work the loop files itself starts on its own and is worked by priority; priority is required, P1–P5.
 - A digest every 4 hours; the nightly run at 19:00 America/New_York.
 - Merge rule, every repo: an external agent's review (judging test coverage), harness verification with screenshots in the PR, and CI. The hold list stays on top; approval by button or a plain reply.
+- New features go through planning first: `#plan`, a product persona (brief) then an engineering persona (feasibility, blueprint, loop-sized pieces), each approved by the user; briefs and blueprints are pages, with a final copy in the target repo.
 - Plan usage is not readable by a runner: the user sets the active-agents number (0–6); spend against ~1/7 of a week is advice only. 45 minutes per run.
