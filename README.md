@@ -21,6 +21,12 @@ Repos: `loopd --repos alexberardi/jarvis-loop,alexberardi/jarvis-server` names t
 works on: triage may give an item without a repo only one of these, and `/loop add` recognises
 them by name ("in jarvis-loop", "jarvis-loop:", "[jarvis-loop]").
 
+Board: `loopd --board-addr 0.0.0.0:7790 --slack-workspace https://<team>.slack.com` adds a second
+listener for the LAN that serves only the read-only swim-lane board (`GET /board`), so the API stays
+on 127.0.0.1. Add a `board` token to the tokens file (`token<TAB>board<TAB>phone`; the API refuses
+it everywhere) and open `http://<host>:7790/board?t=<token>` once: the page keeps the token in an
+HttpOnly cookie and drops it from the address. Why: [docs/decisions/2026-10-15-board.md](docs/decisions/2026-10-15-board.md).
+
 Runner (phases 4 and 5, [docs/phases/04-runner-build.md](docs/phases/04-runner-build.md),
 [docs/phases/05-triage-review.md](docs/phases/05-triage-review.md)):
 `loop-runner --config ~/.config/jarvis-loop/runner.json` (0600) claims `triage`, `build` and `review`

@@ -70,7 +70,7 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | leases | which runner and agent hold which item at which stage, with an expiry kept alive by heartbeats. An expired lease returns the item to its queue |
 | control | the active-agents number (0–6), stop, the per-run time cap |
 
-**API** (JSON over HTTP, a bearer token per runner and one for the user)
+**API** (JSON over HTTP, a bearer token per runner and one for the user; a `board` token reads the web board only and is refused by every API route)
 
 | Call | Does |
 | --- | --- |
@@ -84,6 +84,7 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | `POST /items/{id}/ask`, `/answer` | put an item in needs-you with a question; record the answer |
 | `POST /items/{id}/approve`, `/hold` | the decision on a held merge |
 | `GET`, `PUT /control` | the active-agents number, stop and resume |
+| `GET /board`, `/board/items/{id}`, `/board/items/{id}/evidence/{n}` | the swim-lane web board (HTML, read-only), also on the optional LAN listener `--board-addr`, which serves nothing else ([decision](decisions/2026-10-15-board.md)) |
 
 The `loop` CLI wraps the same API: `loop add`, `loop status`, `loop show`, `loop answer`, `loop agents <n>`.
 
@@ -131,7 +132,7 @@ Slack is the user's whole interface: add work, answer questions and approve merg
 | answer a question | reply in the item's thread; the bot @mentions the user when it asks |
 | decide a held merge | **Approve merge** / **Keep holding** buttons, or a plain reply (Landing) |
 | set priority | words when adding, or the dropdown on the item's first message |
-| see the board | `/loop status`; `/loop show <id>` for one item |
+| see the board | `/loop status`; `/loop show <id>` for one item; on the LAN, the web board at `/board` (columns per stage, read-only, refreshes every 30 s) |
 | turn spending up or down | the pinned **Active agents** message, `/loop agents <n>`, `/loop stop` |
 | catch up | a digest every 4 hours in `#loop-digest`: merged, held, failing, new, estimated spend |
 
