@@ -820,6 +820,23 @@ func TestLoopCommands(t *testing.T) {
 		t.Fatalf("usage %+v", ev)
 	}
 
+	// help lists every command; anything unknown says so, then shows the same help. Anyone may ask.
+	help := e.command(other, "help")
+	for _, want := range []string{"/loop help", "/loop add", "/loop status", "/loop show", "/loop priority", "/loop agents", "/loop stop", "/loop resume", "/loop usage"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("help lacks %s: %q", want, help)
+		}
+	}
+	if strings.Contains(help, "Unknown") {
+		t.Errorf("help says unknown: %q", help)
+	}
+	if out := e.command(other, ""); out != help {
+		t.Errorf("bare /loop %q, want the help", out)
+	}
+	if out := e.command(other, "bogus"); !strings.HasPrefix(out, "Unknown command `bogus`.") || !strings.Contains(out, "/loop help") {
+		t.Errorf("unknown %q", out)
+	}
+
 	// The approver-only commands, from someone else.
 	for _, c := range []string{"add sneaky", "priority 1 P1", "agents 6", "stop", "resume", "usage 10%"} {
 		before, _ := e.st.Control(e.ctx)

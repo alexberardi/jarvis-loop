@@ -11,9 +11,16 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/store"
 )
 
-const helpText = "Usage: `/loop add <what>` (say \"high priority\", \"urgent\", \"low priority\", \"someday\"… for a priority), " +
-	"`/loop status`, `/loop show <id>`, `/loop priority <id> P2`, `/loop agents <0-6>`, `/loop stop`, `/loop resume`, " +
-	"`/loop usage <N>%`. Answer and approve in an item's thread in #loop."
+const helpText = "*/loop commands*\n" +
+	"`/loop help` this list\n" +
+	"`/loop add <what>` add work; say \"urgent\", \"high priority\", \"low priority\" or \"someday\" to set its priority (default P3)\n" +
+	"`/loop status` the board\n" +
+	"`/loop show <id>` one item\n" +
+	"`/loop priority <id> P1`\u2013`P5` change a priority\n" +
+	"`/loop agents <0-6>` how many agents may run at once (0 = paused)\n" +
+	"`/loop stop` / `/loop resume` stop running agents / start again\n" +
+	"`/loop usage <N>%` record what /usage shows\n" +
+	"Answer questions and approve held merges in the item's thread in #loop."
 
 type command struct {
 	Command   string `json:"command"`
@@ -68,6 +75,8 @@ func (b *Bot) runCommand(ctx context.Context, c command) string {
 		return "Sorry, only the approver can do that."
 	}
 	switch verb {
+	case "help":
+		return helpText
 	case "add":
 		it, err := b.add(ctx, c.UserID, rest)
 		if err != nil {
@@ -127,7 +136,7 @@ func (b *Bot) runCommand(ctx context.Context, c command) string {
 		}
 		return fmt.Sprintf("Recorded: %d%% of the weekly limit used.", pct)
 	}
-	return helpText
+	return fmt.Sprintf("Unknown command `%s`.\n", Escape(Clip(verb, 40, ""))) + helpText
 }
 
 // displayOrder is the board's order of display stages.
