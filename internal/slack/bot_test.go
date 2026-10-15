@@ -1056,3 +1056,17 @@ func TestDigestThatCannotBePostedIsSkippedAfterRetries(t *testing.T) {
 		t.Fatal("not logged")
 	}
 }
+
+func TestGuardRefusedLineHidesTheCommand(t *testing.T) {
+	e := newBotEnv(t)
+	it, err := e.st.AddItem(e.ctx, "user:alex", store.NewItem{Title: "x", Repo: "jarvis-server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := store.Event{ItemID: it.ID, Actor: "runner:devbox", Kind: "guard_refused",
+		Data: map[string]any{"rule": "protected_path", "tool": "Bash", "target": "cat /home/alex/secret-host.lan"}}
+	m, ok := e.b.describe(ev, store.Detail{Item: it})
+	if !ok || !strings.Contains(m.Text, "Guard refused a Bash call (protected_path)") || strings.Contains(m.Text, "secret-host") {
+		t.Fatalf("got %q", m.Text)
+	}
+}

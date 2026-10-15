@@ -30,6 +30,10 @@ func TestChoose(t *testing.T) {
 		want  int64 // 0 = nothing
 	}{
 		{"empty queue", ctl, nil, nil, allCaps, 0},
+		{"stage filter skips other stages", ctl, []Item{waiting(1, Triage, "P1", time.Hour), waiting(2, Build, "P5", 0)}, nil,
+			ClaimRequest{Runner: "r", Agent: "a", Stages: []Stage{Build}}, 2},
+		{"stage filter with nothing in it", ctl, []Item{waiting(1, Triage, "P1", 0), waiting(2, Review, "P1", 0)}, nil,
+			ClaimRequest{Runner: "r", Agent: "a", Stages: []Stage{Build}}, 0},
 		{"one triage item", ctl, []Item{waiting(1, Triage, "P3", time.Hour)}, nil, allCaps, 1},
 
 		// 1. control

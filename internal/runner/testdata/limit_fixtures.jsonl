@@ -1,0 +1,17 @@
+{"want":true,"reset":"2026-10-15T15:45:00Z","name":"rate_limit_event rejected (SDKRateLimitEvent)","event":{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1792079100},"uuid":"u","session_id":"s"}}
+{"want":true,"reset":"","name":"credits required rejection","event":{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","errorCode":"credits_required","canUserPurchaseCredits":false}}}
+{"want":false,"name":"rate_limit_event allowed_warning","event":{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1792079100,"utilization":0.9}}}
+{"want":false,"name":"rate_limit_event allowed","event":{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}}
+{"want":true,"reset":"3:45pm","name":"assistant error rate_limit with the session-limit text","event":{"type":"assistant","error":"rate_limit","message":{"content":[{"type":"text","text":"You've hit your session limit · resets 3:45pm"}]}}}
+{"want":true,"reset":"Mon 12:00am","name":"weekly limit text","event":{"type":"assistant","message":{"content":[{"type":"text","text":"You've hit your weekly limit · resets Mon 12:00am"}]}}}
+{"want":true,"reset":"3:45pm","name":"opus limit text","event":{"type":"assistant","message":{"content":[{"type":"text","text":"You've hit your Opus limit · resets 3:45pm"}]}}}
+{"want":true,"reset":"","name":"monthly spend limit","event":{"type":"assistant","error":"billing_error","message":{"content":[{"type":"text","text":"You've hit your monthly spend limit · raise it at https://claude.ai/settings/usage?from=cc_cli_limit_message"}]}}}
+{"want":true,"reset":"2026-10-15T15:45:00Z","name":"legacy usage limit reached|epoch","event":{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached|1792079100"}}
+{"want":true,"reset":"3:45pm","name":"result carrying the limit text","event":{"type":"result","subtype":"success","is_error":true,"result":"You've hit your session limit · resets 3:45pm","num_turns":3}}
+{"want":true,"reset":"","name":"result with api_error_status 429","event":{"type":"result","subtype":"error_during_execution","is_error":true,"api_error_status":429,"errors":["API Error: Request rejected (429) · this may be a temporary capacity issue."]}}
+{"want":false,"name":"server throttle is not the plan limit","event":{"type":"assistant","error":"rate_limit","message":{"content":[{"type":"text","text":"API Error: Server is temporarily limiting requests (not your usage limit)"}]}}}
+{"want":false,"name":"server throttle result","event":{"type":"result","is_error":true,"api_error_status":429,"result":"API Error: Server is temporarily limiting requests (not your usage limit)"}}
+{"want":false,"name":"overloaded","event":{"type":"assistant","error":"overloaded","message":{"content":[{"type":"text","text":"API Error: Repeated 529 Overloaded errors"}]}}}
+{"want":false,"name":"api_retry on rate_limit is a retry, not the end","event":{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":500,"error_status":429,"error":"rate_limit"}}
+{"want":false,"name":"ordinary text that talks about limits","event":{"type":"assistant","message":{"content":[{"type":"text","text":"I raised the rate limit in config.go to 20/s."}]}}}
+{"want":false,"name":"a successful result","event":{"type":"result","subtype":"success","is_error":false,"result":"PR opened","num_turns":12,"total_cost_usd":1.2}}
