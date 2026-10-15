@@ -59,8 +59,9 @@ func (g *rig) toReview(title string) int64 {
 	return id
 }
 
-// An item from Slack has no repo: triage sees every configured repo checked out, the context
-// files, and picks one; loopd records it and the item moves to build.
+// An item from Slack has no repo: triage gets no checkouts, only the routing context, and may
+// still name the repo with reproduced when that settles it; loopd records it and the item moves to
+// build.
 func TestTriagePicksTheRepo(t *testing.T) {
 	g := newRig(t, fakeclaude.Good)
 	g.stages(StageTriage)
@@ -91,27 +92,114 @@ func TestTriagePicksTheRepo(t *testing.T) {
 	}
 	run := g.lastRun(it.ID, StageTriage)
 	brief := g.read(filepath.Join(run, "brief.md"))
-	for _, want := range []string{"# Triage stage", "- Stage: triage", "Repository: none yet", "`repos/demo/` (`alex/demo`, `origin/main`)",
-		"`repos/other/` (`alex/other`, `origin/main`)", "`.loop/context/repos.md` (the configured repos)", "`.loop/context/open-items.md`",
-		"`.loop/context/merged-prs-demo.md`", "`.loop/context/merged-prs-other.md`", "> show the item's repo in /loop show"} {
+	for _, want := range []string{"# Triage stage", "- Stage: triage", "Repository: none yet. **Route it**", "- Checkouts: none",
+		"`.loop/context/repos.md` (the configured repos: group, aliases, what each is, recent PR titles)", "`.loop/context/open-items.md`",
+		"nothing is checked out", "> show the item's repo in /loop show"} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("brief lacks %q:\n%s", want, brief[strings.Index(brief, ItemHeading):])
 		}
 	}
+	if item := brief[strings.Index(brief, ItemHeading):]; strings.Contains(item, "merged-prs-") || strings.Contains(item, "repos/demo/") {
+		t.Errorf("a routing run checks nothing out:\n%s", brief[strings.Index(brief, ItemHeading):])
+	}
 	var gc guard.Config
 	json.Unmarshal([]byte(g.read(filepath.Join(run, "guard.json"))), &gc)
-	if !gc.ReadOnly || !slices.Contains(gc.DenyWrite, "repos/demo/.git") {
+	if !gc.ReadOnly || len(gc.DenyWrite) != 0 {
 		t.Fatalf("guard config %+v", gc)
 	}
 	if _, err := os.Stat(filepath.Join(g.r.Cfg.WorkRoot, fmt.Sprintf("%d-triage", it.ID))); !os.IsNotExist(err) {
 		t.Fatal("the triage dir was left behind")
 	}
-	for _, m := range []string{"demo", "other"} {
-		if out := gitT(t, g.r.mirrorPath(m), "worktree", "list"); strings.Contains(out, "triage") {
-			t.Fatalf("a triage checkout is still registered in %s:\n%s", m, out)
+	g.userUntouched()
+}
+
+// With many repos, triage routes first (docs/phases/06b-all-repos.md): the routing run has no
+// checkouts and reports routed; loopd sets the repo and keeps the item in triage; the next triage
+// run has that one repo checked out and triages it.
+func TestTriageRoutesThenTriages(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	g.stages(StageTriage)
+	it, _ := g.st.AddItem(g.ctx, "slack:U1", store.NewItem{Title: "The home screen flickers"})
+	g.script(it.ID, StageTriage, fakeclaude.Route, "other")
+	if !g.runOnce() {
+		t.Fatal("nothing claimed")
+	}
+	d := g.item(it.ID)
+	if d.Item.Stage != pipeline.Triage || d.Item.Repo != "alex/other" || len(d.Evidence) != 0 {
+		t.Fatalf("after routing: %s repo %q evidence %d (question %q); log:\n%s", d.Item.Stage, d.Item.Repo, len(d.Evidence), d.Item.Question, g.logs.String())
+	}
+	evs := g.events(it.ID, "advanced")
+	ev := evs[len(evs)-1]
+	if ev.Outcome != "routed" || ev.Data["repo"] != "alex/other" || !strings.Contains(fmt.Sprint(ev.Data["why"]), "the ask names") {
+		t.Fatalf("routed event %+v", ev.Data)
+	}
+	first := g.lastRun(it.ID, StageTriage)
+	if !g.runOnce() {
+		t.Fatal("the routed item was not claimed again")
+	}
+	d = g.item(it.ID)
+	if d.Item.Stage != pipeline.Build || d.Item.Repo != "alex/other" {
+		t.Fatalf("after the second triage: %s %q (question %q)", d.Item.Stage, d.Item.Repo, d.Item.Question)
+	}
+	second := g.lastRun(it.ID, StageTriage)
+	if second == first {
+		t.Fatal("the second triage run overwrote the first one's log")
+	}
+	brief := g.read(filepath.Join(second, "brief.md"))
+	if !strings.Contains(brief, "- Checkouts (detached at the base branch): `repos/other/` (`alex/other`, `origin/main`);\n") ||
+		strings.Contains(brief, "repos/demo/") || !strings.Contains(brief, "leave `repo` out") {
+		t.Fatalf("second brief:\n%s", brief[strings.Index(brief, ItemHeading):])
+	}
+}
+
+// The routing context: each repo's group, aliases, description and last merged PR titles; a repo
+// whose titles could not be fetched says so, in repos.md and in the brief.
+func TestRoutingContext(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	g.stages(StageTriage)
+	rc := g.r.Cfg.Repos["demo"]
+	rc.Group, rc.Aliases = "mobile", []string{"mobile", "node app"}
+	g.r.Cfg.Repos["demo"] = rc
+	var merged []MergedPR
+	for i := 1; i <= 7; i++ {
+		merged = append(merged, MergedPR{Number: i, Title: fmt.Sprintf("Change | %d", i)})
+	}
+	g.prs.merged = merged
+	g.prs.mergedErr = map[string]error{"alex/other": fmt.Errorf("HTTP 502\nbad gateway")}
+	it, _ := g.st.AddItem(g.ctx, "slack:U1", store.NewItem{Title: "x"})
+	cl, err := g.r.Client.Claim(g.ctx, "a", nil, []string{StageTriage})
+	if err != nil || cl == nil || cl.Item.ID != it.ID {
+		t.Fatalf("claim %+v %v", cl, err)
+	}
+	ru, err := g.r.newRun(cl, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief, err := g.r.prepare(g.ctx, ru)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.r.cleanup(g.ctx, ru, g.r.Log)
+	repos := g.read(filepath.Join(ru.wt, ".loop", "context", "repos.md"))
+	for _, want := range []string{"| key | slug | group | also called | what it is | recent |",
+		"| demo | alex/demo | mobile | mobile, node app | the demo repo | #1 Change \\| 1; #2 Change \\| 2; #3 Change \\| 3; #4 Change \\| 4; #5 Change \\| 5 |",
+		"| other | alex/other | - | - | another repo (the same remote) | (could not fetch: HTTP 502 bad gateway) |"} {
+		if !strings.Contains(repos, want) {
+			t.Errorf("repos.md lacks %q:\n%s", want, repos)
 		}
 	}
-	g.userUntouched()
+	if strings.Contains(repos, "#6") {
+		t.Errorf("more than 5 titles:\n%s", repos)
+	}
+	if !strings.Contains(brief, "Not available this run: recent PR titles of alex/other: HTTP 502 bad gateway") {
+		t.Errorf("brief lacks the fetch failure:\n%s", brief[strings.Index(brief, ItemHeading):])
+	}
+	if len(ru.checkouts) != 0 {
+		t.Fatalf("checkouts %+v", ru.checkouts)
+	}
+	if ents, _ := os.ReadDir(ru.wt); len(ents) != 1 || ents[0].Name() != ".loop" {
+		t.Fatalf("the routing dir holds more than .loop: %v", ents)
+	}
 }
 
 // What triage is given, before the agent runs.
@@ -144,7 +232,7 @@ func TestTriageContextFiles(t *testing.T) {
 		t.Fatalf("merged:\n%s", merged)
 	}
 	repos := g.read(filepath.Join(ru.wt, ".loop", "context", "repos.md"))
-	if !strings.Contains(repos, "| demo | alex/demo | main | the demo repo |") || !strings.Contains(repos, "| other | alex/other |") {
+	if !strings.Contains(repos, "| demo | alex/demo | - | main | the demo repo |") || !strings.Contains(repos, "| other | alex/other |") {
 		t.Fatalf("repos:\n%s", repos)
 	}
 	// The item has a repo: only it is checked out, and the brief says to leave repo out.
@@ -190,6 +278,23 @@ func TestTriageDuplicate(t *testing.T) {
 	d := g.item(it.ID)
 	if d.Item.Stage != pipeline.Closed || !strings.HasPrefix(d.Item.Summary, fmt.Sprintf("duplicate of #%d / PR #7", first)) {
 		t.Fatalf("%s %q; log:\n%s", d.Item.Stage, d.Item.Summary, g.logs.String())
+	}
+}
+
+// The review agent holds content a path rule cannot see: approved with needs_review reaches loopd
+// as a hold (the merge waits for the user), and the PR comment says so.
+func TestReviewNeedsReviewHolds(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	id := g.toReview("Add a feature")
+	g.stages(StageReview)
+	g.script(id, StageReview, fakeclaude.ApproveHold, "")
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.Land || d.Item.Risk != pipeline.RiskHold || !strings.Contains(d.Item.HoldReason, "review: marked needs review") {
+		t.Fatalf("%s risk %s (%q); log:\n%s", d.Item.Stage, d.Item.Risk, d.Item.HoldReason, g.logs.String())
+	}
+	if c := g.prs.comments[7]; len(c) != 1 || !strings.Contains(c[0], "**Marked needs review:** the merge waits for the user's approval.") {
+		t.Fatalf("comment %q", c)
 	}
 }
 
@@ -294,7 +399,7 @@ func TestBounceThenRebuildThenApprove(t *testing.T) {
 		t.Fatalf("body %s", g.prs.bodies[7])
 	}
 	brief := g.read(filepath.Join(g.lastRun(id, StageBuild), "brief.md"))
-	if !strings.Contains(brief, "Review bounced it 1 time(s); PR #7 is open on this branch") || !strings.Contains(brief, "`.loop/review/notes.md`") {
+	if !strings.Contains(brief, "Sent back 1 time(s) (by review, or by the runner's verify); PR #7 is open on this branch") || !strings.Contains(brief, "`.loop/review/notes.md`") {
 		t.Fatalf("brief:\n%s", brief[strings.Index(brief, ItemHeading):])
 	}
 

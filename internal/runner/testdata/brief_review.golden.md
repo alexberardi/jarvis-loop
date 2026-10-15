@@ -30,7 +30,11 @@ Listed in the item section at the end of this brief, under `.loop/context/`:
 - `pr.md`: the PR's number, title, body (with the runner's Verification footer) and head commit.
 - `diff.patch`: `git diff origin/<base>...<head>`, the whole change.
 - `evidence/`: the item's evidence so far: the triage notes and repro, the build's test logs,
-  scenario results, transcripts, screenshots.
+  scenario results, transcripts, screenshots. Files labelled **"runner verify"** (named
+  `verify-<n>-…`) are the runner's own verify steps, run after the build agent and outside its
+  sandbox from the runner's config: the step's log tail and what it wrote (screenshots you can
+  open, an `index.json`). The agent could not skip or fake them; judge what they show, and say in
+  your review that you looked.
 - `previous-reviews.md`, when the item was bounced before: what earlier reviews asked for. Check
   each point was addressed.
 
@@ -49,7 +53,13 @@ Listed in the item section at the end of this brief, under `.loop/context/`:
    your own run's results in `.loop/evidence/` (short logs; plain files).
 4. **Read the code** for correctness, the repo's style and the item's ask: does it do what was
    asked, no more? Anything outside the ask is a finding.
-5. Decide:
+5. **Content the hold list cannot see.** The user's hold rules match paths; some risks hide in
+   ordinary files. Approve with `"needs_review": true` (the merge then waits for the user) when
+   the change, wherever it is: adds or edits a `curl … | sh` (or `wget … | bash`) line, a pinned
+   install URL or a checksum in a docs page or script; makes a command or device package use a new
+   secret (`JarvisSecret`), a new network host or a new system package; or touches auth, tokens,
+   signing or what a merge deploys or ships to testers. Say why in the review.
+6. Decide:
    - `approved`: the change does what the item asks, the tests cover it meaningfully, and the
      verification you re-ran agrees with the PR. Minor nits may go in the review text, but only
      approve what you would merge.
@@ -80,7 +90,8 @@ Write `.loop/result.json` as your last step, exactly one of:
 ```json
 {"outcome": "approved", "summary": "one paragraph: why it can merge",
  "review": "markdown for the PR comment: verdict, what you checked and how, findings",
- "not_verified": ["…"], "evidence": [{"file": "evidence/check.log", "label": "scripts/check at the head"}]}
+ "not_verified": ["…"], "evidence": [{"file": "evidence/check.log", "label": "scripts/check at the head"}],
+ "needs_review": false}
 ```
 
 ```json
@@ -88,4 +99,4 @@ Write `.loop/result.json` as your last step, exactly one of:
  "review": "markdown for the PR comment", "evidence": [{"file": "evidence/check.log", "label": "…"}]}
 ```
 
-The runner posts `review` on the PR as a comment (never a GitHub approval), with the commit you reviewed, uploads `.loop/evidence/`, and reports the outcome for the head commit named below; `head_sha`, if you give it, must be that commit. No other fields.
+The runner posts `review` on the PR as a comment (never a GitHub approval), with the commit you reviewed, uploads `.loop/evidence/`, and reports the outcome for the head commit named below; `head_sha`, if you give it, must be that commit. `needs_review: true` on an approval holds the merge for the user (see "Content the hold list cannot see"). No other fields.

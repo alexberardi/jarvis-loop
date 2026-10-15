@@ -1,0 +1,84 @@
+{
+  "name": "repo-alias",
+  "about": "Phase 6b: /loop add names a repo by an alias from loopd's repos file (\"node app\", \"mobile\") only as a leading [x] or x:, or a trailing \"in x\"; the words leave the title and the item gets the repo, so triage does not route it. An alias in the middle of the sentence is just a word: no repo, triage routes it.",
+  "steps": [
+    {
+      "do": "command",
+      "text": "add [node app] the chat screen drops the last message",
+      "answer": "^Added #1 \\(P3, sandbox/jarvis-node-mobile\\): the chat screen drops the last message\\."
+    },
+    {
+      "do": "add",
+      "item": "b",
+      "via": "slack",
+      "title": "trailing alias",
+      "text": "the settings page is slow in mobile, low priority"
+    },
+    {
+      "do": "add",
+      "item": "c",
+      "via": "slack",
+      "title": "a word mid-sentence",
+      "text": "make the mobile layout denser"
+    },
+    {
+      "do": "add",
+      "item": "d",
+      "via": "slack",
+      "title": "a leading alias with a colon",
+      "text": "mobile: rename the pairing button"
+    },
+    {
+      "do": "expect",
+      "repo": {
+        "b": "sandbox/jarvis-node-mobile",
+        "c": "",
+        "d": "sandbox/jarvis-node-mobile"
+      },
+      "events": [
+        {
+          "item": "b",
+          "kind": "created",
+          "data": {
+            "title": "^the settings page is slow$",
+            "priority": "^P4$"
+          }
+        },
+        {
+          "item": "c",
+          "kind": "created",
+          "data": {
+            "title": "^make the mobile layout denser$"
+          }
+        },
+        {
+          "item": "d",
+          "kind": "created",
+          "data": {
+            "title": "^rename the pairing button$"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "kind": "response",
+          "text": "^Added #2 \\(P4, sandbox/jarvis-node-mobile\\): the settings page is slow\\."
+        },
+        {
+          "kind": "response",
+          "text": "^Added #3 \\(P3\\): make the mobile layout denser\\."
+        },
+        {
+          "kind": "response",
+          "text": "^Added #4 \\(P3, sandbox/jarvis-node-mobile\\): rename the pairing button\\."
+        }
+      ]
+    },
+    {
+      "do": "command",
+      "text": "show 1",
+      "as": "other",
+      "answer": "· repo sandbox/jarvis-node-mobile ·"
+    }
+  ]
+}

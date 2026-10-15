@@ -113,9 +113,14 @@ func ParsePriority(text string) (priority, title string) {
 
 // ParseRepo reads the repo words of an add request: a configured repo (repos are owner/name slugs)
 // named by its name or slug as "in <name>" anywhere, "<name>:" at the start, or "[<name>]"
-// anywhere. It returns the repo's slug and the text without those words, or "" and the text as it
-// was. The first marker wins. A name two configured repos share counts only as a full slug.
-func ParseRepo(text string, repos []string) (repo, rest string) {
+// anywhere; or by an alias (docs/phases/06b-all-repos.md) only as a leading "[<alias>]" or
+// "<alias>:", or a trailing "in <alias>" (nothing but priority words after it), never in the middle
+// of the sentence. Aliases are the configured ones (alias -> slug: "mobile", "node app") and each
+// repo's name without its "jarvis-", "jarvis-cmd-" or "jarvis-device-" prefix ("nest",
+// "docs"), when only one repo has it; such a derived alias counts only as a leading "[x]" or "x:".
+// It returns the repo's slug and the text without those words, or "" and the text as it was. The
+// first marker wins. A name two configured repos share counts only as a full slug.
+func ParseRepo(text string, repos []string, aliases map[string]string) (repo, rest string) {
 	names := map[string]string{} // lower-case name or slug -> slug ("" when ambiguous)
 	for _, slug := range repos {
 		names[strings.ToLower(slug)] = slug
@@ -128,42 +133,124 @@ func ParseRepo(text string, repos []string) (repo, rest string) {
 			}
 		}
 	}
+	explicit := map[string]string{} // alias -> slug
+	for a, slug := range aliases {
+		a = normAlias(a)
+		if a == "" || slug == "" {
+			continue
+		}
+		if _, isName := names[a]; isName {
+			continue // a name or slug means its own repo
+		}
+		explicit[a] = slug
+	}
+	derived := map[string]string{} // short alias -> slug ("" when ambiguous)
+	for _, slug := range repos {
+		_, name, _ := strings.Cut(strings.ToLower(slug), "/")
+		for _, prefix := range []string{"jarvis-cmd-", "jarvis-device-", "jarvis-"} {
+			if short, ok := strings.CutPrefix(name, prefix); ok && short != "" {
+				if prev, seen := derived[short]; seen && prev != slug {
+					derived[short] = ""
+				} else {
+					derived[short] = slug
+				}
+				break
+			}
+		}
+	}
+	for a := range derived {
+		if _, isName := names[a]; isName {
+			delete(derived, a)
+		} else if _, isAlias := explicit[a]; isAlias {
+			delete(derived, a)
+		}
+	}
+
+	type hit struct {
+		start, end int
+		slug       string
+	}
+	var best *hit
+	consider := func(h hit) {
+		if h.slug != "" && (best == nil || h.start < best.start) {
+			best = &h
+		}
+	}
+	lookup := func(m map[string]string, word string) string {
+		return m[normAlias(word)]
+	}
+
+	if group := altGroup(names); group != "" {
+		const edge = `(?:$|[^\w/'-])`
+		for _, re := range []*regexp.Regexp{
+			regexp.MustCompile(`(?i)(\[\s*` + group + `\s*\])`),
+			regexp.MustCompile(`(?i)^\s*(` + group + `\s*:)`),
+			regexp.MustCompile(`(?i)(?:^|[^\w/'-])(in\s+` + group + `)` + edge),
+		} {
+			if m := re.FindStringSubmatchIndex(text); m != nil {
+				consider(hit{m[2], m[3], lookup(names, text[m[4]:m[5]])})
+			}
+		}
+	}
+	leading := map[string]string{}
+	for a, slug := range explicit {
+		leading[a] = slug
+	}
+	for a, slug := range derived {
+		leading[a] = slug
+	}
+	if group := altGroup(leading); group != "" {
+		for _, re := range []*regexp.Regexp{
+			regexp.MustCompile(`(?i)^\s*(\[\s*` + group + `\s*\])`),
+			regexp.MustCompile(`(?i)^\s*(` + group + `\s*:)`),
+		} {
+			if m := re.FindStringSubmatchIndex(text); m != nil {
+				consider(hit{m[2], m[3], lookup(leading, text[m[4]:m[5]])})
+			}
+		}
+	}
+	if group := altGroup(explicit); group != "" {
+		re := regexp.MustCompile(`(?i)(?:^|[^\w/'-])(in\s+` + group + `)(?:$|[^\w/'-])`)
+		for _, m := range re.FindAllStringSubmatchIndex(text, -1) {
+			// Trailing: nothing but punctuation and priority words after it.
+			if _, after := ParsePriority(text[m[3]:]); strings.Trim(after, " .!?,;:-–—") == "" {
+				consider(hit{m[2], m[3], lookup(explicit, text[m[4]:m[5]])})
+			}
+		}
+	}
+	if best == nil {
+		return "", text
+	}
+	out := text[:best.start] + " " + text[best.end:]
+	out = strings.Join(strings.Fields(out), " ")
+	out = strings.Replace(out, " ,", ",", -1)
+	if strings.HasSuffix(out, " .") || strings.HasSuffix(out, " !") || strings.HasSuffix(out, " ?") {
+		out = out[:len(out)-2] + out[len(out)-1:]
+	}
+	out = strings.Trim(out, " ,:;-–—")
+	return best.slug, out
+}
+
+// normAlias is an alias as matched: lower case, single spaces.
+func normAlias(a string) string { return strings.Join(strings.Fields(strings.ToLower(a)), " ") }
+
+// altGroup is a regexp group of the keys with a slug, longest first (a slug wins over its own
+// short name), spaces matching any run of whitespace; "" when there are none.
+func altGroup(m map[string]string) string {
 	var alts []string
-	for n, slug := range names {
+	for n, slug := range m {
 		if slug != "" && n != "" {
-			alts = append(alts, regexp.QuoteMeta(n))
+			alts = append(alts, n)
 		}
 	}
 	if len(alts) == 0 {
-		return "", text
+		return ""
 	}
-	// Longest first, so a slug wins over its own short name.
 	sort.Slice(alts, func(i, j int) bool {
 		return len(alts[i]) > len(alts[j]) || len(alts[i]) == len(alts[j]) && alts[i] < alts[j]
 	})
-	group := "(" + strings.Join(alts, "|") + ")"
-	const edge = `(?:$|[^\w/'-])`
-	markers := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(\[\s*` + group + `\s*\])`),
-		regexp.MustCompile(`(?i)^\s*(` + group + `\s*:)`),
-		regexp.MustCompile(`(?i)(?:^|[^\w/'-])(in\s+` + group + `)` + edge),
+	for i, a := range alts {
+		alts[i] = strings.ReplaceAll(regexp.QuoteMeta(a), " ", `\s+`)
 	}
-	best, bestEnd, bestName := -1, -1, ""
-	for _, re := range markers {
-		m := re.FindStringSubmatchIndex(text)
-		if m == nil {
-			continue
-		}
-		if best < 0 || m[2] < best {
-			best, bestEnd, bestName = m[2], m[3], strings.ToLower(text[m[4]:m[5]])
-		}
-	}
-	if best < 0 {
-		return "", text
-	}
-	out := text[:best] + " " + text[bestEnd:]
-	out = strings.Join(strings.Fields(out), " ")
-	out = strings.Replace(out, " ,", ",", -1)
-	out = strings.Trim(out, " ,:;-–—")
-	return names[bestName], out
+	return "(" + strings.Join(alts, "|") + ")"
 }

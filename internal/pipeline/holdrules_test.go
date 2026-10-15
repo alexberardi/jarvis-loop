@@ -258,8 +258,198 @@ func TestJarvisLoopHoldRules(t *testing.T) {
 		t.Errorf("a jarvis-loop rule applied to jarvis-server: %v", m)
 	}
 	for _, r := range rules {
-		if r.Repo != ServerRepo && r.Repo != LoopRepo {
-			t.Errorf("default rule %q has repo %q; every default names its repo", r.Name, r.Repo)
+		if r.Repo == "" {
+			t.Errorf("default rule %q has no repo; every default names its repo", r.Name)
+		}
+	}
+}
+
+// A rule's repo may end in "*" (docs/phases/06b-all-repos.md): it applies to every repo whose
+// slug starts with the rest, and to a bare name whose name part does.
+func TestHoldRuleRepoWildcard(t *testing.T) {
+	cases := []struct {
+		rule, item string
+		want       bool
+	}{
+		{"alexberardi/jarvis-cmd-*", "alexberardi/jarvis-cmd-weather", true},
+		{"alexberardi/jarvis-cmd-*", "alexberardi/jarvis-cmd-", true},
+		{"alexberardi/jarvis-cmd-*", "alexberardi/jarvis-device-nest", false},
+		{"alexberardi/jarvis-cmd-*", "someone/jarvis-cmd-weather", false},
+		{"alexberardi/jarvis-cmd-*", "alexberardi/jarvis-server", false},
+		{"alexberardi/jarvis-cmd-*", "jarvis-cmd-weather", true}, // a runner config key
+		{"alexberardi/jarvis-cmd-*", "jarvis-server", false},
+		{"alexberardi/jarvis-cmd-*", "", true}, // unknown repo: every rule
+		{"alexberardi/*", "alexberardi/anything", true},
+		{"alexberardi/*", "other/anything", false},
+		{"alexberardi/jarvis-server", "alexberardi/jarvis-server-2", false}, // no star, exact
+	}
+	for _, c := range cases {
+		if got := ruleApplies(c.rule, c.item); got != c.want {
+			t.Errorf("rule repo %q, item %q: %v, want %v", c.rule, c.item, got, c.want)
+		}
+	}
+	for _, repo := range []string{"alexberardi/jarvis-cmd-*", "alexberardi/*", "a/b*"} {
+		wantCode(t, HoldRule{Name: "x", Glob: "a/**", Repo: repo}.Validate(), "")
+	}
+	for _, repo := range []string{"*/jarvis", "alexberardi/*cmd", "alexberardi/jar*vis", "alexberardi/x**", "*", "alexberardi*/x"} {
+		wantCode(t, HoldRule{Name: "x", Glob: "a/**", Repo: repo}.Validate(), CodeInvalidField)
+	}
+}
+
+// The new repos' hold lists (docs/phases/06b-all-repos.md, "Hold rules for the new repos"), as a
+// table: repo, changed path, the rule that must hold it ("" for none).
+func TestAllReposHoldRules(t *testing.T) {
+	const (
+		node    = "alexberardi/jarvis-node-mobile"
+		recipes = "alexberardi/jarvis-recipes-mobile"
+		docs    = "alexberardi/jarvis-docs"
+		inst    = "alexberardi/jarvis-installer"
+		cmd     = "alexberardi/jarvis-cmd-weather"
+		device  = "alexberardi/jarvis-device-nest"
+	)
+	cases := []struct{ repo, line, rule string }{
+		// mobile, both apps
+		{node, "M eas.json", "release-config"},
+		{recipes, "M app.json", "release-config"},
+		{node, "M app.config.ts", "release-config"},
+		{node, "M .github/workflows/build.yml", "ci"},
+		{node, "A plugins/withFoo.js", "native"},
+		{node, "M targets/widget/Info.plist", "native"},
+		{node, "M native/x.kt", "native"},
+		{recipes, "M ios/Podfile", "native"},
+		{node, "M android/app/build.gradle", "native"},
+		{node, "M scripts/store/submit.sh", "store-scripts"},
+		{node, "M modules/jarvis-crypto/src/index.ts", "crypto"},
+		{node, "M src/auth/login.ts", "auth"},
+		{node, "M src/services/tokenStorage.ts", "auth"},
+		{node, "M src/services/clearUserData.ts", "auth"},
+		{recipes, "M src/services/oauthService.ts", "auth"},
+		{node, "M src/services/qrPairingService.ts", "pairing"},
+		{node, "M src/services/nodePresenceService.ts", "presence"},
+		{node, "M src/config/env.ts", "config"},
+		{node, "M jest.config.js", "test-config"},
+		{node, "D src/screens/__tests__/Home.test.tsx", "deleted-test"},
+		{node, "R src/a.test.ts src/a.ts", "deleted-test"},
+		{recipes, "D src/x.test.tsx", "deleted-test"},
+		{node, "M src/screens/__tests__/Home.test.tsx", ""},
+		{node, "A src/x.test.ts", ""},
+		{node, "M src/screens/HomeScreen.tsx", ""},
+		{node, "M src/services/chatService.ts", ""},
+		{node, "M README.md", ""},
+		// docs
+		{docs, "M .well-known/security.txt", "well-known"},
+		{docs, "M _headers", "hosting"},
+		{docs, "M _redirects", "hosting"},
+		{docs, "M app-fallback/index.html", "hosting"},
+		{docs, "M deploy.sh", "deploy"},
+		{docs, "M mkdocs.yml", "site-config"},
+		{docs, "M docs/security/index.md", "security-docs"},
+		{docs, "A internal-ops/runbook.md", "internal-ops"},
+		{docs, "M .github/workflows/ci.yml", "ci"},
+		{docs, "D tests/test_links.py", "deleted-test"},
+		{docs, "D tools/test_build.py", "deleted-test"},
+		{docs, "M tests/test_links.py", ""},
+		{docs, "M docs/getting-started.md", ""},
+		// installer
+		{inst, "M src/lib/secret-generator.ts", "secrets"},
+		{inst, "M src/lib/compose-generator.ts", "secrets"},
+		{inst, "M src/data/image-digests.json", "image-digests"},
+		{inst, "M src/lib/image-digests.ts", "image-digests"},
+		{inst, "M public/service-registry.json", "service-registry"},
+		{inst, "M public/CNAME", "domain"},
+		{inst, "M scripts/release.sh", "scripts"},
+		{inst, "M .github/workflows/deploy.yml", "ci"},
+		{inst, "D src/lib/__tests__/x.test.ts", "deleted-test"},
+		{inst, "M src/components/Wizard.tsx", ""},
+		{inst, "M src/lib/format.ts", ""},
+		// packages, both prefixes
+		{cmd, "M jarvis_package.yaml", "package-manifest"},
+		{device, "M jarvis_package.yaml", "package-manifest"},
+		{cmd, "M weather_scripts/install.sh", "package-scripts"},
+		{device, "M nest_shared/oauth.py", "package-shared"},
+		{device, "M .github/workflows/ci.yml", "ci"},
+		{cmd, "D tests/test_weather.py", "deleted-test"},
+		{device, "R nest/test_auth.py nest/auth_check.py", "deleted-test"},
+		{cmd, "M commands/weather.py", ""},
+		{cmd, "M tests/test_weather.py", ""},
+		{device, "A tests/test_new.py", ""},
+	}
+	rules := DefaultHoldRules()
+	for _, c := range cases {
+		paths, err := ParseChangedPaths([]string{c.line})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hits := MatchHoldRules(rules, c.repo, paths)
+		if c.rule == "" {
+			if len(hits) != 0 {
+				t.Errorf("%s %q matched %v, want nothing", c.repo, c.line, hits)
+			}
+			continue
+		}
+		found := false
+		for _, h := range hits {
+			found = found || h.Rule == c.rule
+		}
+		if !found {
+			t.Errorf("%s %q matched %v, want rule %q", c.repo, c.line, hits, c.rule)
+		}
+	}
+	// No group's rules leak into another repo: a mobile path is nothing to jarvis-server, a
+	// package manifest nothing to the installer, jarvis-server's auth nothing to a package.
+	for _, c := range []struct{ repo, line string }{
+		{ServerRepo, "M src/auth/login.ts"},
+		{ServerRepo, "M jarvis_package.yaml"},
+		{inst, "M jarvis_package.yaml"},
+		{cmd, "M internal/modules/auth/x.go"},
+		{cmd, "M src/auth/login.ts"},
+		{"alexberardi/jarvis-cmdline", "M jarvis_package.yaml"},
+	} {
+		paths, _ := ParseChangedPaths([]string{c.line})
+		if m := MatchHoldRules(rules, c.repo, paths); len(m) != 0 {
+			t.Errorf("%s %q matched %v, want nothing", c.repo, c.line, m)
+		}
+	}
+	for _, r := range rules {
+		if err := r.Validate(); err != nil {
+			t.Errorf("default rule %q invalid: %v", r.Name, err)
+		}
+		if r.Repo == "" {
+			t.Errorf("default rule %q names no repo", r.Name)
+		}
+	}
+	if err := (Control{ActiveAgents: 1, MaxRunMinutes: 45, Limits: DefaultControl().Limits, HoldRules: rules}).Validate(); err != nil {
+		t.Errorf("the defaults do not validate as a control: %v", err)
+	}
+}
+
+// Rules a store saved as a copy of an earlier built-in set (any control change used to write
+// them out) are recognised, so loopd can go back to the live defaults.
+func TestIsBuiltInHoldRuleSet(t *testing.T) {
+	var server, phase6 []HoldRule
+	for _, r := range DefaultHoldRules() {
+		if r.Repo == ServerRepo {
+			server = append(server, r)
+		}
+		if r.Repo == ServerRepo || r.Repo == LoopRepo {
+			phase6 = append(phase6, r)
+		}
+	}
+	reversed := append([]HoldRule(nil), phase6...)
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	for name, rules := range map[string][]HoldRule{"server only": server, "phase 6": phase6, "reordered": reversed, "today's": DefaultHoldRules()} {
+		if !IsBuiltInHoldRuleSet(rules) {
+			t.Errorf("%s: not recognised as a built-in set", name)
+		}
+	}
+	changed := append([]HoldRule(nil), phase6...)
+	changed[0].Glob = "elsewhere/**"
+	for name, rules := range map[string][]HoldRule{"empty": nil, "one removed": phase6[1:], "one changed": changed,
+		"one added": append(append([]HoldRule(nil), phase6...), HoldRule{Name: "x", Glob: "x/**", Repo: LoopRepo})} {
+		if IsBuiltInHoldRuleSet(rules) {
+			t.Errorf("%s: taken for a built-in set", name)
 		}
 	}
 }

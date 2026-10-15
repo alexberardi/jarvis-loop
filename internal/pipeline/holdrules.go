@@ -20,19 +20,41 @@ type HoldRule struct {
 	Repo     string   `json:"repo,omitempty"`     // owner/name; empty = every repo
 }
 
-// The repos the default rules are for.
+// The repos the default rules are for. A rule's repo may end in "*" (every repo whose slug
+// starts with the rest): the 29 command and device packages share their rules that way.
 const (
-	ServerRepo = "alexberardi/jarvis-server"
-	LoopRepo   = "alexberardi/jarvis-loop"
+	ServerRepo     = "alexberardi/jarvis-server"
+	LoopRepo       = "alexberardi/jarvis-loop"
+	NodeMobileRepo = "alexberardi/jarvis-node-mobile"
+	RecipesRepo    = "alexberardi/jarvis-recipes-mobile"
+	DocsRepo       = "alexberardi/jarvis-docs"
+	InstallerRepo  = "alexberardi/jarvis-installer"
+	CmdPackages    = "alexberardi/jarvis-cmd-*"
+	DevicePackages = "alexberardi/jarvis-device-*"
 )
 
 // DefaultHoldRules are each repo's CLAUDE.md hold list as path rules. jarvis-server: auth and
 // access, signing and the update helper, CI checks, and weakened tests or contract checks.
 // jarvis-loop: who may approve or merge (the stage rules and approvals, loopd's API auth, the Slack
 // approver check, the store that keeps approvals and hold rules, loopd's start-up wiring), token handling, the landing gates, the agents' guard, CI, and weakened tests or
-// scenarios.
+// scenarios. The mobile apps, the docs, the installer and the packages: release and store config,
+// native code, auth and pairing, deploy and hosting, secret generation, package manifests and
+// install scripts, CI, and deleted tests (docs/phases/06b-all-repos.md).
 func DefaultHoldRules() []HoldRule {
-	s, l := ServerRepo, LoopRepo
+	out := append(serverRules(), loopRules()...)
+	for _, repo := range []string{NodeMobileRepo, RecipesRepo} {
+		out = append(out, mobileRules(repo)...)
+	}
+	out = append(out, docsRules(DocsRepo)...)
+	out = append(out, installerRules(InstallerRepo)...)
+	for _, repo := range []string{CmdPackages, DevicePackages} {
+		out = append(out, packageRules(repo)...)
+	}
+	return out
+}
+
+func serverRules() []HoldRule {
+	s := ServerRepo
 	return []HoldRule{
 		{Name: "auth", Glob: "internal/modules/auth/**", Repo: s},
 		{Name: "authn", Glob: "internal/platform/authn/**", Repo: s},
@@ -42,7 +64,12 @@ func DefaultHoldRules() []HoldRule {
 		{Name: "ci", Glob: ".github/workflows/**", Repo: s},
 		{Name: "deleted-test", Glob: "**/*_test.go", Statuses: []string{"D", "R"}, Repo: s},
 		{Name: "contract-removed", Glob: "contract/**", Statuses: []string{"D", "R"}, Repo: s},
+	}
+}
 
+func loopRules() []HoldRule {
+	l := LoopRepo
+	return []HoldRule{
 		{Name: "approval", Glob: "internal/pipeline/**", Repo: l},
 		{Name: "land", Glob: "internal/runner/land*.go", Repo: l},
 		{Name: "land", Glob: "internal/runner/pr.go", Repo: l},
@@ -63,21 +90,157 @@ func DefaultHoldRules() []HoldRule {
 	}
 }
 
-var repoSlugRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+var deletedOrRenamed = []string{"D", "R"}
+
+// tsTestRules hold deleted or renamed TypeScript tests.
+func tsTestRules(repo string) []HoldRule {
+	return []HoldRule{
+		{Name: "deleted-test", Glob: "**/__tests__/**", Statuses: deletedOrRenamed, Repo: repo},
+		{Name: "deleted-test", Glob: "**/*.test.ts", Statuses: deletedOrRenamed, Repo: repo},
+		{Name: "deleted-test", Glob: "**/*.test.tsx", Statuses: deletedOrRenamed, Repo: repo},
+	}
+}
+
+// pyTestRules hold deleted or renamed Python tests.
+func pyTestRules(repo string) []HoldRule {
+	return []HoldRule{
+		{Name: "deleted-test", Glob: "tests/**", Statuses: deletedOrRenamed, Repo: repo},
+		{Name: "deleted-test", Glob: "**/test_*.py", Statuses: deletedOrRenamed, Repo: repo},
+	}
+}
+
+// mobileRules: a merge to main ships to the testers (TestFlight, Play internal), so the release
+// and store config, native code, crypto, auth, pairing and presence are held.
+func mobileRules(r string) []HoldRule {
+	return append([]HoldRule{
+		{Name: "release-config", Glob: "eas.json", Repo: r},
+		{Name: "release-config", Glob: "app.json", Repo: r},
+		{Name: "release-config", Glob: "app.config.*", Repo: r},
+		{Name: "ci", Glob: ".github/**", Repo: r},
+		{Name: "native", Glob: "plugins/**", Repo: r},
+		{Name: "native", Glob: "targets/**", Repo: r},
+		{Name: "native", Glob: "native/**", Repo: r},
+		{Name: "native", Glob: "ios/**", Repo: r},
+		{Name: "native", Glob: "android/**", Repo: r},
+		{Name: "store-scripts", Glob: "scripts/store/**", Repo: r},
+		{Name: "crypto", Glob: "modules/jarvis-crypto/**", Repo: r},
+		{Name: "auth", Glob: "src/auth/**", Repo: r},
+		{Name: "auth", Glob: "src/services/tokenStorage.ts", Repo: r},
+		{Name: "auth", Glob: "src/services/clearUserData.ts", Repo: r},
+		{Name: "auth", Glob: "src/services/oauthService.ts", Repo: r},
+		{Name: "pairing", Glob: "src/services/qr*Service.ts", Repo: r},
+		{Name: "presence", Glob: "src/services/*presence*", Repo: r},
+		{Name: "presence", Glob: "src/services/*Presence*", Repo: r},
+		{Name: "config", Glob: "src/config/env.ts", Repo: r},
+		{Name: "test-config", Glob: "jest.config.js", Repo: r},
+	}, tsTestRules(r)...)
+}
+
+// docsRules: what the site serves beyond pages (headers, redirects, .well-known), how it deploys,
+// its build config, the security pages and the internal runbooks.
+func docsRules(r string) []HoldRule {
+	return append([]HoldRule{
+		{Name: "well-known", Glob: ".well-known/**", Repo: r},
+		{Name: "hosting", Glob: "_headers", Repo: r},
+		{Name: "hosting", Glob: "_redirects", Repo: r},
+		{Name: "hosting", Glob: "app-fallback/**", Repo: r},
+		{Name: "deploy", Glob: "deploy.sh", Repo: r},
+		{Name: "site-config", Glob: "mkdocs.yml", Repo: r},
+		{Name: "security-docs", Glob: "docs/security/**", Repo: r},
+		{Name: "internal-ops", Glob: "internal-ops/**", Repo: r},
+		{Name: "ci", Glob: ".github/**", Repo: r},
+	}, pyTestRules(r)...)
+}
+
+// installerRules: the installer generates secrets and compose files and pins image digests; a
+// merge deploys the site.
+func installerRules(r string) []HoldRule {
+	return append([]HoldRule{
+		{Name: "secrets", Glob: "src/lib/secret-generator.ts", Repo: r},
+		{Name: "secrets", Glob: "src/lib/*generator*.ts", Repo: r},
+		{Name: "image-digests", Glob: "src/data/image-digests.json", Repo: r},
+		{Name: "image-digests", Glob: "src/lib/image-digests.ts", Repo: r},
+		{Name: "service-registry", Glob: "public/service-registry.json", Repo: r},
+		{Name: "domain", Glob: "public/CNAME", Repo: r},
+		{Name: "scripts", Glob: "scripts/**", Repo: r},
+		{Name: "ci", Glob: ".github/**", Repo: r},
+	}, tsTestRules(r)...)
+}
+
+// packageRules: any change to the manifest (its secrets, packages, apt_packages, post_install and
+// version are the risky fields, and a path rule cannot see fields), install scripts, the shared
+// OAuth and token code, CI.
+func packageRules(r string) []HoldRule {
+	return append([]HoldRule{
+		{Name: "package-manifest", Glob: "jarvis_package.yaml", Repo: r},
+		{Name: "package-scripts", Glob: "*_scripts/**", Repo: r},
+		{Name: "package-shared", Glob: "*_shared/**", Repo: r},
+		{Name: "ci", Glob: ".github/**", Repo: r},
+	}, pyTestRules(r)...)
+}
+
+// IsBuiltInHoldRuleSet reports whether rules are, as a set, a built-in default list: today's, or
+// one an earlier loopd shipped (jarvis-server's alone before phase 6, then with jarvis-loop's).
+// Any control change used to write the built-in list out as if the user had set it, which froze
+// it; loopd recognises such a copy and goes back to the live defaults.
+func IsBuiltInHoldRuleSet(rules []HoldRule) bool {
+	if len(rules) == 0 {
+		return false
+	}
+	for _, set := range [][]HoldRule{DefaultHoldRules(), serverRules(), append(serverRules(), loopRules()...)} {
+		if sameRuleSet(rules, set) {
+			return true
+		}
+	}
+	return false
+}
+
+func ruleKey(r HoldRule) string {
+	st := append([]string(nil), r.Statuses...)
+	slices.Sort(st)
+	return r.Repo + "\x00" + r.Name + "\x00" + r.Glob + "\x00" + strings.Join(st, ",")
+}
+
+func sameRuleSet(a, b []HoldRule) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	count := map[string]int{}
+	for _, r := range a {
+		count[ruleKey(r)]++
+	}
+	for _, r := range b {
+		k := ruleKey(r)
+		if count[k] == 0 {
+			return false
+		}
+		count[k]--
+	}
+	return true
+}
+
+var repoSlugRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]*\*?$`)
 
 // ruleApplies says whether a rule for ruleRepo applies to an item of itemRepo. An unscoped rule
 // applies everywhere; an item whose repo is not known yet gets every rule (holding more is the
 // safe direction); an item whose repo is a bare name (a runner config key, before pr_opened
-// reports the slug) matches by the rule repo's name.
+// reports the slug) matches by the rule repo's name. A rule repo ending in "*" matches every repo
+// (or name) that starts with the rest.
 func ruleApplies(ruleRepo, itemRepo string) bool {
 	if ruleRepo == "" || itemRepo == "" || ruleRepo == itemRepo {
 		return true
 	}
+	match := func(pattern, s string) bool {
+		if p, ok := strings.CutSuffix(pattern, "*"); ok {
+			return strings.HasPrefix(s, p)
+		}
+		return pattern == s
+	}
 	if !strings.Contains(itemRepo, "/") {
 		_, name, _ := strings.Cut(ruleRepo, "/")
-		return name == itemRepo
+		return match(name, itemRepo)
 	}
-	return false
+	return match(ruleRepo, itemRepo)
 }
 
 var pathStatuses = []string{"A", "M", "D", "R"}
@@ -95,8 +258,8 @@ func (r HoldRule) Validate() error {
 			return errf(CodeInvalidField, "hold rule %q: status %q is not one of A, M, D, R", r.Name, s)
 		}
 	}
-	if r.Repo != "" && !repoSlugRe.MatchString(r.Repo) {
-		return errf(CodeInvalidField, "hold rule %q: repo must be owner/name, not %q", r.Name, r.Repo)
+	if r.Repo != "" && (!repoSlugRe.MatchString(r.Repo) || strings.Count(r.Repo, "*") > 1 || strings.HasSuffix(r.Repo, "/") && !strings.HasSuffix(r.Repo, "/*")) {
+		return errf(CodeInvalidField, "hold rule %q: repo must be owner/name, or owner/prefix* for every repo starting so, not %q", r.Name, r.Repo)
 	}
 	return nil
 }

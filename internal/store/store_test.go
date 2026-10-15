@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -683,5 +684,85 @@ func TestMainCIEvent(t *testing.T) {
 	}
 	if _, err := s.MainCI(ctx, runner, 999, good); code(err) != CodeNotFound {
 		t.Fatalf("no item: %v", err)
+	}
+}
+
+// Changing the active agents (or any other control field) leaves the hold rules on the built-in
+// defaults: it used to write them out as if the user had set them, which froze them, so rules
+// added to the defaults later (phase 6b's repos) never applied.
+func TestControlChangeKeepsLiveDefaultRules(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	n := 2
+	if _, err := s.SetControl(ctx, user, ControlPatch{ActiveAgents: &n}); err != nil {
+		t.Fatal(err)
+	}
+	var raw string
+	if err := s.w.QueryRow(`SELECT hold_rules FROM control WHERE id = 1`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw != "" {
+		t.Fatalf("hold_rules written out on an active-agents change: %.80s…", raw)
+	}
+	// The defaults the store serves are the live ones.
+	s.SetDefaultHoldRules([]pipeline.HoldRule{{Name: "only", Glob: "x/**"}})
+	ctl, _ := s.Control(ctx)
+	if len(ctl.HoldRules) != 1 || ctl.HoldRules[0].Name != "only" {
+		t.Fatalf("rules after a control change: %+v", ctl.HoldRules)
+	}
+	// Rules the user sets are kept, and stay set through other changes.
+	rules := []pipeline.HoldRule{{Name: "mine", Glob: "a/**"}}
+	if _, err := s.SetControl(ctx, user, ControlPatch{HoldRules: &rules}); err != nil {
+		t.Fatal(err)
+	}
+	n = 3
+	if _, err := s.SetControl(ctx, user, ControlPatch{ActiveAgents: &n}); err != nil {
+		t.Fatal(err)
+	}
+	if ctl, _ = s.Control(ctx); len(ctl.HoldRules) != 1 || ctl.HoldRules[0].Name != "mine" {
+		t.Fatalf("user rules after a control change: %+v", ctl.HoldRules)
+	}
+}
+
+// A database holding a copy of an earlier built-in list (written by a control change before the
+// fix above) goes back to the live defaults when loopd opens it; anything else is the user's and
+// stays.
+func TestOpenResetsACopyOfBuiltInRules(t *testing.T) {
+	var phase6 []pipeline.HoldRule
+	for _, r := range pipeline.DefaultHoldRules() {
+		if r.Repo == pipeline.ServerRepo || r.Repo == pipeline.LoopRepo {
+			phase6 = append(phase6, r)
+		}
+	}
+	custom := append(append([]pipeline.HoldRule(nil), phase6...), pipeline.HoldRule{Name: "mine", Glob: "x/**", Repo: pipeline.LoopRepo})
+	for name, c := range map[string]struct {
+		rules []pipeline.HoldRule
+		reset bool
+	}{"phase 6 copy": {phase6, true}, "custom": {custom, false}} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			clk := clock.NewFake(t0)
+			s, err := Open(dir, clk)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := json.Marshal(c.rules)
+			if _, err := s.w.Exec(`UPDATE control SET hold_rules = ?`, string(b)); err != nil {
+				t.Fatal(err)
+			}
+			s.Close()
+			if s, err = Open(dir, clk); err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			ctl, _ := s.Control(context.Background())
+			want := c.rules
+			if c.reset {
+				want = pipeline.DefaultHoldRules()
+			}
+			if fmt.Sprint(ctl.HoldRules) != fmt.Sprint(want) {
+				t.Fatalf("rules after reopen: %d rules, want %d", len(ctl.HoldRules), len(want))
+			}
+		})
 	}
 }

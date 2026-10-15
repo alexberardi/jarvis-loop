@@ -107,6 +107,17 @@ A runner is a small daemon on a machine that can do the work. It polls `loopd` c
 - Evidence over claims: before/after from the harness, attached to the item; say what was *not* verified.
 - Never `gh pr merge --auto` (no required checks in jarvis-server, so it merges at once); landing is the land stage's job, not the builder's.
 
+**As built (phase 6b, 2026-10-15): every active repo.** The runner's config lists each repo with a
+`group` (server, loop, mobile, docs, installer, package), `aliases`, `setup` commands (dependencies
+installed by the runner before the agent) and `verify` steps. An item with no repo is **routed
+first**: a triage run with no checkouts reads `repos.md` (group, aliases, description, recent PR
+titles) and returns `routed`; the next triage run has that one repo checked out. After a build, the
+runner itself runs the repo's **verify steps** outside the agent's sandbox but inside a bubblewrap
+fence (credentials masked, no tokens, no pushing; fail closed), one at a time per machine, from its
+own config only: the logs and files they write are the item's evidence and are
+listed apart in the PR's Verification footer; a failure sends the build back (counted like a
+bounce) with nothing pushed. Details: `docs/decisions/2026-10-15-all-repos.md`.
+
 **Cleanup** is the runner's, not the agent's: when a lease ends for any reason it removes that item's worktree, takes down its sandbox and stops its emulator. It never touches anything it did not start, so a stray process from another session is reported, not killed.
 
 ## Slack
@@ -115,7 +126,7 @@ Slack is the user's whole interface: add work, answer questions and approve merg
 
 | The user does | In Slack |
 | --- | --- |
-| add work | `/loop add <what>`, or mention `@jarvis-loop` anywhere |
+| add work | `/loop add <what>`, or mention `@jarvis-loop` anywhere; name the repo with `[mobile] …`, `nest: …` or `… in docs` (aliases, phase 6b), or leave it to triage |
 | follow an item | its one thread in `#loop`: every stage change, the PR, CI, the merge |
 | answer a question | reply in the item's thread; the bot @mentions the user when it asks |
 | decide a held merge | **Approve merge** / **Keep holding** buttons, or a plain reply (Landing) |
@@ -176,7 +187,7 @@ The script then:
 
 **Screenshots in public PRs:** jarvis-server is public, so PR screenshots come only from sandboxes with the seeded demo data, never from the real install.
 
-**Repos:** the same rule for jarvis-server and jarvis-node-mobile. A mobile merge also builds and submits to TestFlight and the Play internal track, so the rule goes into that repo's `CLAUDE.md` before the loop works there.
+**Repos:** the same rule for jarvis-server and jarvis-node-mobile. A mobile merge also builds and submits to TestFlight and the Play internal track, so the rule goes into that repo's `CLAUDE.md` before the loop works there. *As built (phase 6b):* the same gates for every active repo (both mobile apps, the docs, the installer, the 29 command and device packages); loopd's built-in hold rules cover each one's release and deploy config, native code, auth and pairing, secrets and install scripts, CI and deleted tests (a rule's repo may end in `*`: `alexberardi/jarvis-cmd-*`), and the review agent holds what a path cannot show (`needs_review`). Mobile still ships every merge to the testers (the user, 2026-10-15); package tags and Pantry submissions stay human.
 
 ## Security
 
@@ -199,7 +210,8 @@ Each phase is usable on its own and proves one thing before the next builds on i
 6. **Land.** The landing script, held merges through Slack. *Proves:* end to end without a human in the middle.
 7. **Move to the prod box.** `loopd` runs there as its own service; the dev box becomes just a runner. *Proves:* the split, and survives the dev box rebooting.
 8. **Nightly regressions, at 19:00 America/New_York.** The scenarios, admin, desktop and mobile shots on `main`, with failures filed as items. *Proves:* the loop finds work on its own.
-9. **Later:** a Mac runner, the mobile repo, the Cloudflare Tunnel.
+   Then **6b, every active repo** (2026-10-15): routing triage, the runner's verify step, setup commands, repo aliases in Slack and the hold rules for the mobile apps, docs, installer and packages. *Proves:* an item about any of them goes from a Slack message to a merged PR with the same gates.
+9. **Later:** a Mac runner, the Cloudflare Tunnel.
 
 ## Decisions (2026-10-14)
 

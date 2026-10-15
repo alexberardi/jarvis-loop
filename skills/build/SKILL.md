@@ -29,9 +29,10 @@ unsure, stop and ask (outcome `question`) instead of guessing.
 1. Read the item below and the target repo's `CLAUDE.md` (and the docs it says to read first).
    Follow the repo's own rules and skills. In jarvis-server that includes `land-pr`'s gate
    (`scripts/check` and the race suite), **but not its merge step**.
-   **If review bounced the item**, the brief lists `.loop/review/`: the review notes (from loopd)
-   and the PR's comments. Read them first and fix each point on the same branch (the worktree
-   continues it); the runner then updates the open PR instead of opening another.
+   **If the item was sent back**, the brief lists `.loop/review/`: the review notes (from loopd)
+   and the PR's comments, or `verify.md` when the runner's own verify failed. Read them first and
+   fix each point on the same branch (the worktree continues it); the runner then updates the
+   open PR instead of opening another.
 2. Write the failing test first, then the fix; keep the change as small as the item asks.
 3. Verify with the repo's harness where the item needs it, under the sandbox name given below
    (`--name <sandbox>`), never `default`. In a fresh jarvis-server worktree, the runner has
@@ -50,7 +51,10 @@ unsure, stop and ask (outcome `question`) instead of guessing.
    merge or edit repository settings. Landing is a later stage's job.
 6. Put the evidence files (screenshots, scenario output, a short test log) in `.loop/evidence/`
    (at most 20 files, 20 MB each; plain files, no symlinks).
-7. Write `.loop/result.json` (contract below) as your last step.
+7. Write `.loop/result.json` (contract below) as your last step. If the repo has verify steps
+   (the brief names them), the runner runs them itself after you finish and before it pushes; a
+   failure sends the item back to you with their output. Dependencies the repo's setup installs
+   (`node_modules`, `.venv`) are already in the worktree.
 
 ## Keep the context small
 

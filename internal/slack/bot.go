@@ -33,6 +33,9 @@ type Config struct {
 	// Repos are the configured repo slugs (loopd's --repos): /loop add sets one when the text
 	// names it.
 	Repos []string
+	// Aliases are other words for repos (alias -> slug, from loopd's --repos-file): "mobile",
+	// "node app". ParseRepo says where they count.
+	Aliases map[string]string
 	// GitHubOwner owns the repos PR links point at (default alexberardi).
 	GitHubOwner string
 	// DigestHours is the digest interval in hours, a divisor of 24 (default 4), aligned to
@@ -479,6 +482,8 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 			if r := str(e.Data, "repo"); r != "" {
 				text = fmt.Sprintf("Reproduced in %s: area %s, size %s, risk %s → ready.", f("repo", 100), f("area", 100), f("size", 10), f("risk", 10))
 			}
+		case pipeline.Routed:
+			text = fmt.Sprintf("Triage: this is %s — %s. Triaging it there next.", f("repo", 100), f("why", 500))
 		case pipeline.NotReproducible:
 			text = "Closed, not reproducible: " + f("summary", 600)
 		case pipeline.PROpened:
@@ -494,6 +499,10 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 			text = "Review approved → land: " + f("summary", 600)
 		case pipeline.Bounce:
 			text = fmt.Sprintf("Bounced back to build (%v): %s", e.Data["bounce_count"], f("notes", 600))
+		case pipeline.VerifyFailed:
+			// The step's name only: its output is on loopd and in the next build's notes.
+			text = fmt.Sprintf("Runner verify \"%s\" failed; nothing pushed. Back to build (%v); the log is evidence (`loop show %d`).",
+				f("verify_step", 100), e.Data["bounce_count"], id)
 		case pipeline.Merged:
 			text = fmt.Sprintf("Merged %s as `%s`. Done.", b.prLink(it), short(str(e.Data, "merge_sha")))
 			if str(e.Data, "main_ci") == "watching" {
@@ -791,7 +800,7 @@ func (b *Bot) onMention(ctx context.Context, m slackEvent) {
 }
 
 func (b *Bot) add(ctx context.Context, user, text string) (pipeline.Item, error) {
-	repo, rest := ParseRepo(text, b.c.Repos)
+	repo, rest := ParseRepo(text, b.c.Repos, b.c.Aliases)
 	pri, title := ParsePriority(rest)
 	if title == "" {
 		return pipeline.Item{}, &pipeline.Error{Code: pipeline.CodeMissingField, Message: "Say what to add."}

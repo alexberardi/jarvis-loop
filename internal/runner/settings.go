@@ -38,10 +38,11 @@ type SettingsInput struct {
 }
 
 // DefaultDomains are the hosts sandboxed commands may reach: GitHub (Go modules, reading), the Go module
-// proxy and checksum DB, and the npm registry.
+// proxy and checksum DB, the npm registry, and PyPI (the docs and the packages are Python).
 var DefaultDomains = []string{
 	"github.com", "api.github.com", "codeload.github.com", "objects.githubusercontent.com",
 	"raw.githubusercontent.com", "proxy.golang.org", "sum.golang.org", "registry.npmjs.org",
+	"pypi.org", "files.pythonhosted.org",
 }
 
 // DenyRules are the permission deny rules for every run. Deny rules are checked before the

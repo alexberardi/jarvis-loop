@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -98,6 +99,38 @@ func TestParseRepos(t *testing.T) {
 		got, err := parseRepos(c.in)
 		if (err == nil) != c.ok || strings.Join(got, ",") != strings.Join(c.want, ",") {
 			t.Errorf("parseRepos(%q) = %v, %v; want %v (ok %v)", c.in, got, err, c.want, c.ok)
+		}
+	}
+}
+
+// --repos-file: the long list of phase 6b, one slug per line with optional aliases.
+func TestParseReposFile(t *testing.T) {
+	repos, aliases, err := parseReposFile(`# the loop's repos
+alexberardi/jarvis-server: server
+alexberardi/jarvis-node-mobile: Mobile, node  app   # the household's app
+
+alexberardi/jarvis-recipes-mobile: recipes app
+alexberardi/jarvis-device-nest
+alexberardi/jarvis-server
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"alexberardi/jarvis-server", "alexberardi/jarvis-node-mobile", "alexberardi/jarvis-recipes-mobile", "alexberardi/jarvis-device-nest"}
+	if strings.Join(repos, ",") != strings.Join(want, ",") {
+		t.Fatalf("repos %v", repos)
+	}
+	if fmt.Sprint(aliases) != "map[mobile:alexberardi/jarvis-node-mobile node app:alexberardi/jarvis-node-mobile recipes app:alexberardi/jarvis-recipes-mobile server:alexberardi/jarvis-server]" {
+		t.Fatalf("aliases %v", aliases)
+	}
+	for name, text := range map[string]string{
+		"not a slug":         "jarvis-server: server",
+		"alias on two repos": "a/one: x\na/two: x",
+		"alias with a slash": "a/one: b/c",
+		"alias is a name":    "a/one: two\na/two",
+	} {
+		if _, _, err := parseReposFile(text); err == nil {
+			t.Errorf("%s accepted", name)
 		}
 	}
 }

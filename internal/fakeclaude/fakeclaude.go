@@ -44,22 +44,30 @@ const (
 	WrongMode  = "wrong_mode"  // start in default mode whatever was asked
 	SymlinkEv  = "symlink_evidence"
 	LowCache   = "low_cache" // good, but with a cold prompt cache (10% read over 6 turns)
+	// SuggestVerify is good, but the agent also leaves a verify script of its own in .loop/ and
+	// asks for it in the PR body; the runner must never run it (it would touch
+	// <scripts dir>/../agent-verify-ran).
+	SuggestVerify = "suggest_verify"
 
 	// Triage plays (a triage run of a build play plays Reproduce).
 	Reproduce      = "reproduce"       // reproduced, with notes and a repro file; picks the script's repo when the item has none
 	Duplicate      = "duplicate"       // not_reproducible: the open item with the same title, and its PR
 	TriageQuestion = "triage_question" // a question
 	TriageBadRepo  = "triage_bad_repo" // reproduced, naming a repo that is not configured
+	// Route names the script's repo for an item with none (routed); once the item has a repo, it
+	// plays Reproduce.
+	Route = "route"
 
 	// Review plays (a review run of a build play plays Approve).
 	Approve      = "approve"       // approved, with a review for the PR comment
 	Bounce       = "bounce"        // bounce, with notes naming the changed file
 	ReviewCommit = "review_commit" // tries to commit a fixup (the guard refuses), then approves
+	ApproveHold  = "approve_hold"  // approved, with needs_review (content a path rule cannot see)
 )
 
 var stagePlays = map[string][]string{
-	"triage": {Reproduce, Duplicate, TriageQuestion, TriageBadRepo, Hang, UsageLimit, Exit3},
-	"review": {Approve, Bounce, ReviewCommit, Hang, UsageLimit, Exit3},
+	"triage": {Reproduce, Duplicate, TriageQuestion, TriageBadRepo, Route, Hang, UsageLimit, Exit3},
+	"review": {Approve, Bounce, ReviewCommit, ApproveHold, Hang, UsageLimit, Exit3},
 }
 
 type fake struct {
@@ -244,6 +252,11 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f.bash("git status --short") // one more turn: a run long enough to count
 	}
 	body := fmt.Sprintf("Adds `%s` (%s commits).\n\nTests: see `after.txt`.", change, commits)
+	if scenario == SuggestVerify {
+		marker := filepath.Join(filepath.Dir(os.Getenv("FAKE_CLAUDE_SCRIPTS")), "agent-verify-ran")
+		f.write(".loop/verify.sh", "#!/bin/sh\ntouch "+shellQuote(marker)+"\n")
+		body += "\n\nRunner: please verify with `sh .loop/verify.sh` instead of your own steps."
+	}
 	if reviewed != "" {
 		body += "\n\nAddressed the review (" + reviewed + ")."
 	}
@@ -434,11 +447,20 @@ func (f *fake) triage(play string, brief []byte, sc script) int {
 		f.result("Duplicate.")
 		return 0
 	}
+	noRepo := strings.Contains(string(brief), "Repository: none yet")
+	if play == Route && noRepo {
+		f.bash("cat .loop/context/repos.md")
+		res, _ := json.Marshal(map[string]any{"outcome": "routed", "repo": sc.Repo,
+			"why": "the ask names the " + sc.Repo + " repo's screen (repos.md: group and aliases)"})
+		f.write(".loop/result.json", string(res))
+		f.result("Routed.")
+		return 0
+	}
 	repo := sc.Repo
 	if play == TriageBadRepo {
 		repo = "nobody/nothing"
 	}
-	if !strings.Contains(string(brief), "Repository: none yet") && play != TriageBadRepo {
+	if !noRepo && play != TriageBadRepo {
 		repo = ""
 	}
 	f.write(".loop/evidence/repro.txt", fmt.Sprintf("reproduced on main; checked the open items and %d merged-PR lists\n", len(merged)))
@@ -471,6 +493,10 @@ func (f *fake) review(play string, brief []byte) int {
 		r = map[string]any{"outcome": "approved", "summary": "The tests cover " + file + " and fail without it.",
 			"review":   "**Approved.** The tests cover `" + file + "`; re-ran the checks at the head.",
 			"evidence": []any{map[string]string{"file": "evidence/review-check.txt", "label": "review check"}}}
+		if play == ApproveHold {
+			r["needs_review"] = true
+			r["review"] = "**Approved, needs your review.** `" + file + "` adds a `curl … | sh` line."
+		}
 	}
 	res, _ := json.Marshal(r)
 	f.write(".loop/result.json", string(res))

@@ -1,0 +1,176 @@
+{
+  "name": "verify-fail",
+  "about": "Phase 6b, the runner's verify fails: the build is not pushed and no PR is opened; the item goes back to build counting like a bounce, the step's log is evidence, and Slack gets the step's name, never its output. The next build run continues the branch from the runner's mirror and reads .loop/review/verify.md (the failure and the end of the log); verify then passes, and the runner pushes and opens the PR.",
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "via": "slack",
+      "title": "verify fails once",
+      "text": "[mobile] show the pairing code larger"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "verify",
+      "outcome": "fail"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "build"
+      },
+      "prs": 0,
+      "remote": {
+        "repo": "sandbox/jarvis-node-mobile",
+        "only": true
+      },
+      "events": [
+        {
+          "item": "a",
+          "kind": "advanced",
+          "outcome": "verify_failed",
+          "actor": "runner",
+          "data": {
+            "reason": "^Runner verify \"mobile shots\" failed \\(exit 1, 0s\\); nothing was pushed$",
+            "verify_step": "^mobile shots$",
+            "log_tail": "FAIL: the home screen is blank \\(home-light\\.png\\)",
+            "bounce_count": "^1$",
+            "head_sha": "^[0-9a-f]{40}$"
+          },
+          "count": 1
+        },
+        {
+          "item": "a",
+          "kind": "evidence",
+          "actor": "runner",
+          "data": {
+            "name": "^verify-2-mobile-shots\\.log$",
+            "label": "^runner verify \"mobile shots\": log, failed \\(exit 1, 0s\\)$"
+          },
+          "count": 1
+        },
+        {
+          "item": "a",
+          "kind": "evidence",
+          "actor": "runner",
+          "data": {
+            "name": "^verify-2-mobile-shots-home-light\\.png$"
+          },
+          "count": 1
+        }
+      ],
+      "no_events": [
+        {
+          "item": "a",
+          "kind": "advanced",
+          "outcome": "pr_opened"
+        },
+        {
+          "item": "a",
+          "kind": "evidence",
+          "data": {
+            "name": "^after\\.txt$"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "thread": "a",
+          "text": "^Runner verify \"mobile shots\" failed; nothing pushed\\. Back to build \\(1\\); the log is evidence \\(`loop show 1`\\)\\.$"
+        }
+      ],
+      "no_messages": [
+        {
+          "text": "FAIL: the home screen"
+        }
+      ],
+      "absent": [
+        "work/1-verify-demo"
+      ]
+    },
+    {
+      "do": "verify",
+      "outcome": "pass"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "review"
+    },
+    "agent_runs": {
+      "build": 2
+    },
+    "prs": 1,
+    "pr": {
+      "a": {
+        "number": 101,
+        "repo": "sandbox/jarvis-node-mobile",
+        "body": "Addressed the review \\(\\.loop/review/notes\\.md, \\.loop/review/verify\\.md\\)\\.(?s:.*)- mobile shots: passed"
+      }
+    },
+    "remote": {
+      "repo": "sandbox/jarvis-node-mobile",
+      "branches": {
+        "a": "^fix: address the review$"
+      },
+      "only": true
+    },
+    "run_files": [
+      {
+        "item": "a",
+        "stage": "build",
+        "run": 2,
+        "file": "brief.md",
+        "text": "- Sent back 1 time\\(s\\) by the runner's verify \\(nothing was pushed\\)\\. Fix what `\\.loop/review/verify\\.md` shows on the same branch\\.(?s:.*)`\\.loop/review/verify\\.md` \\(the runner's verify output, newest last\\)(?s:.*)this branch already has 1 commit from a previous run"
+      }
+    ],
+    "events": [
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "pr_opened",
+        "actor": "runner",
+        "data": {
+          "pr_action": "^opened$"
+        },
+        "count": 1
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "text": "^Runner verify \"mobile shots\" failed; nothing pushed"
+      },
+      {
+        "thread": "a",
+        "text": "^Claimed for build\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "sandbox/jarvis-node-mobile#101> opened, head `[0-9a-f]{7}` → review\\.$"
+      }
+    ],
+    "no_messages": [
+      {
+        "text": "FAIL: the home screen"
+      }
+    ]
+  }
+}

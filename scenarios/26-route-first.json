@@ -1,0 +1,200 @@
+{
+  "name": "route-first",
+  "about": "Phase 6b, many repos: an item from Slack names none. The first triage run gets no checkouts, only repos.md (each repo's group, aliases, description, recent PR titles) and the open items, and returns routed; loopd sets the repo and keeps the item in triage, the thread says where it went and why; the next triage run has that one repo checked out, reproduces, and the item is built there (its verify steps run) and opened as a PR on that repo.",
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "via": "slack",
+      "title": "the home screen flickers after pairing"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "triage"
+      },
+      "repo": {
+        "a": ""
+      }
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "for": "triage",
+      "play": "route",
+      "picks": "jarvis-node-mobile"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "triage"
+      },
+      "repo": {
+        "a": "sandbox/jarvis-node-mobile"
+      },
+      "leased": {
+        "a": false
+      },
+      "events": [
+        {
+          "item": "a",
+          "kind": "advanced",
+          "outcome": "routed",
+          "actor": "runner",
+          "data": {
+            "repo": "^sandbox/jarvis-node-mobile$",
+            "why": "^the ask names the jarvis-node-mobile repo's screen"
+          },
+          "count": 1
+        }
+      ],
+      "no_events": [
+        {
+          "item": "a",
+          "kind": "evidence"
+        }
+      ],
+      "messages": [
+        {
+          "thread": "a",
+          "text": "^Triage: this is sandbox/jarvis-node-mobile — the ask names the jarvis-node-mobile repo's screen \\(repos\\.md: group and aliases\\)\\. Triaging it there next\\.$"
+        }
+      ],
+      "run_files": [
+        {
+          "item": "a",
+          "stage": "triage",
+          "run": 1,
+          "file": "brief.md",
+          "text": "(?s)- Repository: none yet\\. \\*\\*Route it\\*\\*.*\\n- Checkouts: none\\n- Context from the runner \\(read these\\): `\\.loop/context/repos\\.md` \\(the configured repos: group, aliases, what each is, recent PR titles\\); `\\.loop/context/open-items\\.md`",
+          "no_text": "## The item(?s:.*)(repos/|merged-prs-)"
+        },
+        {
+          "item": "a",
+          "stage": "triage",
+          "run": 1,
+          "file": "stream.jsonl",
+          "text": "\\| jarvis-node-mobile \\| sandbox/jarvis-node-mobile \\| mobile \\| mobile, node app \\| the household's phone app"
+        }
+      ]
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "build"
+      },
+      "repo": {
+        "a": "sandbox/jarvis-node-mobile"
+      },
+      "events": [
+        {
+          "item": "a",
+          "kind": "advanced",
+          "outcome": "reproduced",
+          "actor": "runner",
+          "data": {
+            "area": "^sandbox$"
+          },
+          "count": 1
+        }
+      ],
+      "messages": [
+        {
+          "thread": "a",
+          "text": "^Reproduced: area sandbox, size S, risk normal → ready\\.$"
+        }
+      ],
+      "run_files": [
+        {
+          "item": "a",
+          "stage": "triage",
+          "run": 2,
+          "file": "brief.md",
+          "text": "(?s)- Repository: `sandbox/jarvis-node-mobile` \\(set when the item was added or routed; leave `repo` out of the result\\)\\n- Checkouts \\(detached at the base branch\\): `repos/jarvis-node-mobile/` \\(`sandbox/jarvis-node-mobile`, `origin/main`\\);\\n.*`\\.loop/context/merged-prs-jarvis-node-mobile\\.md`",
+          "no_text": "repos/demo/|repos/jarvis-loop/"
+        }
+      ]
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "review"
+    },
+    "agent_runs": {
+      "triage": 2,
+      "build": 1
+    },
+    "prs": 1,
+    "pr": {
+      "a": {
+        "number": 101,
+        "repo": "sandbox/jarvis-node-mobile",
+        "body": "\\*\\*Runner verify\\*\\*"
+      }
+    },
+    "remote": {
+      "repo": "sandbox/jarvis-node-mobile",
+      "branches": {
+        "a": "^feat: add a feature$"
+      },
+      "only": true
+    },
+    "messages": [
+      {
+        "thread": "a",
+        "text": "^Claimed for triage\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "^Triage: this is sandbox/jarvis-node-mobile"
+      },
+      {
+        "thread": "a",
+        "text": "^Claimed for triage\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "^Reproduced: "
+      },
+      {
+        "thread": "a",
+        "text": "^Claimed for build\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "sandbox/jarvis-node-mobile#101> opened, head `[0-9a-f]{7}` → review\\.$"
+      }
+    ],
+    "no_events": [
+      {
+        "item": "a",
+        "kind": "guard_refused"
+      },
+      {
+        "item": "a",
+        "kind": "refused"
+      }
+    ]
+  }
+}

@@ -154,21 +154,82 @@ func TestParseRepo(t *testing.T) {
 		{"plain text", "", "plain text"},
 	}
 	for _, c := range cases {
-		repo, title := ParseRepo(c.text, repos)
+		repo, title := ParseRepo(c.text, repos, nil)
 		if repo != c.repo || title != c.title {
 			t.Errorf("ParseRepo(%q) = %q, %q; want %q, %q", c.text, repo, title, c.repo, c.title)
 		}
 	}
 	// No configured repos: nothing is a marker.
-	if repo, title := ParseRepo("jarvis-loop: x", nil); repo != "" || title != "jarvis-loop: x" {
+	if repo, title := ParseRepo("jarvis-loop: x", nil, nil); repo != "" || title != "jarvis-loop: x" {
 		t.Errorf("no repos: %q %q", repo, title)
 	}
 	// A short name two owners share is ambiguous: only the full slug counts.
 	two := []string{"a/tools", "b/tools"}
-	if repo, _ := ParseRepo("tools: x", two); repo != "" {
+	if repo, _ := ParseRepo("tools: x", two, nil); repo != "" {
 		t.Errorf("ambiguous short name taken as %q", repo)
 	}
-	if repo, title := ParseRepo("b/tools: x", two); repo != "b/tools" || title != "x" {
+	if repo, title := ParseRepo("b/tools: x", two, nil); repo != "b/tools" || title != "x" {
 		t.Errorf("full slug: %q %q", repo, title)
+	}
+}
+
+// Repo aliases (docs/phases/06b-all-repos.md): configured words and a repo's short name count only
+// as a leading "[x]" or "x:", or (configured ones) a trailing "in x"; never words in the middle.
+func TestParseRepoAliases(t *testing.T) {
+	const (
+		node    = "alexberardi/jarvis-node-mobile"
+		recipes = "alexberardi/jarvis-recipes-mobile"
+		docs    = "alexberardi/jarvis-docs"
+		inst    = "alexberardi/jarvis-installer"
+		server  = "alexberardi/jarvis-server"
+		nest    = "alexberardi/jarvis-device-nest"
+		weather = "alexberardi/jarvis-cmd-weather"
+		wdev    = "alexberardi/jarvis-device-weather"
+	)
+	repos := []string{node, recipes, docs, inst, server, "alexberardi/jarvis-loop", nest, weather, wdev, "alexberardi/jarvis-cmd-timer"}
+	aliases := map[string]string{"mobile": node, "node app": node, "Recipes  App": recipes, "docs": docs, "installer": inst, "server": server}
+	cases := []struct {
+		text, repo, title string
+	}{
+		// Configured aliases, leading or trailing.
+		{"[mobile] the home screen flickers", node, "the home screen flickers"},
+		{"mobile: the home screen flickers", node, "the home screen flickers"},
+		{"[node app] dark mode", node, "dark mode"},
+		{"Node  App: dark mode", node, "dark mode"},
+		{"the home screen flickers in mobile", node, "the home screen flickers"},
+		{"the list scrolls badly in the recipes app", "", "the list scrolls badly in the recipes app"},
+		{"the list scrolls badly in recipes app", recipes, "the list scrolls badly"},
+		{"the list scrolls badly in recipes app, high priority", recipes, "the list scrolls badly, high priority"},
+		{"fix the typo on the install page in docs.", docs, "fix the typo on the install page."},
+		{"[installer] the wizard skips step 3", inst, "the wizard skips step 3"},
+		{"server: timers drift", server, "timers drift"},
+		// Never in the middle of a sentence.
+		{"make the mobile layout denser", "", "make the mobile layout denser"},
+		{"fix the crash in mobile when offline", "", "fix the crash in mobile when offline"},
+		{"add [mobile] tags to the docs", "", "add [mobile] tags to the docs"},
+		{"the docs: are wrong about x", "", "the docs: are wrong about x"},
+		{"move the docs into the server", "", "move the docs into the server"},
+		// A package by its suffix, when only one repo has it, only as a leading [x] or x:.
+		{"[nest] the thermostat reads 0", nest, "the thermostat reads 0"},
+		{"nest: the thermostat reads 0", nest, "the thermostat reads 0"},
+		{"timer: rounds down", "alexberardi/jarvis-cmd-timer", "rounds down"},
+		{"the thermostat reads 0 in nest", "", "the thermostat reads 0 in nest"},
+		{"[weather] rain is wrong", "", "[weather] rain is wrong"}, // a command and a device share it
+		{"[jarvis-cmd-weather] rain is wrong", weather, "rain is wrong"},
+		{"[loop] tidy the digest", "alexberardi/jarvis-loop", "tidy the digest"},
+		// Full names still count where they did; the first marker wins.
+		{"fix the leak in jarvis-server where timers drift", server, "fix the leak where timers drift"},
+		{"mobile: move the digest in jarvis-server", node, "move the digest in jarvis-server"},
+		{"plain text", "", "plain text"},
+	}
+	for _, c := range cases {
+		repo, title := ParseRepo(c.text, repos, aliases)
+		if repo != c.repo || title != c.title {
+			t.Errorf("ParseRepo(%q) = %q, %q; want %q, %q", c.text, repo, title, c.repo, c.title)
+		}
+	}
+	// An alias that is a configured repo's own name means that repo.
+	if repo, _ := ParseRepo("[jarvis-docs] x", repos, map[string]string{"jarvis-docs": node}); repo != docs {
+		t.Errorf("a name aliased elsewhere: %q", repo)
 	}
 }

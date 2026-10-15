@@ -42,6 +42,8 @@ type Result struct {
 	Notes string `json:"notes,omitempty"`
 	// Review is the review's text for the PR comment.
 	Review string `json:"review,omitempty"`
+	// Why is a routing run's reason for the repo it named.
+	Why string `json:"why,omitempty"`
 }
 
 // Evidence names a file under .loop/evidence and what it shows.
@@ -76,10 +78,14 @@ type Valid struct {
 // to push and open the PR. The runner then reports loopd's pr_opened.
 const OutcomeReadyForPR = "ready_for_pr"
 
+// OutcomeRouted is a triage run that only named the repo of an item that had none: the runner
+// reports loopd's routed, and the item is triaged again with that repo checked out.
+const OutcomeRouted = "routed"
+
 // StageOutcomes are the outcomes an agent may return per stage (the runner itself reports
 // pr_opened, failed and usage_limit).
 var StageOutcomes = map[string][]string{
-	StageTriage: {"reproduced", "not_reproducible", "question"},
+	StageTriage: {"reproduced", OutcomeRouted, "not_reproducible", "question"},
 	StageBuild:  {OutcomeReadyForPR, "question"},
 	StageReview: {"approved", "bounce"},
 }
@@ -90,8 +96,9 @@ var outcomeFields = map[string][]string{
 	"question":         {"question"},
 	OutcomeReadyForPR:  {"pr_title", "pr_body", "head_sha", "summary", "not_verified", "evidence", "needs_review"},
 	"reproduced":       {"repo", "area", "size", "risk", "resources", "summary", "notes", "evidence", "not_verified"},
+	OutcomeRouted:      {"repo", "why"},
 	"not_reproducible": {"summary", "notes", "evidence", "not_verified"},
-	"approved":         {"summary", "review", "head_sha", "evidence", "not_verified"},
+	"approved":         {"summary", "review", "head_sha", "evidence", "not_verified", "needs_review"},
 	"bounce":           {"notes", "review", "head_sha", "evidence"},
 }
 
@@ -100,6 +107,7 @@ const (
 	MaxNotes   = 20000
 	MaxReview  = 60000
 	MaxSummary = 4000
+	MaxWhy     = 500
 )
 
 // decodeResult parses result.json strictly and checks the outcome is one of the stage's and the
@@ -295,6 +303,19 @@ func ValidateTriage(raw []byte, want TriageExpect) (Result, error) {
 		if strings.TrimSpace(r.Question) == "" {
 			return r, fmt.Errorf("outcome question but the question is empty")
 		}
+		return r, nil
+	case OutcomeRouted:
+		if want.ItemRepo != "" {
+			return r, fmt.Errorf("the item's repo is already %s: routed is only for an item with none (triage it instead)", want.ItemRepo)
+		}
+		slug, ok := want.Resolve(strings.TrimSpace(r.Repo))
+		if strings.TrimSpace(r.Repo) == "" || !ok {
+			return r, fmt.Errorf("routed must name one of the configured repos in repo, not %q", r.Repo)
+		}
+		if !oneLineOK(r.Why, MaxWhy) {
+			return r, fmt.Errorf("why must be one line of 1 to %d characters: why this repo", MaxWhy)
+		}
+		r.Repo, r.Why = slug, strings.TrimSpace(r.Why)
 		return r, nil
 	case "reproduced":
 		switch {

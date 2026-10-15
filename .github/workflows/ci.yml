@@ -22,6 +22,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: bubblewrap (the runner fences setup and verify commands with it)
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q bubblewrap
+          # Ubuntu 24.04 restricts unprivileged user namespaces, which bwrap needs.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --dev-bind / / --unshare-pid --proc /proc -- true
       - name: gofmt
         run: |
           out=$(gofmt -l .)

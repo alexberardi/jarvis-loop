@@ -267,12 +267,28 @@ type RunStats struct {
 	HasResult bool
 }
 
-// PRBody is the agent's body plus the runner's Verification footer: the evidence files (uploaded
-// to loopd with the item) and the run's turn and cache numbers.
-func PRBody(agentBody string, item int64, evidence []EvidenceFile, labels map[string]string, st RunStats) string {
+// PRBody is the agent's body plus the runner's Verification footer: the runner's own verify steps
+// and their results (apart from the agent's claims), the agent's evidence files (uploaded to loopd
+// with the item) and the run's turn and cache numbers.
+func PRBody(agentBody string, item int64, evidence []EvidenceFile, labels map[string]string, st RunStats, verify []VerifyResult) string {
 	var b strings.Builder
 	b.WriteString(strings.TrimRight(agentBody, "\n"))
 	b.WriteString("\n\n---\n\n" + VerificationHeading + "\n\n")
+	if len(verify) > 0 {
+		b.WriteString("**Runner verify** (run by the runner after the agent, outside its sandbox, from the runner's config):\n\n")
+		for _, v := range verify {
+			fmt.Fprintf(&b, "- %s: %s", oneLine(v.Name), v.Status())
+			if v.Skipped == "" {
+				names := []string{"`" + v.LogFile.Name + "`"}
+				for _, e := range v.Evidence {
+					names = append(names, "`"+e.Name+"`")
+				}
+				fmt.Fprintf(&b, "; %s", strings.Join(names, ", "))
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
 	if len(evidence) == 0 {
 		b.WriteString("No evidence files.\n")
 	} else {

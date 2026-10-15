@@ -1,0 +1,172 @@
+{
+  "name": "verify-pass",
+  "about": "Phase 6b, the runner's verify (option 3): after the build agent returns ready_for_pr, the runner runs the repo's configured verify steps itself, outside the agent's sandbox: unit tests in the worktree, mobile shots in a fresh checkout of another configured repo (as jarvis-server's mobile-shot) against the runner's mirror at LOOP_HEAD, and skips a step whose when_changed paths did not change. Their logs and files (a screenshot, index.json) are attached with the runner's label, the PR's Verification footer lists them apart from the agent's evidence, the extra checkout is removed, and the review agent gets the files.",
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "via": "slack",
+      "title": "verified item",
+      "text": "[mobile] show the pairing code larger"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "review"
+      },
+      "events": [
+        {
+          "item": "a",
+          "kind": "evidence",
+          "actor": "runner",
+          "data": {
+            "name": "^verify-1-unit-tests\\.log$",
+            "label": "^runner verify \"unit tests\": log, passed \\(0s\\)$"
+          },
+          "count": 1
+        },
+        {
+          "item": "a",
+          "kind": "evidence",
+          "actor": "runner",
+          "data": {
+            "name": "^verify-2-mobile-shots\\.log$",
+            "label": "^runner verify \"mobile shots\": log, passed \\(0s\\)$"
+          },
+          "count": 1
+        },
+        {
+          "item": "a",
+          "kind": "evidence",
+          "actor": "runner",
+          "data": {
+            "name": "^verify-2-mobile-shots-home-light\\.png$",
+            "label": "^runner verify \"mobile shots\": verify-2-mobile-shots-home-light\\.png$"
+          },
+          "count": 1
+        },
+        {
+          "item": "a",
+          "kind": "evidence",
+          "actor": "runner",
+          "data": {
+            "name": "^verify-2-mobile-shots-index\\.json$"
+          },
+          "count": 1
+        },
+        {
+          "item": "a",
+          "kind": "evidence",
+          "actor": "runner",
+          "data": {
+            "name": "^after\\.txt$",
+            "label": "^tests$"
+          },
+          "count": 1
+        }
+      ],
+      "no_events": [
+        {
+          "item": "a",
+          "kind": "evidence",
+          "data": {
+            "name": "web-screenshots"
+          }
+        }
+      ],
+      "pr": {
+        "a": {
+          "number": 101,
+          "repo": "sandbox/jarvis-node-mobile",
+          "body": "\\n### Verification\\n\\n\\*\\*Runner verify\\*\\* \\(run by the runner after the agent, outside its sandbox, from the runner's config\\):\\n\\n- unit tests: passed \\(0s\\); `verify-1-unit-tests\\.log`\\n- mobile shots: passed \\(0s\\); `verify-2-mobile-shots\\.log`, `verify-2-mobile-shots-home-light\\.png`, `verify-2-mobile-shots-index\\.json`\\n- web screenshots: skipped \\(no changed path matches web/\\*\\*\\)\\n\\nEvidence files \\(on loop item #1\\):\\n\\n- `after\\.txt`: tests\\n"
+        }
+      },
+      "run_files": [
+        {
+          "item": "a",
+          "stage": "build",
+          "run": 1,
+          "file": "verify/verify-2-mobile-shots/output.log",
+          "text": "^built [0-9a-f]{40} from the runner's mirror; shooting in sandbox loop-1 from 1-verify-demo\\nshots: 1 screen, light\\n$"
+        },
+        {
+          "item": "a",
+          "stage": "build",
+          "run": 1,
+          "file": "verify/verify-1-unit-tests/output.log",
+          "text": "^unit tests: 12 passed at [0-9a-f]{40}\\n$"
+        },
+        {
+          "item": "a",
+          "stage": "build",
+          "run": 1,
+          "file": "verify/verify-3-web-screenshots/output.log",
+          "absent": true
+        },
+        {
+          "item": "a",
+          "stage": "build",
+          "run": 1,
+          "file": "brief.md",
+          "text": "the runner runs this repo's verify steps itself \\(outside your sandbox\\), before it pushes: unit tests; mobile shots; web screenshots; a failure comes back to you in `\\.loop/review/verify\\.md`\\."
+        }
+      ],
+      "absent": [
+        "work/1-verify-demo"
+      ]
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "land"
+    },
+    "run_files": [
+      {
+        "item": "a",
+        "stage": "review",
+        "run": 1,
+        "file": "brief.md",
+        "text": "`\\.loop/context/evidence/\\d+-verify-2-mobile-shots-home-light\\.png` \\(runner verify \"mobile shots\": verify-2-mobile-shots-home-light\\.png\\)"
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "text": "^Claimed for build\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "sandbox/jarvis-node-mobile#101> opened, head `[0-9a-f]{7}` → review\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "^Review approved → land"
+      }
+    ],
+    "no_events": [
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "verify_failed"
+      }
+    ]
+  }
+}
