@@ -1,0 +1,51 @@
+{
+  "name": "auto-land",
+  "about": "The runner's land script, no agent: review approves, CI on the PR's head is pending (land waits, heartbeating, posting nothing), then passes; land squash-merges at that head, main moves to the squash commit, the branch is deleted, and main's CI on the merge commit comes back green.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pending", "scenarios": "pending"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "expect", "stage": {"a": "land"}, "leased": {"a": true}, "pr": {"a": {"state": "OPEN", "merge_calls": 0}}},
+    {"do": "clock", "advance": "2m"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass", "scenarios": "pending"}},
+    {"do": "clock", "advance": "1m"},
+    {"do": "expect", "stage": {"a": "land"}, "leased": {"a": true}, "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
+     "no_messages": [{"thread": "a", "text": "CI|pending|waiting"}]},
+    {"do": "ci", "item": "a", "checks": {"check": "pass", "scenarios": "pass"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "leased": {"a": false},
+    "agent_runs": {"build": 1, "review": 1, "land": 0},
+    "pr": {"a": {"number": 101, "state": "MERGED", "merge_calls": 1}},
+    "remote": {"main": "a", "only": true},
+    "events": [
+      {"item": "a", "kind": "claimed", "actor": "runner", "data": {"agent": "^sandbox-"}, "count": 3},
+      {"item": "a", "kind": "advanced", "outcome": "merged", "actor": "runner",
+       "data": {"main_ci": "^watching$", "changed_paths": "feature\\.txt", "head_sha": "^[0-9a-f]{40}$", "merge_sha": "^[0-9a-f]{40}$"}, "count": 1},
+      {"item": "a", "kind": "main_ci", "actor": "runner", "data": {"result": "^green$", "urls": "actions/runs/"}, "count": 1}
+    ],
+    "no_events": [
+      {"item": "a", "kind": "land_waiting"},
+      {"item": "a", "kind": "refused"},
+      {"kind": "created", "data": {"priority": "^P1$"}}
+    ],
+    "messages": [
+      {"parent": "a", "text": "Stage \\*done\\*"},
+      {"thread": "a", "text": "^Review approved → land"},
+      {"thread": "a", "text": "^Claimed for land\\.$"},
+      {"thread": "a", "text": "^Merged <https://github.com/sandbox/demo/pull/101\\|sandbox/demo#101> as `[0-9a-f]{7}`; watching main's CI\\.$"},
+      {"thread": "a", "text": "^main green on `[0-9a-f]{7}`\\.$"}
+    ]
+  }
+}

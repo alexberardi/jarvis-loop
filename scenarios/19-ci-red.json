@@ -1,0 +1,42 @@
+{
+  "name": "ci-red",
+  "about": "CI on the PR's head stays pending for over 10 minutes (the parent's stage line says land is waiting for CI; nothing is posted in the thread), then a check fails: land sends the item back to build with the failing check's name and link, and merges nothing.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pending", "lint": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "clock", "advance": "9m"},
+    {"do": "expect", "stage": {"a": "land"}, "leased": {"a": true},
+     "messages": [{"parent": "a", "text": "Stage \\*land\\* · "}]},
+    {"do": "clock", "advance": "2m"},
+    {"do": "expect", "stage": {"a": "land"}, "leased": {"a": true},
+     "events": [{"item": "a", "kind": "land_waiting", "actor": "runner", "data": {"waiting_for": "^CI \\(check\\)$"}, "count": 1}],
+     "messages": [{"parent": "a", "text": "Stage \\*land, waiting for CI \\(check\\) since 13:00 UTC\\*"}]},
+    {"do": "ci", "item": "a", "checks": {"check": "fail", "lint": "pass"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "build"},
+    "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
+    "remote": {"branches": {"a": "^feat: add a feature$"}, "only": true},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "back_to_build", "actor": "runner",
+       "data": {"reason": "^CI failed on `[0-9a-f]{7}`: check \\(https://github\\.com/sandbox/demo/actions/runs/check\\)$", "changed_paths": "feature\\.txt"}, "count": 1}
+    ],
+    "messages": [
+      {"parent": "a", "text": "Stage \\*ready\\*"},
+      {"thread": "a", "text": "^Claimed for land\\.$"},
+      {"thread": "a", "text": "^Back to build: CI failed on `[0-9a-f]{7}`: check"}
+    ],
+    "no_messages": [
+      {"thread": "a", "text": "waiting|pending|land_waiting"}
+    ]
+  }
+}

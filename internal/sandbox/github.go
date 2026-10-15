@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -24,6 +27,17 @@ type PR struct {
 	Edits   int    `json:"edits,omitempty"`
 	// Comments are what the runner posted on the PR (the review stage's verdicts), oldest first.
 	Comments []string `json:"comments,omitempty"`
+	// MergeCommit is the squash commit on main once the land script merged it.
+	MergeCommit string `json:"merge_commit,omitempty"`
+	// MergeCalls are the land script's merge calls: each head it asked to merge at, and GitHub's
+	// answer ("merged" or the refusal).
+	MergeCalls []MergeCall `json:"merge_calls,omitempty"`
+}
+
+// MergeCall is one gh pr merge.
+type MergeCall struct {
+	Head   string `json:"head"`
+	Result string `json:"result"`
 }
 
 // GitHub is the fake GitHub: bare repositories on disk are the remotes the runner pushes to, and
@@ -35,13 +49,31 @@ type GitHub struct {
 	next   int
 	repos  map[string]string // slug -> bare repo path
 	merged map[string][]runner.MergedPR
+
+	// checks are the CI checks on a commit ("slug@sha" -> name -> pass, fail, pending, cancel,
+	// skip), set by scenario steps; mainCI is how every workflow run on a commit of main goes.
+	checks map[string]map[string]string
+	mainCI map[string]string
+	// mainHead is where each repo's main should be: where it started, then each merge or
+	// scripted push. Anything else moving main is a failure.
+	mainHead map[string]string
+	runIDs   int
+	// refuse is how many of the next merges GitHub refuses anyway (as when the base moved).
+	refuse int
 }
 
-var _ runner.PRs = (*GitHub)(nil)
+var (
+	_ runner.PRs        = (*GitHub)(nil)
+	_ runner.LandGitHub = (*GitHub)(nil)
+)
 
 // NewGitHub returns a fake over these remotes (owner/name -> bare repo).
 func NewGitHub(repos map[string]string) *GitHub {
-	return &GitHub{next: 101, repos: repos}
+	g := &GitHub{next: 101, repos: repos, checks: map[string]map[string]string{}, mainCI: map[string]string{}, mainHead: map[string]string{}, runIDs: 9000}
+	for slug := range repos {
+		g.mainHead[slug] = g.RemoteHead(slug, "main")
+	}
+	return g
 }
 
 // PRs returns the recorded PRs.
@@ -241,4 +273,222 @@ func (g *GitHub) Comments(_ context.Context, slug string, number int) ([]runner.
 		out = append(out, runner.PRComment{Author: "sandbox", At: fmt.Sprintf("comment %d", n+1), Body: c})
 	}
 	return out, nil
+}
+
+// SetChecks sets the CI checks on a repo's commit (name -> pass, fail, pending, cancel, skip).
+func (g *GitHub) SetChecks(slug, sha string, checks map[string]string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	m := map[string]string{}
+	for k, v := range checks {
+		m[k] = v
+	}
+	g.checks[slug+"@"+sha] = m
+}
+
+// SetMainCI sets how the workflow runs on main's commits go (name -> pass, fail, pending); empty:
+// no runs at all.
+func (g *GitHub) SetMainCI(runs map[string]string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.mainCI = map[string]string{}
+	for k, v := range runs {
+		g.mainCI[k] = v
+	}
+}
+
+// MainHead is where a repo's main should be.
+func (g *GitHub) MainHead(slug string) string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.mainHead[slug]
+}
+
+var checkBuckets = map[string]string{"pass": runner.BucketPass, "fail": runner.BucketFail, "pending": runner.BucketPending,
+	"cancel": runner.BucketCancel, "skip": runner.BucketSkipping}
+
+// mergeTree says whether head merges into the base cleanly (git merge-tree), and the tree.
+func (g *GitHub) mergeTree(slug, base, head string) (string, bool) {
+	cmd := exec.Command("git", "-C", g.repos[slug], "merge-tree", "--write-tree", "refs/heads/"+base, head)
+	out, err := cmd.Output()
+	first, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	return first, err == nil
+}
+
+// LandView answers the land script's gh pr view: the PR, its branch's head on the remote, the
+// checks scripted for that head, and its mergeability, computed with git as GitHub would.
+func (g *GitHub) LandView(_ context.Context, slug string, number int) (runner.LandPR, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	i, ok := g.find(slug, number)
+	if !ok {
+		return runner.LandPR{}, fmt.Errorf("no pull request %s#%d", slug, number)
+	}
+	p := g.prs[i]
+	pr := runner.LandPR{Number: p.Number, State: p.State, HeadRefName: p.Head, HeadRefOid: p.HeadSHA, BaseRefName: p.Base,
+		Body: p.Body, MergeCommit: p.MergeCommit, MergeStateStatus: "UNKNOWN", Mergeable: "UNKNOWN"}
+	if p.State == "OPEN" {
+		pr.HeadRefOid = g.RemoteHead(slug, p.Head)
+		if _, clean := g.mergeTree(slug, p.Base, pr.HeadRefOid); clean {
+			pr.Mergeable, pr.MergeStateStatus = "MERGEABLE", "CLEAN"
+		} else {
+			pr.Mergeable, pr.MergeStateStatus = "CONFLICTING", "DIRTY"
+		}
+	}
+	checks := g.checks[slug+"@"+pr.HeadRefOid]
+	names := make([]string, 0, len(checks))
+	for n := range checks {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		b := checkBuckets[checks[n]]
+		if b == "" {
+			b = runner.BucketFail
+		}
+		pr.Checks = append(pr.Checks, runner.Check{Name: n, Bucket: b, URL: fmt.Sprintf("https://github.com/%s/actions/runs/%s", slug, n)})
+	}
+	return pr, nil
+}
+
+// Merge is gh pr merge --squash --delete-branch --match-head-commit: it refuses a PR that is not
+// open, a head that moved, or a conflict; otherwise it squashes the head onto main as one commit,
+// moves main and deletes the branch.
+func (g *GitHub) Merge(_ context.Context, slug string, number int, head string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	i, ok := g.find(slug, number)
+	if !ok {
+		return fmt.Errorf("no pull request %s#%d", slug, number)
+	}
+	p := &g.prs[i]
+	refuse := func(msg string) error {
+		p.MergeCalls = append(p.MergeCalls, MergeCall{Head: head, Result: msg})
+		return fmt.Errorf("gh pr merge: %s", msg)
+	}
+	if p.State != "OPEN" {
+		return refuse("Pull request " + slug + "#" + strconv.Itoa(number) + " is not open")
+	}
+	if cur := g.RemoteHead(slug, p.Head); cur != head {
+		return refuse("Head branch was modified. Review and try the merge again.")
+	}
+	tree, clean := g.mergeTree(slug, p.Base, head)
+	if !clean {
+		return refuse("Pull request is not mergeable: the merge commit cannot be cleanly created.")
+	}
+	if g.refuse > 0 {
+		g.refuse--
+		return refuse("Base branch was modified. Review and try the merge again.")
+	}
+	repo := g.repos[slug]
+	old := g.RemoteHead(slug, p.Base)
+	commit, err := git(repo, "commit-tree", tree, "-p", old, "-m", fmt.Sprintf("%s (#%d)", p.Title, p.Number))
+	if err != nil {
+		return refuse(err.Error())
+	}
+	if _, err := git(repo, "update-ref", "refs/heads/"+p.Base, commit, old); err != nil {
+		return refuse(err.Error())
+	}
+	if _, err := git(repo, "update-ref", "-d", "refs/heads/"+p.Head); err != nil {
+		return refuse(err.Error())
+	}
+	p.State, p.MergeCommit, p.HeadSHA = "MERGED", commit, head
+	p.MergeCalls = append(p.MergeCalls, MergeCall{Head: head, Result: "merged"})
+	if p.Base == "main" {
+		g.mainHead[slug] = commit
+	}
+	return nil
+}
+
+// CommitRuns answers gh run list --commit: on a commit of main, one run per scripted main CI job.
+func (g *GitHub) CommitRuns(_ context.Context, slug, sha string) ([]runner.WorkflowRun, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, ok := g.repos[slug]; !ok {
+		return nil, fmt.Errorf("no repository %s", slug)
+	}
+	onMain := false
+	for _, p := range g.prs {
+		onMain = onMain || p.Repo == slug && p.MergeCommit == sha
+	}
+	if !onMain {
+		return nil, nil
+	}
+	names := make([]string, 0, len(g.mainCI))
+	for n := range g.mainCI {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var runs []runner.WorkflowRun
+	for i, n := range names {
+		r := runner.WorkflowRun{Name: n, Workflow: n, URL: fmt.Sprintf("https://github.com/%s/actions/runs/%d", slug, g.runIDs+i)}
+		switch g.mainCI[n] {
+		case "pass":
+			r.Status, r.Conclusion = "completed", "success"
+		case "fail":
+			r.Status, r.Conclusion = "completed", "failure"
+		default:
+			r.Status = "in_progress"
+		}
+		runs = append(runs, r)
+	}
+	return runs, nil
+}
+
+// Push commits content to a file on a branch of the remote, as someone else would (a teammate's
+// commit on the PR's branch, or a change landing on main meanwhile).
+func (g *GitHub) Push(slug, branch, file, content, msg string) (string, error) {
+	repo := g.repos[slug]
+	if repo == "" {
+		return "", fmt.Errorf("no repository %s", slug)
+	}
+	tmp, err := os.MkdirTemp("", "fake-gh-push-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmp)
+	if _, err := git(tmp, "clone", "-q", "--branch", branch, repo, "."); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(tmp, file)), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(tmp, file), []byte(content), 0o644); err != nil {
+		return "", err
+	}
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", msg}, {"push", "-q", "origin", "HEAD:refs/heads/" + branch}} {
+		if _, err := git(tmp, args...); err != nil {
+			return "", err
+		}
+	}
+	head := g.RemoteHead(slug, branch)
+	if branch == "main" {
+		g.mu.Lock()
+		g.mainHead[slug] = head
+		g.mu.Unlock()
+	}
+	return head, nil
+}
+
+// RefuseMerges makes GitHub refuse the next n merges.
+func (g *GitHub) RefuseMerges(n int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.refuse = n
+}
+
+// MergeByHand merges an item's PR as someone on GitHub would, outside the loop.
+func (g *GitHub) MergeByHand(slug, branch string) error {
+	g.mu.Lock()
+	n := 0
+	for _, p := range g.prs {
+		if p.Repo == slug && p.Head == branch && p.State == "OPEN" {
+			n = p.Number
+		}
+	}
+	g.mu.Unlock()
+	if n == 0 {
+		return fmt.Errorf("no open PR for %s", branch)
+	}
+	return g.Merge(context.Background(), slug, n, g.RemoteHead(slug, branch))
 }

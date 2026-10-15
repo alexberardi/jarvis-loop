@@ -64,6 +64,17 @@ type Step struct {
 	Answer  string `json:"answer,omitempty"` // a /loop command's answer must match this
 	// clock
 	Advance string `json:"advance,omitempty"`
+	// ci: the CI checks on the item's PR head (name -> pass, fail, pending, cancel, skip), and how
+	// the workflow runs on main's commits go (name -> pass, fail, pending)
+	Checks map[string]string `json:"checks,omitempty"`
+	Main   map[string]string `json:"main,omitempty"`
+	// push: a commit by someone else to the item's branch, or to Branch ("main") of the demo
+	// repo, changing File to Text
+	Branch string `json:"branch,omitempty"`
+	// github: GitHub refuses the next RefuseMerges merges; MergeByHand merges the item's PR
+	// outside the loop
+	RefuseMerges *int `json:"refuse_merges,omitempty"`
+	MergeByHand  bool `json:"merge_by_hand,omitempty"`
 	// control (as the CLI's PUT /control)
 	ActiveAgents  *int  `json:"active_agents,omitempty"`
 	MaxRunMinutes *int  `json:"max_run_minutes,omitempty"`
@@ -89,6 +100,9 @@ type Expect struct {
 	PR         map[string]PRMatch `json:"pr,omitempty"`  // alias -> the item's PR, as the runner opened it
 	Remote     *RemoteMatch       `json:"remote,omitempty"`
 	Absent     []string           `json:"absent,omitempty"` // paths under the stack dir that must not exist
+	// AgentRuns: stage -> how many agent runs the runner started for it (its run dirs); land
+	// starts none.
+	AgentRuns map[string]int `json:"agent_runs,omitempty"`
 	// SamePrefix: for each stage named, the runner ran it at least twice, and every run's prompt
 	// starts with that stage's static brief and has the same command line (one cacheable prefix).
 	SamePrefix []string `json:"same_prefix,omitempty"`
@@ -127,6 +141,9 @@ type PRMatch struct {
 	// Comments is how many comments the runner posted; Comment a regexp on the newest.
 	Comments *int   `json:"comments,omitempty"`
 	Comment  string `json:"comment,omitempty"`
+	// State is OPEN, MERGED or CLOSED; MergeCalls how many times land asked GitHub to merge it.
+	State      string `json:"state,omitempty"`
+	MergeCalls *int   `json:"merge_calls,omitempty"`
 }
 
 // ControlMatch checks the active-agents control.
@@ -135,8 +152,11 @@ type ControlMatch struct {
 	Stopped      *bool `json:"stopped,omitempty"`
 }
 
-// RemoteMatch checks the fake GitHub remote. Main never moves (always checked).
+// RemoteMatch checks the fake GitHub remote. Main is always checked: it is where it started, or
+// where a merge or a scripted push put it, nowhere else.
 type RemoteMatch struct {
+	// Main: main's head is this item's squash commit (the land script merged it).
+	Main string `json:"main,omitempty"`
 	// Branches maps an item to a regexp on its branch's head commit subject.
 	Branches map[string]string `json:"branches,omitempty"`
 	// Files maps an item to the exact files its branch's head commit changed.
@@ -329,6 +349,64 @@ func (p *player) step(st Step) error {
 			"head_sha": d.Item.HeadSHA}, nil)
 	case "land":
 		return p.land(st)
+	case "ci":
+		if st.Main != nil {
+			s.GitHub.SetMainCI(st.Main)
+		}
+		if st.Item == "" {
+			return nil
+		}
+		r, err := p.ref(st.Item)
+		if err != nil {
+			return err
+		}
+		d, err := s.Store.GetItem(p.ctx, r.id)
+		if err != nil {
+			return err
+		}
+		head := s.GitHub.RemoteHead(d.Item.Repo, ItemBranch(r.id, r.title))
+		if head == "" {
+			return fmt.Errorf("%s has no branch on %q yet", st.Item, d.Item.Repo)
+		}
+		s.GitHub.SetChecks(d.Item.Repo, head, st.Checks)
+		return nil
+	case "github":
+		if st.RefuseMerges != nil {
+			s.GitHub.RefuseMerges(*st.RefuseMerges)
+		}
+		if st.MergeByHand {
+			r, err := p.ref(st.Item)
+			if err != nil {
+				return err
+			}
+			d, err := s.Store.GetItem(p.ctx, r.id)
+			if err != nil {
+				return err
+			}
+			return s.GitHub.MergeByHand(d.Item.Repo, ItemBranch(r.id, r.title))
+		}
+		return nil
+	case "push":
+		if st.File == "" {
+			return errors.New("push needs file (and text)")
+		}
+		slug, branch := RepoSlug, st.Branch
+		if st.Item != "" {
+			r, err := p.ref(st.Item)
+			if err != nil {
+				return err
+			}
+			d, err := s.Store.GetItem(p.ctx, r.id)
+			if err != nil {
+				return err
+			}
+			slug, branch = d.Item.Repo, ItemBranch(r.id, r.title)
+		}
+		if branch == "" {
+			return errors.New("push needs item or branch")
+		}
+		_, err := s.GitHub.Push(slug, branch, st.File, st.Text, "someone else's commit")
+		return err
 	case "reply", "mention":
 		user, err := userID(st.As)
 		if err != nil {

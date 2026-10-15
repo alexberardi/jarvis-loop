@@ -21,8 +21,6 @@ const (
 	ChannelLoop = "C0C9G6Y87HA"
 	// ChannelDigest holds the active-agents control message and the digest.
 	ChannelDigest = "C0C969AA2Q3"
-	// Approver is the only member whose answers, approvals and control changes count.
-	Approver = "U0C9AFPAMD4"
 	// DefaultBaseURL is Slack's Web API.
 	DefaultBaseURL = "https://slack.com/api/"
 )

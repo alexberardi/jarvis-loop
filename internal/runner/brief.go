@@ -25,6 +25,14 @@ type Item struct {
 	Branch      string   `json:"branch"`
 	HeadSHA     string   `json:"head_sha"`
 	Summary     string   `json:"summary"`
+	// Approval is the user's approval of a held merge, for the head they saw (land reads it).
+	Approval *ItemApproval `json:"approval,omitempty"`
+}
+
+// ItemApproval is the part of an approval land needs.
+type ItemApproval struct {
+	By      string `json:"by"`
+	HeadSHA string `json:"head_sha"`
 }
 
 // The work stages a runner can run agents for.

@@ -1,0 +1,38 @@
+{
+  "name": "main-red",
+  "about": "Land merges a green PR; main's CI on the squash commit fails. The item stays done, gets a main_ci red event, and the runner files a P1 finding naming the failing job and the merge; the bot posts the P1's thread with an @mention of the approver (and only them).",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"build": "pending", "test": "pending"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "expect", "stage": {"a": "done"}, "leased": {"a": false},
+     "messages": [{"thread": "a", "text": "watching main's CI\\.$"}]},
+    {"do": "clock", "advance": "1m"},
+    {"do": "expect", "no_events": [{"item": "a", "kind": "main_ci"}]},
+    {"do": "ci", "main": {"build": "pass", "test": "fail"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "remote": {"main": "a", "only": true},
+    "events": [
+      {"item": "a", "kind": "main_ci", "actor": "runner",
+       "data": {"result": "^red$", "failing": "^\\[\"test\"\\]$", "p1_item": "^2$", "urls": "actions/runs/"}, "count": 1},
+      {"kind": "created", "actor": "runner", "data": {"title": "^main red after #101: test$", "priority": "^P1$", "source": "^finding$", "repo": "^sandbox/demo$"}, "count": 1}
+    ],
+    "messages": [
+      {"thread": "a", "text": "^Merged .*sandbox/demo#101> as `[0-9a-f]{7}`; watching main's CI\\.$"},
+      {"channel": "loop", "text": "^\\*#2 main red after #101: test\\*\\nPriority \\*P1\\* · Stage \\*intake\\* · Source finding · Repo sandbox/demo"},
+      {"channel": "loop", "text": "^<@U0C9AFPAMD4> P1, filed by the loop: main red after #101: test$"},
+      {"thread": "a", "text": "^main red on `[0-9a-f]{7}` \\(failing: test\\): filed #2 \\(P1\\)\\.$"}
+    ]
+  }
+}

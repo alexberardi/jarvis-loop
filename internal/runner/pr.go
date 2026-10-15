@@ -73,10 +73,14 @@ type MergedPR struct {
 type GH struct {
 	// Env for gh; nil means the runner's own, minus loopd's and Slack's secrets.
 	Env []string
+	// Dir is where gh runs; set it to a directory that is no git checkout, so gh never acts on a
+	// local repository (every call names --repo anyway). Empty: the runner's own directory.
+	Dir string
 }
 
 func (g GH) run(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Dir = g.Dir
 	env := g.Env
 	if env == nil {
 		env = scrubEnv(nil)
@@ -268,7 +272,7 @@ type RunStats struct {
 func PRBody(agentBody string, item int64, evidence []EvidenceFile, labels map[string]string, st RunStats) string {
 	var b strings.Builder
 	b.WriteString(strings.TrimRight(agentBody, "\n"))
-	b.WriteString("\n\n---\n\n### Verification\n\n")
+	b.WriteString("\n\n---\n\n" + VerificationHeading + "\n\n")
 	if len(evidence) == 0 {
 		b.WriteString("No evidence files.\n")
 	} else {
@@ -287,7 +291,7 @@ func PRBody(agentBody string, item int64, evidence []EvidenceFile, labels map[st
 	} else {
 		fmt.Fprintf(&b, "\nRun: %s (no usage numbers).\n", duration(st.Seconds))
 	}
-	b.WriteString("\n*Built by a jarvis-loop agent; pushed and opened by the runner.*\n")
+	b.WriteString("\n" + VerificationTrailer + "\n")
 	return b.String()
 }
 

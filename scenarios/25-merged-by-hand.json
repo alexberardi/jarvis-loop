@@ -1,0 +1,30 @@
+{
+  "name": "merged-by-hand",
+  "about": "Someone merges the PR on GitHub before land gets to it: land finds it merged, records merged with GitHub's merge commit (idempotent: the one merge call on the PR is the hand merge, land makes none) and still watches main's CI.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "github", "item": "a", "merge_by_hand": true},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "pr": {"a": {"state": "MERGED", "merge_calls": 1}},
+    "remote": {"main": "a", "only": true},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "merged", "actor": "runner", "data": {"merged_outside": "^true$", "main_ci": "^watching$"}, "count": 1},
+      {"item": "a", "kind": "main_ci", "data": {"result": "^green$"}, "count": 1}
+    ],
+    "messages": [
+      {"thread": "a", "text": "^Merged .*sandbox/demo#101> as `[0-9a-f]{7}` on GitHub, outside the loop; watching main's CI\\.$"},
+      {"thread": "a", "text": "^main green on `[0-9a-f]{7}`\\.$"}
+    ]
+  }
+}

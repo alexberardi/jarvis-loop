@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Config is the runner's config file (0600: it holds the runner's loopd token).
@@ -49,8 +50,14 @@ type Config struct {
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
 	// VerifyPR checks the PR on GitHub (gh pr view) against git before reporting. Default true.
 	VerifyPR *bool `json:"verify_pr,omitempty"`
+	// LandCIWait is how long a land run waits for CI (or GitHub's mergeability) on the PR's head
+	// before giving up; LandMainWait how long it watches main's CI after a merge. Go durations,
+	// default "30m" each.
+	LandCIWait   string `json:"land_ci_wait,omitempty"`
+	LandMainWait string `json:"land_main_wait,omitempty"`
 
-	path string
+	path             string
+	ciWait, mainWait time.Duration
 }
 
 // RepoConfig is one repository the runner works on, keyed by the item's repo field.
@@ -159,9 +166,23 @@ func (c *Config) normalize() error {
 		c.Stages = append([]string(nil), AgentStages...)
 	}
 	for _, st := range c.Stages {
-		if !slices.Contains(AgentStages, st) {
-			return fmt.Errorf("config: stages may be %s, not %q", strings.Join(AgentStages, ", "), st)
+		if !slices.Contains(RunnerStages, st) {
+			return fmt.Errorf("config: stages may be %s, not %q", strings.Join(RunnerStages, ", "), st)
 		}
+	}
+	for _, w := range []struct {
+		name, val string
+		to        *time.Duration
+	}{{"land_ci_wait", c.LandCIWait, &c.ciWait}, {"land_main_wait", c.LandMainWait, &c.mainWait}} {
+		*w.to = 30 * time.Minute
+		if w.val == "" {
+			continue
+		}
+		d, err := time.ParseDuration(w.val)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("config: %s must be a positive duration like \"30m\", not %q", w.name, w.val)
+		}
+		*w.to = d
 	}
 	c.Stages = uniq(c.Stages)
 	if c.UserEmulator == "" {
