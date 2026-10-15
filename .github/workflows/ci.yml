@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "not gofmt'd:"; echo "$out"; exit 1; fi
+      - name: vet (linux, darwin; CGO off)
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          GOOS=linux go vet ./...
+          GOOS=darwin go vet ./...
+      - name: test (race)
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./...
+      - name: build (CGO off)
+        env:
+          CGO_ENABLED: "0"
+        run: go build ./...

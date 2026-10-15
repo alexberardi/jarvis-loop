@@ -1,0 +1,146 @@
+// Command loopd is the Jarvis Loop control plane: the pipeline's state, its rules, the API and
+// the status page (docs/DESIGN.md, docs/phases/02-loopd-core.md).
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/alexberardi/jarvis-loop/internal/api"
+	"github.com/alexberardi/jarvis-loop/internal/clock"
+	"github.com/alexberardi/jarvis-loop/internal/store"
+	"github.com/alexberardi/jarvis-loop/internal/web"
+)
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, os.Args[1:], os.Stderr); err != nil {
+		fmt.Fprintln(os.Stderr, "loopd:", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, args []string, stderr io.Writer) error {
+	fs := flag.NewFlagSet("loopd", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	addr := fs.String("addr", "127.0.0.1:7780", "listen address")
+	data := fs.String("data", "~/.local/share/jarvis-loop", "data directory (database and evidence)")
+	tokensPath := fs.String("tokens", "~/.config/jarvis-loop/tokens", "tokens file, 0600: token<TAB>kind<TAB>name per line")
+	lan := fs.Bool("lan", false, "allow listening on a non-loopback address")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := checkAddr(*addr, *lan); err != nil {
+		return err
+	}
+	log := slog.New(slog.NewJSONHandler(stderr, nil))
+
+	toks, err := api.LoadTokens(expand(*tokensPath))
+	if err != nil {
+		return fmt.Errorf("tokens: %w", err)
+	}
+	st, err := store.Open(expand(*data), clock.Real{})
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	defer st.Close()
+
+	srv := &http.Server{
+		Addr:              *addr,
+		Handler:           handler(st, toks, log),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       5 * time.Minute, // evidence uploads
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    64 << 10,
+	}
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		return err
+	}
+	log.Info("loopd listening", "addr", ln.Addr().String(), "data", expand(*data))
+
+	// Expiry also runs on every request; the ticker covers a quiet server.
+	go func() {
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := st.Sweep(ctx); err != nil && ctx.Err() == nil {
+					log.Error("sweep", "err", err)
+				}
+			}
+		}
+	}()
+
+	errc := make(chan error, 1)
+	go func() { errc <- srv.Serve(ln) }()
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+	}
+	log.Info("loopd shutting down")
+	shutCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutCtx); err != nil {
+		return err
+	}
+	if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// handler serves the API, plus the status page at / and its form at /ui/control.
+func handler(st *store.Store, toks *api.Tokens, log *slog.Logger) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/", api.New(st, toks, log))
+	page := api.Logged(log, web.New(st, toks, log))
+	mux.Handle("GET /{$}", page)
+	mux.Handle("POST /ui/control", page)
+	return mux
+}
+
+// checkAddr refuses a non-loopback listen address unless --lan says it is deliberate.
+func checkAddr(addr string, lan bool) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("--addr: %w", err)
+	}
+	if lan {
+		return nil
+	}
+	if host == "localhost" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("--addr %s is not loopback; pass --lan to listen beyond this machine", addr)
+}
+
+func expand(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, p[1:])
+		}
+	}
+	return p
+}
