@@ -35,7 +35,7 @@ type SettingsInput struct {
 	ExcludedCommands []string
 }
 
-// DefaultDomains are the hosts sandboxed commands may reach: GitHub (push, gh), the Go module
+// DefaultDomains are the hosts sandboxed commands may reach: GitHub (Go modules, reading), the Go module
 // proxy and checksum DB, and the npm registry.
 var DefaultDomains = []string{
 	"github.com", "api.github.com", "codeload.github.com", "objects.githubusercontent.com",
@@ -57,16 +57,15 @@ func DenyRules(in SettingsInput) []string {
 			"Bash(gh api *--method "+m+"*)", "Bash(gh api *--method="+m+"*)")
 	}
 	rules = append(rules,
-		// Pushing: never main/master, never forced, never deleting. The guard allows only the
-		// item's own branch.
-		"Bash(git push *--force*)", "Bash(git push -f*)", "Bash(git push * -f)", "Bash(git push * -f *)",
-		"Bash(git push *+*)", "Bash(git push *--mirror*)", "Bash(git push *--all*)", "Bash(git push *--delete*)",
-		"Bash(git push * -d *)", "Bash(git push * main)", "Bash(git push * main *)", "Bash(git push * master)",
-		"Bash(git push * master *)", "Bash(git push *:main*)", "Bash(git push *:master*)",
-		"Bash(git push *refs/heads/main*)", "Bash(git push *refs/heads/master*)",
+		// Pushing and opening or editing PRs are the runner's, outside the sandbox, with the user's
+		// credentials (docs/decisions/2026-10-15-runner-pushes.md). The agent never pushes.
+		"Bash(git push)", "Bash(git push *)", "Bash(gh pr create *)", "Bash(gh pr edit *)",
 		// Devices, privileges, services, processes and remote shells.
 		"Bash(adb)", "Bash(adb *)", "Bash(sudo *)", "Bash(pkexec *)", "Bash(doas *)", "Bash(systemctl *)",
-		"Bash(kill *)", "Bash(pkill *)", "Bash(killall *)", "Bash(ssh *)", "Bash(scp *)", "Bash(sftp *)",
+		"Bash(pkill *)", "Bash(killall *)", "Bash(ssh *)", "Bash(scp *)", "Bash(sftp *)",
+	)
+	rules = append(rules, killRules()...)
+	rules = append(rules,
 		// Recursive removal of anything absolute or above the worktree (the guard resolves paths).
 		"Bash(rm -rf /*)", "Bash(rm -rf ~*)", "Bash(rm -rf ..*)", "Bash(rm -rf $HOME*)",
 		"Bash(rm -fr /*)", "Bash(rm -fr ~*)", "Bash(rm -fr ..*)",
@@ -89,6 +88,27 @@ func DenyRules(in SettingsInput) []string {
 	return uniq(rules)
 }
 
+// killRules deny every kill except "kill -0 <pid>" (signal 0 sends nothing: a liveness check,
+// which the guard then checks exactly). A rule cannot say "anything but -0", so they spell out
+// what kill's first argument can start with: no argument, a signal other than 0 (a digit 1-9, a
+// name, -s/-n/-l, --), 0 followed by more digits, a pid, a job, an expansion or a quote.
+func killRules() []string {
+	rules := []string{"Bash(kill)", "Bash(kill -)", "Bash(kill - *)", "Bash(kill --*)"}
+	for c := '1'; c <= '9'; c++ {
+		rules = append(rules, "Bash(kill -"+string(c)+"*)")
+	}
+	for c := '0'; c <= '9'; c++ {
+		rules = append(rules, "Bash(kill -0"+string(c)+"*)", "Bash(kill "+string(c)+"*)")
+	}
+	for c := 'A'; c <= 'Z'; c++ {
+		rules = append(rules, "Bash(kill -"+string(c)+"*)", "Bash(kill -"+string(c+'a'-'A')+"*)")
+	}
+	for _, c := range []string{"%", "$", "`", "\"", "'", "\\", "{", "(", "~", "?", "["} {
+		rules = append(rules, "Bash(kill "+c+"*)")
+	}
+	return rules
+}
+
 // pathRules are the Read/Edit rule paths for p, a file or a directory: //abs and //abs/**.
 func pathRules(p string) []string {
 	p = filepath.Clean(p)
@@ -99,7 +119,7 @@ func pathRules(p string) []string {
 func AllowRules(in SettingsInput) []string {
 	return []string{
 		"Bash(go *)", "Bash(gofmt *)", "Bash(npm *)", "Bash(npx *)", "Bash(git *)",
-		"Bash(gh pr create *)", "Bash(gh pr view *)", "Bash(gh pr checks *)", "Bash(gh pr list *)",
+		"Bash(gh pr view *)", "Bash(gh pr checks *)", "Bash(gh pr list *)",
 		"Bash(gh pr comment *)", "Bash(scripts/check)", "Bash(scripts/check *)", "Bash(scripts/sandbox *)",
 		"Bash(scripts/fetch-sherpa-libs.sh *)", "Bash(mkdir *)", "Bash(ls *)",
 		// The working directory (the worktree, relative so it is the same rule for every item).

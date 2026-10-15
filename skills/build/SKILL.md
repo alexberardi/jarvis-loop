@@ -1,6 +1,6 @@
 ---
 name: build
-description: The loop's build stage. Implement one loop item test-first in the runner's worktree, verify it, open a PR from the item's branch with the evidence, and write .loop/result.json. Never merge, approve, or push anywhere but the item's branch.
+description: The loop's build stage. Implement one loop item test-first in the runner's worktree, verify it, commit on the item's branch, and write .loop/result.json (ready_for_pr) with the PR's title and body; the runner pushes and opens the PR. Never push, merge or approve.
 ---
 
 # Build stage
@@ -15,7 +15,7 @@ unsure, stop and ask (outcome `question`) instead of guessing.
   touch the user's checkouts (`~/jarvis/<repo>`), the user's emulator (`emulator-5554`),
   `~/.config/jarvis-harness/`, `~/.config/jarvis-loop/`, or processes you did not start.
 - The worktree is a fresh checkout of the base branch (or of this item's branch, if an earlier run
-  pushed to it) on the item's branch. `.loop/` is the runner's: read `.loop/brief.md`, write only
+  left commits on it) on the item's branch. `.loop/` is the runner's: read `.loop/brief.md`, write only
   `.loop/result.json`, files in `.loop/evidence/` and temp files in `.loop/scratch/`. `.loop/` is ignored by git; never commit it.
 - Your tools run under four boundaries the user set: deny rules, a classifier, a guard hook
   (`loop-guard`) and an OS sandbox (writes only here, `$TMPDIR` and the build
@@ -35,13 +35,12 @@ unsure, stop and ask (outcome `question`) instead of guessing.
    already fetched the sherpa libs; put Go's temp dir in the scratch dir if `/tmp` is short
    (`GOTMPDIR=$PWD/.loop/scratch`). Screenshots for a PR come only from seeded sandboxes, never the real
    install.
-4. Commit with clear messages and push **only** the item's branch:
-   `git push origin <branch>` (the exact command is below). No force pushes, no other branch, no
-   other remote.
-5. Open the PR from that branch with `gh pr create --head <branch>`, with the evidence in its
-   description: what changed, the tests, before/after from the harness, and what was **not**
-   verified. Do not request reviews, approve, merge, enable auto-merge (`gh pr merge --auto` is
-   never allowed), or edit repository settings. Landing is a later stage's job.
+4. Commit everything with clear messages on the item's branch. **Do not push**: you hold no
+   GitHub credentials, and the runner pushes the branch (only it, never forced) after you finish.
+5. **Do not open a PR** either: the runner opens it (or updates the open one) from your
+   `ready_for_pr` result's `pr_title` and `pr_body`: what changed, the tests, before/after from
+   the harness, and what was **not** verified; name evidence files by file name. Never approve,
+   merge or edit repository settings. Landing is a later stage's job.
 6. Put the evidence files (screenshots, scenario output, a short test log) in `.loop/evidence/`
    (at most 20 files, 20 MB each; plain files, no symlinks).
 7. Write `.loop/result.json` (contract below) as your last step.
@@ -70,6 +69,6 @@ answer in one reply.
 ## Evidence over claims
 
 Say what you verified and how; list what you did not verify in `not_verified`. The runner checks
-your result against git: `head_sha` must be `git rev-parse HEAD` and must be what you pushed, and
-`changed_paths` must be exactly `git diff --name-status origin/<base>...HEAD`. A result that
-disagrees with git is rejected and the item goes to the user.
+your result against git: it reports git's own HEAD and changed files, refuses `ready_for_pr` while
+the worktree has uncommitted changes, and pushes only your commits. A result that disagrees with
+git is rejected and the item goes to the user.

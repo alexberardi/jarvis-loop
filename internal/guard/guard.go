@@ -8,8 +8,11 @@
 package guard
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -38,7 +41,8 @@ type Config struct {
 	Worktree   string `json:"worktree"`
 	Scratch    string `json:"scratch"`
 	SandboxDir string `json:"sandbox_dir,omitempty"`
-	// Branch is the only branch the agent may push, to Remote.
+	// Branch and Remote are the item's branch and its remote, for the record: agents never push
+	// (the runner pushes the branch after the run; docs/decisions/2026-10-15-runner-pushes.md).
 	Branch string `json:"branch"`
 	Remote string `json:"remote"`
 	Home   string `json:"home"`
@@ -319,7 +323,7 @@ func (c *Config) checkScript(script, cwd, target string, depth int) Decision {
 	if depth > 4 {
 		return deny(RuleUnparseable, target, "too many nested shells")
 	}
-	segs, subs, err := parse(script)
+	segs, subs, err := parseRaw(script)
 	if err != nil {
 		return deny(RuleUnparseable, target, "the command could not be parsed ("+err.Error()+")")
 	}
@@ -329,7 +333,18 @@ func (c *Config) checkScript(script, cwd, target string, depth int) Decision {
 		}
 	}
 	movedDir := false
-	for _, words := range segs {
+	for _, raw := range segs {
+		// kill -0 is judged on the raw words (which word came from which substitution), and only
+		// when nothing wraps it: a wrapper would run /bin/kill, not the shell's builtin.
+		if len(raw) > 0 && raw[0] == "kill" {
+			if c.killZero(raw[1:], subs, cwd, movedDir) {
+				continue
+			}
+		}
+		words := make([]string, len(raw))
+		for i, w := range raw {
+			words[i] = unmark(w)
+		}
 		argv := stripWrappers(words)
 		if len(argv) == 0 {
 			continue
@@ -367,6 +382,56 @@ var never = map[string]string{
 	"killall": "stopping processes is the runner's job", "skill": "stopping processes is the runner's job",
 	"adb": "emulator work goes through the harness scripts, which pass -s",
 	"ssh": "no remote shells", "scp": "no remote copies", "sftp": "no remote copies",
+}
+
+var pidRe = regexp.MustCompile(`^[0-9]+$`)
+
+// killZero reports whether kill's arguments are "-0" and then only pids: literal numbers, or
+// $(cat <file>) where the file (readable to the agent, not a secret) holds exactly one pid now.
+// Signal 0 sends nothing; it only asks whether the process exists. The file is read because the
+// substitution's words reach kill unchecked: a file holding "-s 9 1" would send a signal.
+func (c *Config) killZero(args, subs []string, cwd string, movedDir bool) bool {
+	if len(args) < 2 || args[0] != "-0" {
+		return false
+	}
+	for _, a := range args[1:] {
+		if pidRe.MatchString(a) {
+			continue
+		}
+		n, ok := marked(a)
+		if !ok || n >= len(subs) {
+			return false
+		}
+		segs, inner, err := parseRaw(subs[n])
+		if err != nil || len(inner) > 0 || len(segs) != 1 || len(segs[0]) != 2 || segs[0][0] != "cat" {
+			return false
+		}
+		file := segs[0][1]
+		if strings.ContainsAny(file, "$`*?[") || (movedDir && !filepath.IsAbs(c.expandHome(file))) {
+			return false
+		}
+		if c.checkRead(file, cwd).Deny {
+			return false
+		}
+		b, err := readSmall(c.resolve(file, cwd), 64)
+		if err != nil || !pidRe.MatchString(strings.TrimSpace(string(b))) {
+			return false
+		}
+	}
+	return true
+}
+
+func readSmall(p string, n int64) ([]byte, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, n+1))
+	if err == nil && int64(len(b)) > n {
+		return nil, errors.New("too long")
+	}
+	return b, err
 }
 
 func (c *Config) checkArgv(name string, argv []string, cwd, target string, movedDir bool) Decision {
@@ -427,40 +492,7 @@ func (c *Config) checkGit(args []string, target string) Decision {
 }
 
 func (c *Config) checkPush(args []string, target string) Decision {
-	if c.Branch == "" {
-		return deny(RuleGitPush, target, "this run may not push")
-	}
-	want := "git push " + c.Remote + " " + c.Branch
-	var pos []string
-	for _, a := range args {
-		switch {
-		case a == "-u" || a == "--set-upstream" || a == "-q" || a == "--quiet" || a == "-v" || a == "--verbose" || a == "--no-verify" || a == "--porcelain":
-		case strings.HasPrefix(a, "-"):
-			return deny(RuleGitPush, target, "push flag "+a+" is not allowed; push with: "+want)
-		default:
-			pos = append(pos, a)
-		}
-	}
-	if len(pos) < 2 {
-		return deny(RuleGitPush, target, "name the remote and the branch: "+want)
-	}
-	if pos[0] != c.Remote {
-		return deny(RuleGitPush, target, "push only to "+c.Remote+": "+want)
-	}
-	for _, ref := range pos[1:] {
-		src, dst, hasColon := strings.Cut(ref, ":")
-		if !hasColon {
-			dst = src
-		}
-		if strings.HasPrefix(ref, "+") || src == "" {
-			return deny(RuleGitPush, target, "no force pushes or deletes: "+want)
-		}
-		dst = strings.TrimPrefix(dst, "refs/heads/")
-		if dst != c.Branch {
-			return deny(RuleGitPush, target, "only this item's branch "+c.Branch+" may be pushed: "+want)
-		}
-	}
-	return Decision{}
+	return deny(RuleGitPush, target, "agents never push; commit on the item's branch and write outcome \"ready_for_pr\": the runner pushes it and opens the PR")
 }
 
 // ---- gh ----
@@ -514,6 +546,8 @@ func checkGH(args []string, target string) Decision {
 	switch first(2) {
 	case "pr merge":
 		return deny(RuleGH, target, "merging is the land stage's job (never gh pr merge, never --auto)")
+	case "pr create", "pr edit":
+		return deny(RuleGH, target, "the runner opens and updates the PR; write outcome \"ready_for_pr\" with pr_title and pr_body")
 	case "pr review":
 		return deny(RuleGH, target, "the builder never reviews or approves")
 	case "repo delete", "repo edit", "repo rename", "repo archive", "repo sync":

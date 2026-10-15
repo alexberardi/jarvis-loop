@@ -2,6 +2,8 @@ package guard
 
 import (
 	"errors"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -12,6 +14,35 @@ import (
 // and its arguments. Anything it cannot read (an unterminated quote or substitution) is an error,
 // and the guard refuses the command.
 func parse(s string) (segs [][]string, subs []string, err error) {
+	segs, subs, err = parseRaw(s)
+	for _, words := range segs {
+		for i, w := range words {
+			words[i] = unmark(w)
+		}
+	}
+	return segs, subs, err
+}
+
+var markRe = regexp.MustCompile("\x00[0-9]+\x00")
+
+// unmark replaces parseRaw's substitution markers with "$SUB".
+func unmark(w string) string { return markRe.ReplaceAllString(w, "$$SUB") }
+
+// marked reports whether w is exactly one substitution marker, and which substitution it is.
+func marked(w string) (int, bool) {
+	if len(w) < 3 || w[0] != 0 || w[len(w)-1] != 0 || !markRe.MatchString(w) || strings.Count(w, "\x00") != 2 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(w[1 : len(w)-1])
+	return n, err == nil
+}
+
+// parseRaw is parse, but each command substitution in a word is a marker "\x00<n>\x00" naming
+// subs[n], so a caller can tell which word came from which substitution.
+func parseRaw(s string) (segs [][]string, subs []string, err error) {
+	if strings.IndexByte(s, 0) >= 0 {
+		return nil, nil, errors.New("a NUL byte")
+	}
 	var (
 		words   []string
 		cur     strings.Builder
@@ -88,7 +119,7 @@ func parse(s string) (segs [][]string, subs []string, err error) {
 				return 0, false, err
 			}
 			subs = append(subs, s[i+2:end])
-			cur.WriteString("$SUB")
+			cur.WriteString("\x00" + strconv.Itoa(len(subs)-1) + "\x00")
 			inWord = true
 			return end, true, nil
 		}
@@ -98,7 +129,7 @@ func parse(s string) (segs [][]string, subs []string, err error) {
 				return 0, false, err
 			}
 			subs = append(subs, s[i+1:end])
-			cur.WriteString("$SUB")
+			cur.WriteString("\x00" + strconv.Itoa(len(subs)-1) + "\x00")
 			inWord = true
 			return end, true, nil
 		}

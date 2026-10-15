@@ -139,7 +139,6 @@ func TestBashCommands(t *testing.T) {
 		{"CGO_ENABLED=0 go build ./... && go vet ./...", ""},
 		{"git status && git diff --stat", ""},
 		{"git add -A && git commit -m 'fix: x'", ""},
-		{"gh pr create --title 'x' --body 'y' --head loop/12-fix-x", ""},
 		{"gh pr view 3 --json state", ""},
 		{"gh pr checks 3", ""},
 		{"echo 'gh pr merge is not allowed' > notes.txt", ""},
@@ -148,11 +147,13 @@ func TestBashCommands(t *testing.T) {
 		{"rm -f " + f.outside + "/x", ""}, // not recursive: the sandbox decides
 		{"ls ~/go/pkg/mod", ""},
 
-		// Pushing: only the item's own branch, to origin, without force.
-		{"git push origin loop/12-fix-x", ""},
-		{"git push -u origin HEAD:loop/12-fix-x", ""},
-		{"git push origin HEAD:refs/heads/loop/12-fix-x", ""},
-		{"git push --set-upstream origin loop/12-fix-x", ""},
+		// Pushing: never. The runner pushes the item's branch after the agent ends.
+		{"git push origin loop/12-fix-x", RuleGitPush},
+		{"git push -u origin HEAD:loop/12-fix-x", RuleGitPush},
+		{"git push origin HEAD:refs/heads/loop/12-fix-x", RuleGitPush},
+		{"git push --set-upstream origin loop/12-fix-x", RuleGitPush},
+		{"git push --dry-run origin loop/12-fix-x", RuleGitPush},
+		{"git commit -m 'git push later' && git log", ""},
 		{"git push", RuleGitPush},
 		{"git push origin", RuleGitPush},
 		{"git push origin main", RuleGitPush},
@@ -203,6 +204,12 @@ func TestBashCommands(t *testing.T) {
 		{"gh api graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'", RuleGH},
 		{"gh api repos/o/r/pulls/3", ""},
 		{"gh auth token", RuleGH},
+		{"gh auth status", RuleGH},
+		// PRs: the runner opens and updates them.
+		{"gh pr create --title 'x' --body 'y' --head loop/12-fix-x", RuleGH},
+		{"gh -R o/r pr create --fill", RuleGH},
+		{"gh pr edit 3 --body 'x'", RuleGH},
+		{"gh pr list --head loop/12-fix-x", ""},
 		{"gh secret set X", RuleGH},
 
 		// Never.
@@ -210,6 +217,13 @@ func TestBashCommands(t *testing.T) {
 		{"pkexec ls", RuleNever},
 		{"systemctl --user restart jarvisd", RuleNever},
 		{"kill 1234", RuleNever},
+		{"kill", RuleNever},
+		{"kill -9 1234", RuleNever},
+		{"kill -TERM 1234", RuleNever},
+		{"kill -s 0 1234", RuleNever},
+		{"kill -0", RuleNever},
+		{"kill -0 -s 9 1234", RuleNever},
+		{"kill -0 1234 && kill 1234", RuleNever},
 		{"pkill -f jarvisd", RuleNever},
 		{"killall node", RuleNever},
 		{"adb devices", RuleNever},
@@ -260,11 +274,65 @@ func TestBashCommands(t *testing.T) {
 	}
 }
 
-func TestNoBranchMeansNoPush(t *testing.T) {
+func TestPushRefusalSaysWhoPushes(t *testing.T) {
 	f := newFixture(t)
-	f.cfg.Branch = ""
-	if d := f.cfg.Check(bash(f, "git push origin loop/12-fix-x")); d.Rule != RuleGitPush {
+	d := f.cfg.Check(bash(f, "git push origin loop/12-fix-x"))
+	if d.Rule != RuleGitPush || !strings.Contains(d.Reason, "ready_for_pr") {
 		t.Fatalf("got %+v", d)
+	}
+}
+
+// kill -0 sends no signal (a liveness check), so it is allowed with literal pids, or with the pid
+// read from a file whose content is a single pid right now. Every other kill stays refused.
+func TestKillZero(t *testing.T) {
+	f := newFixture(t)
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(f.wt, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("agent.pid", "4242\n")
+	write("two.pid", "1 2\n")
+	write("evil.pid", "-s 9 1\n")
+	write("empty.pid", "")
+	cases := []struct {
+		cmd  string
+		rule string
+	}{
+		{"kill -0 4242", ""},
+		{"kill -0 4242 4243", ""},
+		{"kill -0 $(cat agent.pid)", ""},
+		{`kill -0 "$(cat agent.pid)"`, ""},
+		{"kill -0 `cat agent.pid`", ""},
+		{"kill -0 $(cat agent.pid) 2>/dev/null && echo up || echo down", ""},
+		{"test -f agent.pid && kill -0 $(cat " + filepath.Join(f.wt, "agent.pid") + ")", ""},
+		{"kill -0 $(cat two.pid)", RuleNever},     // word splitting: more than one pid in the file
+		{"kill -0 $(cat evil.pid)", RuleNever},    // options through the substitution
+		{"kill -0 $(cat empty.pid)", RuleNever},   // not a pid
+		{"kill -0 $(cat missing.pid)", RuleNever}, // nothing to check
+		{"kill -0 $(cat agent.pid two.pid)", RuleNever},
+		{"kill -0 $(head -1 agent.pid)", RuleNever},
+		{"kill -0 $(pgrep jarvisd)", RuleNever},
+		{"kill -0 $PID", RuleNever},
+		{"kill -0 -1", RuleNever},
+		{"kill -0 %1", RuleNever},
+		{"kill -0 -- 4242", RuleNever},
+		{"kill -00 4242", RuleNever},
+		{"/bin/kill -0 4242", RuleNever},
+		{"env kill -0 4242", RuleNever},
+		{"echo 4242 | xargs kill -0", RuleNever},
+		{"FOO=1 kill -0 4242", RuleNever},
+		{"kill -0 $(cat ~/.ssh/agent.pid)", RuleProtectedPath},
+		{"kill -0 4242; kill -9 4242", RuleNever},
+		{"pkill -0 jarvisd", RuleNever},
+	}
+	for _, c := range cases {
+		t.Run(c.cmd, func(t *testing.T) {
+			d := f.cfg.Check(bash(f, c.cmd))
+			if d.Rule != c.rule || d.Deny != (c.rule != "") {
+				t.Fatalf("rule = %q (%s), want %q", d.Rule, d.Reason, c.rule)
+			}
+		})
 	}
 }
 

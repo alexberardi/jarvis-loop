@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -86,8 +87,8 @@ func TestSettingsShape(t *testing.T) {
 			t.Errorf("%s: mode %q, bypass %q", mode, p.DefaultMode, p.DisableBypass)
 		}
 		for _, r := range []string{"Bash(gh pr merge *)", "Bash(gh pr review *)", "Bash(gh repo delete *)", "Bash(gh api *-X DELETE*)",
-			"Bash(git push *--force*)", "Bash(git push * main)", "Bash(adb *)", "Bash(sudo *)", "Bash(pkexec *)", "Bash(systemctl *)",
-			"Bash(kill *)", "Bash(pkill *)", "Bash(killall *)", "Bash(ssh *)", "Bash(scp *)", "Bash(rm -rf /*)",
+			"Bash(git push)", "Bash(git push *)", "Bash(gh pr create *)", "Bash(gh pr edit *)", "Bash(adb *)", "Bash(sudo *)", "Bash(pkexec *)", "Bash(systemctl *)",
+			"Bash(kill)", "Bash(kill -9*)", "Bash(pkill *)", "Bash(killall *)", "Bash(ssh *)", "Bash(scp *)", "Bash(rm -rf /*)",
 			"Bash(curl *127.0.0.1:7780*)", "Bash(wget *localhost:7780*)", "Read(//home/u/.ssh/**)", "Edit(//home/u/jarvis/jarvis-server/**)"} {
 			if !slices.Contains(p.Deny, r) {
 				t.Errorf("%s: deny rule %s missing", mode, r)
@@ -154,6 +155,52 @@ func TestSettingsHaveNoPerItemContent(t *testing.T) {
 	for _, s := range []string{"12-build", "runs/", "loop/12", "guard.json", "LOOP_GUARD_CONFIG"} {
 		if bytes.Contains(a, []byte(s)) {
 			t.Errorf("settings mention %q, which is per item or per run", s)
+		}
+	}
+}
+
+// globMatch is a Bash permission rule's pattern match as the deny list relies on it: * matches
+// any run of characters.
+func globMatch(pat, s string) bool {
+	if pat == "" {
+		return s == ""
+	}
+	if pat[0] == '*' {
+		for i := 0; i <= len(s); i++ {
+			if globMatch(pat[1:], s[i:]) {
+				return true
+			}
+		}
+		return false
+	}
+	return s != "" && pat[0] == s[0] && globMatch(pat[1:], s[1:])
+}
+
+func denied(rules []string, cmd string) string {
+	for _, r := range rules {
+		if strings.HasPrefix(r, "Bash(") && globMatch(strings.TrimSuffix(strings.TrimPrefix(r, "Bash("), ")"), cmd) {
+			return r
+		}
+	}
+	return ""
+}
+
+// The deny rules leave kill -0 (a liveness check) to the guard and refuse every other kill
+// spelling; pushing and opening or editing PRs are the runner's.
+func TestDenyRulesKillAndPush(t *testing.T) {
+	rules := DenyRules(goldenInput(ModeAuto))
+	for _, cmd := range []string{"kill -0 4242", "kill -0 $(cat agent.pid)", "kill -0 `cat x.pid`", "git commit -m x",
+		"gh pr view 3", "gh pr list --head loop/1-x"} {
+		if r := denied(rules, cmd); r != "" {
+			t.Errorf("%q is denied by %s", cmd, r)
+		}
+	}
+	for _, cmd := range []string{"kill", "kill 4242", "kill -9 4242", "kill -15 1", "kill -TERM 1", "kill -s 9 1", "kill -n 9 1",
+		"kill -KILL 1", "kill -- -1", "kill %1", "kill $(cat agent.pid)", "kill $PID", "kill -00 1", "kill -09 1", "kill -l",
+		"kill \"$PID\"", "kill '1'", "git push", "git push origin loop/1-x", "git push -u origin HEAD", "gh pr create --fill",
+		"gh pr edit 3 --body x"} {
+		if denied(rules, cmd) == "" {
+			t.Errorf("%q is not denied", cmd)
 		}
 	}
 }

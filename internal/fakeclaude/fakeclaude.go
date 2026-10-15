@@ -22,12 +22,14 @@ import (
 
 // Scenarios.
 const (
-	Good       = "good"        // commit, push the item branch, evidence, a valid result
+	Good       = "good"        // commit on the item branch, evidence, a ready_for_pr result (the runner pushes)
 	Escape     = "escape"      // try to write outside the worktree and push main first (refused), then good
 	Lying      = "lying"       // good, but the result's head_sha is not HEAD
-	Malformed  = "malformed"   // push, then a result that is not JSON
-	NoResult   = "noresult"    // push, exit 0, no result
+	Malformed  = "malformed"   // commit, then a result that is not JSON
+	NoResult   = "noresult"    // commit, exit 0, no result
 	Question   = "question"    // a question result
+	CommitAsk  = "commit_ask"  // commit, then a question (the commit stays in the runner's mirror)
+	Dirty      = "dirty"       // good, but a change left uncommitted
 	Hang       = "hang"        // write a file, then wait forever
 	IgnoreTerm = "ignore_term" // like hang, but ignore SIGTERM
 	Exit3      = "exit3"       // print something and exit 3
@@ -76,7 +78,6 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	f.cwd, _ = os.Getwd()
 	brief, _ := io.ReadAll(stdin)
 	branch := find("Branch: `([^`]+)`", brief)
-	slug := find("Repository: `([^`]+)`", brief)
 	base := find("base branch `([^`]+)`", brief)
 	if b, err := os.ReadFile(settings); err == nil {
 		var s struct {
@@ -141,15 +142,20 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f.bash("git push origin main")
 	}
 
-	// The common path: a change, committed and pushed on the item's branch.
+	// The common path: a change, committed on the item's branch (a resumed run finds it there).
 	f.write("feature.txt", "a feature for "+branch+"\n")
 	f.bash("git add feature.txt && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'feat: add a feature'")
 	if scenario == NoArm {
 		f.result("done without hooks")
 		return 0
 	}
-	f.bash("git push -q origin " + branch)
 	switch scenario {
+	case CommitAsk:
+		f.write(".loop/result.json", `{"outcome":"question","question":"Is one feature file enough?"}`)
+		f.result("Asked a question.")
+		return 0
+	case Dirty:
+		f.write("notes.txt", "not committed\n")
 	case Malformed:
 		f.write(".loop/result.json", `{"outcome": "pr_opened", oops`)
 		f.result("done")
@@ -166,18 +172,17 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if scenario == Lying {
 		head = strings.Repeat("0", 40)
 	}
-	var paths []string
-	for _, l := range strings.Split(git(f.cwd, "diff", "--name-status", "origin/"+base+"...HEAD"), "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			paths = append(paths, l)
-		}
+	commits := strings.TrimSpace(git(f.cwd, "rev-list", "--count", "origin/"+base+"..HEAD"))
+	if scenario == LowCache {
+		f.bash("git status --short") // one more turn: a run long enough to count
 	}
-	res, _ := json.Marshal(map[string]any{"outcome": "pr_opened", "repo": slug, "pr": 1, "branch": branch, "head_sha": head,
-		"changed_paths": paths, "summary": "Added a feature, test first.", "not_verified": []string{"nothing on a phone"},
+	res, _ := json.Marshal(map[string]any{"outcome": "ready_for_pr", "pr_title": "Add a feature",
+		"pr_body": fmt.Sprintf("Adds `feature.txt` (%s commits).\n\nTests: see `after.txt`.", commits), "head_sha": head,
+		"summary": "Added a feature, test first.", "not_verified": []string{"nothing on a phone"},
 		"evidence": []any{map[string]string{"file": "evidence/after.txt", "label": "tests"}}})
 	f.write(".loop/result.json", string(res))
-	f.say("Opened PR #1.")
-	f.result("Opened PR #1.")
+	f.say("Ready for a PR.")
+	f.result("Ready for a PR.")
 	return 0
 }
 

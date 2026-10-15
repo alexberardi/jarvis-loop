@@ -3,8 +3,9 @@
 //
 //	loop-runner [--config ~/.config/jarvis-loop/runner.json] [--once] [--dry-run]
 //
-// --once claims and works at most one item, then exits. --dry-run skips the GitHub check of the
-// agent's PR (for runs with a fake claude and a local remote); nothing else changes.
+// --once claims and works at most one item, then exits. --dry-run opens no PR and skips the GitHub
+// check (for runs with a fake claude and a local remote); the runner still pushes the item's
+// branch to the configured remote.
 package main
 
 import (
@@ -30,7 +31,7 @@ func run(args []string) error {
 	fs := flag.NewFlagSet("loop-runner", flag.ContinueOnError)
 	cfgPath := fs.String("config", "~/.config/jarvis-loop/runner.json", "runner config (0600)")
 	once := fs.Bool("once", false, "work at most one item, then exit")
-	dry := fs.Bool("dry-run", false, "skip the GitHub PR check (fake claude, local remote)")
+	dry := fs.Bool("dry-run", false, "open no PR and skip the GitHub PR check (fake claude, local remote)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -41,6 +42,12 @@ func run(args []string) error {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	r := &runner.Runner{
 		Cfg: cfg, Client: &runner.Client{Base: cfg.LoopdURL, Token: cfg.Token}, Clock: runner.RealClock{}, Log: log,
+	}
+	// The runner, not the agent, pushes the item's branch and opens its PR, with the user's own
+	// git and gh credentials (docs/decisions/2026-10-15-runner-pushes.md).
+	r.PRs = runner.GH{}
+	if *dry {
+		r.PRs = runner.DryRunPRs{}
 	}
 	if *cfg.VerifyPR && !*dry {
 		r.VerifyPR = runner.GHVerify

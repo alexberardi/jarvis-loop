@@ -5,6 +5,11 @@ against the installed Claude Code (see `2026-10-15-claude-headless-facts.md`). E
 a test unless it says otherwise. **Not yet run with a real agent**: held for the user's approval
 of the boundaries.
 
+**Superseded in part** by `2026-10-15-runner-pushes.md` (after the first real run): the agent no
+longer pushes or opens the PR (`git push` and `gh pr create|edit` are denied outright; its outcome
+is `ready_for_pr`, not `pr_opened`), `kill -0` is allowed, and a re-run continues the item's branch
+from the mirror. The push and result rules below are the phase 4 originals.
+
 ## The four layers as built
 
 **1. No loopd credential for the agent.** The runner's token is in its 0600 config (refused

@@ -170,3 +170,57 @@ func (c *Client) Upload(ctx context.Context, id int64, path, name, label string)
 	_, err = c.do(ctx, "POST", fmt.Sprintf("/items/%d/evidence", id), mw.FormDataContentType(), pr, nil)
 	return err
 }
+
+// EvidenceInfo is one evidence file on an item.
+type EvidenceInfo struct {
+	N     int    `json:"n"`
+	Name  string `json:"name"`
+	Label string `json:"label"`
+	Size  int64  `json:"size"`
+}
+
+// Evidence lists an item's evidence files, oldest first.
+func (c *Client) Evidence(ctx context.Context, id int64) ([]EvidenceInfo, error) {
+	var d struct {
+		Evidence []EvidenceInfo `json:"evidence"`
+	}
+	_, err := c.json(ctx, "GET", fmt.Sprintf("/items/%d", id), nil, &d)
+	return d.Evidence, err
+}
+
+// DownloadEvidence saves evidence file n of an item to dst (at most MaxEvidenceBytes).
+func (c *Client) DownloadEvidence(ctx context.Context, id int64, n int, dst string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(c.Base, "/")+fmt.Sprintf("/items/%d/evidence/%d", id, n), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	hc := c.HTTP
+	if hc == nil {
+		hc = &http.Client{Timeout: 2 * time.Minute}
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return &APIError{Status: resp.StatusCode, Code: "http", Msg: strings.TrimSpace(string(b))}
+	}
+	f, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	n64, err := io.Copy(f, io.LimitReader(resp.Body, MaxEvidenceBytes+1))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil && n64 > MaxEvidenceBytes {
+		err = fmt.Errorf("larger than 20 MB")
+	}
+	if err != nil {
+		os.Remove(dst)
+	}
+	return err
+}

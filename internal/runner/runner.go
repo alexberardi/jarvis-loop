@@ -34,6 +34,10 @@ type Runner struct {
 	// Env is the environment the agent starts with (default: the runner's own), minus loopd's
 	// and Slack's secrets.
 	Env []string
+	// PRs opens or updates the item's PR after the runner pushed its branch (GH, or DryRunPRs).
+	PRs PRs
+	// Push pushes the item's branch from the mirror; nil means Git.PushBranch.
+	Push func(ctx context.Context, mirror, branch string) error
 	// VerifyPR checks the PR on GitHub; nil skips the check (the dry run, tests).
 	VerifyPR func(ctx context.Context, slug string, pr int) (PRInfo, error)
 	// HeartbeatEvery and KillGrace default to 60 s and 10 s.
@@ -218,8 +222,9 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 	}
 	unlock := r.lockMirror(ru.mirror)
 	err := r.Git.EnsureMirror(ctx, ru.mirror, ru.repo)
+	ahead := 0
 	if err == nil {
-		err = r.Git.AddWorktree(ctx, ru.mirror, ru.wt, ru.branch, ru.repo.Base)
+		ahead, err = r.Git.AddWorktree(ctx, ru.mirror, ru.wt, ru.branch, ru.repo.Base)
 	}
 	unlock()
 	if err != nil {
@@ -230,7 +235,9 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 			return "", err
 		}
 	}
-	brief := BuildBrief(ru.item, RunInfo{Slug: ru.repo.Slug, Base: ru.repo.Base, Branch: ru.branch, Worktree: ru.wt, Scratch: ru.scratch, Sandbox: ru.sandbox})
+	info := RunInfo{Slug: ru.repo.Slug, Base: ru.repo.Base, Branch: ru.branch, Worktree: ru.wt, Scratch: ru.scratch, Sandbox: ru.sandbox, Resumed: ahead}
+	info.Triage, info.TriageErr = r.fetchTriage(ctx, ru)
+	brief := BuildBrief(ru.item, info)
 	for _, p := range []string{filepath.Join(ru.wt, ".loop", "brief.md"), filepath.Join(ru.dir, "brief.md")} {
 		if err := os.WriteFile(p, []byte(brief), 0o644); err != nil {
 			return "", err
@@ -294,8 +301,10 @@ func (r *Runner) shell(ctx context.Context, dir, command string, limit time.Dura
 
 // agentEnv is the environment for the agent and the runner's helper commands: no loopd or Slack
 // secret.
-func (r *Runner) agentEnv() []string {
-	src := r.Env
+func (r *Runner) agentEnv() []string { return scrubEnv(r.Env) }
+
+// scrubEnv is src (nil: the runner's own environment) without loopd's and Slack's secrets.
+func scrubEnv(src []string) []string {
 	if src == nil {
 		src = os.Environ()
 	}
@@ -743,7 +752,7 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 		fail("the runner could not read git: " + ferr.Error())
 		return
 	}
-	v, err := ValidateResult(raw, Expect{Stage: "build", Slug: ru.repo.Slug, Branch: ru.branch}, facts, filepath.Join(ru.wt, ".loop"))
+	v, err := ValidateResult(raw, Expect{Stage: "build"}, facts, filepath.Join(ru.wt, ".loop"))
 	if err != nil {
 		fail("result rejected: " + err.Error())
 		return
@@ -752,28 +761,30 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 		r.advance(ctx, ru, "question", r.metrics(ru, out, map[string]string{"question": clip(v.Question, 2000)}), nil)
 		return
 	}
-	prVerified := "skipped"
-	if r.VerifyPR != nil {
-		info, err := r.VerifyPR(ctx, ru.repo.Slug, v.PR)
-		if err != nil {
-			fail(fmt.Sprintf("could not check PR #%d on GitHub: %v", v.PR, err))
-			return
-		}
-		if info.HeadRefName != ru.branch || info.HeadRefOid != facts.HeadSHA || info.State != "OPEN" {
-			fail(fmt.Sprintf("PR #%d is %s %s at %s, not %s at %s", v.PR, info.State, info.HeadRefName, info.HeadRefOid, ru.branch, facts.HeadSHA))
-			return
-		}
-		prVerified = "true"
-	}
-	labels := map[string]string{}
-	for _, e := range v.Evidence {
-		labels[filepath.Base(e.File)] = e.Label
-	}
 	files, err := EvidenceFiles(filepath.Join(ru.wt, ".loop"))
 	if err != nil {
 		fail("evidence: " + err.Error())
 		return
 	}
+	pr, err := r.publish(ctx, ru, v, files, out)
+	if err != nil {
+		fail(err.Error())
+		return
+	}
+	prVerified := "skipped"
+	if r.VerifyPR != nil {
+		info, err := r.VerifyPR(ctx, ru.repo.Slug, pr)
+		if err != nil {
+			fail(fmt.Sprintf("could not check PR #%d on GitHub: %v", pr, err))
+			return
+		}
+		if info.HeadRefName != ru.branch || info.HeadRefOid != facts.HeadSHA || info.State != "OPEN" {
+			fail(fmt.Sprintf("PR #%d is %s %s at %s, not %s at %s", pr, info.State, info.HeadRefName, info.HeadRefOid, ru.branch, facts.HeadSHA))
+			return
+		}
+		prVerified = "true"
+	}
+	labels := evidenceLabels(v)
 	for _, f := range files {
 		if err := r.Client.Upload(ctx, ru.item.ID, f.Path, f.Name, labels[f.Name]); err != nil {
 			fail("uploading evidence " + f.Name + ": " + err.Error())
@@ -781,13 +792,114 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 		}
 	}
 	fields := map[string]string{
-		"repo": ru.repo.Slug, "pr": strconv.Itoa(v.PR), "branch": ru.branch, "head_sha": facts.HeadSHA,
+		"repo": ru.repo.Slug, "pr": strconv.Itoa(pr), "branch": ru.branch, "head_sha": facts.HeadSHA,
 		"summary": clip(v.Summary, 2000), "not_verified": clip(strings.Join(v.NotVerified, "; "), 1000), "pr_verified": prVerified,
 	}
 	if v.NeedsReview {
 		fields["needs_review"] = "true"
 	}
 	r.advance(ctx, ru, "pr_opened", r.metrics(ru, out, fields), facts.ChangedPaths)
+}
+
+func evidenceLabels(v Valid) map[string]string {
+	labels := map[string]string{}
+	for _, e := range v.Evidence {
+		labels[filepath.Base(e.File)] = e.Label
+	}
+	return labels
+}
+
+// publish pushes the item's branch (only it, never forced) and opens its PR, or updates the open
+// one, with the runner's own credentials; it returns the PR number. The agent did neither.
+func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []EvidenceFile, out outcome) (int, error) {
+	if r.PRs == nil {
+		return 0, errors.New("the runner has no way to open PRs (configuration)")
+	}
+	push := r.Push
+	if push == nil {
+		push = r.Git.PushBranch
+	}
+	unlock := r.lockMirror(ru.mirror)
+	err := push(ctx, ru.mirror, ru.branch)
+	remote := ""
+	if err == nil {
+		remote, err = r.Git.RemoteHead(ctx, ru.mirror, ru.branch)
+	}
+	unlock()
+	if err != nil {
+		return 0, fmt.Errorf("the runner could not push %s: %v", ru.branch, err)
+	}
+	if remote != v.HeadSHA {
+		return 0, fmt.Errorf("after the push, %s on the remote is %q, not HEAD %s", ru.branch, remote, v.HeadSHA)
+	}
+	st := RunStats{Seconds: int(r.Clock.Now().Sub(ru.started).Seconds())}
+	if res := out.stats.result; res != nil {
+		u := res.Usage
+		st = RunStats{Turns: res.NumTurns, CacheHit: CacheHitRatio(u.Input, u.CacheCreation, u.CacheRead), Seconds: st.Seconds,
+			CostUSD: res.CostUSD, HasResult: true}
+	}
+	body := filepath.Join(ru.dir, "pr-body.md")
+	if err := os.WriteFile(body, []byte(PRBody(v.PRBody, ru.item.ID, files, evidenceLabels(v), st)), 0o600); err != nil {
+		return 0, err
+	}
+	spec := PRSpec{Slug: ru.repo.Slug, Head: ru.branch, Base: ru.repo.Base, Title: v.PRTitle, BodyFile: body}
+	pr, err := r.PRs.Find(ctx, ru.repo.Slug, ru.branch)
+	if err != nil {
+		return 0, fmt.Errorf("could not look for an open PR for %s: %v", ru.branch, err)
+	}
+	if pr > 0 {
+		if err := r.PRs.Edit(ctx, pr, spec); err != nil {
+			return 0, fmt.Errorf("could not update PR #%d: %v", pr, err)
+		}
+		return pr, nil
+	}
+	pr, err = r.PRs.Create(ctx, spec)
+	if err != nil {
+		return 0, fmt.Errorf("could not open the PR for %s: %v", ru.branch, err)
+	}
+	if pr <= 0 {
+		return 0, fmt.Errorf("opening the PR for %s returned no number", ru.branch)
+	}
+	return pr, nil
+}
+
+// fetchTriage copies the item's evidence so far (triage's notes and repro first) into
+// .loop/triage/ for the agent to read. A failure is reported in the brief, not fatal.
+func (r *Runner) fetchTriage(ctx context.Context, ru *run) ([]TriageFile, string) {
+	evs, err := r.Client.Evidence(ctx, ru.item.ID)
+	if err != nil {
+		return nil, err.Error()
+	}
+	if len(evs) == 0 {
+		return nil, ""
+	}
+	dir := filepath.Join(ru.wt, ".loop", "triage")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err.Error()
+	}
+	var out []TriageFile
+	for _, e := range evs {
+		name := fmt.Sprintf("%d-%s", e.N, safeName(e.Name))
+		if err := r.Client.DownloadEvidence(ctx, ru.item.ID, e.N, filepath.Join(dir, name)); err != nil {
+			return out, fmt.Sprintf("evidence %d (%s): %v", e.N, e.Name, err)
+		}
+		out = append(out, TriageFile{Name: name, Label: e.Label})
+	}
+	return out, ""
+}
+
+var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+// safeName is a file name with no path in it.
+func safeName(n string) string {
+	n = strings.Trim(unsafeName.ReplaceAllString(filepath.Base(n), "_"), "._")
+	if n == "" {
+		n = "file"
+	}
+	if len(n) > 80 {
+		n = n[:80]
+	}
+	return n
 }
 
 func readResult(p string) ([]byte, error) {
