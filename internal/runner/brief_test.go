@@ -11,7 +11,8 @@ func TestBuildBrief(t *testing.T) {
 		Worktree: "/w/12-build", Scratch: "/w/12-build.scratch", Sandbox: "loop-12"})
 	for _, want := range []string{"- Item: #12: Fix the timer", "# Build stage", "never", "> The timer says 5 when asked for 15.",
 		"Branch: `loop/12-fix-the-timer`", "`loop-12`", `"outcome": "ready_for_pr"`, `"outcome": "question"`, `"pr_title"`, `"pr_body"`,
-		"the runner pushes", "against `origin/main`", "alexberardi/jarvis-server", "not its merge step", "Keep the context small"} {
+		"the runner pushes", "against `origin/main`", "alexberardi/jarvis-server", "not its merge step", "Keep the context small",
+		"scripts/loop-sandbox run", "transcript"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("brief lacks %q", want)
 		}

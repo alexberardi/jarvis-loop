@@ -40,3 +40,12 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: go build ./...
+      - name: loop harness scenarios (fake Slack, fake claude, fake GitHub)
+        run: scripts/loop-sandbox run --name ci
+      - name: scenario transcripts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loop-sandbox-run
+          path: .sandbox/ci/runs/latest/*/transcript.md
+          if-no-files-found: ignore

@@ -23,3 +23,7 @@ Runner (phase 4, [docs/phases/04-runner-build.md](docs/phases/04-runner-build.md
 deny rules, the auto-mode classifier, the `loop-guard` hook and Claude Code's OS sandbox. `--once`
 works one item; `--dry-run` skips the GitHub PR check, for runs with `tools/fakeclaude`. What is
 allowed and why: [docs/decisions/2026-10-15-runner-choices.md](docs/decisions/2026-10-15-runner-choices.md).
+
+Harness (phase 4b, [docs/phases/04b-loop-harness.md](docs/phases/04b-loop-harness.md)):
+`scripts/loop-sandbox run` plays `scenarios/*.json` against the real loopd wiring, runner, bot and
+`loop-guard`, with a fake Slack, claude and GitHub, and writes each scenario's Slack transcript.

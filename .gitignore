@@ -8,3 +8,6 @@
 .env.*
 # never commit tokens
 tokens
+
+# the loop's harness (scripts/loop-sandbox)
+/.sandbox/

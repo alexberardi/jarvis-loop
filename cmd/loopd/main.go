@@ -21,9 +21,9 @@ import (
 
 	"github.com/alexberardi/jarvis-loop/internal/api"
 	"github.com/alexberardi/jarvis-loop/internal/clock"
+	"github.com/alexberardi/jarvis-loop/internal/loopd"
 	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/store"
-	"github.com/alexberardi/jarvis-loop/internal/web"
 )
 
 func main() {
@@ -88,7 +88,8 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	sctx, stopSlack := context.WithCancel(ctx) // ends the Slack goroutines however run returns
 	defer stopSlack()
 	if *slackEnv != "" {
-		if err := startSlack(sctx, &bg, st, slackToks, *slackLink, log); err != nil {
+		if _, err := loopd.StartSlack(sctx, &bg, st, loopd.Slack{BaseURL: slack.DefaultBaseURL, Tokens: slackToks,
+			LinkBase: *slackLink, Clock: clock.Real{}, Log: log}); err != nil {
 			ln.Close()
 			return err
 		}
@@ -129,34 +130,9 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	return nil
 }
 
-// startSlack runs the Slack layer: the bot (event fan-out, timers, control message) and the
-// Socket Mode connection. Slack failures are logged; they never stop loopd or a pipeline action.
-func startSlack(ctx context.Context, bg *sync.WaitGroup, st *store.Store, toks slack.Tokens, link string, log *slog.Logger) error {
-	slg := log.With("component", "slack")
-	botAPI := slack.NewAPI(slack.DefaultBaseURL, toks.Bot, slack.Channels{slack.ChannelLoop, slack.ChannelDigest})
-	appAPI := slack.NewAPI(slack.DefaultBaseURL, toks.App, nil)
-	bot, err := slack.New(slack.Config{Store: st, API: botAPI, Clock: clock.Real{}, Log: slg, LinkBase: link})
-	if err != nil {
-		return err
-	}
-	bot.Attach()
-	sock := &slack.Socket{Open: appAPI.OpenConnection, OnEnvelope: bot.HandleEnvelope, OnCommand: bot.HandleCommand,
-		OnLate: bot.Late, Log: slg, PingEvery: 30 * time.Second}
-	bg.Add(2)
-	go func() { defer bg.Done(); bot.Run(ctx) }()
-	go func() { defer bg.Done(); sock.Run(ctx) }()
-	slg.Info("slack on", "channels", "#loop, #loop-digest")
-	return nil
-}
-
 // handler serves the API, plus the status page at / and its form at /ui/control.
 func handler(st *store.Store, toks *api.Tokens, log *slog.Logger) http.Handler {
-	mux := http.NewServeMux()
-	mux.Handle("/", api.New(st, toks, log))
-	page := api.Logged(log, web.New(st, toks, log))
-	mux.Handle("GET /{$}", page)
-	mux.Handle("POST /ui/control", page)
-	return mux
+	return loopd.Handler(st, toks, log)
 }
 
 // checkAddr refuses a non-loopback listen address unless --lan says it is deliberate.

@@ -1,0 +1,75 @@
+{
+  "name": "priority",
+  "about": "Two items are ready: a P3 added first, then a P1. Triage and the runner both take the P1 first, then the P3.",
+  "steps": [
+    {
+      "do": "add",
+      "item": "low",
+      "title": "Polish the status page",
+      "priority": "P3"
+    },
+    {
+      "do": "add",
+      "item": "urgent",
+      "title": "Main is red",
+      "priority": "P1"
+    },
+    {
+      "do": "triage",
+      "item": "urgent"
+    },
+    {
+      "do": "triage",
+      "item": "low"
+    },
+    {
+      "do": "script",
+      "item": "low",
+      "play": "good"
+    },
+    {
+      "do": "script",
+      "item": "urgent",
+      "play": "good"
+    },
+    {
+      "do": "runner",
+      "claims": "urgent"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "runner",
+      "claims": "low"
+    },
+    {
+      "do": "runner_idle"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "low": "review",
+      "urgent": "review"
+    },
+    "messages": [
+      {
+        "parent": "low",
+        "text": "Priority \\*P3\\*"
+      },
+      {
+        "parent": "urgent",
+        "text": "Priority \\*P1\\*"
+      },
+      {
+        "thread": "urgent",
+        "text": "sandbox/demo#101> opened"
+      },
+      {
+        "thread": "low",
+        "text": "sandbox/demo#102> opened"
+      }
+    ],
+    "prs": 2
+  }
+}

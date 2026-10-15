@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# The loop's own harness (docs/phases/04b-loop-harness.md): the real loopd wiring, runner, Slack
+# bot and loop-guard against a fake Slack, a fake claude and a fake GitHub, on temp data under
+# .sandbox/<name>/. Loopback only; never reads ~/.config/jarvis-harness/ or real tokens; never
+# talks to real Slack or GitHub.
+#
+#   scripts/loop-sandbox up [--name N]               the live sandbox (real clock), for poking
+#   scripts/loop-sandbox run [--name N] [scenario...] play scenarios (default: scenarios/*.json)
+#   scripts/loop-sandbox transcript [--name N] [--scenario S] [--item N] [--live] [--run DIR]
+#   scripts/loop-sandbox inject [--name N] reply|press|command ...   (live sandbox only)
+#   scripts/loop-sandbox down [--name N] [--purge]
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$root"
+
+cmd=${1:-}
+[ $# -gt 0 ] && shift
+name=default
+purge=false
+args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --name) name=${2:?--name needs a value}; shift 2 ;;
+    --name=*) name=${1#--name=}; shift ;;
+    --purge) purge=true; shift ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+case "$name" in
+  ''|*/*|.*) echo "loop-sandbox: bad --name '$name'" >&2; exit 2 ;;
+esac
+dir="$root/.sandbox/$name"
+bin="$dir/bin"
+pidfile="$dir/serve.pid"
+
+build() {
+  mkdir -p "$bin"
+  chmod 700 "$dir"
+  CGO_ENABLED=0 go build -o "$bin/" ./cmd/loop-sandbox ./cmd/loop-guard ./cmd/loop ./tools/fakeclaude
+}
+
+# ours PID: the process is this sandbox's `loop-sandbox serve`, and nothing else.
+ours() {
+  local pid=$1
+  [ -r "/proc/$pid/cmdline" ] || return 1
+  tr '\0' ' ' < "/proc/$pid/cmdline" | grep -qF -- "$bin/loop-sandbox serve --dir $dir"
+}
+
+running() {
+  [ -f "$pidfile" ] && ours "$(cat "$pidfile")"
+}
+
+case "$cmd" in
+  up)
+    build
+    if running; then
+      echo "loop-sandbox: '$name' is already up (pid $(cat "$pidfile"))"
+      exit 0
+    fi
+    rm -f "$dir/live/ready"
+    if command -v setsid >/dev/null; then
+      setsid "$bin/loop-sandbox" serve --dir "$dir" > "$dir/serve.log" 2>&1 < /dev/null &
+    else
+      nohup "$bin/loop-sandbox" serve --dir "$dir" > "$dir/serve.log" 2>&1 < /dev/null &
+    fi
+    echo $! > "$pidfile"
+    for _ in $(seq 1 100); do
+      [ -f "$dir/live/ready" ] && break
+      if ! running; then
+        echo "loop-sandbox: the sandbox did not start:" >&2
+        tail -20 "$dir/serve.log" >&2
+        exit 1
+      fi
+      sleep 0.2
+    done
+    [ -f "$dir/live/ready" ] || { echo "loop-sandbox: not ready after 20 s; see $dir/serve.log" >&2; exit 1; }
+    cat "$dir/serve.log"
+    echo "Use it:  source $dir/live/loop.env && $bin/loop status   (hand.env: as a hand runner, for triage/review/land)"
+    echo "         scripts/loop-sandbox inject --name $name command status"
+    echo "         scripts/loop-sandbox transcript --name $name --live"
+    ;;
+  run)
+    build
+    exec "$bin/loop-sandbox" run --dir "$dir" "${args[@]}"
+    ;;
+  transcript)
+    [ -x "$bin/loop-sandbox" ] || build
+    exec "$bin/loop-sandbox" transcript --dir "$dir" "${args[@]}"
+    ;;
+  inject)
+    [ -x "$bin/loop-sandbox" ] || build
+    exec "$bin/loop-sandbox" inject --dir "$dir" "${args[@]}"
+    ;;
+  down)
+    if [ -f "$pidfile" ]; then
+      pid=$(cat "$pidfile")
+      if ours "$pid"; then
+        kill -TERM "$pid"
+        for _ in $(seq 1 150); do ours "$pid" || break; sleep 0.2; done
+        if ours "$pid"; then echo "loop-sandbox: pid $pid did not stop" >&2; exit 1; fi
+        echo "loop-sandbox: '$name' is down"
+      else
+        echo "loop-sandbox: pid $pid is not this sandbox's; not touching it"
+      fi
+      rm -f "$pidfile"
+    else
+      echo "loop-sandbox: '$name' is not up"
+    fi
+    if $purge && [ -d "$dir" ]; then
+      case "$dir" in
+        "$root/.sandbox/"?*) rm -rf -- "$dir"; echo "loop-sandbox: removed $dir" ;;
+      esac
+    fi
+    ;;
+  *)
+    sed -n '2,13p' "$0" >&2
+    exit 2
+    ;;
+esac

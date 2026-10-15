@@ -8,6 +8,9 @@ Built right after phase 4 merges, from the dry-run pieces phase 4 already has (t
 the local loopd wiring). **Proves:** a change to the loop can be shown working end to end before
 it lands.
 
+**As built (2026-10-15):** `docs/decisions/2026-10-15-loop-harness.md` (the shape, the fake clock,
+what is real and what is fake, findings). The scenario format is in "Scenario format" below.
+
 ## `scripts/loop-sandbox`
 
 ```
@@ -78,3 +81,46 @@ seen in real Slack. `loop-sandbox up --live-slack` connects to real Slack with t
 The scenario runner itself: a scenario that should fail does (wrong stage, missing message,
 a forbidden message), with a readable failure. The fake Slack's injection and recording. CI runs
 `scripts/loop-sandbox run` headless.
+
+## Scenario format (as built)
+
+A scenario file is `{"name", "about", "steps": [...], "expect": {...}}`. Items are named by an
+alias (`"a"`) given when added; ids are the stack's own. Unknown fields are refused, so a typo
+cannot silently check nothing. Steps (`"do"`):
+
+| Step | Does |
+| --- | --- |
+| `add` `item`, `title`, [`priority`], [`via`: `cli`\|`slack`] | add an item (CLI: `POST /items` with repo `demo`; Slack: `/loop add`) |
+| `triage` / `review` `item` | claim the stage by hand (a `hand` runner token, as `loop claim`/`loop advance`) and finish it: reproduced with evidence / approved for the PR head |
+| `land` `item`, `outcome` (`hold`\|`merged`\|`back_to_build`), [`reason`] | the land stage by hand, with the PR's changed paths |
+| `script` `item`, `play`, [`file`] | how the fake claude plays the item's runs (`good`, `escape`, `hang`, `ignore_term`, `usage_limit`, `question`, `exit3`, …; `file`: the path it changes) |
+| `runner` [`claims`: alias\|`none`] | the runner polls once: claims (and works in the background) or finds nothing |
+| `agent_running` `item` | wait until the item's agent is mid-run (a hanging fake) |
+| `runner_idle` | wait until no run is working |
+| `clock` `advance` (`"2m"`, `"45m"`) | move the fake clock, in 30-second steps |
+| `reply` / `mention` `item`, `as` (`approver`\|`other`), `text` | a thread reply / mention in the item's thread |
+| `press` / `choose` `item` or `message: control`, `button` (action_id), [`value`], `as` | press a button / pick a menu option on the newest message that has it |
+| `command` `text`, `as`, [`answer` regexp] | `/loop <text>`; the ephemeral answer must match |
+| `control` `active_agents`, `max_run_minutes`, `stopped` | `PUT /control` as the CLI |
+| `expect` / `wait` + expectations | as below, at that point |
+
+Expectations (`expect`, in a step or at the end) are retried for `within` (default 10 s); the
+negative ones are checked once the loop has gone quiet:
+
+| Field | Holds when |
+| --- | --- |
+| `stage`: {alias: stage}, `question`: {alias: regexp}, `leased`: {alias: bool} | the item is there |
+| `events` / `no_events`: [{`item`, `kind`, `actor` (`approver`, `other`, `runner`, `hand`, `user`, `loopd`), `outcome`, `data`: {key: regexp}, `count`}] | such events exist (exactly `count`) / none do |
+| `messages` (in this order) / `no_messages`: [{`thread` or `parent`: alias, `channel` (`loop`\|`digest`), `from` (`bot`, `approver`, `other`), `kind` (`message`, `ephemeral`, `command`, `response`), `to`, `text` regexp, `buttons`: [labels], `pinned`}] | such messages exist, as they stand after edits / none do |
+| `control`: {`active_agents`, `stopped`} | loopd's control |
+| `prs`: n | PRs opened on the fake GitHub |
+| `pr`: {alias: {`number`, `title` regexp, `body` regexp}} | the PR the runner opened for the item, at its branch's head |
+| `remote`: {`branches`: {alias: head-subject regexp}, `files`: {alias: [paths]}, `only`} | the remote's branches; `main` never moved |
+| `absent`: [paths under the stack dir] | they do not exist |
+
+**Always checked, after every step (must-not):** no bot call to a channel other than `#loop` and
+`#loop-digest`; no token (Slack, loopd user, runner or hand) in any call to Slack or any message; the
+bot token on every bot call and the app token on `apps.connections.open`; no `<!channel>`,
+`<!here>` or `<!everyone>`, no mention of anyone but the approver; no message over 2,000
+characters; no token in a PR's title or body; no event by an actor other than loopd, the approver, the sandbox user, the runner or the
+hand runner, except `refused` events recording someone else's attempt.

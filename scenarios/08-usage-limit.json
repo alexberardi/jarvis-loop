@@ -1,0 +1,96 @@
+{
+  "name": "usage-limit",
+  "about": "The agent hits the plan's session limit: the item goes back to its queue, the active agents go to 0, the pinned control message shows 0, and #loop-digest tells the approver with the reset time.",
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Explain the hold list"
+    },
+    {
+      "do": "add",
+      "item": "b",
+      "title": "Something else waiting"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "triage",
+      "item": "b"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "usage_limit"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "messages": [
+        {
+          "channel": "digest",
+          "pinned": true,
+          "text": "^Active agents: 0 of 6$"
+        },
+        {
+          "channel": "digest",
+          "from": "bot",
+          "pinned": false,
+          "text": "^<@U0C9AFPAMD4> Usage limit hit on #\\d+: .+ \\(resets .+\\)\\.\\nActive agents set to 0\\."
+        }
+      ]
+    },
+    {
+      "do": "runner",
+      "claims": "none"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "build",
+      "b": "build"
+    },
+    "control": {
+      "active_agents": 0
+    },
+    "events": [
+      {
+        "item": "a",
+        "kind": "usage_limit",
+        "actor": "runner",
+        "data": {
+          "error": "rate limit|session limit",
+          "reset": "."
+        }
+      },
+      {
+        "kind": "control",
+        "actor": "loopd",
+        "data": {
+          "reason": "^usage_limit$"
+        }
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "text": "^Usage limit hit: .*\\. Active agents set to 0; back in the queue\\.$"
+      }
+    ],
+    "no_messages": [
+      {
+        "thread": "a",
+        "text": "needs you"
+      }
+    ],
+    "prs": 0
+  }
+}

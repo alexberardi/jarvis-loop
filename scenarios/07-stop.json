@@ -1,0 +1,105 @@
+{
+  "name": "stop",
+  "about": "/loop stop while an agent runs: at its next heartbeat the runner kills the agent's process group, pushes its work as WIP to the item's branch only, reports nothing, and the item is back in its queue.",
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Tidy the runner log"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "hang"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "agent_running",
+      "item": "a"
+    },
+    {
+      "do": "command",
+      "as": "approver",
+      "text": "stop",
+      "answer": "^Stopped: running agents stop at their next heartbeat"
+    },
+    {
+      "do": "expect",
+      "control": {
+        "stopped": true
+      },
+      "messages": [
+        {
+          "channel": "digest",
+          "pinned": true,
+          "text": "Active agents: 4 of 6 \\(stopped\\)"
+        }
+      ]
+    },
+    {
+      "do": "clock",
+      "advance": "60s"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "runner",
+      "claims": "none"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "build"
+    },
+    "leased": {
+      "a": false
+    },
+    "events": [
+      {
+        "item": "a",
+        "kind": "stopped"
+      },
+      {
+        "kind": "control",
+        "actor": "approver"
+      }
+    ],
+    "no_events": [
+      {
+        "item": "a",
+        "kind": "advanced",
+        "actor": "runner"
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "text": "^Claimed for build\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "^Stopped; back in the build queue\\.$"
+      }
+    ],
+    "remote": {
+      "branches": {
+        "a": "^WIP: loop item #\\d+ \\(stopped\\)$"
+      },
+      "files": {
+        "a": [
+          "wip.txt"
+        ]
+      },
+      "only": true
+    },
+    "prs": 0
+  }
+}
