@@ -168,7 +168,7 @@
     "messages": [
       {
         "parent": "a",
-        "text": "Stage \\*done\\* · Source user · <https://github.com/sandbox/demo/pull/101\\|sandbox/demo#101>"
+        "text": "Stage \\*done\\* · Source user · Repo sandbox/demo · <https://github.com/sandbox/demo/pull/101\\|sandbox/demo#101>"
       },
       {
         "thread": "a",

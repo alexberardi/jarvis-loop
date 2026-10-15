@@ -208,7 +208,7 @@ func (b *Bot) show(ctx context.Context, id int64) string {
 	}
 	it := d.Item
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "*#%d %s*\nStage *%s* · Priority *%s* · risk %s", it.ID, b.field(it.Title, 300, id), d.Display, it.Priority, it.Risk)
+	fmt.Fprintf(&sb, "*#%d %s*\nStage *%s* · Priority *%s* · repo %s · risk %s", it.ID, b.field(it.Title, 300, id), d.Display, it.Priority, repoText(it), it.Risk)
 	if it.HoldReason != "" {
 		sb.WriteString(" — " + b.field(it.HoldReason, 300, id))
 	}
