@@ -1,0 +1,64 @@
+{
+  "name": "qa",
+  "about": "The QA lane, after merge and opt-in (docs/decisions/2026-10-15-qa.md). a: the user marks it with /loop qa before it lands; land merges it and it waits in qa (nothing claims it), with 'Merged — waiting for your check' and Verified / Reopen buttons. Someone else's Reopen is refused; a reply before Reopen is not taken; the approver's Reopen asks for the words, and the next reply files a P2 item linked to a, and a is done. b: the mobile repo has qa: true, so land sends needs_qa and b waits in qa without anyone marking it; Verified moves it to done.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Show the pairing code larger"},
+    {"do": "command", "as": "other", "text": "qa 1", "answer": "only the approver"},
+    {"do": "command", "as": "approver", "text": "qa 1", "answer": "^#1 waits in qa for your check once merged\\.$"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "qa"}, "leased": {"a": false}, "pr": {"a": {"state": "MERGED", "merge_calls": 1}},
+     "messages": [{"thread": "a", "from": "bot", "text": "Merged — waiting for your check\\. <https://github.com/sandbox/demo/pull/101\\|sandbox/demo#101> merged as `[0-9a-f]{7}`; watching main's CI\\.", "buttons": ["Verified", "Reopen"]}]},
+    {"do": "runner", "claims": "none"},
+    {"do": "add", "item": "b", "via": "slack", "title": "mobile item", "text": "[mobile] make the chime louder"},
+    {"do": "triage", "item": "b"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "b", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"b": "qa"}, "pr": {"b": {"state": "MERGED"}},
+     "events": [{"item": "b", "kind": "advanced", "outcome": "merged", "data": {"needs_qa": "^true$"}, "count": 1}],
+     "messages": [{"thread": "b", "from": "bot", "text": "Merged — waiting for your check", "buttons": ["Verified", "Reopen"]}]},
+    {"do": "press", "item": "b", "button": "qa_verified", "as": "approver"},
+    {"do": "press", "item": "a", "button": "qa_reopen", "as": "other"},
+    {"do": "expect", "stage": {"a": "qa"}, "events": [{"item": "a", "kind": "refused", "actor": "other", "data": {"action": "^qa_reopen$"}, "count": 1}]},
+    {"do": "reply", "item": "a", "as": "approver", "text": "checking tonight"},
+    {"do": "expect", "stage": {"a": "qa"}, "messages": [{"thread": "a", "from": "bot", "text": "^Not taken: press Verified if it works, or Reopen"}]},
+    {"do": "press", "item": "a", "button": "qa_reopen", "as": "approver"},
+    {"do": "expect", "stage": {"a": "qa"}, "messages": [{"thread": "a", "from": "bot", "text": "^Reply in this thread with what is wrong"}]},
+    {"do": "reply", "item": "a", "as": "approver", "text": "the code is still small on the phone"},
+    {"do": "expect", "stage": {"a": "done"},
+     "events": [{"item": "a", "kind": "reopened", "actor": "approver", "data": {"words": "^the code is still small on the phone$", "reopen_item": "^3$"}, "count": 1},
+                {"kind": "created", "data": {"priority": "^P2$", "reopen_of": "^1$", "repo": "^sandbox/demo$"}, "count": 1}],
+     "messages": [{"thread": "a", "from": "bot", "text": "^Reopened by you: 'the code is still small on the phone'\\. Filed #3 \\(P2\\) with those words; this one is done\\.$"}]}
+  ],
+  "expect": {
+    "stage": {"a": "done", "b": "done"},
+    "agent_runs": {"build": 2, "review": 2, "land": 0},
+    "events": [
+      {"item": "a", "kind": "qa_marked", "actor": "approver", "count": 1},
+      {"item": "a", "kind": "advanced", "outcome": "merged", "count": 1},
+      {"item": "b", "kind": "verified", "actor": "approver", "data": {"words": "^Verified button$"}, "count": 1}
+    ],
+    "no_events": [
+      {"item": "a", "kind": "verified"},
+      {"item": "b", "kind": "qa_marked"},
+      {"item": "b", "kind": "reopened"}
+    ],
+    "messages": [
+      {"thread": "a", "from": "bot", "text": "^Marked for your check once merged \\(you\\): it waits in qa after it lands\\.$"},
+      {"thread": "b", "from": "bot", "text": "^Verified by you\\. Done\\.$"}
+    ]
+  }
+}

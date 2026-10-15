@@ -280,7 +280,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 			RepoKey: {Remote: s.Remote, Slug: RepoSlug, Base: "main", Group: "server", Description: "the sandbox's demo app"},
 			LoopKey: {Remote: s.LoopRemote, Slug: LoopSlug, Base: "main", Group: "loop", Description: "the loop itself (loopd, the runner, the Slack bot)"},
 			MobileKey: {Remote: s.MobileRemote, Slug: MobileSlug, Base: "main", Group: "mobile", Aliases: []string{"mobile", "node app"},
-				Description: "the household's phone app (screens, chat, pairing)", Verify: MobileVerify(dir)},
+				Description: "the household's phone app (screens, chat, pairing)", Verify: MobileVerify(dir), QA: true},
 		},
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")

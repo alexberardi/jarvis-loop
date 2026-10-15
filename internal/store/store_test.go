@@ -622,8 +622,21 @@ func TestHoldRulesMigrationTagsJarvisServer(t *testing.T) {
 // toDone takes an item through every stage, merged by runnerName.
 func toDone(t *testing.T, s *Store, runnerName string) pipeline.Item {
 	t.Helper()
+	return toMerged(t, s, runnerName, nil, nil)
+}
+
+// toMerged is toDone with a hook after the item is added, and extra fields for merged.
+func toMerged(t *testing.T, s *Store, runnerName string, after func(pipeline.Item), mergedFields map[string]string) pipeline.Item {
+	t.Helper()
 	ctx := context.Background()
 	it := add(t, s, "ship it", "")
+	if after != nil {
+		after(it)
+	}
+	merged := map[string]string{"merge_sha": "ffffffffffffffffffffffffffffffffffffffff", "head_sha": shaA}
+	for k, v := range mergedFields {
+		merged[k] = v
+	}
 	step := func(agent string, out pipeline.Outcome, f map[string]string, paths []string, ev bool) {
 		t.Helper()
 		c, err := s.Claim(ctx, runnerName, pipeline.ClaimRequest{Runner: runnerName, Agent: agent})
@@ -642,7 +655,7 @@ func toDone(t *testing.T, s *Store, runnerName string) pipeline.Item {
 	step("triager", pipeline.Reproduced, map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": ""}, nil, true)
 	step("builder", pipeline.PROpened, map[string]string{"repo": "o/r", "pr": "7", "branch": "loop/1-x", "head_sha": shaA}, []string{"M x.go"}, true)
 	step("reviewer", pipeline.Approved, map[string]string{"summary": "ok", "head_sha": shaA}, nil, false)
-	step("lander", pipeline.Merged, map[string]string{"merge_sha": "ffffffffffffffffffffffffffffffffffffffff", "head_sha": shaA}, []string{"M x.go"}, false)
+	step("lander", pipeline.Merged, merged, []string{"M x.go"}, false)
 	return it
 }
 

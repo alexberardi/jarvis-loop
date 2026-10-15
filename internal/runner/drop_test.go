@@ -154,6 +154,7 @@ func (f *fakeLand) Merge(_ context.Context, slug string, pr int, head string) er
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.merges = append(f.merges, head)
+	f.pr.State, f.pr.MergeCommit = "MERGED", "cccccccccccccccccccccccccccccccccccccccc"
 	return nil
 }
 
@@ -209,5 +210,52 @@ func TestDropDuringLandDoesNotMerge(t *testing.T) {
 	}
 	if d := g.item(id); d.Item.Stage != pipeline.Closed || g.lastEvent(id, "advanced").Outcome == "merged" {
 		t.Fatalf("stage %s, last advance %+v", d.Item.Stage, g.lastEvent(id, "advanced"))
+	}
+}
+
+// A repo with qa: true: land sends needs_qa with merged, and loopd puts the item in qa
+// (docs/decisions/2026-10-15-qa.md). The review agent's needs_qa marks the item the same way.
+func TestLandQARepoAndReviewNeedsQA(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		repoQA bool
+		play   string
+		want   pipeline.Stage
+	}{
+		{"plain", false, fakeclaude.Approve, pipeline.Done},
+		{"repo qa", true, fakeclaude.Approve, pipeline.QA},
+		{"review needs qa", false, fakeclaude.ApproveQA, pipeline.QA},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := newRig(t, fakeclaude.Good)
+			rc := g.r.Cfg.Repos["demo"]
+			rc.QA = c.repoQA
+			g.r.Cfg.Repos["demo"] = rc
+			id := g.toReview("Add a feature")
+			g.stages(StageReview)
+			g.script(id, StageReview, c.play, "")
+			if !g.runOnce() || g.item(id).Item.Stage != pipeline.Land {
+				t.Fatalf("review did not reach land; log:\n%s", g.logs.String())
+			}
+			it := g.item(id).Item
+			if it.NeedsQA != (c.play == fakeclaude.ApproveQA) {
+				t.Fatalf("needs_qa after review: %v", it.NeedsQA)
+			}
+			gh := &fakeLand{pr: LandPR{Number: it.PR, State: "OPEN", HeadRefName: it.Branch, HeadRefOid: it.HeadSHA, BaseRefName: "main",
+				Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN", Body: g.prs.bodies[it.PR]}}
+			gh.setChecks(BucketPass)
+			g.r.Land = gh
+			g.stages(StageLand)
+			g.runOnce()
+			d := g.item(id)
+			evs := g.events(id, "advanced")
+			ev := evs[len(evs)-1]
+			if d.Item.Stage != c.want || ev.Outcome != "merged" {
+				t.Fatalf("stage %s, last advance %+v; log:\n%s", d.Item.Stage, ev, g.logs.String())
+			}
+			if got := ev.Data["needs_qa"] == "true"; got != c.repoQA {
+				t.Fatalf("merged needs_qa field %v, want %v", ev.Data["needs_qa"], c.repoQA)
+			}
+		})
 	}
 }

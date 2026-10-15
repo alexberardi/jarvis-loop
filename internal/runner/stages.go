@@ -364,6 +364,9 @@ func (r *Runner) reportTriage(ctx context.Context, ru *run, out outcome, raw []b
 		if v.Repo != "" {
 			fields["repo"] = v.Repo
 		}
+		if v.NeedsQA {
+			fields["needs_qa"] = "true"
+		}
 	}
 	r.advance(ctx, ru, v.Outcome, r.metrics(ru, out, fields), nil)
 }
@@ -440,6 +443,9 @@ func (r *Runner) reportReview(ctx context.Context, ru *run, out outcome, raw []b
 		fields["summary"], fields["head_sha"] = clip(v.Summary, 2000), it.HeadSHA
 		if v.NeedsReview {
 			fields["needs_review"] = "true"
+		}
+		if v.NeedsQA {
+			fields["needs_qa"] = "true"
 		}
 		if len(v.NotVerified) > 0 {
 			fields["not_verified"] = clip(strings.Join(v.NotVerified, "; "), 1000)

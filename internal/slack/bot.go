@@ -54,10 +54,13 @@ type Bot struct {
 	c      Config
 	events chan store.Event
 
-	mu       sync.Mutex
-	pending  map[string]*pendingApproval // by id
-	digestTS time.Time                   // the boundary the failures below are for
-	digestNG int                         // failed attempts to post that digest
+	mu      sync.Mutex
+	pending map[string]*pendingApproval // by id
+	// reopening are the qa items whose Reopen the approver pressed: their next reply in the thread
+	// is the words (qa.go).
+	reopening map[int64]bool
+	digestTS  time.Time // the boundary the failures below are for
+	digestNG  int       // failed attempts to post that digest
 }
 
 const (
@@ -98,7 +101,7 @@ func New(c Config) (*Bot, error) {
 		c.TickEvery = 5 * time.Second
 	}
 	c.LinkBase = strings.TrimRight(c.LinkBase, "/")
-	return &Bot{c: c, events: make(chan store.Event, eventsBuffer), pending: map[string]*pendingApproval{}}, nil
+	return &Bot{c: c, events: make(chan store.Event, eventsBuffer), pending: map[string]*pendingApproval{}, reopening: map[int64]bool{}}, nil
 }
 
 // Attach subscribes the bot to the store's events. The subscriber only queues: Slack never slows
@@ -356,6 +359,9 @@ func (b *Bot) parentMessage(d store.Detail) Message {
 	if pr := b.prLink(it); pr != "" {
 		line += " · " + pr
 	}
+	if it.ReopenOf != 0 {
+		line += fmt.Sprintf(" · Reopens #%d", it.ReopenOf)
+	}
 	text := "*" + head + "*\n" + line
 	if it.Risk == pipeline.RiskHold && it.HoldReason != "" {
 		text += "\nOn the hold list: " + b.field(it.HoldReason, 400, it.ID)
@@ -439,6 +445,9 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 	if e.Kind == "advanced" && pipeline.Outcome(e.Outcome) == pipeline.Hold {
 		return b.heldMessage(e, d), true
 	}
+	if e.Kind == "advanced" && pipeline.Outcome(e.Outcome) == pipeline.Merged && to == pipeline.QA {
+		return b.qaMessage(e, d), true
+	}
 
 	var text string
 	switch e.Kind {
@@ -497,6 +506,17 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 		text += "."
 	case "pr_closed":
 		return Message{}, false // the dropped line already said so
+	case "qa_marked":
+		text = fmt.Sprintf("Marked for your check once merged (%s): it waits in qa after it lands.", who(e.Actor))
+	case "verified":
+		text = "Verified by " + who(e.Actor)
+		if w := str(e.Data, "words"); w != "" && w != VerifiedWords {
+			text += ": '" + f("words", 300) + "'"
+		}
+		text += ". Done."
+	case "reopened":
+		text = fmt.Sprintf("Reopened by %s: '%s'. Filed #%v (%s) with those words; this one is done.",
+			who(e.Actor), f("words", 300), e.Data["reopen_item"], pipeline.ReopenPriority)
 	case "advanced":
 		switch pipeline.Outcome(e.Outcome) {
 		case pipeline.Reproduced:
@@ -790,6 +810,8 @@ func (b *Bot) onMessage(ctx context.Context, m slackEvent) {
 		if _, err := b.c.Store.Answer(ctx, actorPrefix+m.User, id, text); err != nil {
 			b.threadReply(ctx, m.ThreadTS, "Could not record that answer: "+Escape(errMessage(err)))
 		}
+	case pipeline.QA:
+		b.qaReply(ctx, m, id, text)
 	case pipeline.Held:
 		if !IsApprover(m.User) {
 			b.refuse(ctx, m.Channel, m.User, id, "approve")
@@ -869,6 +891,13 @@ func (b *Bot) onActions(ctx context.Context, p interaction) {
 			if _, err := b.c.Store.Drop(ctx, actor, itemID, "Drop button"); err != nil {
 				b.ephemeral(ctx, channel, user, Escape(errMessage(err)))
 			}
+		case "qa_verified":
+			b.clearReopen(itemID)
+			if _, err := b.c.Store.Verified(ctx, actor, itemID, VerifiedWords); err != nil {
+				b.ephemeral(ctx, channel, user, Escape(errMessage(err)))
+			}
+		case "qa_reopen":
+			b.reopenButton(ctx, channel, user, itemID)
 		case "keep_holding":
 			b.cancelPending(itemID)
 			if _, err := b.c.Store.Hold(ctx, actor, itemID, "Keep holding"); err != nil {
@@ -905,13 +934,13 @@ func (b *Bot) onActions(ctx context.Context, p interaction) {
 }
 
 // actionItem finds the item an action is about: the parent's block_id "item:N", or a held
-// button's value "N:sha", or a Drop button's "N" or "N:sha".
+// button's value "N:sha", or a Drop button's "N" or "N:sha", or a qa button's "N".
 func actionItem(actionID, blockID, value string) int64 {
 	if rest, ok := strings.CutPrefix(blockID, "item:"); ok {
 		id, _ := strconv.ParseInt(rest, 10, 64)
 		return id
 	}
-	if actionID == "approve" || actionID == "keep_holding" || actionID == "drop" {
+	if actionID == "approve" || actionID == "keep_holding" || actionID == "drop" || actionID == "qa_verified" || actionID == "qa_reopen" {
 		n, _, _ := strings.Cut(value, ":")
 		id, _ := strconv.ParseInt(n, 10, 64)
 		return id

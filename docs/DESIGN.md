@@ -12,7 +12,7 @@ Jarvis Loop turns the hand-run agent work of 2026-10-13/14 (jarvis-server PRs #1
 
 ## The pipeline
 
-*(Drawing in the living doc: intake → triage → ready → build → review → land → done, with the two human gates on the side: needs-you, fed by triage questions and by review after 2 bounces; held, fed by land for hold-list PRs.)*
+*(Drawing in the living doc: intake → triage → ready → build → review → land → done, with the two human gates on the side: needs-you, fed by triage questions and by review after 2 bounces; held, fed by land for hold-list PRs. Since 2026-10-15 an opt-in third one after land: qa, for merged items only the user can check.)*
 
 Work moves one stage at a time and cannot skip one; only the two gates wait on the user, both through Slack.
 
@@ -26,6 +26,7 @@ Work moves one stage at a time and cannot skip one; only the two gates wait on t
 | Land | a script | merged with `main` green, or held | 1 at a time |
 | Needs-you | the user, in the item's thread | answered; it returns to the stage that asked | none |
 | Held | the user, button or reply | approved (merge, then done) or kept holding | none |
+| QA | the user, after merge (opt-in) | **Verified** → done, or **Reopen** with words → done, and a new P2 item with those words. Only items marked needs_qa (by triage, review, `/loop qa <id>` before land, or the repo's `qa: true`) come here instead of done; nothing claims it ([decision](decisions/2026-10-15-qa.md)) | none |
 
 ## Priority
 
@@ -84,6 +85,7 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | `POST /items/{id}/ask`, `/answer` | put an item in needs-you with a question; record the answer |
 | `POST /items/{id}/approve`, `/hold` | the decision on a held merge |
 | `POST /items/{id}/drop` | the user closes an item they won't land, from any open stage; the runner then closes its PR |
+| `POST /items/{id}/qa`, `/verified`, `/reopen` | the QA lane: mark an item for the user's check before it lands; the check passed (qa → done) or failed (qa → done, and a new P2 item with the words) |
 | `GET`, `PUT /control` | the active-agents number, stop and resume |
 
 The `loop` CLI wraps the same API: `loop add`, `loop status`, `loop show`, `loop answer`, `loop agents <n>`.
@@ -132,10 +134,11 @@ Slack is the user's whole interface: add work, answer questions and approve merg
 | answer a question | reply in the item's thread; the bot @mentions the user when it asks |
 | decide a held merge | **Approve merge** / **Keep holding** buttons, or a plain reply (Landing) |
 | drop an item | **Drop** on a held or needs-you message, or `/loop drop <id> [why]` (`loop drop <id>` on the CLI); its PR is closed, the branch stays |
+| check a merged change yourself | `/loop qa <id>` before it lands (or a repo's `qa: true`); then **Verified** / **Reopen** on the "Merged — waiting for your check" message, or `/loop verified <id>`, `/loop reopen <id> <what is wrong>` |
 | set priority | words when adding, or the dropdown on the item's first message |
 | see the board | `/loop status`; `/loop show <id>` for one item |
 | turn spending up or down | the pinned **Active agents** message, `/loop agents <n>`, `/loop stop` |
-| catch up | a digest every 4 hours in `#loop-digest`: merged, held, failing, new, estimated spend |
+| catch up | a digest every 4 hours in `#loop-digest`: merged, held, failing, new, waiting for your check (qa), estimated spend |
 
 **What never goes to Slack** (a third party): full logs, model-call transcripts, sandbox credentials, tokens, and host names from `HOSTS.local.md`. The bot posts summaries, PR links and small evidence (a cropped screenshot, one failing scenario line); everything else is a link to `loopd` that works only on the LAN, or through the tunnel later.
 

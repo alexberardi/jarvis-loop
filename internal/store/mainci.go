@@ -24,8 +24,9 @@ var MainCIResults = []string{"green", "red", "timeout"}
 var mainCIKeys = []string{"result", "urls", "failing", "merge_sha", "p1_item"}
 
 // MainCI records the result of main's CI on the commit an item was merged as (kind main_ci). Only
-// the runner whose land run merged the item may record it, once, after the item is done: the
-// lease ended at the merge, so the merged event is the proof of who watches.
+// the runner whose land run merged the item may record it, once, after the merge (the item is done,
+// or in qa waiting for the user's check, or was closed from qa): the lease ended at the merge, so
+// the merged event is the proof of who watches.
 func (s *Store) MainCI(ctx context.Context, runnerName string, id int64, data map[string]any) (Event, error) {
 	var out Event
 	actor := "runner:" + runnerName
@@ -37,8 +38,8 @@ func (s *Store) MainCI(ctx context.Context, runnerName string, id int64, data ma
 		if err != nil {
 			return err
 		}
-		if it.Stage != pipeline.Done {
-			return errf(pipeline.CodeWrongStage, "item %d is %s, not done", id, it.Stage)
+		if it.Stage != pipeline.Done && it.Stage != pipeline.QA && it.Stage != pipeline.Closed {
+			return errf(pipeline.CodeWrongStage, "item %d is %s, not merged", id, it.Stage)
 		}
 		var mergedBy string
 		err = tx.QueryRow(`SELECT actor FROM events WHERE item_id = ? AND kind = 'advanced' AND outcome = ? ORDER BY id DESC LIMIT 1`,
@@ -59,7 +60,7 @@ func (s *Store) MainCI(ctx context.Context, runnerName string, id int64, data ma
 		if n > 0 {
 			return errf(CodeAlreadyRecorded, "item %d already has main's CI result", id)
 		}
-		out = Event{ItemID: id, Actor: actor, Kind: "main_ci", From: string(pipeline.Done), To: string(pipeline.Done), Data: data}
+		out = Event{ItemID: id, Actor: actor, Kind: "main_ci", From: string(it.Stage), To: string(it.Stage), Data: data}
 		return s.event(tx, out)
 	})
 	if err != nil {

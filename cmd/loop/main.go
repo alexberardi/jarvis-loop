@@ -30,6 +30,9 @@ const usage = `usage: loop <command> [args]
   approve <id> --sha <head sha> [--words TEXT]
   hold <id> [--words TEXT]
   drop <id> [--words TEXT]
+  qa <id>                     check it yourself once merged (it waits in qa)
+  verified <id> [--words TEXT]
+  reopen <id> "<what is wrong>"
   priority <id> <P1-P5>
   agents [<0-6>]
   stop | resume
@@ -159,6 +162,9 @@ var commands = map[string]command{
 	"approve":   {1, 1, []string{"sha", "words"}, cmdApprove},
 	"hold":      {1, 1, []string{"words"}, cmdHold},
 	"drop":      {1, 1, []string{"words"}, cmdDrop},
+	"qa":        {1, 1, nil, cmdQA},
+	"verified":  {1, 1, []string{"words"}, cmdVerified},
+	"reopen":    {2, 2, nil, cmdReopen},
 	"priority":  {2, 2, nil, cmdPriority},
 	"agents":    {0, 1, nil, cmdAgents},
 	"stop":      {0, 0, nil, cmdStop(true)},
@@ -245,6 +251,8 @@ type item struct {
 	Branch      string    `json:"branch"`
 	HeadSHA     string    `json:"head_sha"`
 	MergeSHA    string    `json:"merge_sha"`
+	NeedsQA     bool      `json:"needs_qa"`
+	ReopenOf    int64     `json:"reopen_of"`
 	CreatedAt   time.Time `json:"created_at"`
 	Approval    *struct {
 		By      string    `json:"by"`
@@ -423,6 +431,12 @@ func cmdShow(c *client, pos []string, _ map[string][]string) error {
 	if it.MergeSHA != "" {
 		fmt.Fprintf(w, "merged:   %s\n", it.MergeSHA)
 	}
+	if it.NeedsQA {
+		fmt.Fprintln(w, "qa:       waits for your check once merged")
+	}
+	if it.ReopenOf != 0 {
+		fmt.Fprintf(w, "reopens:  #%d\n", it.ReopenOf)
+	}
 	if l := d.Lease; l != nil {
 		fmt.Fprintf(w, "lease:    %s by %s/%s, expires %s\n", l.ID, l.Runner, l.Agent, l.ExpiresAt.Format(time.RFC3339))
 	}
@@ -504,6 +518,48 @@ func cmdHold(c *client, pos []string, f map[string][]string) error {
 		return err
 	}
 	fmt.Fprintf(c.out, "#%d still held\n", it.ID)
+	return nil
+}
+
+func cmdQA(c *client, pos []string, _ map[string][]string) error {
+	id, err := itemID(pos[0])
+	if err != nil {
+		return err
+	}
+	var it item
+	if _, err := c.json("POST", "/items/"+id+"/qa", map[string]string{}, &it); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "#%d waits in qa for your check once merged\n", it.ID)
+	return nil
+}
+
+func cmdVerified(c *client, pos []string, f map[string][]string) error {
+	id, err := itemID(pos[0])
+	if err != nil {
+		return err
+	}
+	var it item
+	if _, err := c.json("POST", "/items/"+id+"/verified", map[string]string{"words": last(f, "words")}, &it); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "#%d verified (done)\n", it.ID)
+	return nil
+}
+
+func cmdReopen(c *client, pos []string, _ map[string][]string) error {
+	id, err := itemID(pos[0])
+	if err != nil {
+		return err
+	}
+	var out struct {
+		Item  item `json:"item"`
+		Filed item `json:"filed"`
+	}
+	if _, err := c.json("POST", "/items/"+id+"/reopen", map[string]string{"words": pos[1]}, &out); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "#%d done; filed #%d (%s): %s\n", out.Item.ID, out.Filed.ID, out.Filed.Priority, out.Filed.Title)
 	return nil
 }
 

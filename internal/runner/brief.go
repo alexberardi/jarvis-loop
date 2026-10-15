@@ -120,7 +120,8 @@ func StaticBrief(stage string) string {
 		b.WriteString(`{"outcome": "reproduced", "repo": "owner/name (only when the item has no repo)",
  "area": "a short area name", "size": "S | M | L", "risk": "normal | hold", "resources": ["gpu", "voice", "emulator", "macos"],
  "summary": "one paragraph: what you found", "notes": "markdown: what to change, where, how to verify, what you could not check",
- "evidence": [{"file": "evidence/repro.log", "label": "the failing test on main"}]}`)
+ "evidence": [{"file": "evidence/repro.log", "label": "the failing test on main"}],
+ "needs_qa": false}`)
 		b.WriteString("\n```\n\n```json\n")
 		b.WriteString(`{"outcome": "not_reproducible", "summary": "duplicate of #N / PR #M, or: works on main because …",
  "notes": "markdown: what you checked and saw", "evidence": [{"file": "evidence/check.log", "label": "…"}]}`)
@@ -128,18 +129,18 @@ func StaticBrief(stage string) string {
 		b.WriteString("When the item has no repo yet (no checkouts this run), name it first:\n\n```json\n")
 		b.WriteString(`{"outcome": "routed", "repo": "owner/name", "why": "one line: why this repo"}`)
 		b.WriteString("\n```\n\n")
-		b.WriteString("`resources` lists only what verifying the change needs (often `[]`). The runner checks `repo` against the configured repos and uploads your `notes` (as `triage-notes.md`) and the files in `.loop/evidence/` with the item. After `routed`, the item is triaged again with that repo checked out. No other fields.\n")
+		b.WriteString("`resources` lists only what verifying the change needs (often `[]`). The runner checks `repo` against the configured repos and uploads your `notes` (as `triage-notes.md`) and the files in `.loop/evidence/` with the item. After `routed`, the item is triaged again with that repo checked out. Set `needs_qa` to true when only the user can check the change once it is merged (on their phone or hardware): the item then waits in qa after it lands. No other fields.\n")
 	case StageReview:
 		b.WriteString("Write `.loop/result.json` as your last step, exactly one of:\n\n```json\n")
 		b.WriteString(`{"outcome": "approved", "summary": "one paragraph: why it can merge",
  "review": "markdown for the PR comment: verdict, what you checked and how, findings",
  "not_verified": ["…"], "evidence": [{"file": "evidence/check.log", "label": "scripts/check at the head"}],
- "needs_review": false}`)
+ "needs_review": false, "needs_qa": false}`)
 		b.WriteString("\n```\n\n```json\n")
 		b.WriteString(`{"outcome": "bounce", "notes": "the build agent's list: each point specific, with file:line, and what done looks like",
  "review": "markdown for the PR comment", "evidence": [{"file": "evidence/check.log", "label": "…"}]}`)
 		b.WriteString("\n```\n\n")
-		b.WriteString("The runner posts `review` on the PR as a comment (never a GitHub approval), with the commit you reviewed, uploads `.loop/evidence/`, and reports the outcome for the head commit named below; `head_sha`, if you give it, must be that commit. `needs_review: true` on an approval holds the merge for the user (see \"Content the hold list cannot see\"). No other fields.\n")
+		b.WriteString("The runner posts `review` on the PR as a comment (never a GitHub approval), with the commit you reviewed, uploads `.loop/evidence/`, and reports the outcome for the head commit named below; `head_sha`, if you give it, must be that commit. `needs_review: true` on an approval holds the merge for the user (see \"Content the hold list cannot see\"). `needs_qa: true` on an approval means only the user can check the change once merged (on their phone or hardware): the item then waits in qa after it lands instead of going to done. No other fields.\n")
 	default:
 		b.WriteString("Commit your work on the item's branch (the runner pushes it and opens the PR; you never push), then write `.loop/result.json`, exactly one of:\n\n```json\n")
 		b.WriteString(`{"outcome": "ready_for_pr", "pr_title": "one line, at most 256 characters",

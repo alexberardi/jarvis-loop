@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/api"
 	"github.com/alexberardi/jarvis-loop/internal/clock"
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 	"github.com/alexberardi/jarvis-loop/internal/store"
 )
 
@@ -117,5 +119,17 @@ func TestSliderPost(t *testing.T) {
 	}
 	if c, _ := st.Control(context.Background()); c.ActiveAgents != 3 {
 		t.Fatalf("cross-site post changed control: %+v", c)
+	}
+}
+
+// Every stage's board name has a column, so no item is left off the page (qa was missing once).
+func TestOrderHasEveryStage(t *testing.T) {
+	for _, s := range pipeline.AllStages {
+		for _, claimed := range []bool{false, true} {
+			name := pipeline.Display(s, claimed)
+			if !slices.Contains(order, name) {
+				t.Errorf("no column for %q", name)
+			}
+		}
 	}
 }
