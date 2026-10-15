@@ -58,8 +58,26 @@ type rig struct {
 	remote   string // the "GitHub" bare repo
 	local    string // the user's own clone
 	localRef string // its HEAD before the run
-	logs     *bytes.Buffer
+	logs     *syncBuffer
 	scripts  string // the fake claude's per-item scripts
+}
+
+// syncBuffer is the runner's log in the tests: a test may read it while a run writes it.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 func gitT(t *testing.T, dir string, args ...string) string {
@@ -110,6 +128,7 @@ func newRig(t *testing.T, scenario string) *rig {
 	cfg := &Config{
 		LoopdURL: srv.URL, Token: runnerToken, Name: "devbox", Slots: 1, WorkRoot: filepath.Join(root, "work"),
 		Claude: self, Guard: self, Mode: ModeAuto, PollSeconds: 30, UserEmulator: "emulator-5554", VerifyPR: &verify,
+		VerifyLock: filepath.Join(root, "verify.lock"),
 		// The build tests' runner builds only; the triage and review tests set the stages.
 		Stages: []string{StageBuild},
 		Repos: map[string]RepoConfig{
@@ -120,7 +139,7 @@ func newRig(t *testing.T, scenario string) *rig {
 	if err := cfg.normalize(); err != nil {
 		t.Fatal(err)
 	}
-	logs := &bytes.Buffer{}
+	logs := &syncBuffer{}
 	clk := NewFakeClock(t0)
 	r := &Runner{
 		Cfg: cfg, Client: &Client{Base: srv.URL, Token: runnerToken}, Clock: clk,
@@ -148,15 +167,16 @@ func newRig(t *testing.T, scenario string) *rig {
 
 // fakePRs is GitHub's PRs for the tests: it records what the runner asked for.
 type fakePRs struct {
-	mu       sync.Mutex
-	next     int
-	open     map[string]int // branch -> PR
-	specs    map[int]PRSpec
-	bodies   map[int]string
-	created  []int
-	edited   []int
-	comments map[int][]string // PR -> comment bodies the runner posted
-	merged   []MergedPR
+	mu        sync.Mutex
+	next      int
+	open      map[string]int // branch -> PR
+	specs     map[int]PRSpec
+	bodies    map[int]string
+	created   []int
+	edited    []int
+	comments  map[int][]string // PR -> comment bodies the runner posted
+	merged    []MergedPR
+	mergedErr map[string]error
 }
 
 func (f *fakePRs) View(_ context.Context, slug string, pr int) (PRView, error) {
@@ -197,6 +217,9 @@ func (f *fakePRs) Comments(_ context.Context, slug string, pr int) ([]PRComment,
 func (f *fakePRs) MergedPRs(_ context.Context, slug string, n int) ([]MergedPR, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.mergedErr[slug]; err != nil {
+		return nil, err
+	}
 	return f.merged, nil
 }
 

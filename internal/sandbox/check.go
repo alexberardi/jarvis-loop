@@ -246,6 +246,9 @@ func (p *player) problems(e Expect, negatives bool) []string {
 			add("%d agent run(s) for %s, want %d", len(runs), stage, e.AgentRuns[stage])
 		}
 	}
+	for _, m := range e.RunFiles {
+		out = append(out, p.runFileProblems(m)...)
+	}
 	for _, rel := range e.Absent {
 		if _, err := os.Lstat(filepath.Join(p.s.Dir, rel)); err == nil {
 			add("%s exists, want it absent", rel)
@@ -610,6 +613,13 @@ func (p *player) remoteProblems(rm RemoteMatch) []string {
 			}
 		}
 	}
+	slug := RepoSlug
+	if rm.Repo != "" {
+		slug = rm.Repo
+		if h, want := gh.RemoteHead(slug, "main"), gh.MainHead(slug); h != want {
+			out = append(out, fmt.Sprintf("%s's main moved: %s, want %s", slug, h, want))
+		}
+	}
 	want := []string{"main"}
 	for _, alias := range sortedKeys(rm.Branches) {
 		r, err := p.ref(alias)
@@ -619,23 +629,23 @@ func (p *player) remoteProblems(rm RemoteMatch) []string {
 		}
 		br := ItemBranch(r.id, r.title)
 		want = append(want, br)
-		head := gh.RemoteHead(RepoSlug, br)
+		head := gh.RemoteHead(slug, br)
 		if head == "" {
 			out = append(out, fmt.Sprintf("no branch %s on the remote", br))
 			continue
 		}
-		subj := gh.Subject(RepoSlug, head)
+		subj := gh.Subject(slug, head)
 		if ok, err := matches(rm.Branches[alias], subj); err != nil || !ok {
 			out = append(out, fmt.Sprintf("%s's head is %q, want /%s/ %s", br, subj, rm.Branches[alias], errOrNil(err)))
 		}
 		if files, ok := rm.Files[alias]; ok {
-			if got := gh.Files(RepoSlug, head); !slices.Equal(got, files) {
+			if got := gh.Files(slug, head); !slices.Equal(got, files) {
 				out = append(out, fmt.Sprintf("%s's head changed %v, want %v", br, got, files))
 			}
 		}
 	}
 	if rm.Only {
-		for _, b := range gh.Branches(RepoSlug) {
+		for _, b := range gh.Branches(slug) {
 			if !slices.Contains(want, b) {
 				out = append(out, fmt.Sprintf("unexpected branch %s on the remote", b))
 			}
@@ -673,6 +683,44 @@ func (p *player) prefixProblems(stage string) []string {
 			argv0 = argv
 		} else if string(argv) != string(argv0) {
 			out = append(out, fmt.Sprintf("%s: argv %s differs from %s", filepath.Base(r), argv, argv0))
+		}
+	}
+	return out
+}
+
+// runFileProblems checks one file of one of an item's agent runs.
+func (p *player) runFileProblems(m RunMatch) []string {
+	r, err := p.ref(m.Item)
+	if err != nil {
+		return []string{err.Error()}
+	}
+	runs, _ := filepath.Glob(filepath.Join(p.s.Dir, "work", "runs", fmt.Sprintf("%d-%s-*", r.id, m.Stage)))
+	sort.Strings(runs)
+	n := m.Run
+	if n == 0 {
+		n = len(runs)
+	}
+	if n < 1 || n > len(runs) {
+		return []string{fmt.Sprintf("%s has %d %s run(s), want run %d", m.Item, len(runs), m.Stage, n)}
+	}
+	path := filepath.Join(runs[n-1], m.File)
+	b, err := os.ReadFile(path)
+	if m.Absent {
+		if err == nil {
+			return []string{fmt.Sprintf("%s's %s run %d has %s, want none", m.Item, m.Stage, n, m.File)}
+		}
+		return nil
+	}
+	if err != nil {
+		return []string{fmt.Sprintf("%s's %s run %d: %v", m.Item, m.Stage, n, err)}
+	}
+	var out []string
+	if ok, err := matches(m.Text, string(b)); err != nil || !ok {
+		out = append(out, fmt.Sprintf("%s's %s run %d %s does not match /%s/ %s:\n%s", m.Item, m.Stage, n, m.File, m.Text, errOrNil(err), clip(string(b), 1500)))
+	}
+	if m.NoText != "" {
+		if ok, err := matches(m.NoText, string(b)); err != nil || ok {
+			out = append(out, fmt.Sprintf("%s's %s run %d %s matches /%s/, want not %s", m.Item, m.Stage, n, m.File, m.NoText, errOrNil(err)))
 		}
 	}
 	return out

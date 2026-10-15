@@ -13,7 +13,7 @@ import (
 
 const helpText = "*/loop commands*\n" +
 	"`/loop help` this list\n" +
-	"`/loop add <what>` add work; say \"urgent\", \"high priority\", \"low priority\" or \"someday\" to set its priority (default P3), and \"in <repo>\", \"<repo>:\" or \"[<repo>]\" to name its repo (default: triage picks one)\n" +
+	"`/loop add <what>` add work; say \"urgent\", \"high priority\", \"low priority\" or \"someday\" to set its priority (default P3), and \"in <repo>\", \"<repo>:\" or \"[<repo>]\" to name its repo, also by a short word at the start or end (\"[mobile] …\", \"nest: …\", \"… in docs\"; default: triage picks one)\n" +
 	"`/loop status` the board\n" +
 	"`/loop show <id>` one item\n" +
 	"`/loop priority <id> P1`\u2013`P5` change a priority\n" +

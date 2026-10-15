@@ -40,6 +40,11 @@ func (g Git) run(ctx context.Context, dir string, args ...string) (string, error
 	return strings.TrimSpace(out.String()), nil
 }
 
+// MirrorExclude is the mirror's info/exclude: the runner's own files, and what a repo's setup
+// commands install into the worktree (dependencies the repo may not ignore itself), so they are
+// never committed and never make the worktree look dirty.
+const MirrorExclude = "# the runner's files, never committed\n.loop/\n# installed by the repo's setup commands\n.venv/\nnode_modules/\n"
+
 // EnsureMirror creates or refreshes the runner's own bare mirror of a repo: objects seeded from
 // the user's clone when given (read only), then fetched from the remote. The user's clone is
 // never written.
@@ -61,14 +66,18 @@ func (g Git) EnsureMirror(ctx context.Context, mirror string, r RepoConfig) erro
 				return err
 			}
 		}
-		if err := os.MkdirAll(filepath.Join(mirror, "info"), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(mirror, "info", "exclude"), []byte("# the runner's files, never committed\n.loop/\n"), 0o644); err != nil {
-			return err
-		}
 	} else if _, err := g.run(ctx, mirror, "config", "remote.origin.url", r.Remote); err != nil {
 		return err
+	}
+	// Kept up to date on every refresh: a mirror made before a line was added gets it too.
+	if err := os.MkdirAll(filepath.Join(mirror, "info"), 0o755); err != nil {
+		return err
+	}
+	excl := filepath.Join(mirror, "info", "exclude")
+	if b, err := os.ReadFile(excl); err != nil || string(b) != MirrorExclude {
+		if err := os.WriteFile(excl, []byte(MirrorExclude), 0o644); err != nil {
+			return err
+		}
 	}
 	if r.Local != "" {
 		if _, err := os.Stat(r.Local); err == nil {

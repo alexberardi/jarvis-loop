@@ -174,6 +174,9 @@ type run struct {
 
 	reported int // refusals already sent
 	refusals int
+	// done closes when the run must stop (the runner shutting down): its reports go on, but a
+	// verify step is ended.
+	done <-chan struct{}
 }
 
 func (r *Runner) lockMirror(path string) func() {
@@ -212,6 +215,14 @@ func (r *Runner) newRun(cl *Claim, agent string) (*run, error) {
 	// would differ per item.
 	ru.scratch = filepath.Join(ru.wt, ".loop", "scratch")
 	ru.dir = filepath.Join(r.Cfg.WorkRoot, "runs", fmt.Sprintf("%d-%s-%s", it.ID, stage, ru.started.Format("20060102T150405Z")))
+	// Two runs of a stage within a second (a routed item triaged again, a build after a failed
+	// verify) keep separate logs.
+	for n := 2; ; n++ {
+		if _, err := os.Lstat(ru.dir); os.IsNotExist(err) {
+			break
+		}
+		ru.dir = filepath.Join(r.Cfg.WorkRoot, "runs", fmt.Sprintf("%d-%s-%s-%d", it.ID, stage, ru.started.Format("20060102T150405Z"), n))
+	}
 	// One settings file per repo and stage, the same bytes for every item (prompt caching).
 	ru.settings = filepath.Join(r.Cfg.WorkRoot, "settings", stage+".json")
 	if ru.repoKey != "" {
@@ -234,6 +245,7 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 		return
 	}
 	cleanupCtx := context.WithoutCancel(ctx)
+	ru.done = ctx.Done()
 	defer r.cleanup(cleanupCtx, ru, log)
 
 	brief, err := r.prepare(ctx, ru)
@@ -256,7 +268,13 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 	if err := os.MkdirAll(ru.dir, 0o700); err != nil {
 		return "", err
 	}
-	info := RunInfo{Slug: ru.repo.Slug, Base: ru.repo.Base, Branch: ru.branch, Worktree: ru.wt, Scratch: ru.scratch, Sandbox: ru.sandbox}
+	info := RunInfo{Slug: ru.repo.Slug, Base: ru.repo.Base, Branch: ru.branch, Worktree: ru.wt, Scratch: ru.scratch, Sandbox: ru.sandbox,
+		RepoGroup: ru.repo.Group}
+	if ru.stage == StageBuild {
+		for _, v := range ru.repo.Verify {
+			info.Verify = append(info.Verify, v.Name)
+		}
+	}
 	var err error
 	switch ru.stage {
 	case StageTriage:
@@ -285,6 +303,9 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 			if out, err := r.shell(ctx, ru.repoDir, c, 20*time.Minute); err != nil {
 				return "", fmt.Errorf("prepare %q: %v: %s", c, err, clip(out, 500))
 			}
+		}
+		if err := r.setup(ctx, ru); err != nil {
+			return "", err
 		}
 	}
 	home := Home()
@@ -356,6 +377,42 @@ func (r *Runner) prepareBuild(ctx context.Context, ru *run, info *RunInfo) error
 		r.reviewContext(ctx, ru, info, filepath.Join(".loop", "review", "notes.md"), filepath.Join(".loop", "review", "pr-comments.md"))
 	}
 	return nil
+}
+
+// SetupTimeout is the time limit of each of a repo's setup commands.
+const SetupTimeout = 20 * time.Minute
+
+// setup runs the repo's setup commands (npm ci, a venv) in the checkout, as the runner, outside
+// the agent's sandbox, before the agent starts; their output goes to setup.log in the run dir.
+// A failure fails the run (the user sees the log's tail).
+func (r *Runner) setup(ctx context.Context, ru *run) error {
+	if len(ru.repo.Setup) == 0 {
+		return nil
+	}
+	logf, err := os.OpenFile(filepath.Join(ru.dir, "setup.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer logf.Close()
+	for _, c := range ru.repo.Setup {
+		fmt.Fprintf(logf, "$ %s\n", c)
+		out, err := r.shell(ctx, ru.repoDir, c, SetupTimeout)
+		logf.WriteString(out)
+		if err != nil {
+			fmt.Fprintf(logf, "[failed: %v]\n", err)
+			return fmt.Errorf("setup %q: %v: %s", c, err, clip(tail(out, 20), 800))
+		}
+	}
+	return nil
+}
+
+// tail is the last n lines of s.
+func tail(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func writeAtomic(path string, b []byte) error {
@@ -868,7 +925,26 @@ func (r *Runner) reportBuild(ctx context.Context, ru *run, out outcome, raw []by
 		fail("evidence: " + err.Error())
 		return
 	}
-	pr, action, err := r.publish(ctx, ru, v, files, out)
+	// The runner's own verify steps, before anything is pushed (verify.go).
+	vres, err := r.runVerify(ctx, ru, facts.HeadSHA, facts.ChangedPaths)
+	if errors.Is(err, errVerifyStopped) {
+		r.Log.Info("verify stopped; the build's commits stay in the mirror", "item", ru.item.ID)
+		return
+	}
+	if err != nil {
+		fail("the runner's verify did not run: " + err.Error())
+		return
+	}
+	if bad := firstFailed(vres); bad != nil {
+		if err := r.uploadVerify(ctx, ru, vres); err != nil {
+			fail("uploading the verify output: " + err.Error())
+			return
+		}
+		r.advance(ctx, ru, "verify_failed", r.metrics(ru, out, map[string]string{
+			"reason": VerifyFailedReason(*bad), "verify_step": bad.Name, "log_tail": VerifyLogTail(*bad), "head_sha": facts.HeadSHA}), nil)
+		return
+	}
+	pr, action, err := r.publish(ctx, ru, v, files, out, vres)
 	if err != nil {
 		fail(err.Error())
 		return
@@ -893,6 +969,10 @@ func (r *Runner) reportBuild(ctx context.Context, ru *run, out outcome, raw []by
 			return
 		}
 	}
+	if err := r.uploadVerify(ctx, ru, vres); err != nil {
+		fail("uploading the verify output: " + err.Error())
+		return
+	}
 	fields := map[string]string{
 		"repo": ru.repo.Slug, "pr": strconv.Itoa(pr), "branch": ru.branch, "head_sha": facts.HeadSHA,
 		"summary": clip(v.Summary, 2000), "not_verified": clip(strings.Join(v.NotVerified, "; "), 1000), "pr_verified": prVerified,
@@ -915,7 +995,7 @@ func evidenceLabels(v Result) map[string]string {
 // publish pushes the item's branch (only it, never forced) and opens its PR, or updates the open
 // one, with the runner's own credentials; it returns the PR number and "opened" or "updated". The
 // agent did neither.
-func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []EvidenceFile, out outcome) (int, string, error) {
+func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []EvidenceFile, out outcome, vres []VerifyResult) (int, string, error) {
 	if r.PRs == nil {
 		return 0, "", errors.New("the runner has no way to open PRs (configuration)")
 	}
@@ -938,7 +1018,7 @@ func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []Evidence
 	}
 	st := r.runStats(ru, out)
 	body := filepath.Join(ru.dir, "pr-body.md")
-	if err := os.WriteFile(body, []byte(PRBody(v.PRBody, ru.item.ID, files, evidenceLabels(v.Result), st)), 0o600); err != nil {
+	if err := os.WriteFile(body, []byte(PRBody(v.PRBody, ru.item.ID, files, evidenceLabels(v.Result), st, vres)), 0o600); err != nil {
 		return 0, "", err
 	}
 	spec := PRSpec{Slug: ru.repo.Slug, Head: ru.branch, Base: ru.repo.Base, Title: v.PRTitle, BodyFile: body}

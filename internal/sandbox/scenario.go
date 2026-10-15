@@ -106,6 +106,22 @@ type Expect struct {
 	// SamePrefix: for each stage named, the runner ran it at least twice, and every run's prompt
 	// starts with that stage's static brief and has the same command line (one cacheable prefix).
 	SamePrefix []string `json:"same_prefix,omitempty"`
+	// RunFiles check files in an item's agent run dirs (the brief, the verify output).
+	RunFiles []RunMatch `json:"run_files,omitempty"`
+}
+
+// RunMatch checks a file in one of an item's run dirs (work/runs/<id>-<stage>-<time>[-n]/).
+type RunMatch struct {
+	Item  string `json:"item"`
+	Stage string `json:"stage"`
+	// Run is which run of the stage, 1 for the first; 0 for the latest.
+	Run int `json:"run,omitempty"`
+	// File is relative to the run dir (brief.md, setup.log, verify/<step>/output.log); Absent:
+	// it must not exist.
+	File   string `json:"file"`
+	Absent bool   `json:"absent,omitempty"`
+	Text   string `json:"text,omitempty"`    // a regexp the file must match
+	NoText string `json:"no_text,omitempty"` // a regexp it must not match
 }
 
 // EventMatch selects loopd events.
@@ -163,6 +179,8 @@ type RemoteMatch struct {
 	Files map[string][]string `json:"files,omitempty"`
 	// Only: no branch but main and the ones named exists.
 	Only bool `json:"only,omitempty"`
+	// Repo is the scratch repo the branch checks are about (default the demo repo).
+	Repo string `json:"repo,omitempty"`
 }
 
 // LoadScenario reads a scenario file, refusing unknown fields (a typo would silently check
@@ -370,6 +388,19 @@ func (p *player) step(st Step) error {
 		}
 		s.GitHub.SetChecks(d.Item.Repo, head, st.Checks)
 		return nil
+	case "verify":
+		// How the stand-in node-mobile's "mobile shots" verify step goes from now on.
+		f := filepath.Join(s.Dir, VerifyFailFile)
+		switch st.Outcome {
+		case "fail":
+			return os.WriteFile(f, []byte("fail\n"), 0o644)
+		case "pass":
+			if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			return nil
+		}
+		return fmt.Errorf("verify outcome %q: use pass or fail", st.Outcome)
 	case "github":
 		if st.RefuseMerges != nil {
 			s.GitHub.RefuseMerges(*st.RefuseMerges)

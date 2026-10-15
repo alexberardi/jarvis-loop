@@ -1,0 +1,58 @@
+{
+  "name": "verify-not-the-agents",
+  "about": "Phase 6b: the verify steps come from the runner's config only. The build agent leaves its own verify script in .loop/ and asks for it in the PR body; the runner never runs it (its marker file never appears) and runs exactly the configured steps.",
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "via": "slack",
+      "title": "agent suggests a verify",
+      "text": "[mobile] show the pairing code larger"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "suggest_verify"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "review"
+    },
+    "absent": [
+      "agent-verify-ran"
+    ],
+    "pr": {
+      "a": {
+        "body": "please verify with `sh \\.loop/verify\\.sh`(?s:.*)\\*\\*Runner verify\\*\\*(?s:.*)- unit tests: passed(?s:.*)- mobile shots: passed"
+      }
+    },
+    "run_files": [
+      {
+        "item": "a",
+        "stage": "build",
+        "run": 1,
+        "file": "verify/verify-1-unit-tests/output.log",
+        "no_text": "verify\\.sh"
+      },
+      {
+        "item": "a",
+        "stage": "build",
+        "run": 1,
+        "file": "verify/verify-4-x/output.log",
+        "absent": true
+      }
+    ]
+  }
+}

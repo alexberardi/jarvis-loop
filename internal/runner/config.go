@@ -15,6 +15,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
 // Config is the runner's config file (0600: it holds the runner's loopd token).
@@ -55,6 +57,10 @@ type Config struct {
 	// default "30m" each.
 	LandCIWait   string `json:"land_ci_wait,omitempty"`
 	LandMainWait string `json:"land_main_wait,omitempty"`
+	// VerifyLock is the lock file that keeps the repos' verify steps one at a time on this
+	// machine (the GPU model, the emulator and the mobile build dir are single). Default
+	// ~/.cache/jarvis-loop/verify.lock, shared by every runner of the user.
+	VerifyLock string `json:"verify_lock,omitempty"`
 
 	path             string
 	ciWait, mainWait time.Duration
@@ -82,8 +88,53 @@ type RepoConfig struct {
 	// ExcludedCommands run outside the OS sandbox (sandbox.excludedCommands). Empty by default;
 	// see docs/decisions/2026-10-15-runner-choices.md before adding any.
 	ExcludedCommands []string `json:"excluded_commands,omitempty"`
-	// DenyWrite are worktree-relative paths no tool may change.
+	// DenyWrite are worktree-relative paths no tool may change. Verify does not run on a change
+	// that touches one (it would run the agent's version of a file the runner trusts).
 	DenyWrite []string `json:"deny_write,omitempty"`
+	// Group is the kind of repo (server, loop, mobile, docs, installer, package), shown to triage
+	// and in the brief.
+	Group string `json:"group,omitempty"`
+	// Aliases are other words for the repo ("mobile", "node app"): triage sees them, and the runner
+	// accepts them where it accepts the key.
+	Aliases []string `json:"aliases,omitempty"`
+	// Setup commands run by the runner in the checkout before the agent, after Prepare, outside
+	// the agent's sandbox, logged in the run dir: dependencies (npm ci, a venv) are then present.
+	Setup []string `json:"setup,omitempty"`
+	// Verify are the runner's own steps after a build, before it pushes (verify.go): they come
+	// from this config only, never from the agent or the repo's PR.
+	Verify []VerifyStep `json:"verify,omitempty"`
+}
+
+// Groups are the kinds of repo a config may name.
+var Groups = []string{"server", "loop", "mobile", "docs", "installer", "package"}
+
+// DefaultVerifyTimeout is a verify step's time limit when its config gives none.
+const DefaultVerifyTimeout = 20 * time.Minute
+
+// VerifyStep is one of a repo's verify steps.
+type VerifyStep struct {
+	// Name is how the PR footer, the evidence labels and the next build's notes name the step.
+	Name string `json:"name"`
+	// Run is a bash command line. Its environment has LOOP_ITEM, LOOP_HEAD, LOOP_WORKTREE,
+	// LOOP_EVIDENCE_DIR, LOOP_SANDBOX, LOOP_REPO, LOOP_BASE and LOOP_MIRROR.
+	Run string `json:"run"`
+	// Repo, when set, runs the step in a fresh checkout of that configured repo (key) at its base
+	// branch instead of the worktree: e.g. jarvis-server's mobile-shot for jarvis-node-mobile.
+	Repo string `json:"repo,omitempty"`
+	// TimeoutText is a Go duration (default 20m).
+	TimeoutText string `json:"timeout,omitempty"`
+	// WhenChanged are globs: the step runs only when a changed path matches one (e.g. web/**).
+	WhenChanged []string `json:"when_changed,omitempty"`
+
+	timeout time.Duration
+}
+
+// Timeout is the step's time limit.
+func (v VerifyStep) Timeout() time.Duration {
+	if v.timeout > 0 {
+		return v.timeout
+	}
+	return DefaultVerifyTimeout
 }
 
 // LoadConfig reads and checks the config file. It refuses a file group or others can read.
@@ -185,6 +236,10 @@ func (c *Config) normalize() error {
 		*w.to = d
 	}
 	c.Stages = uniq(c.Stages)
+	if c.VerifyLock == "" {
+		c.VerifyLock = "~/.cache/jarvis-loop/verify.lock"
+	}
+	c.VerifyLock = Expand(c.VerifyLock)
 	if c.UserEmulator == "" {
 		c.UserEmulator = "emulator-5554"
 	}
@@ -213,21 +268,78 @@ func (c *Config) normalize() error {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("config: loopd_url %q is not an http(s) URL", c.LoopdURL)
 	}
+	words := map[string]string{} // key, slug or alias (lower case) -> repo key
+	claim := func(word, key string) error {
+		w := strings.ToLower(strings.TrimSpace(word))
+		if w == "" {
+			return fmt.Errorf("config: repo %s has an empty alias", key)
+		}
+		if other, ok := words[w]; ok && other != key {
+			return fmt.Errorf("config: %q names both repo %s and repo %s", word, other, key)
+		}
+		words[w] = key
+		return nil
+	}
 	for name, r := range c.Repos {
 		if r.Remote == "" || r.Slug == "" || !strings.Contains(r.Slug, "/") {
 			return fmt.Errorf("config: repo %s needs remote and slug (owner/name)", name)
 		}
+		for _, w := range []string{name, r.Slug} {
+			if err := claim(w, name); err != nil {
+				return err
+			}
+		}
+	}
+	for name, r := range c.Repos {
 		if r.Base == "" {
 			r.Base = "main"
 		}
 		r.Local = Expand(r.Local)
+		if r.Group != "" && !slices.Contains(Groups, r.Group) {
+			return fmt.Errorf("config: repo %s: group must be one of %s, not %q", name, strings.Join(Groups, ", "), r.Group)
+		}
+		for _, a := range r.Aliases {
+			if err := claim(a, name); err != nil {
+				return err
+			}
+		}
+		for _, cmd := range append(append([]string{}, r.Prepare...), r.Setup...) {
+			if strings.TrimSpace(cmd) == "" {
+				return fmt.Errorf("config: repo %s has an empty prepare or setup command", name)
+			}
+		}
+		for i, v := range r.Verify {
+			switch {
+			case strings.TrimSpace(v.Name) == "":
+				return fmt.Errorf("config: repo %s: verify step %d needs a name", name, i+1)
+			case strings.TrimSpace(v.Run) == "":
+				return fmt.Errorf("config: repo %s: verify step %q needs run", name, v.Name)
+			}
+			if v.Repo != "" {
+				if _, ok := c.Repos[v.Repo]; !ok {
+					return fmt.Errorf("config: repo %s: verify step %q runs in repo %q, which is not configured (use its key)", name, v.Name, v.Repo)
+				}
+			}
+			if v.TimeoutText != "" {
+				d, err := time.ParseDuration(v.TimeoutText)
+				if err != nil || d <= 0 {
+					return fmt.Errorf("config: repo %s: verify step %q: timeout must be a positive duration like \"20m\", not %q", name, v.Name, v.TimeoutText)
+				}
+				r.Verify[i].timeout = d
+			}
+			for _, g := range v.WhenChanged {
+				if (pipeline.HoldRule{Name: "x", Glob: g}).Validate() != nil {
+					return fmt.Errorf("config: repo %s: verify step %q: when_changed %q must be a relative path pattern", name, v.Name, g)
+				}
+			}
+		}
 		c.Repos[name] = r
 	}
 	return nil
 }
 
 // Repo finds a repo by its config key or by its slug (loopd keeps the PR's owner/name on the
-// item once a PR exists).
+// item once a PR exists), or by one of its aliases.
 func (c *Config) Repo(name string) (string, RepoConfig, bool) {
 	if r, ok := c.Repos[name]; ok {
 		return name, r, true
@@ -235,6 +347,15 @@ func (c *Config) Repo(name string) (string, RepoConfig, bool) {
 	for k, r := range c.Repos {
 		if r.Slug == name {
 			return k, r, true
+		}
+	}
+	if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
+		for k, r := range c.Repos {
+			for _, a := range r.Aliases {
+				if strings.ToLower(strings.TrimSpace(a)) == name {
+					return k, r, true
+				}
+			}
 		}
 	}
 	return "", RepoConfig{}, false

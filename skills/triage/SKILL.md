@@ -1,6 +1,6 @@
 ---
 name: triage
-description: The loop's triage stage. Decide, with evidence, which repo a loop item belongs to, whether it is still real on main, and whether it is already done or in flight; then write .loop/result.json (reproduced, not_reproducible or question) with triage notes for the build agent. Never commit, push or open a PR.
+description: The loop's triage stage. Decide, with evidence, which repo a loop item belongs to (routing it first when it has none), whether it is still real on main, and whether it is already done or in flight; then write .loop/result.json (routed, reproduced, not_reproducible or question) with triage notes for the build agent. Never commit, push or open a PR.
 ---
 
 # Triage stage
@@ -13,9 +13,10 @@ unclear, stop and ask (outcome `question`) instead of guessing.
 
 ## Where you are
 
-- **Your working directory is the run's own directory**, not a repository. The repositories you
-  may need are checked out under `repos/<key>/`, each at its base branch (`origin/main` unless the
-  item says otherwise), detached. Scratch files go in `.loop/scratch/`.
+- **Your working directory is the run's own directory**, not a repository. The item's repository
+  is checked out under `repos/<key>/` at its base branch (`origin/main` unless the item says
+  otherwise), detached. **An item with no repo yet has no checkout**: that run only routes it (see
+  "Routing" below). Scratch files go in `.loop/scratch/`.
 - **Work only here.** Never touch the user's checkouts (`~/jarvis/<repo>`), the user's emulator
   (`emulator-5554`), `~/.config/jarvis-harness/`, `~/.config/jarvis-loop/`, or processes you did
   not start.
@@ -34,17 +35,29 @@ unclear, stop and ask (outcome `question`) instead of guessing.
 
 Listed in the item section at the end of this brief, under `.loop/context/`:
 
-- `repos.md`: the repos the loop works on (key, `owner/name` slug, what each is for).
+- `repos.md`: the repos the loop works on (key, `owner/name` slug, group, what each is for; when
+  routing, also the words the user calls each one and its last merged PR titles).
 - `open-items.md`: every open loop item (id, title, stage, repo, PR): work in flight.
-- `merged-prs-<key>.md`: the last 30 merged PRs of the item's repo (or of each repo, when the item
-  has none yet): number, title, merge date, changed paths.
+- `merged-prs-<key>.md`: the last 30 merged PRs of the item's repo (number, title, merge date,
+  changed paths); not when routing.
 - `evidence/`: whatever was attached to the item so far (a log, a screenshot, a report).
+
+## Routing (an item with no repo)
+
+The loop works on many repos (the server, the loop, two mobile apps, the docs, the installer and
+the command and device packages), so an item that names none is routed before it is triaged:
+nothing is checked out, and you decide **only the repo**, from the ask and `repos.md` (each
+repo's group, the words the user calls it, what it is, its recent PR titles), plus `open-items.md`.
+Return `routed` with the slug and one line on why; the runner checks that repo out for the next
+triage run, which does the rest. A package's name says what it controls (`jarvis-device-nest`:
+the Nest devices). Return `reproduced` with `repo` instead only when that file alone settles the
+whole triage (rare: a duplicate is `not_reproducible`), and `question` when the ask fits several
+repos or none.
 
 ## What to decide
 
-1. **Which repo.** If the item names none, pick it from `repos.md` by reading the ask and the code
-   under `repos/<key>/`, and set `repo` to that repo's slug. If you cannot tell, ask. If the item
-   already has a repo, leave `repo` out.
+1. **Which repo.** When the item has a repo (set when it was added, or by routing), leave `repo`
+   out of the result.
 2. **Already done or in flight?** Compare the ask with `open-items.md` and the merged PRs. If an
    open item or a merged PR already covers it, it is a duplicate: return `not_reproducible` with a
    summary that starts "duplicate of #N" (the loop item) and/or "PR #M" (the merged PR), and say

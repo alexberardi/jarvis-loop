@@ -1,6 +1,6 @@
 {
   "name": "triage-picks-repo",
-  "about": "An item added from Slack names no repo. The runner's triage agent sees every configured repo checked out, picks jarvis-loop (by its config key; the runner reports the slug), loopd records it, the thread header and /loop show say so (\"not set, triage will pick\" before), and the same item is then built and reviewed by the runner on that repo.",
+  "about": "An item added from Slack names no repo. The runner's triage agent gets no checkouts (phase 6b: an item with no repo is routed first), only the routing context, and here settles it from that alone: it picks jarvis-loop (by its config key; the runner reports the slug), loopd records it, the thread header and /loop show say so (\"not set, triage will pick\" before), and the same item is then built and reviewed by the runner on that repo.",
   "steps": [
     {"do": "add", "item": "a", "via": "slack", "title": "show the item's repo in loop show"},
     {"do": "expect", "stage": {"a": "triage"}, "repo": {"a": ""},

@@ -619,3 +619,109 @@ func TestControlValidate(t *testing.T) {
 		wantCode(t, c.Validate(), CodeInvalidField)
 	}
 }
+
+// Triage with no repo may route the item first (docs/phases/06b-all-repos.md): routed sets the
+// repo and leaves the item in triage, for a run with that one repo checked out.
+func TestRouted(t *testing.T) {
+	repos := []string{"alexberardi/jarvis-node-mobile", "alexberardi/jarvis-server"}
+	cases := []struct {
+		name, itemRepo string
+		fields         map[string]string
+		repos          []string
+		code           string
+	}{
+		{"a configured repo", "", map[string]string{"repo": "alexberardi/jarvis-node-mobile", "why": "the ask is about the app's home screen"}, repos, ""},
+		{"spaces trimmed", "", map[string]string{"repo": " alexberardi/jarvis-server ", "why": "x"}, repos, ""},
+		{"repo missing", "", map[string]string{"why": "x"}, repos, CodeMissingField},
+		{"why missing", "", map[string]string{"repo": "alexberardi/jarvis-server"}, repos, CodeMissingField},
+		{"not configured", "", map[string]string{"repo": "alexberardi/other", "why": "x"}, repos, CodeInvalidField},
+		{"a short name is not a slug", "", map[string]string{"repo": "jarvis-server", "why": "x"}, repos, CodeInvalidField},
+		{"loopd has no repos", "", map[string]string{"repo": "alexberardi/jarvis-server", "why": "x"}, nil, CodeInvalidField},
+		{"the item has a repo already", "alexberardi/jarvis-server", map[string]string{"repo": "alexberardi/jarvis-node-mobile", "why": "x"}, repos, CodeInvalidField},
+		{"even the same one", "alexberardi/jarvis-server", map[string]string{"repo": "alexberardi/jarvis-server", "why": "x"}, repos, CodeInvalidField},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			it := item(Triage)
+			it.Repo = c.itemRepo
+			tr, err := ApplyAdvance(it, Advance{Outcome: Routed, Fields: c.fields, Repos: c.repos, Agent: "a"}, t0)
+			wantCode(t, err, c.code)
+			if c.code != "" {
+				return
+			}
+			want := strings.TrimSpace(c.fields["repo"])
+			if tr.Item.Repo != want || tr.To != Triage || tr.Item.Stage != Triage || tr.Data["repo"] != want {
+				t.Fatalf("routed: repo %q stage %s data %v; want %q in triage", tr.Item.Repo, tr.Item.Stage, tr.Data, want)
+			}
+		})
+	}
+	// Routing needs no evidence (a routing run reads one file), and is triage's only.
+	for _, from := range []Stage{Build, Review, Land} {
+		it := item(from)
+		_, err := ApplyAdvance(it, Advance{Outcome: Routed, Fields: map[string]string{"repo": repos[0], "why": "x"}, Repos: repos}, t0)
+		wantCode(t, err, CodeWrongStage)
+	}
+}
+
+// A failed runner verify sends the build back to build, counting like a review bounce; the
+// second one goes to the user.
+func TestVerifyFailed(t *testing.T) {
+	it := item(Build)
+	f := map[string]string{"reason": "verify unit tests failed (exit 1)"}
+	_, err := ApplyAdvance(it, Advance{Outcome: VerifyFailed, Fields: f}, t0)
+	wantCode(t, err, CodeEvidenceRequired)
+	_, err = ApplyAdvance(it, Advance{Outcome: VerifyFailed, Evidence: 1}, t0)
+	wantCode(t, err, CodeMissingField)
+	tr, err := ApplyAdvance(it, Advance{Outcome: VerifyFailed, Fields: f, Evidence: 1}, t0)
+	wantCode(t, err, "")
+	if tr.Item.Stage != Build || tr.Item.BounceCount != 1 || tr.Data["bounce_count"] != 1 {
+		t.Fatalf("first verify failure: %s, bounces %d", tr.Item.Stage, tr.Item.BounceCount)
+	}
+	tr, err = ApplyAdvance(tr.Item, Advance{Outcome: VerifyFailed, Fields: f, Evidence: 1}, t0)
+	wantCode(t, err, "")
+	if tr.Item.Stage != NeedsYou || tr.Item.ReturnStage != Build || tr.Item.Question != f["reason"] {
+		t.Fatalf("second: %s (return %s, q %q), want needs_you returning to build", tr.Item.Stage, tr.Item.ReturnStage, tr.Item.Question)
+	}
+	// A review bounce and a verify failure share the count.
+	b := item(Review)
+	tr, _ = ApplyAdvance(b, Advance{Outcome: Bounce, Fields: map[string]string{"notes": "x"}, Agent: "r"}, t0)
+	tr, err = ApplyAdvance(tr.Item, Advance{Outcome: VerifyFailed, Fields: f, Evidence: 1}, t0)
+	wantCode(t, err, "")
+	if tr.Item.Stage != NeedsYou {
+		t.Fatalf("a bounce then a verify failure: %s, want needs_you", tr.Item.Stage)
+	}
+	for _, from := range []Stage{Triage, Review, Land} {
+		_, err := ApplyAdvance(item(from), Advance{Outcome: VerifyFailed, Fields: f, Evidence: 1}, t0)
+		wantCode(t, err, CodeWrongStage)
+	}
+}
+
+// The review agent holds an item for content a path rule cannot see (a curl | sh pin in a docs
+// page, a new secret in a package) by approving with needs_review.
+func TestApprovedNeedsReview(t *testing.T) {
+	base := map[string]string{"summary": "ok", "head_sha": sha1}
+	for _, c := range []struct {
+		v    string
+		hold bool
+		code string
+	}{{"", false, ""}, {"false", false, ""}, {"true", true, ""}, {"yes", false, CodeInvalidField}} {
+		f := map[string]string{}
+		for k, v := range base {
+			f[k] = v
+		}
+		if c.v != "" {
+			f["needs_review"] = c.v
+		}
+		tr, err := ApplyAdvance(item(Review), Advance{Outcome: Approved, Fields: f, Agent: "reviewer"}, t0)
+		wantCode(t, err, c.code)
+		if c.code != "" {
+			continue
+		}
+		if (tr.Item.Risk == RiskHold) != c.hold || tr.Item.Stage != Land {
+			t.Errorf("needs_review %q: risk %s stage %s", c.v, tr.Item.Risk, tr.Item.Stage)
+		}
+		if c.hold && !strings.Contains(tr.Item.HoldReason, "review: marked needs review") {
+			t.Errorf("hold reason %q", tr.Item.HoldReason)
+		}
+	}
+}

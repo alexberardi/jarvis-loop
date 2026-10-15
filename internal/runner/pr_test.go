@@ -72,13 +72,33 @@ esac
 func TestPRBody(t *testing.T) {
 	ev := []EvidenceFile{{Name: "after.png"}, {Name: "test.log"}}
 	b := PRBody("## What\n\nFixed.\n\n", 12, ev, map[string]string{"after.png": "after,\n phone"},
-		RunStats{Turns: 41, CacheHit: 0.973, Seconds: 754, CostUSD: 3.214, HasResult: true})
+		RunStats{Turns: 41, CacheHit: 0.973, Seconds: 754, CostUSD: 3.214, HasResult: true}, nil)
 	want := "## What\n\nFixed.\n\n---\n\n### Verification\n\nEvidence files (on loop item #12):\n\n- `after.png`: after, phone\n- `test.log`\n\n" +
 		"Run: 41 turns, prompt-cache hit 97%, 12m 34s, about $3.21 (estimate).\n\n*Built by a jarvis-loop agent; pushed and opened by the runner.*\n"
 	if b != want {
 		t.Fatalf("got:\n%s", b)
 	}
-	if b := PRBody("x", 1, nil, nil, RunStats{Seconds: 9}); !strings.Contains(b, "No evidence files.") || !strings.Contains(b, "Run: 9s (no usage numbers).") {
+	if b := PRBody("x", 1, nil, nil, RunStats{Seconds: 9}, nil); !strings.Contains(b, "No evidence files.") || !strings.Contains(b, "Run: 9s (no usage numbers).") {
+		t.Fatalf("got:\n%s", b)
+	}
+}
+
+// The runner's verify steps are listed apart from the agent's evidence, before it, with each
+// step's result and files; the trailer stays last (land checks it).
+func TestPRBodyVerify(t *testing.T) {
+	vs := []VerifyResult{
+		{Name: "unit tests", Seconds: 62, LogFile: EvidenceFile{Name: "verify-1-unit-tests.log"}},
+		{Name: "admin screenshots", Skipped: "no changed path matches web/**"},
+		{Name: "mobile shots", Seconds: 300, LogFile: EvidenceFile{Name: "verify-3-mobile-shots.log"},
+			Evidence: []EvidenceFile{{Name: "verify-3-mobile-shots-home-light.png"}, {Name: "verify-3-mobile-shots-index.json"}}},
+	}
+	b := PRBody("body", 4, []EvidenceFile{{Name: "after.txt"}}, nil, RunStats{Seconds: 5}, vs)
+	want := "**Runner verify** (run by the runner after the agent, outside its sandbox, from the runner's config):\n\n" +
+		"- unit tests: passed (1m 02s); `verify-1-unit-tests.log`\n" +
+		"- admin screenshots: skipped (no changed path matches web/**)\n" +
+		"- mobile shots: passed (5m 00s); `verify-3-mobile-shots.log`, `verify-3-mobile-shots-home-light.png`, `verify-3-mobile-shots-index.json`\n\n" +
+		"Evidence files (on loop item #4):\n\n- `after.txt`\n"
+	if !strings.Contains(b, want) || !strings.HasSuffix(strings.TrimSpace(b), VerificationTrailer) {
 		t.Fatalf("got:\n%s", b)
 	}
 }

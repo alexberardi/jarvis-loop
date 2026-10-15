@@ -130,6 +130,10 @@ func Open(dir string, clk clock.Clock) (*Store, error) {
 		w.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := s.resetBuiltInCopy(); err != nil {
+		w.Close()
+		return nil, fmt.Errorf("hold rules: %w", err)
+	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		w.Close()
 		return nil, err
@@ -627,7 +631,10 @@ func (s *Store) loadControl(q interface {
 	return c, err
 }
 
-func saveControl(tx *sql.Tx, c pipeline.Control) error {
+// saveControl writes the control row. builtInRules keeps hold_rules at ” (the live built-in
+// defaults) instead of writing the list out: a change to another field must not freeze the
+// defaults as if the user had set them.
+func saveControl(tx *sql.Tx, c pipeline.Control, builtInRules bool) error {
 	limits, err := json.Marshal(c.Limits)
 	if err != nil {
 		return err
@@ -639,6 +646,9 @@ func saveControl(tx *sql.Tx, c pipeline.Control) error {
 	if err != nil {
 		return err
 	}
+	if builtInRules {
+		rules = nil
+	}
 	stopped := 0
 	if c.Stopped {
 		stopped = 1
@@ -646,6 +656,31 @@ func saveControl(tx *sql.Tx, c pipeline.Control) error {
 	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=? WHERE id = 1`,
 		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules))
 	return err
+}
+
+// builtInRules reports whether control's hold rules are the built-in defaults (stored as ”).
+func builtInRules(tx *sql.Tx) (bool, error) {
+	var raw string
+	err := tx.QueryRow(`SELECT hold_rules FROM control WHERE id = 1`).Scan(&raw)
+	return raw == "", err
+}
+
+// resetBuiltInCopy puts the hold rules back on the live defaults when the stored list is a copy of
+// a built-in list (pipeline.IsBuiltInHoldRuleSet): a control change before phase 6b wrote the
+// defaults out, which froze them. A list the user changed is theirs and stays.
+func (s *Store) resetBuiltInCopy() error {
+	return s.tx(context.Background(), func(tx *sql.Tx) error {
+		var raw string
+		if err := tx.QueryRow(`SELECT hold_rules FROM control WHERE id = 1`).Scan(&raw); err != nil || raw == "" {
+			return err
+		}
+		var rules []pipeline.HoldRule
+		if json.Unmarshal([]byte(raw), &rules) != nil || !pipeline.IsBuiltInHoldRuleSet(rules) {
+			return nil
+		}
+		_, err := tx.Exec(`UPDATE control SET hold_rules = '' WHERE id = 1`)
+		return err
+	})
 }
 
 // Control returns the current control row.
@@ -688,13 +723,18 @@ func (s *Store) SetControl(ctx context.Context, actor string, p ControlPatch) (p
 		for k, v := range p.Limits {
 			c.Limits[k] = v
 		}
+		builtIn, err := builtInRules(tx)
+		if err != nil {
+			return err
+		}
 		if p.HoldRules != nil {
 			c.HoldRules = *p.HoldRules
+			builtIn = false
 		}
 		if err := c.Validate(); err != nil {
 			return err
 		}
-		if err := saveControl(tx, c); err != nil {
+		if err := saveControl(tx, c, builtIn); err != nil {
 			return err
 		}
 		out = c
@@ -1006,7 +1046,11 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 			}
 			before := ctl
 			ctl.ActiveAgents = 0
-			if err := saveControl(tx, ctl); err != nil {
+			builtIn, err := builtInRules(tx)
+			if err != nil {
+				return err
+			}
+			if err := saveControl(tx, ctl, builtIn); err != nil {
 				return err
 			}
 			if err := s.event(tx, Event{Actor: "loopd", Kind: "control", Data: map[string]any{

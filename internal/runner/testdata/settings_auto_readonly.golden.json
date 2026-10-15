@@ -237,7 +237,9 @@
         "raw.githubusercontent.com",
         "proxy.golang.org",
         "sum.golang.org",
-        "registry.npmjs.org"
+        "registry.npmjs.org",
+        "pypi.org",
+        "files.pythonhosted.org"
       ],
       "deniedDomains": [
         "127.0.0.1:7780",

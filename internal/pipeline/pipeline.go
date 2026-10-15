@@ -67,18 +67,24 @@ type Outcome string
 
 // The outcomes a lease holder may report.
 const (
-	Reproduced      Outcome = "reproduced"
+	Reproduced Outcome = "reproduced"
+	// Routed is triage naming the repo of an item that has none, without triaging it: the item
+	// stays in triage, and the next run has that one repo checked out (docs/phases/06b-all-repos.md).
+	Routed          Outcome = "routed"
 	NotReproducible Outcome = "not_reproducible"
 	Question        Outcome = "question"
 	PROpened        Outcome = "pr_opened"
-	Approved        Outcome = "approved"
-	Bounce          Outcome = "bounce"
-	Merged          Outcome = "merged"
-	Hold            Outcome = "hold"
-	BackToBuild     Outcome = "back_to_build"
-	BackToReview    Outcome = "back_to_review"
-	UsageLimit      Outcome = "usage_limit"
-	Failed          Outcome = "failed"
+	// VerifyFailed is the runner's own verify step failing after a build: back to build, counted
+	// like a review bounce.
+	VerifyFailed Outcome = "verify_failed"
+	Approved     Outcome = "approved"
+	Bounce       Outcome = "bounce"
+	Merged       Outcome = "merged"
+	Hold         Outcome = "hold"
+	BackToBuild  Outcome = "back_to_build"
+	BackToReview Outcome = "back_to_review"
+	UsageLimit   Outcome = "usage_limit"
+	Failed       Outcome = "failed"
 )
 
 // Risk values set by triage.
@@ -239,8 +245,8 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 	}
 	f := fields(a.Fields)
 	allowed := map[Outcome][]Stage{
-		Reproduced: {Triage}, NotReproducible: {Triage}, Question: {Triage, Build},
-		PROpened: {Build}, Approved: {Review}, Bounce: {Review},
+		Reproduced: {Triage}, Routed: {Triage}, NotReproducible: {Triage}, Question: {Triage, Build},
+		PROpened: {Build}, VerifyFailed: {Build}, Approved: {Review}, Bounce: {Review},
 		Merged: {Land}, Hold: {Land}, BackToBuild: {Land}, BackToReview: {Land},
 		UsageLimit: {Triage, Build, Review, Land}, Failed: {Triage, Build, Review, Land},
 	}
@@ -315,14 +321,10 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 			return Transition{}, err
 		}
 		repo := strings.TrimSpace(a.Fields["repo"])
-		switch {
-		case repo == "":
-		case it.Repo != "":
-			return Transition{}, errf(CodeInvalidField, "the item already has repo %q; triage sets one only when it has none", it.Repo)
-		case len(a.Repos) == 0:
-			return Transition{}, errf(CodeInvalidField, "loopd has no configured repos (--repos), so triage cannot set one")
-		case !slices.Contains(a.Repos, repo):
-			return Transition{}, errf(CodeInvalidField, "repo must be a configured repo (%s), not %q", strings.Join(a.Repos, ", "), repo)
+		if repo != "" {
+			if err := checkTriageRepo(it, repo, a.Repos); err != nil {
+				return Transition{}, err
+			}
 		}
 		if err := needEvidence(); err != nil {
 			return Transition{}, err
@@ -336,6 +338,21 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 			raiseRisk(&it, []string{"triage: risk hold"})
 		}
 		it.Stage = Build
+	case Routed:
+		repo, err := f.need("repo")
+		if err != nil {
+			return Transition{}, err
+		}
+		why, err := f.need("why")
+		if err != nil {
+			return Transition{}, err
+		}
+		if err := checkTriageRepo(it, repo, a.Repos); err != nil {
+			return Transition{}, err
+		}
+		it.Repo = repo
+		data["repo"], data["why"] = repo, why
+		it.Stage = Triage
 	case NotReproducible:
 		summary, err := f.need("summary")
 		if err != nil {
@@ -411,6 +428,15 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if a.Agent != "" && a.Agent == it.BuilderAgent {
 			return Transition{}, errf(CodeSameAgent, "the builder cannot approve its own work")
 		}
+		// The reviewer holds what a path rule cannot see: a curl | sh pin edited in a docs page, a
+		// new secret used in a package.
+		switch strings.TrimSpace(a.Fields["needs_review"]) {
+		case "", "false":
+		case "true":
+			raiseRisk(&it, []string{"review: marked needs review"})
+		default:
+			return Transition{}, errf(CodeInvalidField, "needs_review must be true or false")
+		}
 		it.Summary = summary
 		it.Stage = Land
 	case Bounce:
@@ -418,13 +444,18 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if err != nil {
 			return Transition{}, err
 		}
-		it.BounceCount++
-		data["bounce_count"] = it.BounceCount
-		if it.BounceCount >= 2 {
-			it = toNeedsYou(it, Build, notes)
-		} else {
-			it.Stage = Build
+		it = bounce(it, data, notes)
+	case VerifyFailed:
+		// The runner's verify failed on the build's commit: nothing was pushed; the next build run
+		// gets the log. It counts like a review bounce.
+		reason, err := f.need("reason")
+		if err != nil {
+			return Transition{}, err
 		}
+		if err := needEvidence(); err != nil {
+			return Transition{}, err
+		}
+		it = bounce(it, data, reason)
 	case Merged:
 		sha, err := f.sha("merge_sha")
 		if err != nil {
@@ -519,6 +550,32 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 	tr.Item = it
 	tr.To = it.Stage
 	return tr, nil
+}
+
+// checkTriageRepo checks a repo triage gives an item: only one that has none, and only a slug
+// loopd is configured with.
+func checkTriageRepo(it Item, repo string, repos []string) error {
+	switch {
+	case it.Repo != "":
+		return errf(CodeInvalidField, "the item already has repo %q; triage sets one only when it has none", it.Repo)
+	case len(repos) == 0:
+		return errf(CodeInvalidField, "loopd has no configured repos (--repos), so triage cannot set one")
+	case !slices.Contains(repos, repo):
+		return errf(CodeInvalidField, "repo must be a configured repo (%s), not %q", strings.Join(repos, ", "), repo)
+	}
+	return nil
+}
+
+// bounce sends an item back to build, or to the user at the second bounce (a review's or the
+// runner's verify, counted together).
+func bounce(it Item, data map[string]any, why string) Item {
+	it.BounceCount++
+	data["bounce_count"] = it.BounceCount
+	if it.BounceCount >= 2 {
+		return toNeedsYou(it, Build, why)
+	}
+	it.Stage = Build
+	return it
 }
 
 func toNeedsYou(it Item, ret Stage, question string) Item {

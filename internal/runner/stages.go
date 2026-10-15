@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // MergedPRsForTriage is how many recently merged PRs of a repo triage sees for dedupe.
@@ -32,24 +34,27 @@ func writeContext(ru *run, info *RunInfo, rel, label, content string) {
 	info.Context = append(info.Context, TriageFile{Name: rel, Label: label})
 }
 
-// prepareTriage makes triage's working directory: a plain directory with the item's repo (or,
-// when it has none, every configured repo) checked out detached at the base branch under
-// repos/<key>/, and the context: the configured repos, the open items, the recently merged PRs
-// and the item's evidence.
+// RecentTitlesForRouting is how many recently merged PR titles per repo a routing run sees, and
+// RoutingFetchTimeout how long the runner waits for them (all repos at once) before it notes the
+// ones it could not get.
+const (
+	RecentTitlesForRouting = 5
+	RoutingFetchTimeout    = 20 * time.Second
+	routingFetchParallel   = 6
+)
+
+// prepareTriage makes triage's working directory and context: the configured repos, the open
+// items and the item's evidence. An item with a repo gets that repo checked out detached at its
+// base under repos/<key>/ and its recently merged PRs. An item with none is routed first
+// (docs/phases/06b-all-repos.md): no checkouts, and repos.md carries each repo's group, aliases,
+// description and last merged PR titles, so the agent can name the repo from that file alone.
 func (r *Runner) prepareTriage(ctx context.Context, ru *run, info *RunInfo) error {
 	os.RemoveAll(ru.wt)
 	if err := os.MkdirAll(ru.wt, 0o755); err != nil {
 		return err
 	}
-	keys := []string{ru.repoKey}
-	if ru.repoKey == "" {
-		keys = keys[:0]
-		for k := range r.Cfg.Repos {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-	}
-	for _, k := range keys {
+	if ru.repoKey != "" {
+		k := ru.repoKey
 		rc := r.Cfg.Repos[k]
 		mirror := r.mirrorPath(k)
 		dir := "repos/" + Slug(k)
@@ -65,23 +70,43 @@ func (r *Runner) prepareTriage(ctx context.Context, ru *run, info *RunInfo) erro
 		c := Checkout{Key: k, Slug: rc.Slug, Base: rc.Base, Dir: dir}
 		ru.checkouts = append(ru.checkouts, c)
 		info.Checkouts = append(info.Checkouts, c)
-	}
-	if ru.repoKey != "" {
-		ru.repoDir = filepath.Join(ru.wt, ru.checkouts[0].Dir)
+		ru.repoDir = filepath.Join(ru.wt, dir)
 	}
 
-	var repos strings.Builder
-	repos.WriteString("# The repos the loop works on\n\n| key | slug | base | what it is |\n| --- | --- | --- | --- |\n")
 	all := make([]string, 0, len(r.Cfg.Repos))
 	for k := range r.Cfg.Repos {
 		all = append(all, k)
 	}
 	sort.Strings(all)
-	for _, k := range all {
-		rc := r.Cfg.Repos[k]
-		fmt.Fprintf(&repos, "| %s | %s | %s | %s |\n", k, rc.Slug, rc.Base, cell(rc.Description))
+	var repos strings.Builder
+	if ru.repoKey != "" {
+		repos.WriteString("# The repos the loop works on\n\n| key | slug | group | base | what it is |\n| --- | --- | --- | --- | --- |\n")
+		for _, k := range all {
+			rc := r.Cfg.Repos[k]
+			fmt.Fprintf(&repos, "| %s | %s | %s | %s | %s |\n", k, rc.Slug, cell(rc.Group), rc.Base, cell(rc.Description))
+		}
+		writeContext(ru, info, ".loop/context/repos.md", "the configured repos", repos.String())
+	} else {
+		info.Routing = true
+		titles, errs := r.recentTitles(ctx, all)
+		fmt.Fprintf(&repos, "# The repos the loop works on\n\nPick the one this item belongs to. \"Recent\" are the last %d merged PR titles.\n\n", RecentTitlesForRouting)
+		repos.WriteString("| key | slug | group | also called | what it is | recent |\n| --- | --- | --- | --- | --- | --- |\n")
+		for _, k := range all {
+			rc := r.Cfg.Repos[k]
+			recent := strings.Join(titles[k], "; ")
+			if e := errs[k]; e != "" {
+				recent = "(could not fetch: " + e + ")"
+			} else if recent == "" {
+				recent = "(none)"
+			}
+			fmt.Fprintf(&repos, "| %s | %s | %s | %s | %s | %s |\n", k, rc.Slug, cell(rc.Group), cell(strings.Join(rc.Aliases, ", ")),
+				cell(rc.Description), cell(recent))
+			if e := errs[k]; e != "" {
+				info.ContextErrs = append(info.ContextErrs, "recent PR titles of "+rc.Slug+": "+e)
+			}
+		}
+		writeContext(ru, info, ".loop/context/repos.md", "the configured repos: group, aliases, what each is, recent PR titles", repos.String())
 	}
-	writeContext(ru, info, ".loop/context/repos.md", "the configured repos", repos.String())
 
 	if rows, err := r.Client.OpenItems(ctx); err != nil {
 		info.ContextErrs = append(info.ContextErrs, "the open items: "+err.Error())
@@ -132,6 +157,51 @@ func (r *Runner) prepareTriage(ctx context.Context, ru *run, info *RunInfo) erro
 		info.ContextErrs = append(info.ContextErrs, "the item's evidence: "+errText)
 	}
 	return nil
+}
+
+// recentTitles fetches each repo's last merged PR titles, a few at a time, within
+// RoutingFetchTimeout. A repo whose titles could not be fetched has an error instead.
+func (r *Runner) recentTitles(ctx context.Context, keys []string) (map[string][]string, map[string]string) {
+	ctx, cancel := context.WithTimeout(ctx, RoutingFetchTimeout)
+	defer cancel()
+	titles, errs := map[string][]string{}, map[string]string{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, routingFetchParallel)
+	for _, k := range keys {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				mu.Lock()
+				errs[k] = "timed out"
+				mu.Unlock()
+				return
+			}
+			prs, err := r.PRs.MergedPRs(ctx, r.Cfg.Repos[k].Slug, RecentTitlesForRouting)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if ctx.Err() != nil {
+					errs[k] = "timed out"
+				} else {
+					errs[k] = clip(oneLine(err.Error()), 120)
+				}
+				return
+			}
+			for i, p := range prs {
+				if i == RecentTitlesForRouting {
+					break
+				}
+				titles[k] = append(titles[k], fmt.Sprintf("#%d %s", p.Number, oneLine(p.Title)))
+			}
+		}()
+	}
+	wg.Wait()
+	return titles, errs
 }
 
 // prepareReview checks out the PR's head (the commit loopd recorded at pr_opened), detached, and
@@ -208,6 +278,27 @@ func (r *Runner) reviewContext(ctx context.Context, ru *run, info *RunInfo, note
 			b.WriteString("\nNone recorded.\n")
 		}
 		writeContext(ru, info, notesRel, "the review notes, newest last", b.String())
+		if commentsRel != "" {
+			// A build after the runner's verify failed: what failed, with the end of its output.
+			var v strings.Builder
+			v.WriteString("# The runner's verify (failed; nothing was pushed)\n")
+			n := 0
+			for _, e := range d.Events {
+				if e.Outcome != "verify_failed" {
+					continue
+				}
+				n++
+				reason, _ := e.Data["reason"].(string)
+				head, _ := e.Data["head_sha"].(string)
+				logTail, _ := e.Data["log_tail"].(string)
+				fmt.Fprintf(&v, "\n## Failure %d (%s, on %s)\n\n%s. The end of its output:\n\n```\n%s\n```\n", n, e.At.UTC().Format("2006-01-02 15:04 UTC"),
+					short7(head), strings.TrimSpace(reason), strings.TrimRight(logTail, "\n"))
+			}
+			if n > 0 {
+				v.WriteString("\nThe full logs and anything the steps wrote are the item's evidence (`verify-<n>-…` files in `.loop/triage/`).\n")
+				writeContext(ru, info, filepath.Join(filepath.Dir(notesRel), "verify.md"), "the runner's verify output, newest last", v.String())
+			}
+		}
 	}
 	if commentsRel == "" {
 		return
@@ -254,8 +345,13 @@ func (r *Runner) reportTriage(ctx context.Context, ru *run, out outcome, raw []b
 		r.fail(ctx, ru, out, "result rejected: "+err.Error())
 		return
 	}
-	if v.Outcome == "question" {
+	switch v.Outcome {
+	case "question":
 		r.advance(ctx, ru, "question", r.metrics(ru, out, map[string]string{"question": clip(v.Question, 2000)}), nil)
+		return
+	case OutcomeRouted:
+		// The repo is set and the item stays in triage; the next run checks out that repo.
+		r.advance(ctx, ru, OutcomeRouted, r.metrics(ru, out, map[string]string{"repo": v.Repo, "why": clip(v.Why, MaxWhy)}), nil)
 		return
 	}
 	if !r.uploadNotesAndEvidence(ctx, ru, out, v, "triage-notes.md", "triage notes") {
@@ -342,6 +438,9 @@ func (r *Runner) reportReview(ctx context.Context, ru *run, out outcome, raw []b
 	fields := map[string]string{"pr_comment": "posted"}
 	if v.Outcome == "approved" {
 		fields["summary"], fields["head_sha"] = clip(v.Summary, 2000), it.HeadSHA
+		if v.NeedsReview {
+			fields["needs_review"] = "true"
+		}
 		if len(v.NotVerified) > 0 {
 			fields["not_verified"] = clip(strings.Join(v.NotVerified, "; "), 1000)
 		}
@@ -365,6 +464,9 @@ func ReviewComment(v Result, it Item, evidence []EvidenceFile, labels map[string
 	}
 	if len(v.NotVerified) > 0 {
 		b.WriteString("\n**Not verified:** " + oneLine(strings.Join(v.NotVerified, "; ")) + "\n")
+	}
+	if v.Outcome == "approved" && v.NeedsReview {
+		b.WriteString("\n**Marked needs review:** the merge waits for the user's approval.\n")
 	}
 	fmt.Fprintf(&b, "\n---\n\nReviewed `%s` for loop item #%d by a jarvis-loop review agent, not the one that built it. This is a comment, not a GitHub approval.\n", it.HeadSHA, it.ID)
 	if len(evidence) > 0 {

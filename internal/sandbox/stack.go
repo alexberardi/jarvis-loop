@@ -40,8 +40,13 @@ const (
 	RepoSlug = "sandbox/demo"
 	// LoopKey and LoopSlug are a second scratch repo, standing in for jarvis-loop: triage picks
 	// it for items added without a repo.
-	LoopKey    = "jarvis-loop"
-	LoopSlug   = "sandbox/jarvis-loop"
+	LoopKey  = "jarvis-loop"
+	LoopSlug = "sandbox/jarvis-loop"
+	// MobileKey and MobileSlug are a third scratch repo, standing in for jarvis-node-mobile (group
+	// mobile, aliases "mobile" and "node app"): routing picks it, and its verify steps are the
+	// runner's (one in its worktree, one in a checkout of demo as jarvis-server's mobile-shot runs).
+	MobileKey  = "jarvis-node-mobile"
+	MobileSlug = "sandbox/jarvis-node-mobile"
 	RunnerName = "sandbox"
 	HandRunner = "hand"
 	UserName   = "sandbox"
@@ -88,8 +93,9 @@ type Stack struct {
 	LoopdURL string
 	Remote   string
 	MainSHA  string // the remote's main when the stack started
-	// LoopRemote is the second repo's remote (LoopSlug).
-	LoopRemote string
+	// LoopRemote is the second repo's remote (LoopSlug), MobileRemote the third's.
+	LoopRemote   string
+	MobileRemote string
 
 	// Secrets are every token the stack holds: none may appear in a Slack message.
 	Secrets []string
@@ -208,7 +214,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 	}
 	// loopd's --repos, and the built-in hold rules pointed at the scratch repos: jarvis-server's
 	// at demo, jarvis-loop's at the stand-in for jarvis-loop.
-	s.Store.SetRepos([]string{RepoSlug, LoopSlug})
+	s.Store.SetRepos(Repos)
 	s.Store.SetDefaultHoldRules(SandboxHoldRules())
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -239,7 +245,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 		tick = 20 * time.Millisecond // a moved fake clock takes effect at once
 	}
 	if s.Bot, err = loopd.StartSlack(s.ctx, &s.bg, s.Store, loopd.Slack{BaseURL: s.Slack.BaseURL(), Tokens: slackToks,
-		Repos: []string{RepoSlug, LoopSlug}, Clock: clk, Log: log, TickEvery: tick}); err != nil {
+		Repos: Repos, Aliases: Aliases, Clock: clk, Log: log, TickEvery: tick}); err != nil {
 		return nil, err
 	}
 	if err := s.Slack.WaitConnected(10 * time.Second); err != nil {
@@ -253,7 +259,10 @@ func StartStack(opts Options) (st *Stack, err error) {
 	if s.LoopRemote, _, err = makeRemote(dir, "jarvis-loop"); err != nil {
 		return nil, err
 	}
-	s.GitHub = NewGitHub(map[string]string{RepoSlug: s.Remote, LoopSlug: s.LoopRemote})
+	if s.MobileRemote, _, err = makeRemote(dir, "jarvis-node-mobile"); err != nil {
+		return nil, err
+	}
+	s.GitHub = NewGitHub(map[string]string{RepoSlug: s.Remote, LoopSlug: s.LoopRemote, MobileSlug: s.MobileRemote})
 
 	// The runner, from a 0600 config file as loop-runner reads it.
 	s.scripts = filepath.Join(dir, "scripts")
@@ -266,9 +275,12 @@ func StartStack(opts Options) (st *Stack, err error) {
 		WorkRoot: filepath.Join(dir, "work"), Claude: opts.Bin.Claude, Guard: opts.Bin.Guard, Mode: runner.ModeAuto,
 		PollSeconds: 2, UserEmulator: "emulator-5554", VerifyPR: &verify,
 		LoopdTokens: tokPath, LoopdData: filepath.Join(dir, "loopd"), Stages: opts.Stages,
+		VerifyLock: filepath.Join(dir, "verify.lock"),
 		Repos: map[string]runner.RepoConfig{
-			RepoKey: {Remote: s.Remote, Slug: RepoSlug, Base: "main", Description: "the sandbox's demo app"},
-			LoopKey: {Remote: s.LoopRemote, Slug: LoopSlug, Base: "main", Description: "the loop itself (loopd, the runner, the Slack bot)"},
+			RepoKey: {Remote: s.Remote, Slug: RepoSlug, Base: "main", Group: "server", Description: "the sandbox's demo app"},
+			LoopKey: {Remote: s.LoopRemote, Slug: LoopSlug, Base: "main", Group: "loop", Description: "the loop itself (loopd, the runner, the Slack bot)"},
+			MobileKey: {Remote: s.MobileRemote, Slug: MobileSlug, Base: "main", Group: "mobile", Aliases: []string{"mobile", "node app"},
+				Description: "the household's phone app (screens, chat, pairing)", Verify: MobileVerify(dir)},
 		},
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
@@ -294,10 +306,45 @@ func StartStack(opts Options) (st *Stack, err error) {
 	return s, nil
 }
 
+// Repos are the sandbox loopd's --repos, and Aliases its --repos-file aliases.
+var (
+	Repos   = []string{RepoSlug, LoopSlug, MobileSlug}
+	Aliases = map[string]string{"mobile": MobileSlug, "node app": MobileSlug}
+)
+
+// VerifyFailFile is the file (under the stack dir) whose presence makes the mobile repo's verify
+// fail, as a scenario's "verify" step sets it.
+const VerifyFailFile = "verify-fail"
+
+// MobileVerify are the stand-in node-mobile's verify steps: unit tests in the worktree; "mobile
+// shots" in a checkout of demo (as jarvis-server's mobile-shot runs against the runner's mirror at
+// LOOP_HEAD), writing a screenshot and index.json as evidence, failing when the scenario says so;
+// and a step that only runs when web/ changed.
+func MobileVerify(dir string) []runner.VerifyStep {
+	fail := filepath.Join(dir, VerifyFailFile)
+	return []runner.VerifyStep{
+		{Name: "unit tests", Run: `test -f README.md && echo "unit tests: 12 passed at $LOOP_HEAD"`},
+		{Name: "mobile shots", Repo: RepoKey, Run: `set -e
+git --git-dir="$LOOP_MIRROR" cat-file -e "$LOOP_HEAD^{commit}"
+echo "built $LOOP_HEAD from the runner's mirror; shooting in sandbox $LOOP_SANDBOX from $(basename "$PWD")"
+printf 'PNG
+
+' > "$LOOP_EVIDENCE_DIR/home-light.png"
+printf '{"screens":["home"],"head":"%s"}
+' "$LOOP_HEAD" > "$LOOP_EVIDENCE_DIR/index.json"
+if [ -e ` + shellQuote(fail) + ` ]; then echo "FAIL: the home screen is blank (home-light.png)"; exit 1; fi
+echo "shots: 1 screen, light"`},
+		{Name: "web screenshots", Run: "echo should not run; exit 1", WhenChanged: []string{"web/**"}},
+	}
+}
+
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
 // SandboxHoldRules are the built-in hold rules with their repos swapped for the sandbox's: the
-// rules for jarvis-server apply to demo, jarvis-loop's to the sandbox's jarvis-loop.
+// rules for jarvis-server apply to demo, jarvis-loop's to the sandbox's jarvis-loop, and
+// jarvis-node-mobile's to its stand-in.
 func SandboxHoldRules() []pipeline.HoldRule {
-	swap := map[string]string{pipeline.ServerRepo: RepoSlug, pipeline.LoopRepo: LoopSlug}
+	swap := map[string]string{pipeline.ServerRepo: RepoSlug, pipeline.LoopRepo: LoopSlug, pipeline.NodeMobileRepo: MobileSlug}
 	var out []pipeline.HoldRule
 	for _, r := range pipeline.DefaultHoldRules() {
 		if to, ok := swap[r.Repo]; ok {

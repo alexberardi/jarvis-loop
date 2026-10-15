@@ -60,8 +60,15 @@ type RunInfo struct {
 	// the copy failed.
 	Triage    []TriageFile
 	TriageErr string
-	// Checkouts are triage's repo checkouts (repos/<key>/), one per repo in question.
+	// Checkouts are triage's repo checkouts (repos/<key>/): the item's repo, or none when it has
+	// no repo yet.
 	Checkouts []Checkout
+	// Routing: a triage run of an item with no repo, which names the repo first.
+	Routing bool
+	// RepoGroup is the item's repo's group (build and review).
+	RepoGroup string
+	// Verify names the runner's verify steps for the repo (build): they run after the agent.
+	Verify []string
 	// Context are the files the runner wrote for the agent (paths relative to the working
 	// directory: .loop/context/..., .loop/review/...), with what each holds.
 	Context []TriageFile
@@ -118,17 +125,21 @@ func StaticBrief(stage string) string {
 		b.WriteString(`{"outcome": "not_reproducible", "summary": "duplicate of #N / PR #M, or: works on main because …",
  "notes": "markdown: what you checked and saw", "evidence": [{"file": "evidence/check.log", "label": "…"}]}`)
 		b.WriteString("\n```\n\n```json\n{\"outcome\": \"question\", \"question\": \"…\"}\n```\n\n")
-		b.WriteString("`resources` lists only what verifying the change needs (often `[]`). The runner checks `repo` against the configured repos and uploads your `notes` (as `triage-notes.md`) and the files in `.loop/evidence/` with the item. No other fields.\n")
+		b.WriteString("When the item has no repo yet (no checkouts this run), name it first:\n\n```json\n")
+		b.WriteString(`{"outcome": "routed", "repo": "owner/name", "why": "one line: why this repo"}`)
+		b.WriteString("\n```\n\n")
+		b.WriteString("`resources` lists only what verifying the change needs (often `[]`). The runner checks `repo` against the configured repos and uploads your `notes` (as `triage-notes.md`) and the files in `.loop/evidence/` with the item. After `routed`, the item is triaged again with that repo checked out. No other fields.\n")
 	case StageReview:
 		b.WriteString("Write `.loop/result.json` as your last step, exactly one of:\n\n```json\n")
 		b.WriteString(`{"outcome": "approved", "summary": "one paragraph: why it can merge",
  "review": "markdown for the PR comment: verdict, what you checked and how, findings",
- "not_verified": ["…"], "evidence": [{"file": "evidence/check.log", "label": "scripts/check at the head"}]}`)
+ "not_verified": ["…"], "evidence": [{"file": "evidence/check.log", "label": "scripts/check at the head"}],
+ "needs_review": false}`)
 		b.WriteString("\n```\n\n```json\n")
 		b.WriteString(`{"outcome": "bounce", "notes": "the build agent's list: each point specific, with file:line, and what done looks like",
  "review": "markdown for the PR comment", "evidence": [{"file": "evidence/check.log", "label": "…"}]}`)
 		b.WriteString("\n```\n\n")
-		b.WriteString("The runner posts `review` on the PR as a comment (never a GitHub approval), with the commit you reviewed, uploads `.loop/evidence/`, and reports the outcome for the head commit named below; `head_sha`, if you give it, must be that commit. No other fields.\n")
+		b.WriteString("The runner posts `review` on the PR as a comment (never a GitHub approval), with the commit you reviewed, uploads `.loop/evidence/`, and reports the outcome for the head commit named below; `head_sha`, if you give it, must be that commit. `needs_review: true` on an approval holds the merge for the user (see \"Content the hold list cannot see\"). No other fields.\n")
 	default:
 		b.WriteString("Commit your work on the item's branch (the runner pushes it and opens the PR; you never push), then write `.loop/result.json`, exactly one of:\n\n```json\n")
 		b.WriteString(`{"outcome": "ready_for_pr", "pr_title": "one line, at most 256 characters",
@@ -150,18 +161,25 @@ func Brief(stage string, it Item, r RunInfo) string {
 	fmt.Fprintf(&b, "- Stage: %s\n- Priority: %s\n", stage, orDash(it.Priority))
 	switch stage {
 	case StageTriage:
-		if it.Repo != "" {
-			fmt.Fprintf(&b, "- Repository: `%s` (set when the item was added; leave `repo` out of the result)\n", r.Slug)
-		} else {
+		switch {
+		case it.Repo != "":
+			fmt.Fprintf(&b, "- Repository: `%s` (set when the item was added or routed; leave `repo` out of the result)\n", r.Slug)
+		case r.Routing:
+			b.WriteString("- Repository: none yet. **Route it**: pick its repo from `.loop/context/repos.md` (the ask, each repo's group, aliases, description and recent PR titles) and return `routed` with the slug and why. Nothing is checked out this run; the runner checks the repo out for the next triage run. Return `reproduced` with `repo` only if that file alone settles everything (rare); `question` if you cannot tell.\n")
+		default:
 			b.WriteString("- Repository: none yet. Pick one of the configured repos (`.loop/context/repos.md`) and name its slug in `repo`.\n")
 		}
-		b.WriteString("- Checkouts (detached at the base branch):")
-		for _, c := range r.Checkouts {
-			fmt.Fprintf(&b, " `%s/` (`%s`, `origin/%s`);", c.Dir, c.Slug, c.Base)
+		if len(r.Checkouts) == 0 {
+			b.WriteString("- Checkouts: none\n")
+		} else {
+			b.WriteString("- Checkouts (detached at the base branch):")
+			for _, c := range r.Checkouts {
+				fmt.Fprintf(&b, " `%s/` (`%s`, `origin/%s`);", c.Dir, c.Slug, c.Base)
+			}
+			b.WriteString("\n")
 		}
-		b.WriteString("\n")
 	case StageReview:
-		fmt.Fprintf(&b, "- Repository: `%s` (base branch `%s`)\n- PR: #%d, branch `%s`, head `%s` (review this commit)\n", r.Slug, r.Base, r.PR, r.Branch, r.HeadSHA)
+		fmt.Fprintf(&b, "- Repository: `%s` (base branch `%s`%s)\n- PR: #%d, branch `%s`, head `%s` (review this commit)\n", r.Slug, r.Base, groupNote(r.RepoGroup), r.PR, r.Branch, r.HeadSHA)
 		if it.Area != "" || it.Size != "" {
 			fmt.Fprintf(&b, "- Triage: area %s, size %s, risk %s\n", orDash(it.Area), orDash(it.Size), orDash(it.Risk))
 		}
@@ -175,15 +193,25 @@ func Brief(stage string, it Item, r RunInfo) string {
 			fmt.Fprintf(&b, "- The build's summary: %s\n", it.Summary)
 		}
 	default:
-		fmt.Fprintf(&b, "- Repository: `%s` (base branch `%s`; the PR's changes are against `origin/%s`)\n", r.Slug, r.Base, r.Base)
+		fmt.Fprintf(&b, "- Repository: `%s` (base branch `%s`%s; the PR's changes are against `origin/%s`)\n", r.Slug, r.Base, groupNote(r.RepoGroup), r.Base)
 		if it.Area != "" || it.Size != "" {
 			fmt.Fprintf(&b, "- Triage: area %s, size %s, risk %s\n", orDash(it.Area), orDash(it.Size), orDash(it.Risk))
 		}
 		if it.HoldReason != "" {
 			fmt.Fprintf(&b, "- On the hold list: %s (the user approves the merge; build it as asked)\n", it.HoldReason)
 		}
-		if it.BounceCount > 0 {
-			fmt.Fprintf(&b, "- Review bounced it %d time(s); PR #%d is open on this branch. Fix every point in `.loop/review/` on the same branch; the runner updates that PR.\n", it.BounceCount, it.PR)
+		switch {
+		case it.BounceCount > 0 && it.PR > 0:
+			fmt.Fprintf(&b, "- Sent back %d time(s) (by review, or by the runner's verify); PR #%d is open on this branch. Fix every point in `.loop/review/` on the same branch; the runner updates that PR.\n", it.BounceCount, it.PR)
+		case it.BounceCount > 0:
+			fmt.Fprintf(&b, "- Sent back %d time(s) by the runner's verify (nothing was pushed). Fix what `.loop/review/verify.md` shows on the same branch.\n", it.BounceCount)
+		}
+		if len(r.Verify) > 0 {
+			b.WriteString("- After you return `ready_for_pr`, the runner runs this repo's verify steps itself (outside your sandbox), before it pushes:")
+			for _, v := range r.Verify {
+				fmt.Fprintf(&b, " %s;", oneLine(v))
+			}
+			b.WriteString(" a failure comes back to you in `.loop/review/verify.md`.\n")
 		}
 		if it.Summary != "" {
 			fmt.Fprintf(&b, "- Notes so far: %s\n", it.Summary)
@@ -217,7 +245,11 @@ func Brief(stage string, it Item, r RunInfo) string {
 	b.WriteString("\n## This run\n\n")
 	switch stage {
 	case StageTriage:
-		fmt.Fprintf(&b, "- Working directory (not a repository; the checkouts are under it): `%s`\n", r.Worktree)
+		if len(r.Checkouts) == 0 {
+			fmt.Fprintf(&b, "- Working directory (not a repository; nothing is checked out): `%s`\n", r.Worktree)
+		} else {
+			fmt.Fprintf(&b, "- Working directory (not a repository; the checkouts are under it): `%s`\n", r.Worktree)
+		}
 	case StageReview:
 		fmt.Fprintf(&b, "- Worktree (your working directory, the PR at `%s`, detached; never commit): `%s`\n", short7(r.HeadSHA), r.Worktree)
 	default:
@@ -236,6 +268,13 @@ func Brief(stage string, it Item, r RunInfo) string {
 
 // BuildBrief is the build stage's brief.
 func BuildBrief(it Item, r RunInfo) string { return Brief(StageBuild, it, r) }
+
+func groupNote(g string) string {
+	if g == "" {
+		return ""
+	}
+	return ", group " + g
+}
 
 func writeFile(b *strings.Builder, name, label string) {
 	if label != "" {
