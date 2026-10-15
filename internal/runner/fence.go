@@ -149,7 +149,9 @@ func (r *Runner) fenced(dir, script string, env, extraWritable []string) (*exec.
 	}
 	env = append(env, "GOFLAGS=-modcacherw", "TMPDIR=/tmp")
 	home := envHome(env)
-	args := []string{"--dev-bind", "/", "/"}
+	// A private /tmp first: what is bound below (home, the work root, the working dirs) may itself
+	// live under the host's /tmp, and later mounts go over earlier ones.
+	args := []string{"--dev-bind", "/", "/", "--tmpfs", "/tmp"}
 	if fi, err := os.Stat(home); err == nil && fi.IsDir() {
 		args = append(args, "--ro-bind", home, home)
 	}
@@ -176,7 +178,7 @@ func (r *Runner) fenced(dir, script string, env, extraWritable []string) (*exec.
 			args = append(args, "--bind", p, p)
 		}
 	}
-	args = append(args, "--tmpfs", "/tmp", "--unshare-pid", "--proc", "/proc", "--die-with-parent", "--new-session",
+	args = append(args, "--unshare-pid", "--proc", "/proc", "--die-with-parent", "--new-session",
 		"--chdir", dir, "--", "bash", "-c", script)
 	cmd := exec.Command(bwrap, args...)
 	cmd.Dir = dir

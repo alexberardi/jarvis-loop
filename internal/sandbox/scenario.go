@@ -393,6 +393,9 @@ func (p *player) step(st Step) error {
 		f := filepath.Join(s.Dir, VerifyFailFile)
 		switch st.Outcome {
 		case "fail":
+			if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+				return err
+			}
 			return os.WriteFile(f, []byte("fail\n"), 0o644)
 		case "pass":
 			if err := os.Remove(f); err != nil && !os.IsNotExist(err) {

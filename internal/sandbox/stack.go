@@ -313,8 +313,9 @@ var (
 )
 
 // VerifyFailFile is the file (under the stack dir) whose presence makes the mobile repo's verify
-// fail, as a scenario's "verify" step sets it.
-const VerifyFailFile = "verify-fail"
+// fail, as a scenario's "verify" step sets it. It is in the runner's work root, which the fence
+// keeps readable (the rest of the stack dir may be under a /tmp the fence makes private).
+const VerifyFailFile = "work/verify-fail"
 
 // MobileVerify are the stand-in node-mobile's verify steps: unit tests in the worktree; "mobile
 // shots" in a checkout of demo (as jarvis-server's mobile-shot runs against the runner's mirror at
