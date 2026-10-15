@@ -190,7 +190,7 @@ Each phase is usable on its own and proves one thing before the next builds on i
 2. **loopd core on the dev box.** Items, events, the stage rules, priority, the active-agents number, the API and the `loop` CLI, with stages moved by hand. *Proves:* the state machine and limits, with no agents involved.
 3. **Slack.** Item threads, `/loop`, questions and answers, the buttons and reply approvals, the digest, the active-agents control. *Proves:* the pipeline runs from a phone.
 4. **Runner and the build stage.** One runner on the dev box claims items and runs the build brief; landing still by hand. *Proves:* an unattended agent produces a PR with evidence.
-   Then **the planning stages** in `#plan`: product and engineering personas, briefs and blueprints as pages, item dependencies. *Proves:* an idea becomes loop-ready items without hand-written specs.
+   Then **4b, the loop's own harness** (`scripts/loop-sandbox`: real loopd, runner and bot code against a fake Slack, a fake claude and a fake GitHub, with scenario files and Slack transcripts), so the loop's own PRs meet the three gates. Then **the planning stages** in `#plan`: product and engineering personas, briefs and blueprints as pages, item dependencies. *Proves:* an idea becomes loop-ready items without hand-written specs.
 5. **Triage and review.** The two agent stages around build; bounce and needs-you. *Proves:* bad fixes and stale reports get caught before the user sees them.
 6. **Land.** The landing script, held merges through Slack. *Proves:* end to end without a human in the middle.
 7. **Move to the prod box.** `loopd` runs there as its own service; the dev box becomes just a runner. *Proves:* the split, and survives the dev box rebooting.
