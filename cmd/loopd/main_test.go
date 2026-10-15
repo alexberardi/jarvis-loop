@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -54,5 +57,22 @@ func TestHandlerRouting(t *testing.T) {
 		if resp.StatusCode != 401 || !strings.HasPrefix(resp.Header.Get("WWW-Authenticate"), want) {
 			t.Errorf("%s: %d %q, want 401 %s", path, resp.StatusCode, resp.Header.Get("WWW-Authenticate"), want)
 		}
+	}
+}
+
+func TestSlackEnvMustBePrivate(t *testing.T) {
+	dir := t.TempDir()
+	tokens := filepath.Join(dir, "tokens")
+	os.WriteFile(tokens, []byte("user-token-0123456789abcdef\tuser\talex\n"), 0o600)
+	env := filepath.Join(dir, "slack.env")
+	os.WriteFile(env, []byte("SLACK_BOT_TOKEN=xoxb-secret-bot\nSLACK_APP_TOKEN=xapp-secret-app\n"), 0o600)
+	os.Chmod(env, 0o644)
+	var stderr strings.Builder
+	err := run(context.Background(), []string{"--addr", "127.0.0.1:0", "--data", filepath.Join(dir, "data"), "--tokens", tokens, "--slack-env", env}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "0600") {
+		t.Fatalf("err %v", err)
+	}
+	if strings.Contains(err.Error()+stderr.String(), "secret") {
+		t.Fatal("a token was printed")
 	}
 }

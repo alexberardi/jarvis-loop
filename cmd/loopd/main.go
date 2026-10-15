@@ -15,11 +15,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/api"
 	"github.com/alexberardi/jarvis-loop/internal/clock"
+	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/store"
 	"github.com/alexberardi/jarvis-loop/internal/web"
 )
@@ -40,6 +42,8 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	data := fs.String("data", "~/.local/share/jarvis-loop", "data directory (database and evidence)")
 	tokensPath := fs.String("tokens", "~/.config/jarvis-loop/tokens", "tokens file, 0600: token<TAB>kind<TAB>name per line")
 	lan := fs.Bool("lan", false, "allow listening on a non-loopback address")
+	slackEnv := fs.String("slack-env", "", "Slack env file, 0600, with SLACK_BOT_TOKEN and SLACK_APP_TOKEN; Slack is off without it")
+	slackLink := fs.String("slack-link", "", "loopd's address as the Slack reader reaches it (LAN), for links to long text; default: point at `loop show`")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -51,6 +55,12 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	toks, err := api.LoadTokens(expand(*tokensPath))
 	if err != nil {
 		return fmt.Errorf("tokens: %w", err)
+	}
+	var slackToks slack.Tokens
+	if *slackEnv != "" {
+		if slackToks, err = slack.LoadEnv(expand(*slackEnv)); err != nil {
+			return fmt.Errorf("slack: %w", err)
+		}
 	}
 	st, err := store.Open(expand(*data), clock.Real{})
 	if err != nil {
@@ -72,6 +82,17 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 	log.Info("loopd listening", "addr", ln.Addr().String(), "data", expand(*data))
+
+	var bg sync.WaitGroup
+	defer bg.Wait()
+	sctx, stopSlack := context.WithCancel(ctx) // ends the Slack goroutines however run returns
+	defer stopSlack()
+	if *slackEnv != "" {
+		if err := startSlack(sctx, &bg, st, slackToks, *slackLink, log); err != nil {
+			ln.Close()
+			return err
+		}
+	}
 
 	// Expiry also runs on every request; the ticker covers a quiet server.
 	go func() {
@@ -105,6 +126,26 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	return nil
+}
+
+// startSlack runs the Slack layer: the bot (event fan-out, timers, control message) and the
+// Socket Mode connection. Slack failures are logged; they never stop loopd or a pipeline action.
+func startSlack(ctx context.Context, bg *sync.WaitGroup, st *store.Store, toks slack.Tokens, link string, log *slog.Logger) error {
+	slg := log.With("component", "slack")
+	botAPI := slack.NewAPI(slack.DefaultBaseURL, toks.Bot, slack.Channels{slack.ChannelLoop, slack.ChannelDigest})
+	appAPI := slack.NewAPI(slack.DefaultBaseURL, toks.App, nil)
+	bot, err := slack.New(slack.Config{Store: st, API: botAPI, Clock: clock.Real{}, Log: slg, LinkBase: link})
+	if err != nil {
+		return err
+	}
+	bot.Attach()
+	sock := &slack.Socket{Open: appAPI.OpenConnection, OnEnvelope: bot.HandleEnvelope, OnCommand: bot.HandleCommand,
+		OnLate: bot.Late, Log: slg, PingEvery: 30 * time.Second}
+	bg.Add(2)
+	go func() { defer bg.Done(); bot.Run(ctx) }()
+	go func() { defer bg.Done(); sock.Run(ctx) }()
+	slg.Info("slack on", "channels", "#loop, #loop-digest")
 	return nil
 }
 
