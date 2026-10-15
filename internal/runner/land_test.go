@@ -215,6 +215,15 @@ func TestMainCIResult(t *testing.T) {
 	if res, _ := MainResult(nil); res != "" {
 		t.Fatalf("no runs yet: %q", res)
 	}
+	// A run cancelled by a newer push to main (or by hand) is not a failure.
+	runs[0].Conclusion = "cancelled"
+	if res, failing := MainResult(runs); res != "superseded" || len(failing) != 0 {
+		t.Fatalf("cancelled: %q %v", res, failing)
+	}
+	runs[1].Conclusion = "failure"
+	if res, failing := MainResult(runs); res != "red" || len(failing) != 1 || failing[0] != runs[1].Name {
+		t.Fatalf("cancelled and failed: %q %v", res, failing)
+	}
 }
 
 // The land script's gh calls, as argv: the merge is always squash, always bound to the head it

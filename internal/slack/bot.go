@@ -586,6 +586,8 @@ func (b *Bot) mainCILine(e store.Event, id int64) string {
 			return fmt.Sprintf("main red on `%s` (failing: %s): filed #%d (P1).", sha, failing, int64(p1))
 		}
 		return fmt.Sprintf("main red on `%s` (failing: %s); no P1 item could be filed, see `loop show %d`.", sha, failing, id)
+	case "superseded":
+		return fmt.Sprintf("main's CI on `%s` was cancelled (likely by a newer push to main); nothing failed, no P1 filed.", sha)
 	case "timeout":
 		return fmt.Sprintf("main's CI on `%s` did not finish in time; see the runs on GitHub.", sha)
 	}

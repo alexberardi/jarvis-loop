@@ -286,7 +286,7 @@ func (g *GitHub) SetChecks(slug, sha string, checks map[string]string) {
 	g.checks[slug+"@"+sha] = m
 }
 
-// SetMainCI sets how the workflow runs on main's commits go (name -> pass, fail, pending); empty:
+// SetMainCI sets how the workflow runs on main's commits go (name -> pass, fail, pending, cancel); empty:
 // no runs at all.
 func (g *GitHub) SetMainCI(runs map[string]string) {
 	g.mu.Lock()
@@ -427,6 +427,8 @@ func (g *GitHub) CommitRuns(_ context.Context, slug, sha string) ([]runner.Workf
 			r.Status, r.Conclusion = "completed", "success"
 		case "fail":
 			r.Status, r.Conclusion = "completed", "failure"
+		case "cancel":
+			r.Status, r.Conclusion = "completed", "cancelled"
 		default:
 			r.Status = "in_progress"
 		}

@@ -1,0 +1,33 @@
+{
+  "name": "main-superseded",
+  "about": "Land merges a green PR; main's CI run on the squash commit ends cancelled (a newer push to main superseded it), none failed. The item stays done with a main_ci superseded event; no P1 is filed and nobody is @mentioned.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"build": "pending", "test": "pending"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "expect", "stage": {"a": "done"}, "leased": {"a": false},
+     "messages": [{"thread": "a", "text": "watching main's CI\\.$"}]},
+    {"do": "ci", "main": {"build": "pass", "test": "cancel"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "remote": {"main": "a", "only": true},
+    "events": [
+      {"item": "a", "kind": "main_ci", "actor": "runner", "data": {"result": "^superseded$", "urls": "actions/runs/"}, "count": 1}
+    ],
+    "no_events": [{"kind": "created", "actor": "runner"}],
+    "messages": [
+      {"thread": "a", "text": "^main's CI on `[0-9a-f]{7}` was cancelled \\(likely by a newer push to main\\); nothing failed, no P1 filed\\.$"}
+    ],
+    "no_messages": [{"text": "main red|<@"}]
+  }
+}

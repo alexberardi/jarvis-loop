@@ -18,7 +18,7 @@ const (
 )
 
 // MainCIResults are what a main_ci event may report about main's CI on a merge commit.
-var MainCIResults = []string{"green", "red", "timeout"}
+var MainCIResults = []string{"green", "red", "superseded", "timeout"}
 
 // mainCIKeys are the only data a main_ci event may carry.
 var mainCIKeys = []string{"result", "urls", "failing", "merge_sha", "p1_item"}

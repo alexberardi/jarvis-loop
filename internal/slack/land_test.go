@@ -40,6 +40,8 @@ func TestLandLines(t *testing.T) {
 			"^main red on `ff0f006` \\(failing: ci, &lt;!channel&gt;\\): filed #12 \\(P1\\)\\.$"},
 		{store.Event{Kind: "main_ci", Data: map[string]any{"result": "red", "merge_sha": merge, "failing": []any{"ci"}}},
 			"^main red on `ff0f006` \\(failing: ci\\); no P1 item could be filed, see `loop show \\d+`\\.$"},
+		{store.Event{Kind: "main_ci", Data: map[string]any{"result": "superseded", "merge_sha": merge}},
+			"^main's CI on `ff0f006` was cancelled \\(likely by a newer push to main\\); nothing failed, no P1 filed\\.$"},
 		{store.Event{Kind: "main_ci", Data: map[string]any{"result": "timeout", "merge_sha": merge}},
 			"^main's CI on `ff0f006` did not finish in time; see the runs on GitHub\\.$"},
 		{store.Event{Kind: "land_waiting", Data: map[string]any{"waiting_for": "CI (check)"}}, ""},
