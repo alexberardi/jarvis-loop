@@ -17,10 +17,15 @@ linked at its top; when the design changes, update both.
   model transcripts, credentials, tokens, or host names from jarvis-server's `HOSTS.local.md`.
 - **Never touch** the user's checkouts, the user's emulator (`emulator-5554`), or processes this
   code did not start.
-- **Merging (until the loop lands its own PRs, rollout phase 6):** squash-merge your own PR once
-  every CI check has passed (wait explicitly; never `gh pr merge --auto`), then check main's CI.
-  Hold for the user instead when a PR changes who may approve or merge (the approver check, token
-  handling, the landing gates) or touches the prod box.
+- **Merging (since rollout phase 6, 2026-10-15):** the loop lands its own PRs. Work through the
+  loop (`loop add`, Slack) rather than merging by hand: the land stage merges once review approved
+  the head, CI passed on it and the build's evidence is in the PR, and holds for the user when
+  `loopd`'s hold rules match (`pipeline.DefaultHoldRules`: approvals and stage rules, the store,
+  loopd's wiring, API auth, the Slack approver check, tokens, the land script, the guard, CI, removed
+  tests or scenarios). A held PR merges after the user's approval in its Slack thread. A PR made by
+  hand outside the loop: squash-merge your own once every CI check passed (wait explicitly; never
+  `gh pr merge --auto`), then check main's CI, and hold for the user under the same rules or when it
+  touches the prod box. Never edit the hold rules to get a PR through; that change is itself held.
 - **Decisions** get a file each in `docs/decisions/YYYY-MM-DD-<slug>.md`; no session log (history is
   the commits and PRs), as in jarvis-server.
 
