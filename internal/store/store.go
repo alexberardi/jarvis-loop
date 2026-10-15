@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite" // the database/sql driver "sqlite"
@@ -50,6 +51,24 @@ type Store struct {
 	w     *sql.DB // the one writer
 	r     *sql.DB // readers
 	clock clock.Clock
+
+	// wmu serializes write transactions (there is one writer connection anyway) and guards
+	// pending, the events written by the open transaction. emitMu hands them to subscribers after
+	// commit, in commit order.
+	wmu     sync.Mutex
+	emitMu  sync.Mutex
+	pending []Event
+	subsMu  sync.RWMutex
+	subs    []func(Event)
+}
+
+// Subscribe registers fn to receive every event after the transaction that wrote it commits, in
+// commit order. fn runs on the committing goroutine: it must be quick and must not call the
+// store's write methods (the Slack layer only queues the event).
+func (s *Store) Subscribe(fn func(Event)) {
+	s.subsMu.Lock()
+	defer s.subsMu.Unlock()
+	s.subs = append(s.subs, fn)
 }
 
 // Open opens (creating if needed) the data directory and its database, and applies migrations.
@@ -136,15 +155,42 @@ func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
 }
 
 func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
+	s.wmu.Lock()
+	s.pending = nil
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
+		s.wmu.Unlock()
 		return err
 	}
 	if err := fn(tx); err != nil {
 		tx.Rollback()
+		s.pending = nil
+		s.wmu.Unlock()
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		s.pending = nil
+		s.wmu.Unlock()
+		return err
+	}
+	evs := s.pending
+	s.pending = nil
+	// Take the emit lock before letting the next writer in, so events leave in commit order.
+	s.emitMu.Lock()
+	s.wmu.Unlock()
+	defer s.emitMu.Unlock()
+	if len(evs) == 0 {
+		return nil
+	}
+	s.subsMu.RLock()
+	subs := append([]func(Event){}, s.subs...)
+	s.subsMu.RUnlock()
+	for _, e := range evs {
+		for _, fn := range subs {
+			fn(e)
+		}
+	}
+	return nil
 }
 
 // Event is one entry of an item's history (or a control change, with ItemID 0).
@@ -172,9 +218,23 @@ func (s *Store) event(tx *sql.Tx, e Event) error {
 	if e.ItemID != 0 {
 		item = e.ItemID
 	}
-	_, err = tx.Exec(`INSERT INTO events (item_id, at, actor, kind, from_stage, to_stage, outcome, data) VALUES (?,?,?,?,?,?,?,?)`,
-		item, s.clock.Now().UnixNano(), e.Actor, e.Kind, e.From, e.To, e.Outcome, string(data))
-	return err
+	at := s.clock.Now()
+	res, err := tx.Exec(`INSERT INTO events (item_id, at, actor, kind, from_stage, to_stage, outcome, data) VALUES (?,?,?,?,?,?,?,?)`,
+		item, at.UnixNano(), e.Actor, e.Kind, e.From, e.To, e.Outcome, string(data))
+	if err != nil {
+		return err
+	}
+	if e.ID, err = res.LastInsertId(); err != nil {
+		return err
+	}
+	// Subscribers get the event as a reader would see it (data round-tripped through JSON).
+	e.At = fromNanos(at.UnixNano())
+	e.Data = map[string]any{}
+	if err := json.Unmarshal(data, &e.Data); err != nil {
+		return err
+	}
+	s.pending = append(s.pending, e)
+	return nil
 }
 
 func transitionEvent(id int64, actor string, tr pipeline.Transition) Event {
