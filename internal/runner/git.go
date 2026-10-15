@@ -132,6 +132,20 @@ func (g Git) AddWorktree(ctx context.Context, mirror, path, branch, base string)
 	return ahead, err
 }
 
+// AddDetached makes a fresh worktree at rev, detached: triage's checkouts and review's PR head.
+// rev must already be in the mirror.
+func (g Git) AddDetached(ctx context.Context, mirror, path, rev string) error {
+	g.RemoveWorktree(ctx, mirror, path)
+	if !g.hasRef(ctx, mirror, rev+"^{commit}") {
+		return fmt.Errorf("the mirror has no commit %s", rev)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	_, err := g.run(ctx, mirror, "worktree", "add", "-q", "--detach", path, rev)
+	return err
+}
+
 func (g Git) isAncestor(ctx context.Context, dir, a, b string) bool {
 	_, err := g.run(ctx, dir, "merge-base", "--is-ancestor", a, b)
 	return err == nil

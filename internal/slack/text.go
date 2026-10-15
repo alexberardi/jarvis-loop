@@ -148,3 +148,60 @@ func ParsePriority(text string) (priority, title string) {
 	out = strings.Trim(out, " ,:;-–—")
 	return priority, out
 }
+
+// ParseRepo reads the repo words of an add request: a configured repo (repos are owner/name slugs)
+// named by its name or slug as "in <name>" anywhere, "<name>:" at the start, or "[<name>]"
+// anywhere. It returns the repo's slug and the text without those words, or "" and the text as it
+// was. The first marker wins. A name two configured repos share counts only as a full slug.
+func ParseRepo(text string, repos []string) (repo, rest string) {
+	names := map[string]string{} // lower-case name or slug -> slug ("" when ambiguous)
+	for _, slug := range repos {
+		names[strings.ToLower(slug)] = slug
+		if i := strings.LastIndex(slug, "/"); i >= 0 {
+			short := strings.ToLower(slug[i+1:])
+			if prev, seen := names[short]; seen && prev != slug {
+				names[short] = ""
+			} else {
+				names[short] = slug
+			}
+		}
+	}
+	var alts []string
+	for n, slug := range names {
+		if slug != "" && n != "" {
+			alts = append(alts, regexp.QuoteMeta(n))
+		}
+	}
+	if len(alts) == 0 {
+		return "", text
+	}
+	// Longest first, so a slug wins over its own short name.
+	sort.Slice(alts, func(i, j int) bool {
+		return len(alts[i]) > len(alts[j]) || len(alts[i]) == len(alts[j]) && alts[i] < alts[j]
+	})
+	group := "(" + strings.Join(alts, "|") + ")"
+	const edge = `(?:$|[^\w/'-])`
+	markers := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(\[\s*` + group + `\s*\])`),
+		regexp.MustCompile(`(?i)^\s*(` + group + `\s*:)`),
+		regexp.MustCompile(`(?i)(?:^|[^\w/'-])(in\s+` + group + `)` + edge),
+	}
+	best, bestEnd, bestName := -1, -1, ""
+	for _, re := range markers {
+		m := re.FindStringSubmatchIndex(text)
+		if m == nil {
+			continue
+		}
+		if best < 0 || m[2] < best {
+			best, bestEnd, bestName = m[2], m[3], strings.ToLower(text[m[4]:m[5]])
+		}
+	}
+	if best < 0 {
+		return "", text
+	}
+	out := text[:best] + " " + text[bestEnd:]
+	out = strings.Join(strings.Fields(out), " ")
+	out = strings.Replace(out, " ,", ",", -1)
+	out = strings.Trim(out, " ,:;-–—")
+	return names[bestName], out
+}

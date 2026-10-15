@@ -1,0 +1,46 @@
+{
+  "name": "review-bounce",
+  "about": "The runner's review agent bounces the PR: its review is posted on the PR as a comment and its notes are recorded; the build re-run finds them (and the PR's comments) in .loop/review/, commits a fix on the same branch, and the runner updates the existing PR instead of opening a second; the next review approves; land merges by hand.",
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "script", "item": "a", "for": "review", "play": "bounce"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "bounce", "actor": "runner",
+                 "data": {"notes": "^`feature\\.txt:1`: add a test for the empty case\\.$", "bounce_count": "^1$", "pr_comment": "^posted$"}}],
+     "pr": {"a": {"comments": 1, "comment": "(?s)^## Loop review: changes requested\\n\\nChanges needed: the empty case is not tested\\.\\n\\n### What to change\\n\\n`feature\\.txt:1`"}}},
+    {"do": "script", "item": "a", "for": "review", "play": "approve"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review"}, "prs": 1,
+     "pr": {"a": {"number": 101, "edits": 1, "body": "Addressed the review \\(\\.loop/review/notes\\.md, \\.loop/review/pr-comments\\.md\\)\\."}},
+     "remote": {"branches": {"a": "^fix: address the review$"}, "only": true}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"}},
+    {"do": "land", "item": "a", "outcome": "merged"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "prs": 1,
+    "pr": {"a": {"number": 101, "comments": 2, "comment": "^## Loop review: approved"}},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "data": {"pr_action": "^opened$"}, "count": 1},
+      {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "data": {"pr_action": "^updated$"}, "count": 1},
+      {"item": "a", "kind": "advanced", "outcome": "approved", "actor": "runner", "count": 1}
+    ],
+    "messages": [
+      {"thread": "a", "text": "sandbox/demo#101> opened"},
+      {"thread": "a", "text": "^Claimed for review\\.$"},
+      {"thread": "a", "text": "^Bounced back to build \\(1\\): `feature\\.txt:1`: add a test for the empty case\\.$"},
+      {"thread": "a", "text": "^Claimed for build\\.$"},
+      {"thread": "a", "text": "sandbox/demo#101> updated, head `[0-9a-f]{7}` → review\\.$"},
+      {"thread": "a", "text": "^Review approved → land"},
+      {"thread": "a", "text": "^Merged .*sandbox/demo#101> as `[0-9a-f]{7}`\\. Done\\.$"}
+    ]
+  }
+}

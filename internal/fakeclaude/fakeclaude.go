@@ -44,7 +44,23 @@ const (
 	WrongMode  = "wrong_mode"  // start in default mode whatever was asked
 	SymlinkEv  = "symlink_evidence"
 	LowCache   = "low_cache" // good, but with a cold prompt cache (10% read over 6 turns)
+
+	// Triage plays (a triage run of a build play plays Reproduce).
+	Reproduce      = "reproduce"       // reproduced, with notes and a repro file; picks the script's repo when the item has none
+	Duplicate      = "duplicate"       // not_reproducible: the open item with the same title, and its PR
+	TriageQuestion = "triage_question" // a question
+	TriageBadRepo  = "triage_bad_repo" // reproduced, naming a repo that is not configured
+
+	// Review plays (a review run of a build play plays Approve).
+	Approve      = "approve"       // approved, with a review for the PR comment
+	Bounce       = "bounce"        // bounce, with notes naming the changed file
+	ReviewCommit = "review_commit" // tries to commit a fixup (the guard refuses), then approves
 )
+
+var stagePlays = map[string][]string{
+	"triage": {Reproduce, Duplicate, TriageQuestion, TriageBadRepo, Hang, UsageLimit, Exit3},
+	"review": {Approve, Bounce, ReviewCommit, Hang, UsageLimit, Exit3},
+}
 
 type fake struct {
 	out       io.Writer
@@ -85,9 +101,16 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	branch := find("Branch: `([^`]+)`", brief)
 	base := find("base branch `([^`]+)`", brief)
 	item := find(`Item: #(\d+)`, brief)
-	sc := loadScript(os.Getenv("FAKE_CLAUDE_SCRIPTS"), item)
+	stage := find(`(?m)^- Stage: (\w+)$`, brief)
+	if stage == "" {
+		stage = "build"
+	}
+	sc := loadScript(os.Getenv("FAKE_CLAUDE_SCRIPTS"), item, stage)
 	if sc.Play != "" {
 		scenario = sc.Play
+	}
+	if plays, ok := stagePlays[stage]; ok && !contains(plays, scenario) {
+		scenario = plays[0] // a build play in a triage or review run: that stage's usual
 	}
 	f.scenario = scenario
 	change := "feature.txt"
@@ -166,10 +189,29 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f.write(outside, "I got out\n")
 		f.bash("git push origin main")
 	}
+	switch stage {
+	case "triage":
+		return f.triage(scenario, brief, sc)
+	case "review":
+		return f.review(scenario, brief)
+	}
 
 	// The common path: a change, committed on the item's branch (a resumed run finds it there).
-	f.write(change, "a feature for "+branch+"\n")
-	f.bash("git add " + shellQuote(change) + " && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'feat: add a feature'")
+	// After a bounce, the review's notes are in .loop/review/: address them in a new commit.
+	reviewed := ""
+	if ents, err := os.ReadDir(filepath.Join(f.cwd, ".loop", "review")); err == nil && len(ents) > 0 {
+		var names []string
+		for _, e := range ents {
+			names = append(names, ".loop/review/"+e.Name())
+		}
+		reviewed = strings.Join(names, ", ")
+		old, _ := os.ReadFile(filepath.Join(f.cwd, change))
+		f.write(change, string(old)+"addressed the review\n")
+		f.bash("git add " + shellQuote(change) + " && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'fix: address the review'")
+	} else {
+		f.write(change, "a feature for "+branch+"\n")
+		f.bash("git add " + shellQuote(change) + " && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'feat: add a feature'")
+	}
 	if scenario == NoArm {
 		f.result("done without hooks")
 		return 0
@@ -201,8 +243,12 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if scenario == LowCache {
 		f.bash("git status --short") // one more turn: a run long enough to count
 	}
+	body := fmt.Sprintf("Adds `%s` (%s commits).\n\nTests: see `after.txt`.", change, commits)
+	if reviewed != "" {
+		body += "\n\nAddressed the review (" + reviewed + ")."
+	}
 	res, _ := json.Marshal(map[string]any{"outcome": "ready_for_pr", "pr_title": "Add a feature",
-		"pr_body": fmt.Sprintf("Adds `%s` (%s commits).\n\nTests: see `after.txt`.", change, commits), "head_sha": head,
+		"pr_body": body, "head_sha": head,
 		"summary": "Added a feature, test first.", "not_verified": []string{"nothing on a phone"},
 		"evidence": []any{map[string]string{"file": "evidence/after.txt", "label": "tests"}}})
 	f.write(".loop/result.json", string(res))
@@ -315,21 +361,121 @@ func (f *fake) bash(command string) {
 	})
 }
 
-// script is one item's play in the harness.
+// script is one item's play in the harness: <item>-<stage>.json for a stage, or <item>.json for
+// its build runs.
 type script struct {
 	Play string `json:"play"`
 	File string `json:"file"`
+	// Repo is the repo triage picks for an item that has none.
+	Repo string `json:"repo"`
 }
 
-func loadScript(dir, item string) script {
+func loadScript(dir, item, stage string) script {
 	var s script
 	if dir == "" || item == "" {
 		return s
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, item+".json")); err == nil {
-		json.Unmarshal(b, &s)
+	names := []string{item + "-" + stage + ".json"}
+	if stage == "build" {
+		names = append(names, item+".json")
+	}
+	for _, n := range names {
+		if b, err := os.ReadFile(filepath.Join(dir, n)); err == nil {
+			json.Unmarshal(b, &s)
+			return s
+		}
 	}
 	return s
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// triage plays a triage run: it reads the runner's context and writes a triage result.
+func (f *fake) triage(play string, brief []byte, sc script) int {
+	ctxDir := filepath.Join(f.cwd, ".loop", "context")
+	open, _ := os.ReadFile(filepath.Join(ctxDir, "open-items.md"))
+	merged, _ := filepath.Glob(filepath.Join(ctxDir, "merged-prs-*.md"))
+	f.bash("ls repos")
+	switch play {
+	case TriageQuestion:
+		f.write(".loop/result.json", `{"outcome":"question","question":"Which screen do you mean?"}`)
+		f.result("Asked a question.")
+		return 0
+	case Duplicate:
+		title := find(`Item: #\d+: (.*)`, brief)
+		dup := ""
+		for _, line := range strings.Split(string(open), "\n") {
+			cells := strings.Split(line, "|")
+			if len(cells) < 6 || strings.Contains(line, "(this item)") {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(cells[2]), strings.TrimSpace(title)) {
+				dup = "duplicate of " + strings.TrimSpace(cells[1])
+				if pr := strings.TrimSpace(cells[5]); pr != "" {
+					dup += " / PR " + pr
+				}
+				break
+			}
+		}
+		if dup == "" {
+			dup = "no duplicate found"
+		}
+		f.write(".loop/evidence/dedupe.txt", fmt.Sprintf("checked the open items and %d merged-PR lists\n", len(merged)))
+		res, _ := json.Marshal(map[string]any{"outcome": "not_reproducible", "summary": dup + ": the same ask is already in flight.",
+			"notes": "Same title as an open item; nothing new to build.", "evidence": []any{map[string]string{"file": "evidence/dedupe.txt", "label": "dedupe"}}})
+		f.write(".loop/result.json", string(res))
+		f.result("Duplicate.")
+		return 0
+	}
+	repo := sc.Repo
+	if play == TriageBadRepo {
+		repo = "nobody/nothing"
+	}
+	if !strings.Contains(string(brief), "Repository: none yet") && play != TriageBadRepo {
+		repo = ""
+	}
+	f.write(".loop/evidence/repro.txt", fmt.Sprintf("reproduced on main; checked the open items and %d merged-PR lists\n", len(merged)))
+	r := map[string]any{"outcome": "reproduced", "area": "sandbox", "size": "S", "risk": "normal", "resources": []string{},
+		"summary": "Reproduced on main.", "notes": "Change the feature file; verify with the scenario.",
+		"evidence": []any{map[string]string{"file": "evidence/repro.txt", "label": "repro"}}}
+	if repo != "" {
+		r["repo"] = repo
+	}
+	res, _ := json.Marshal(r)
+	f.write(".loop/result.json", string(res))
+	f.result("Triaged.")
+	return 0
+}
+
+// review plays a review run at the PR's head.
+func (f *fake) review(play string, brief []byte) int {
+	diff, _ := os.ReadFile(filepath.Join(f.cwd, ".loop", "context", "diff.patch"))
+	file := find(`(?m)^\+\+\+ b/(.+)$`, diff)
+	f.bash("git status --short")
+	if play == ReviewCommit {
+		f.bash("git -c user.name=fake -c user.email=fake@example.com commit --allow-empty -q -m 'review fixup'")
+	}
+	f.write(".loop/evidence/review-check.txt", fmt.Sprintf("re-ran the checks at the head; the diff has %d lines\n", strings.Count(string(diff), "\n")))
+	var r map[string]any
+	if play == Bounce {
+		r = map[string]any{"outcome": "bounce", "notes": "`" + file + ":1`: add a test for the empty case.",
+			"review": "Changes needed: the empty case is not tested.", "evidence": []any{map[string]string{"file": "evidence/review-check.txt", "label": "review check"}}}
+	} else {
+		r = map[string]any{"outcome": "approved", "summary": "The tests cover " + file + " and fail without it.",
+			"review":   "**Approved.** The tests cover `" + file + "`; re-ran the checks at the head.",
+			"evidence": []any{map[string]string{"file": "evidence/review-check.txt", "label": "review check"}}}
+	}
+	res, _ := json.Marshal(r)
+	f.write(".loop/result.json", string(res))
+	f.result("Reviewed.")
+	return 0
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

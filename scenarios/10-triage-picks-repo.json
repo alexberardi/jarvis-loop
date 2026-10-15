@@ -1,0 +1,34 @@
+{
+  "name": "triage-picks-repo",
+  "about": "An item added from Slack names no repo. The runner's triage agent sees every configured repo checked out, picks jarvis-loop (by its config key; the runner reports the slug), loopd records it, and the same item is then built and reviewed by the runner on that repo.",
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "show the item's repo in loop show"},
+    {"do": "expect", "stage": {"a": "triage"}, "repo": {"a": ""},
+     "messages": [{"kind": "response", "text": "^Added #\\d+ \\(P3\\): show the item's repo in loop show\\."}]},
+    {"do": "script", "item": "a", "for": "triage", "play": "reproduce", "picks": "jarvis-loop"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"}, "repo": {"a": "sandbox/jarvis-loop"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "reproduced", "actor": "runner",
+                 "data": {"repo": "^sandbox/jarvis-loop$", "area": "^sandbox$", "size": "^S$", "resources": "^$"}}]},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review"}, "pr": {"a": {"number": 101, "repo": "sandbox/jarvis-loop"}}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "land"},
+    "prs": 1,
+    "pr": {"a": {"repo": "sandbox/jarvis-loop", "comments": 1, "comment": "^## Loop review: approved"}},
+    "messages": [
+      {"thread": "a", "text": "^Claimed for triage\\.$"},
+      {"thread": "a", "text": "^Reproduced in sandbox/jarvis-loop: area sandbox, size S, risk normal → ready\\.$"},
+      {"thread": "a", "text": "^Claimed for build\\.$"},
+      {"thread": "a", "text": "sandbox/jarvis-loop#101> opened, head `[0-9a-f]{7}` → review\\.$"},
+      {"thread": "a", "text": "^Claimed for review\\.$"},
+      {"thread": "a", "text": "^Review approved → land: The tests cover feature\\.txt"}
+    ],
+    "no_events": [{"item": "a", "kind": "guard_refused"}]
+  }
+}

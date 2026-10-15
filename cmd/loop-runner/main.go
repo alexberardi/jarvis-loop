@@ -1,5 +1,6 @@
-// Command loop-runner claims build items from loopd and runs one headless `claude -p` per item
-// inside the four boundary layers of docs/phases/04-runner-build.md. See internal/runner.
+// Command loop-runner claims triage, build and review items (config `stages`) from loopd and runs
+// one headless `claude -p` per item inside the four boundary layers of
+// docs/phases/04-runner-build.md (stages: docs/phases/05-triage-review.md). See internal/runner.
 //
 //	loop-runner [--config ~/.config/jarvis-loop/runner.json] [--once] [--dry-run]
 //

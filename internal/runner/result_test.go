@@ -122,3 +122,97 @@ func TestEvidenceFiles(t *testing.T) {
 		t.Fatal("a symlinked evidence folder must be refused")
 	}
 }
+
+func resolver(name string) (string, bool) {
+	switch name {
+	case "jarvis-loop", "alexberardi/jarvis-loop":
+		return "alexberardi/jarvis-loop", true
+	case "demo", "alexberardi/demo":
+		return "alexberardi/demo", true
+	}
+	return "", false
+}
+
+func TestValidateTriage(t *testing.T) {
+	repro := func(extra string) string {
+		return `{"outcome":"reproduced","area":"slack","size":"S","risk":"normal","resources":[],` + extra +
+			`"summary":"The thread header has no repo.","notes":"Change bot.go; test in bot_test.go.","evidence":[{"file":"evidence/repro.txt","label":"repro"}]}`
+	}
+	cases := []struct {
+		name, raw, itemRepo string
+		wantRepo            string
+		err                 string
+	}{
+		{"no repo: picks one by key", repro(`"repo":"jarvis-loop",`), "", "alexberardi/jarvis-loop", ""},
+		{"no repo: picks one by slug", repro(`"repo":"alexberardi/jarvis-loop",`), "", "alexberardi/jarvis-loop", ""},
+		{"no repo: must pick", repro(``), "", "", "must name one of the configured repos"},
+		{"no repo: not configured", repro(`"repo":"alexberardi/other",`), "", "", "not a configured repo"},
+		{"has a repo: none given", repro(``), "demo", "", ""},
+		{"has a repo: the same, dropped", repro(`"repo":"alexberardi/demo",`), "demo", "", ""},
+		{"has a repo: cannot change it", repro(`"repo":"jarvis-loop",`), "demo", "", "cannot change it"},
+		{"gpu", strings.Replace(repro(``), `"resources":[]`, `"resources":["gpu","voice"]`, 1), "demo", "", ""},
+		{"unknown resource", strings.Replace(repro(``), `"resources":[]`, `"resources":["tpu"]`, 1), "demo", "", "unknown resource"},
+		{"bad size", strings.Replace(repro(``), `"size":"S"`, `"size":"XL"`, 1), "demo", "", "size must be"},
+		{"bad risk", strings.Replace(repro(``), `"risk":"normal"`, `"risk":"low"`, 1), "demo", "", "risk must be"},
+		{"no area", strings.Replace(repro(``), `"area":"slack",`, ``, 1), "demo", "", "area"},
+		{"no notes", strings.Replace(repro(``), `"notes":"Change bot.go; test in bot_test.go.",`, ``, 1), "demo", "", "notes are required"},
+		{"no summary", strings.Replace(repro(``), `"summary":"The thread header has no repo.",`, ``, 1), "demo", "", "summary is required"},
+		{"duplicate", `{"outcome":"not_reproducible","summary":"duplicate of #1 / PR #101","notes":"Same title, PR open."}`, "", "", ""},
+		{"not reproducible without notes", `{"outcome":"not_reproducible","summary":"works on main"}`, "", "", "notes are required"},
+		{"a repo on not_reproducible", `{"outcome":"not_reproducible","repo":"jarvis-loop","summary":"x","notes":"y"}`, "", "", `field "repo" is not part of outcome not_reproducible`},
+		{"question", `{"outcome":"question","question":"Which screen?"}`, "", "", ""},
+		{"a build outcome", `{"outcome":"ready_for_pr","pr_title":"x"}`, "", "", "not an outcome of triage"},
+		{"a build field", strings.Replace(repro(``), `"area"`, `"pr_title":"x","area"`, 1), "demo", "", `field "pr_title" is not part of outcome reproduced`},
+		{"evidence outside", strings.Replace(repro(``), `evidence/repro.txt`, `../x`, 1), "demo", "", "directly in evidence/"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r, err := ValidateTriage([]byte(c.raw), TriageExpect{ItemRepo: c.itemRepo, Resolve: resolver})
+			if c.err == "" {
+				if err != nil {
+					t.Fatalf("rejected: %v", err)
+				}
+				if r.Repo != c.wantRepo {
+					t.Fatalf("repo %q, want %q", r.Repo, c.wantRepo)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.err) {
+				t.Fatalf("err %v, want %q", err, c.err)
+			}
+		})
+	}
+}
+
+func TestValidateReview(t *testing.T) {
+	cases := []struct {
+		name, raw, err string
+		review         string
+	}{
+		{"approved", `{"outcome":"approved","summary":"Tests fail without the fix.","review":"**Approved.** Ran the check."}`, "", "**Approved.** Ran the check."},
+		{"approved for the head", `{"outcome":"approved","summary":"s","review":"r","head_sha":"` + headSHA + `"}`, "", "r"},
+		{"approved for another head", `{"outcome":"approved","summary":"s","review":"r","head_sha":"` + otherSHA + `"}`, "not the reviewed commit", ""},
+		{"approved without a review", `{"outcome":"approved","summary":"s"}`, "review (the PR comment) is required", ""},
+		{"approved without a summary", `{"outcome":"approved","review":"r"}`, "summary is required", ""},
+		{"bounce", `{"outcome":"bounce","notes":"x.go:3: test the empty case.","review":"Changes needed."}`, "", "Changes needed."},
+		{"bounce: the notes are the review", `{"outcome":"bounce","notes":"x.go:3: test the empty case."}`, "", "x.go:3: test the empty case."},
+		{"bounce without notes", `{"outcome":"bounce","review":"no"}`, "notes are required", ""},
+		{"a GitHub approval is not a field", `{"outcome":"approved","summary":"s","review":"r","approve":true}`, "unknown field", ""},
+		{"a question is not a review outcome", `{"outcome":"question","question":"?"}`, "not an outcome of review", ""},
+		{"a build field", `{"outcome":"approved","summary":"s","review":"r","pr_body":"x"}`, `field "pr_body"`, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r, err := ValidateReview([]byte(c.raw), headSHA)
+			if c.err == "" {
+				if err != nil || r.Review != c.review || r.HeadSHA != headSHA {
+					t.Fatalf("%+v %v", r, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.err) {
+				t.Fatalf("err %v, want %q", err, c.err)
+			}
+		})
+	}
+}

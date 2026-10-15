@@ -4,6 +4,11 @@ Goal (DESIGN.md, Rollout 5): the two agent stages around build run unattended, s
 no longer does them by hand (as it did for item #1). **Proves:** bad fixes and stale reports get
 caught before the user sees them.
 
+**As built (2026-10-15):** `docs/decisions/2026-10-15-triage-review.md`: loopd learns the
+configured repos from a `--repos` flag (the live loopd needs it before the real run), triage's
+working directory (the repos checked out under `repos/<key>/`), the read-only guard rule, the
+per-stage prefix goldens, the review comment, and the harness additions.
+
 ## Runner
 
 - The runner claims `triage`, `build` and `review` (config `stages`, default all three). Same four

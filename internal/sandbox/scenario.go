@@ -24,10 +24,13 @@ import (
 // Scenario is one scripted walk through the loop and what must (and must not) come of it. See
 // "Scenario format" in docs/phases/04b-loop-harness.md.
 type Scenario struct {
-	Name  string  `json:"name"`
-	About string  `json:"about"`
-	Steps []Step  `json:"steps"`
-	Final *Expect `json:"expect,omitempty"`
+	Name  string `json:"name"`
+	About string `json:"about"`
+	// Stages are the stages the sandbox's runner claims (default: triage, build and review). A
+	// scenario that does triage or review by hand while the runner builds names ["build"].
+	Stages []string `json:"stages,omitempty"`
+	Steps  []Step   `json:"steps"`
+	Final  *Expect  `json:"expect,omitempty"`
 }
 
 // Step is one thing that happens. Do says what; the other fields are its arguments. An "expect"
@@ -40,9 +43,12 @@ type Step struct {
 	Title    string `json:"title,omitempty"`
 	Priority string `json:"priority,omitempty"`
 	Via      string `json:"via,omitempty"` // "cli" (default) or "slack"
-	// script: how the fake claude plays the item's runs
-	Play string `json:"play,omitempty"`
-	File string `json:"file,omitempty"`
+	// script: how the fake claude plays the item's runs of a stage (default build), and the repo
+	// a triage run picks
+	For   string `json:"for,omitempty"` // the stage the script is for: triage, build (default), review
+	Play  string `json:"play,omitempty"`
+	File  string `json:"file,omitempty"`
+	Picks string `json:"picks,omitempty"` // the repo a triage run picks
 	// runner: which item the claim must take ("none": nothing)
 	Claims string `json:"claims,omitempty"`
 	// land
@@ -71,6 +77,7 @@ type Step struct {
 type Expect struct {
 	Within     string             `json:"within,omitempty"`
 	Stage      map[string]string  `json:"stage,omitempty"`    // alias -> stage
+	Repo       map[string]string  `json:"repo,omitempty"`     // alias -> the item's repo (exactly; "" for none)
 	Question   map[string]string  `json:"question,omitempty"` // alias -> regexp on the open question
 	Leased     map[string]bool    `json:"leased,omitempty"`   // alias -> holds a live lease
 	Events     []EventMatch       `json:"events,omitempty"`
@@ -82,6 +89,9 @@ type Expect struct {
 	PR         map[string]PRMatch `json:"pr,omitempty"`  // alias -> the item's PR, as the runner opened it
 	Remote     *RemoteMatch       `json:"remote,omitempty"`
 	Absent     []string           `json:"absent,omitempty"` // paths under the stack dir that must not exist
+	// SamePrefix: for each stage named, the runner ran it at least twice, and every run's prompt
+	// starts with that stage's static brief and has the same command line (one cacheable prefix).
+	SamePrefix []string `json:"same_prefix,omitempty"`
 }
 
 // EventMatch selects loopd events.
@@ -110,8 +120,13 @@ type MsgMatch struct {
 // PRMatch checks the PR the runner opened for an item (found by its branch).
 type PRMatch struct {
 	Number int    `json:"number,omitempty"`
+	Repo   string `json:"repo,omitempty"`  // the slug, exactly
 	Title  string `json:"title,omitempty"` // regexp
 	Body   string `json:"body,omitempty"`  // regexp
+	Edits  *int   `json:"edits,omitempty"` // how many times the runner updated it
+	// Comments is how many comments the runner posted; Comment a regexp on the newest.
+	Comments *int   `json:"comments,omitempty"`
+	Comment  string `json:"comment,omitempty"`
 }
 
 // ControlMatch checks the active-agents control.
@@ -264,7 +279,7 @@ func (p *player) step(st Step) error {
 		if err != nil {
 			return err
 		}
-		return s.SetScript(r.id, st.Play, st.File, r.title)
+		return s.SetScript(r.id, st.For, st.Play, st.File, st.Picks)
 	case "runner":
 		id, err := s.Poll(30 * time.Second)
 		if err != nil {
@@ -403,6 +418,9 @@ func (p *player) add(st Step) error {
 			return err
 		}
 		text := "add " + st.Title
+		if st.Text != "" {
+			text = "add " + st.Text // the words as typed (repo and priority words); title is the alias's note
+		}
 		ans, err := p.s.Slack.Command(user, slack.ChannelLoop, "/loop", text)
 		if err != nil {
 			return err

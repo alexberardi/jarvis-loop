@@ -76,3 +76,28 @@ func TestSlackEnvMustBePrivate(t *testing.T) {
 		t.Fatal("a token was printed")
 	}
 }
+
+// --repos are the slugs triage may give an item and the Slack add words may name.
+func TestParseRepos(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+		ok   bool
+	}{
+		{"", nil, true},
+		{"alexberardi/jarvis-loop", []string{"alexberardi/jarvis-loop"}, true},
+		{" alexberardi/jarvis-loop , alexberardi/jarvis-server,alexberardi/jarvis-loop ", []string{"alexberardi/jarvis-loop", "alexberardi/jarvis-server"}, true},
+		{"jarvis-loop", nil, false},
+		{"a/b/c", nil, false},
+		{"alexberardi/jarvis loop", nil, false},
+		{"alexberardi/", nil, false},
+		{"/jarvis-loop", nil, false},
+		{"alexberardi/jarvis-loop,", []string{"alexberardi/jarvis-loop"}, true},
+	}
+	for _, c := range cases {
+		got, err := parseRepos(c.in)
+		if (err == nil) != c.ok || strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Errorf("parseRepos(%q) = %v, %v; want %v (ok %v)", c.in, got, err, c.want, c.ok)
+		}
+	}
+}

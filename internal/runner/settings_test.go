@@ -23,12 +23,15 @@ func goldenInput(mode string) SettingsInput {
 }
 
 func TestSettingsGolden(t *testing.T) {
-	for _, mode := range []string{ModeAuto, ModeStrict} {
-		got, err := GenerateSettings(goldenInput(mode))
+	for _, name := range []string{ModeAuto, ModeStrict, ModeAuto + "_readonly"} {
+		mode, ro := strings.CutSuffix(name, "_readonly")
+		in := goldenInput(mode)
+		in.ReadOnly = ro
+		got, err := GenerateSettings(in)
 		if err != nil {
 			t.Fatal(err)
 		}
-		path := filepath.Join("testdata", "settings_"+mode+".golden.json")
+		path := filepath.Join("testdata", "settings_"+name+".golden.json")
 		if *update {
 			if err := os.WriteFile(path, got, 0o644); err != nil {
 				t.Fatal(err)

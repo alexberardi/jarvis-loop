@@ -123,3 +123,52 @@ func TestClipAndEscape(t *testing.T) {
 		t.Fatalf("clip without a hint: %q", got[len(got)-40:])
 	}
 }
+
+// The repo words of an add request: a configured repo named as "in <name>", "<name>:" at the
+// start or "[<name>]" sets the item's repo and leaves the title; anything else leaves the repo
+// empty, for triage to decide.
+func TestParseRepo(t *testing.T) {
+	repos := []string{"alexberardi/jarvis-loop", "alexberardi/jarvis-server"}
+	cases := []struct {
+		text, repo, title string
+	}{
+		{"show the item's repo in /loop show in jarvis-loop", "alexberardi/jarvis-loop", "show the item's repo in /loop show"},
+		{"jarvis-loop: show the repo", "alexberardi/jarvis-loop", "show the repo"},
+		{"[jarvis-server] timers drift", "alexberardi/jarvis-server", "timers drift"},
+		{"timers drift [jarvis-server]", "alexberardi/jarvis-server", "timers drift"},
+		{"[ alexberardi/jarvis-loop ] tidy the digest", "alexberardi/jarvis-loop", "tidy the digest"},
+		{"fix the digest in Jarvis-Loop, high priority", "alexberardi/jarvis-loop", "fix the digest, high priority"},
+		{"in jarvis-server: the timer rounds down", "alexberardi/jarvis-server", "the timer rounds down"},
+		{"JARVIS-SERVER: the timer rounds down", "alexberardi/jarvis-server", "the timer rounds down"},
+		{"[jarvis-loop]", "alexberardi/jarvis-loop", ""},
+		// The first marker wins; only its words leave the title.
+		{"jarvis-loop: move the digest in jarvis-server", "alexberardi/jarvis-loop", "move the digest in jarvis-server"},
+		// Not a marker: a repo named in passing, a longer name, another repo, a possessive.
+		{"jarvis-loop is slow", "", "jarvis-loop is slow"},
+		{"add a jarvis-loop: prefix to messages", "", "add a jarvis-loop: prefix to messages"},
+		{"fix the leak in jarvis-loopd", "", "fix the leak in jarvis-loopd"},
+		{"fix the leak in jarvis-mobile", "", "fix the leak in jarvis-mobile"},
+		{"fix the leak in jarvis-loop's runner", "", "fix the leak in jarvis-loop's runner"},
+		{"fix the leak in jarvis-loop/runner", "", "fix the leak in jarvis-loop/runner"},
+		{"[jarvis-mobile] dark mode", "", "[jarvis-mobile] dark mode"},
+		{"plain text", "", "plain text"},
+	}
+	for _, c := range cases {
+		repo, title := ParseRepo(c.text, repos)
+		if repo != c.repo || title != c.title {
+			t.Errorf("ParseRepo(%q) = %q, %q; want %q, %q", c.text, repo, title, c.repo, c.title)
+		}
+	}
+	// No configured repos: nothing is a marker.
+	if repo, title := ParseRepo("jarvis-loop: x", nil); repo != "" || title != "jarvis-loop: x" {
+		t.Errorf("no repos: %q %q", repo, title)
+	}
+	// A short name two owners share is ambiguous: only the full slug counts.
+	two := []string{"a/tools", "b/tools"}
+	if repo, _ := ParseRepo("tools: x", two); repo != "" {
+		t.Errorf("ambiguous short name taken as %q", repo)
+	}
+	if repo, title := ParseRepo("b/tools: x", two); repo != "b/tools" || title != "x" {
+		t.Errorf("full slug: %q %q", repo, title)
+	}
+}

@@ -13,7 +13,7 @@ import (
 
 const helpText = "*/loop commands*\n" +
 	"`/loop help` this list\n" +
-	"`/loop add <what>` add work; say \"urgent\", \"high priority\", \"low priority\" or \"someday\" to set its priority (default P3)\n" +
+	"`/loop add <what>` add work; say \"urgent\", \"high priority\", \"low priority\" or \"someday\" to set its priority (default P3), and \"in <repo>\", \"<repo>:\" or \"[<repo>]\" to name its repo (default: triage picks one)\n" +
 	"`/loop status` the board\n" +
 	"`/loop show <id>` one item\n" +
 	"`/loop priority <id> P1`\u2013`P5` change a priority\n" +
@@ -82,7 +82,11 @@ func (b *Bot) runCommand(ctx context.Context, c command) string {
 		if err != nil {
 			return Escape(errMessage(err)) + " " + helpText
 		}
-		return fmt.Sprintf("Added #%d (%s): %s. Its thread is in <#%s>.", it.ID, it.Priority, Escape(it.Title), ChannelLoop)
+		where := it.Priority
+		if it.Repo != "" {
+			where += ", " + Escape(it.Repo)
+		}
+		return fmt.Sprintf("Added #%d (%s): %s. Its thread is in <#%s>.", it.ID, where, Escape(it.Title), ChannelLoop)
 	case "status":
 		return b.status(ctx)
 	case "show":

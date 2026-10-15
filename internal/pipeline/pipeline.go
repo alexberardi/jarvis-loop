@@ -223,6 +223,9 @@ type Advance struct {
 	ChangedPaths []string
 	// HoldRules are the rules hold risk is computed with (from control).
 	HoldRules []HoldRule
+	// Repos are the repo slugs (owner/name) loopd is configured with: the only values triage's
+	// reproduced may set as the repo of an item that has none.
+	Repos []string
 }
 
 var shaRe = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
@@ -304,8 +307,22 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if err != nil {
 			return Transition{}, err
 		}
+		repo := strings.TrimSpace(a.Fields["repo"])
+		switch {
+		case repo == "":
+		case it.Repo != "":
+			return Transition{}, errf(CodeInvalidField, "the item already has repo %q; triage sets one only when it has none", it.Repo)
+		case len(a.Repos) == 0:
+			return Transition{}, errf(CodeInvalidField, "loopd has no configured repos (--repos), so triage cannot set one")
+		case !slices.Contains(a.Repos, repo):
+			return Transition{}, errf(CodeInvalidField, "repo must be a configured repo (%s), not %q", strings.Join(a.Repos, ", "), repo)
+		}
 		if err := needEvidence(); err != nil {
 			return Transition{}, err
+		}
+		if repo != "" {
+			it.Repo = repo
+			data["repo"] = repo
 		}
 		it.Area, it.Size, it.Resources = area, size, res
 		if risk == RiskHold {

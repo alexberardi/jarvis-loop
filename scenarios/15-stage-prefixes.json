@@ -1,0 +1,25 @@
+{
+  "name": "stage-prefixes",
+  "about": "Two items each go through the runner's triage, build and review. Per stage, every run's prompt starts with that stage's static brief, byte for byte (the golden files in internal/runner/testdata/brief_*.golden.md), and has the same command line: one cacheable prefix per stage.",
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "add", "item": "b", "title": "Rename the control message", "priority": "P4"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "land", "b": "land"},
+    "same_prefix": ["triage", "build", "review"],
+    "prs": 2
+  }
+}

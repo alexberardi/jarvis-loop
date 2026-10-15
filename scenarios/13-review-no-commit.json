@@ -1,0 +1,29 @@
+{
+  "name": "review-no-commit",
+  "about": "The review agent tries to commit a fixup on the PR's head; the real loop-guard refuses it (git_commit, a review run is read-only), the refusal is an event and a thread line, nothing reaches the branch, and the review still completes and approves.",
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "script", "item": "a", "for": "review", "play": "review_commit"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "land"},
+    "events": [
+      {"item": "a", "kind": "guard_refused", "actor": "runner", "data": {"rule": "^git_commit$", "tool": "^Bash$"}, "count": 1},
+      {"item": "a", "kind": "advanced", "outcome": "approved", "actor": "runner", "data": {"guard_refusals": "^1$"}}
+    ],
+    "messages": [
+      {"thread": "a", "text": "^Claimed for review\\.$"},
+      {"thread": "a", "text": "^Guard refused a Bash call \\(git_commit\\); details on loopd \\(`loop show \\d+`\\)\\.$"},
+      {"thread": "a", "text": "^Review approved → land"}
+    ],
+    "no_messages": [{"thread": "a", "text": "review fixup"}],
+    "remote": {"branches": {"a": "^feat: add a feature$"}, "files": {"a": ["feature.txt"]}, "only": true},
+    "pr": {"a": {"comments": 1}},
+    "prs": 1
+  }
+}

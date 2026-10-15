@@ -35,8 +35,12 @@ import (
 // The sandbox's names. The repo is a scratch repo the sandbox creates; the slug only ever names
 // the fake GitHub.
 const (
-	RepoKey    = "demo"
-	RepoSlug   = "sandbox/demo"
+	RepoKey  = "demo"
+	RepoSlug = "sandbox/demo"
+	// LoopKey and LoopSlug are a second scratch repo, standing in for jarvis-loop: triage picks
+	// it for items added without a repo.
+	LoopKey    = "jarvis-loop"
+	LoopSlug   = "sandbox/jarvis-loop"
 	RunnerName = "sandbox"
 	HandRunner = "hand"
 	UserName   = "sandbox"
@@ -65,6 +69,9 @@ type Options struct {
 	// claims when a step says so.
 	RealClock bool
 	Log       io.Writer
+	// Stages are the stages the runner claims (default: triage, build and review, as a real
+	// runner).
+	Stages []string
 }
 
 // Stack is one sandboxed loop: loopd (store, API on a loopback port, Slack layer), a runner, a
@@ -80,6 +87,8 @@ type Stack struct {
 	LoopdURL string
 	Remote   string
 	MainSHA  string // the remote's main when the stack started
+	// LoopRemote is the second repo's remote (LoopSlug).
+	LoopRemote string
 
 	// Secrets are every token the stack holds: none may appear in a Slack message.
 	Secrets []string
@@ -115,10 +124,10 @@ func git(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// makeRemote creates the scratch repo: a bare remote with one commit on main.
-func makeRemote(dir string) (string, string, error) {
-	remote := filepath.Join(dir, "github", "demo.git")
-	seed := filepath.Join(dir, "github", "seed")
+// makeRemote creates a scratch repo: a bare remote with one commit on main.
+func makeRemote(dir, name string) (string, string, error) {
+	remote := filepath.Join(dir, "github", name+".git")
+	seed := filepath.Join(dir, "github", name+"-seed")
 	for _, d := range []string{remote, seed} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return "", "", err
@@ -131,8 +140,8 @@ func makeRemote(dir string) (string, string, error) {
 		return "", "", err
 	}
 	files := map[string]string{
-		"README.md": "# demo\n\nThe loop sandbox's scratch repository.\n",
-		"CLAUDE.md": "# demo\n\nA scratch repository for the loop's harness. Nothing here is real.\n",
+		"README.md": "# " + name + "\n\nThe loop sandbox's scratch repository.\n",
+		"CLAUDE.md": "# " + name + "\n\nA scratch repository for the loop's harness. Nothing here is real.\n",
 	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(seed, name), []byte(body), 0o644); err != nil {
@@ -196,6 +205,8 @@ func StartStack(opts Options) (st *Stack, err error) {
 	if s.Store, err = store.Open(filepath.Join(dir, "loopd"), clk); err != nil {
 		return nil, err
 	}
+	// loopd's --repos.
+	s.Store.SetRepos([]string{RepoSlug, LoopSlug})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -225,18 +236,21 @@ func StartStack(opts Options) (st *Stack, err error) {
 		tick = 20 * time.Millisecond // a moved fake clock takes effect at once
 	}
 	if s.Bot, err = loopd.StartSlack(s.ctx, &s.bg, s.Store, loopd.Slack{BaseURL: s.Slack.BaseURL(), Tokens: slackToks,
-		Clock: clk, Log: log, TickEvery: tick}); err != nil {
+		Repos: []string{RepoSlug, LoopSlug}, Clock: clk, Log: log, TickEvery: tick}); err != nil {
 		return nil, err
 	}
 	if err := s.Slack.WaitConnected(10 * time.Second); err != nil {
 		return nil, err
 	}
 
-	// The fake GitHub and its remote.
-	if s.Remote, s.MainSHA, err = makeRemote(dir); err != nil {
+	// The fake GitHub and its remotes.
+	if s.Remote, s.MainSHA, err = makeRemote(dir, "demo"); err != nil {
 		return nil, err
 	}
-	s.GitHub = NewGitHub(map[string]string{RepoSlug: s.Remote})
+	if s.LoopRemote, _, err = makeRemote(dir, "jarvis-loop"); err != nil {
+		return nil, err
+	}
+	s.GitHub = NewGitHub(map[string]string{RepoSlug: s.Remote, LoopSlug: s.LoopRemote})
 
 	// The runner, from a 0600 config file as loop-runner reads it.
 	s.scripts = filepath.Join(dir, "scripts")
@@ -248,8 +262,11 @@ func StartStack(opts Options) (st *Stack, err error) {
 		LoopdURL: s.LoopdURL, Token: runnerTok, Name: RunnerName, Capabilities: []string{}, Slots: 1,
 		WorkRoot: filepath.Join(dir, "work"), Claude: opts.Bin.Claude, Guard: opts.Bin.Guard, Mode: runner.ModeAuto,
 		PollSeconds: 2, UserEmulator: "emulator-5554", VerifyPR: &verify,
-		LoopdTokens: tokPath, LoopdData: filepath.Join(dir, "loopd"),
-		Repos: map[string]runner.RepoConfig{RepoKey: {Remote: s.Remote, Slug: RepoSlug, Base: "main"}},
+		LoopdTokens: tokPath, LoopdData: filepath.Join(dir, "loopd"), Stages: opts.Stages,
+		Repos: map[string]runner.RepoConfig{
+			RepoKey: {Remote: s.Remote, Slug: RepoSlug, Base: "main", Description: "the sandbox's demo app"},
+			LoopKey: {Remote: s.LoopRemote, Slug: LoopSlug, Base: "main", Description: "the loop itself (loopd, the runner, the Slack bot)"},
+		},
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	cfgPath := filepath.Join(dir, "runner.json")
@@ -432,10 +449,15 @@ func (s *Stack) claimedSince(id int64) (int64, bool) {
 	return 0, false
 }
 
-// SetScript sets how the fake claude plays item id's next runs.
-func (s *Stack) SetScript(id int64, play, file, title string) error {
-	b, _ := json.Marshal(map[string]string{"play": play, "file": file, "title": title})
-	return os.WriteFile(filepath.Join(s.scripts, fmt.Sprintf("%d.json", id)), b, 0o644)
+// SetScript sets how the fake claude plays item id's next runs of a stage ("" or "build": its
+// build runs); repo is the repo a triage run picks for an item that has none.
+func (s *Stack) SetScript(id int64, stage, play, file, repo string) error {
+	b, _ := json.Marshal(map[string]string{"play": play, "file": file, "repo": repo})
+	name := fmt.Sprintf("%d.json", id)
+	if stage != "" && stage != runner.StageBuild {
+		name = fmt.Sprintf("%d-%s.json", id, stage)
+	}
+	return os.WriteFile(filepath.Join(s.scripts, name), b, 0o644)
 }
 
 // AgentState is what the fake claude reported for an item's runs so far ("started", "hanging").

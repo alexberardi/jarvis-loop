@@ -1,0 +1,29 @@
+{
+  "name": "second-bounce",
+  "about": "Review bounces the PR twice: after the second, loopd sends the item to the user (needs-you, with the review's notes), and the bot @mentions the approver in the thread. Both reviews are on the PR as comments.",
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "for": "review", "play": "bounce"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "needs_you"},
+    "question": {"a": "^`feature\\.txt:1`: add a test for the empty case\\.$"},
+    "events": [{"item": "a", "kind": "advanced", "outcome": "bounce", "actor": "runner", "count": 2}],
+    "messages": [
+      {"thread": "a", "text": "^Bounced back to build \\(1\\)"},
+      {"thread": "a", "text": "^<@U0C9AFPAMD4> #\\d+ needs you: `feature\\.txt:1`: add a test for the empty case\\.\\nReply in this thread to answer\\.$"}
+    ],
+    "pr": {"a": {"number": 101, "comments": 2, "edits": 1}},
+    "prs": 1
+  }
+}

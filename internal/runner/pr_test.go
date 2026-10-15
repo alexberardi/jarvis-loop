@@ -82,3 +82,43 @@ func TestPRBody(t *testing.T) {
 		t.Fatalf("got:\n%s", b)
 	}
 }
+
+// The reads triage and a bounced build need, and the review's comment: a comment, never an
+// approval.
+func TestGHReadsAndComment(t *testing.T) {
+	ctx := context.Background()
+	gh, log := fakeGH(t, `case "$*" in
+"pr view 7 --repo a/b --json comments,reviews") echo '{"comments":[{"author":{"login":"alex"},"body":"## Loop review: changes requested","createdAt":"2026-10-15T12:01:00Z"}],
+ "reviews":[{"author":{"login":"alex"},"body":"","state":"COMMENTED","submittedAt":"2026-10-15T12:00:00Z"},
+            {"author":{"login":"bob"},"body":"","state":"CHANGES_REQUESTED","submittedAt":"2026-10-15T12:03:00Z"}]}';;
+"api --method GET repos/a/b/pulls/7/comments?per_page=100") echo '[{"user":{"login":"alex"},"body":"name it","path":"x.go","line":4,"created_at":"2026-10-15T12:02:00Z"}]';;
+"pr list --repo a/b --state merged --limit 30 --json number,title,mergedAt,files") echo '[{"number":3,"title":"Add x","mergedAt":"2026-10-14T10:00:00Z","files":[{"path":"a.go"},{"path":"b.go"}]}]';;
+"pr view 7 --repo a/b --json number,title,body,headRefName,headRefOid,baseRefName,state") echo '{"number":7,"title":"T","body":"B","headRefName":"loop/1-x","headRefOid":"abc","baseRefName":"main","state":"OPEN"}';;
+"pr comment 7 --repo a/b --body-file /run/review.md") ;;
+*) echo "unexpected: $*" >&2; exit 1;;
+esac
+`)
+	cs, err := gh.Comments(ctx, "a/b", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The empty COMMENTED review is left out; oldest first.
+	if len(cs) != 3 || cs[0].Body != "## Loop review: changes requested" || cs[1].Path != "x.go" || cs[1].Line != 4 || cs[2].State != "CHANGES_REQUESTED" {
+		t.Fatalf("comments %+v", cs)
+	}
+	m, err := gh.MergedPRs(ctx, "a/b", 30)
+	if err != nil || len(m) != 1 || m[0].Number != 3 || strings.Join(m[0].Files, ",") != "a.go,b.go" {
+		t.Fatalf("merged %+v %v", m, err)
+	}
+	v, err := gh.View(ctx, "a/b", 7)
+	if err != nil || v.HeadRefOid != "abc" || v.Body != "B" {
+		t.Fatalf("view %+v %v", v, err)
+	}
+	if err := gh.Comment(ctx, "a/b", 7, "/run/review.md"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(log); !strings.Contains(string(b), "pr comment 7 --repo a/b --body-file /run/review.md") ||
+		strings.Contains(string(b), "pr review") || strings.Contains(string(b), "approve") {
+		t.Fatalf("gh calls:\n%s", b)
+	}
+}

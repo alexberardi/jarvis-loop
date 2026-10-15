@@ -179,13 +179,55 @@ type EvidenceInfo struct {
 	Size  int64  `json:"size"`
 }
 
+// EventInfo is one event in an item's history.
+type EventInfo struct {
+	At      time.Time      `json:"at"`
+	Actor   string         `json:"actor"`
+	Kind    string         `json:"kind"`
+	From    string         `json:"from"`
+	To      string         `json:"to"`
+	Outcome string         `json:"outcome"`
+	Data    map[string]any `json:"data"`
+}
+
+// Detail is an item with its history and evidence.
+type Detail struct {
+	Item     Item           `json:"item"`
+	Events   []EventInfo    `json:"events"`
+	Evidence []EvidenceInfo `json:"evidence"`
+}
+
+// Detail reads one item with its events and evidence.
+func (c *Client) Detail(ctx context.Context, id int64) (Detail, error) {
+	var d Detail
+	_, err := c.json(ctx, "GET", fmt.Sprintf("/items/%d", id), nil, &d)
+	return d, err
+}
+
 // Evidence lists an item's evidence files, oldest first.
 func (c *Client) Evidence(ctx context.Context, id int64) ([]EvidenceInfo, error) {
-	var d struct {
-		Evidence []EvidenceInfo `json:"evidence"`
-	}
-	_, err := c.json(ctx, "GET", fmt.Sprintf("/items/%d", id), nil, &d)
+	d, err := c.Detail(ctx, id)
 	return d.Evidence, err
+}
+
+// BoardRow is one open item, for triage's snapshot.
+type BoardRow struct {
+	ID       int64  `json:"id"`
+	Title    string `json:"title"`
+	Priority string `json:"priority"`
+	Stage    string `json:"stage"`
+	Display  string `json:"display"`
+	Repo     string `json:"repo"`
+	PR       int    `json:"pr"`
+}
+
+// OpenItems lists the open items (GET /items?open=1).
+func (c *Client) OpenItems(ctx context.Context) ([]BoardRow, error) {
+	var out struct {
+		Items []BoardRow `json:"items"`
+	}
+	_, err := c.json(ctx, "GET", "/items?open=1", nil, &out)
+	return out.Items, err
 }
 
 // DownloadEvidence saves evidence file n of an item to dst (at most MaxEvidenceBytes).

@@ -35,8 +35,10 @@ type Slack struct {
 	Tokens  slack.Tokens
 	// LinkBase is loopd's address as the Slack reader reaches it, for links to long text.
 	LinkBase string
-	Clock    clock.Clock
-	Log      *slog.Logger
+	// Repos are the configured repo slugs, which /loop add recognises by name.
+	Repos []string
+	Clock clock.Clock
+	Log   *slog.Logger
 	// TickEvery is the bot's timer interval (default 5 s).
 	TickEvery time.Duration
 	// Sleep waits between Slack retries and reconnects (default: real sleeps).
@@ -57,7 +59,7 @@ func StartSlack(ctx context.Context, bg *sync.WaitGroup, st *store.Store, c Slac
 		botAPI.Sleep, appAPI.Sleep = c.Sleep, c.Sleep
 	}
 	bot, err := slack.New(slack.Config{Store: st, API: botAPI, Clock: c.Clock, Log: slg, LinkBase: c.LinkBase,
-		TickEvery: c.TickEvery, Sleep: c.Sleep})
+		Repos: c.Repos, TickEvery: c.TickEvery, Sleep: c.Sleep})
 	if err != nil {
 		return nil, err
 	}

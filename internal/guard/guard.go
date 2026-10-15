@@ -31,6 +31,7 @@ const (
 	RuleGitRemote      = "git_remote"
 	RuleGitConfig      = "git_config"
 	RuleGitWorktree    = "git_worktree"
+	RuleGitCommit      = "git_commit"
 	RuleRmOutside      = "rm_outside"
 	RuleUnparseable    = "unparseable"
 )
@@ -55,6 +56,9 @@ type Config struct {
 	Words []string `json:"words"`
 	// LoopdAddrs are host:port spellings of loopd's address.
 	LoopdAddrs []string `json:"loopd_addrs"`
+	// ReadOnly is a triage or review run: it never commits or rewrites git history (a review's
+	// worktree is the PR's head; what should change goes into the result).
+	ReadOnly bool `json:"read_only,omitempty"`
 	// DenyWrite are worktree-relative paths no tool may change (e.g. a harness entry point that
 	// runs outside the sandbox).
 	DenyWrite []string `json:"deny_write,omitempty"`
@@ -469,6 +473,9 @@ func (c *Config) checkGit(args []string, target string) Decision {
 		return Decision{}
 	}
 	sub, rest := args[i], args[i+1:]
+	if c.ReadOnly && writesHistory(sub, rest) {
+		return deny(RuleGitCommit, target, "a triage or review run never commits or rewrites history (git "+sub+"); say what should change in your result instead")
+	}
 	switch sub {
 	case "push":
 		return c.checkPush(rest, target)
@@ -489,6 +496,23 @@ func (c *Config) checkGit(args []string, target string) Decision {
 		}
 	}
 	return Decision{}
+}
+
+// writesHistory reports whether a git subcommand makes commits or moves refs other than HEAD's
+// checkout: what a read-only run may not do.
+func writesHistory(sub string, rest []string) bool {
+	switch sub {
+	case "commit", "commit-tree", "merge", "rebase", "cherry-pick", "revert", "am", "update-ref", "filter-branch", "replace", "notes":
+		return true
+	case "tag":
+		for _, a := range rest {
+			if a == "-l" || a == "--list" {
+				return false
+			}
+		}
+		return len(rest) > 0
+	}
+	return false
 }
 
 func (c *Config) checkPush(args []string, target string) Decision {
