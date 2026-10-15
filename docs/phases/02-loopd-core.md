@@ -41,14 +41,23 @@ lease holder, with an **outcome**:
 | triage | `reproduced` | area, size (`S`/`M`/`L`), risk (`normal`/`hold`), resources (subset of `gpu`, `voice`, `emulator`, `macos`), ≥1 evidence | build |
 | triage | `not_reproducible` | ≥1 evidence, summary | closed |
 | triage, build | `question` | question text | needs_you (return stage = from) |
-| build | `pr_opened` | repo, pr number, branch, head sha, ≥1 evidence | review |
+| build | `pr_opened` | repo, pr number, branch, head sha, **changed_paths**, ≥1 evidence; optional `needs_review` (`true` → hold) | review; risk recomputed (see Hold risk) |
 | review | `approved` | summary, head sha (must equal the item's head sha) | land |
 | review | `bounce` | notes | build if this is the 1st bounce; needs_you on the 2nd (bounce count ≥ 2), with the notes as the question |
-| land | `merged` | merge sha | done |
-| land | `hold` | hold reason | held |
+| land | `merged` | merge sha, **head sha** (the PR head that was merged), **changed_paths** | done; risk recomputed on those paths, and a hold item needs `approval.head_sha == head sha`, else 409 `approval_required` (stays in land) |
+| land | `hold` | hold reason, **head sha**, **changed_paths** | held; the item's head becomes this sha and an approval for another head is void |
 | land | `back_to_build` | reason | build |
 | any work stage | `usage_limit` | error text, reset text if any | same stage, waiting; **active agents := 0**; event `usage_limit` |
 | any work stage | `failed` | error text | needs_you, with the error as the question |
+
+**Hold risk** is computed by loopd, not trusted from an agent (review of PR #1;
+`docs/decisions/2026-10-14-hold-rules.md`). `changed_paths` is the PR's files in `git diff
+--name-status` form (`M internal/x.go`, `D foo_test.go`, `R old new`). Control holds the **hold
+rules** (`hold_rules`: `{name, glob, statuses?}`, glob with `**` and `*`; set with `PUT /control`,
+persisted; defaults are jarvis-server's hold list). Risk only ratchets up: it is `hold` if triage said
+`hold`, or any rule matches a changed path, or `needs_review` was set, or land held it, and stays
+`hold` after that. Each reason (`auth: M internal/modules/auth/x.go`, `triage: risk hold`, `marked
+needs review`, `land: <reason>`) is added to the item's `hold_reason`; the matches are on the event.
 
 Human transitions (user principal only):
 

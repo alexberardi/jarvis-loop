@@ -8,11 +8,8 @@
   user's answer sends the item back to be built again. The bounce count is **not** reset by the
   answer: every later bounce also goes to the user. Reading of DESIGN.md's "after 2 bounces →
   needs-you".
-- **A hold-risk item cannot be `merged` without the user's approval for its current head.** The
-  spec has land → `hold` → held → approve → land → `merged`; nothing stopped a land agent from
-  reporting `merged` on a `risk=hold` item directly. `merged` on such an item now needs an approval
-  whose `head_sha` equals the item's (409 `approval_required`). A `pr_opened` with a new head voids
-  an old approval (spec).
+- **Hold risk is computed by loopd, and a hold item merges only at the approved head.** Superseded
+  and extended after review: see `2026-10-14-hold-rules.md`.
 - **Review independence is enforced twice:** the claim skips the builder's own review (spec), and
   an `approved` advance from the builder agent is refused (`same_agent`) in case a runner reuses an
   agent id.

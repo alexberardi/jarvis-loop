@@ -173,10 +173,18 @@ func (e *env) upload(tok string, id int64, name string, content []byte, wantStat
 	return out
 }
 
+var cleanPaths = []string{"M internal/modules/cc/turn.go", "A internal/modules/cc/turn_test.go"}
+
+// advance reports an outcome with a PR diff that hits no hold rule.
 func (e *env) advance(id int64, outcome string, fields map[string]string, wantStatus int) map[string]any {
 	e.t.Helper()
+	return e.advanceWith(id, outcome, fields, cleanPaths, wantStatus)
+}
+
+func (e *env) advanceWith(id int64, outcome string, fields map[string]string, paths []string, wantStatus int) map[string]any {
+	e.t.Helper()
 	out := map[string]any{}
-	e.do(runnerTok, "POST", fmt.Sprintf("/items/%d/advance", id), map[string]any{"outcome": outcome, "fields": fields}, wantStatus, &out)
+	e.do(runnerTok, "POST", fmt.Sprintf("/items/%d/advance", id), map[string]any{"outcome": outcome, "fields": fields, "changed_paths": paths}, wantStatus, &out)
 	return out
 }
 
@@ -187,6 +195,8 @@ type detail struct {
 		ReturnStage string `json:"return_stage"`
 		Question    string `json:"question"`
 		HeadSHA     string `json:"head_sha"`
+		Risk        string `json:"risk"`
+		HoldReason  string `json:"hold_reason"`
 		BounceCount int    `json:"bounce_count"`
 		Approval    *struct {
 			By      string `json:"by"`
@@ -320,7 +330,7 @@ func TestFullWalk(t *testing.T) {
 
 	// Land: held.
 	e.mustClaim("lander", id, "land", "gpu")
-	e.advance(id, "hold", map[string]string{"reason": "weakens a test"}, 200)
+	e.advance(id, "hold", map[string]string{"reason": "weakens a test", "head_sha": shaB}, 200)
 	if d := e.get(id); d.Item.Stage != "held" || d.Display != "held" {
 		t.Fatalf("after hold: %+v", d)
 	}
@@ -338,7 +348,7 @@ func TestFullWalk(t *testing.T) {
 
 	// Land: merged.
 	e.mustClaim("lander", id, "land", "gpu")
-	e.advance(id, "merged", map[string]string{"merge_sha": shaM}, 200)
+	e.advance(id, "merged", map[string]string{"merge_sha": shaM, "head_sha": shaB}, 200)
 	d = e.get(id)
 	if d.Item.Stage != "done" || d.Display != "done" || d.Lease != nil || len(d.Evidence) != 3 {
 		t.Fatalf("done: %+v", d)
@@ -555,5 +565,136 @@ func TestTokensFile(t *testing.T) {
 		if _, err := ParseTokens(strings.NewReader(bad)); err == nil {
 			t.Errorf("accepted a bad tokens file: %q", bad)
 		}
+	}
+}
+
+// Walks an item to land with the given triage risk and PR diff; returns its id.
+func (e *env) toLand(risk string, paths []string) int64 {
+	e.t.Helper()
+	id := e.addItem("x")
+	e.mustClaim("t", id, "triage")
+	e.upload(runnerTok, id, "e.txt", []byte("e"), 201)
+	e.advance(id, "reproduced", map[string]string{"area": "a", "size": "S", "risk": risk, "resources": ""}, 200)
+	e.mustClaim("builder", id, "build")
+	e.upload(runnerTok, id, "e.txt", []byte("e"), 201)
+	e.advanceWith(id, "pr_opened", map[string]string{"repo": "r", "pr": "1", "branch": "b", "head_sha": shaA}, paths, 200)
+	e.mustClaim("reviewer", id, "review")
+	e.advance(id, "approved", map[string]string{"summary": "ok", "head_sha": shaA}, 200)
+	return id
+}
+
+// Hold risk comes from loopd's rules on the PR's changed paths, not from triage's label.
+func TestHoldComputedFromChangedPaths(t *testing.T) {
+	cases := []struct {
+		name   string
+		paths  []string
+		reason string
+	}{
+		{"auth change labelled normal", []string{"M internal/modules/cc/turn.go", "M internal/modules/auth/login.go"}, "auth: M internal/modules/auth/login.go"},
+		{"deleted test", []string{"D internal/x_test.go"}, "deleted-test: D internal/x_test.go"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEnv(t)
+			id := e.toLand("normal", c.paths)
+			d := e.get(id)
+			if d.Item.Risk != "hold" || d.Item.HoldReason != c.reason {
+				t.Fatalf("risk %q reason %q, want hold %q", d.Item.Risk, d.Item.HoldReason, c.reason)
+			}
+			var matched bool
+			for _, ev := range d.Events {
+				if ev.Outcome == "pr_opened" && ev.Data["hold_matches"] != nil {
+					matched = true
+				}
+			}
+			if !matched {
+				t.Fatal("the pr_opened event does not say which rule matched")
+			}
+			e.mustClaim("lander", id, "land")
+			e.refused(runnerTok, "POST", fmt.Sprintf("/items/%d/advance", id), map[string]any{"outcome": "merged",
+				"fields": map[string]string{"merge_sha": shaM, "head_sha": shaA}, "changed_paths": c.paths}, 409, "approval_required")
+			e.advanceWith(id, "hold", map[string]string{"reason": "on the hold list", "head_sha": shaA}, c.paths, 200)
+			if d := e.get(id); d.Item.Stage != "held" || d.Item.HeadSHA != shaA {
+				t.Fatalf("held: %+v", d.Item)
+			}
+		})
+	}
+	t.Run("needs_review", func(t *testing.T) {
+		e := newEnv(t)
+		id := e.addItem("x")
+		e.mustClaim("t", id, "triage")
+		e.upload(runnerTok, id, "e.txt", []byte("e"), 201)
+		e.advance(id, "reproduced", map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": ""}, 200)
+		e.mustClaim("builder", id, "build")
+		e.upload(runnerTok, id, "e.txt", []byte("e"), 201)
+		e.advance(id, "pr_opened", map[string]string{"repo": "r", "pr": "1", "branch": "b", "head_sha": shaA, "needs_review": "true"}, 200)
+		if d := e.get(id); d.Item.Risk != "hold" || d.Item.HoldReason != "marked needs review" {
+			t.Fatalf("needs_review: %+v", d.Item)
+		}
+	})
+	t.Run("changed_paths required", func(t *testing.T) {
+		e := newEnv(t)
+		id := e.addItem("x")
+		e.mustClaim("t", id, "triage")
+		e.upload(runnerTok, id, "e.txt", []byte("e"), 201)
+		e.advance(id, "reproduced", map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": ""}, 200)
+		e.mustClaim("builder", id, "build")
+		e.upload(runnerTok, id, "e.txt", []byte("e"), 201)
+		e.refused(runnerTok, "POST", fmt.Sprintf("/items/%d/advance", id), map[string]any{"outcome": "pr_opened",
+			"fields": map[string]string{"repo": "r", "pr": "1", "branch": "b", "head_sha": shaA}}, 400, "missing_field")
+	})
+}
+
+// Approval for A; land pushes B (e.g. merged main in). merged with B is refused and the item
+// stays in land; hold with B shows B and voids A; approve B; merged with B lands.
+func TestMergedHeadMustMatchApproval(t *testing.T) {
+	e := newEnv(t)
+	id := e.toLand("hold", cleanPaths)
+	e.mustClaim("lander", id, "land")
+	e.advanceWith(id, "hold", map[string]string{"reason": "triage said hold", "head_sha": shaA}, cleanPaths, 200)
+	e.do(userTok, "POST", fmt.Sprintf("/items/%d/approve", id), map[string]any{"head_sha": shaA, "words": "A is fine"}, 200, nil)
+
+	e.mustClaim("lander", id, "land")
+	e.refused(runnerTok, "POST", fmt.Sprintf("/items/%d/advance", id), map[string]any{"outcome": "merged",
+		"fields": map[string]string{"merge_sha": shaM, "head_sha": shaB}, "changed_paths": cleanPaths}, 409, "approval_required")
+	if d := e.get(id); d.Item.Stage != "land" || d.Lease == nil {
+		t.Fatalf("a refused merge must leave the item in land under its lease: %+v", d)
+	}
+
+	e.advanceWith(id, "hold", map[string]string{"reason": "head moved after approval", "head_sha": shaB}, cleanPaths, 200)
+	d := e.get(id)
+	if d.Item.Stage != "held" || d.Item.HeadSHA != shaB || d.Item.Approval != nil {
+		t.Fatalf("hold with B: %+v", d.Item)
+	}
+	e.refused(userTok, "POST", fmt.Sprintf("/items/%d/approve", id), map[string]any{"head_sha": shaA}, 409, "sha_mismatch")
+	e.do(userTok, "POST", fmt.Sprintf("/items/%d/approve", id), map[string]any{"head_sha": shaB, "words": "B too"}, 200, nil)
+	e.mustClaim("lander", id, "land")
+	e.advanceWith(id, "merged", map[string]string{"merge_sha": shaM, "head_sha": shaB}, cleanPaths, 200)
+	if d := e.get(id); d.Item.Stage != "done" || d.Item.HeadSHA != shaB {
+		t.Fatalf("merged B: %+v", d.Item)
+	}
+}
+
+func TestHoldRulesInControl(t *testing.T) {
+	e := newEnv(t)
+	var ctl struct {
+		HoldRules []struct {
+			Name     string   `json:"name"`
+			Glob     string   `json:"glob"`
+			Statuses []string `json:"statuses"`
+		} `json:"hold_rules"`
+	}
+	e.do(runnerTok, "GET", "/control", nil, 200, &ctl)
+	if len(ctl.HoldRules) != 8 || ctl.HoldRules[0].Glob != "internal/modules/auth/**" {
+		t.Fatalf("default hold rules: %+v", ctl.HoldRules)
+	}
+	e.refused(userTok, "PUT", "/control", map[string]any{"hold_rules": []map[string]any{{"name": "x", "glob": "/abs"}}}, 400, "invalid_field")
+	e.do(userTok, "PUT", "/control", map[string]any{"hold_rules": []map[string]any{{"name": "docs", "glob": "docs/**"}}}, 200, &ctl)
+	if len(ctl.HoldRules) != 1 || ctl.HoldRules[0].Name != "docs" {
+		t.Fatalf("hold rules after PUT: %+v", ctl.HoldRules)
+	}
+	id := e.toLand("normal", []string{"M docs/STATUS.md"})
+	if d := e.get(id); d.Item.HoldReason != "docs: M docs/STATUS.md" {
+		t.Fatalf("custom rule: %+v", d.Item)
 	}
 }

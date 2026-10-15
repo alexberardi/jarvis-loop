@@ -37,6 +37,9 @@ const usage = `usage: loop <command> [args]
   claim [--runner R] --agent A [--cap gpu,voice,...]
   heartbeat <lease> [--note TEXT]
   advance <id> <outcome> [--field k=v ...] [--evidence FILE ...]
+          [--path "M internal/x.go" ...] [--paths-file FILE]
+      pr_opened, merged and hold need the PR's changed paths: --path per file, or
+      --paths-file with the output of git diff --name-status main...HEAD
 
 environment: LOOP_URL (default http://127.0.0.1:7780), LOOP_TOKEN (required)
 `
@@ -160,7 +163,7 @@ var commands = map[string]command{
 	"resume":    {0, 0, nil, cmdStop(false)},
 	"claim":     {0, 0, []string{"runner", "agent", "cap"}, cmdClaim},
 	"heartbeat": {1, 1, []string{"note"}, cmdHeartbeat},
-	"advance":   {2, 2, []string{"field", "evidence"}, cmdAdvance},
+	"advance":   {2, 2, []string{"field", "evidence", "path", "paths-file"}, cmdAdvance},
 }
 
 // ---- HTTP ----
@@ -233,6 +236,7 @@ type item struct {
 	Area        string    `json:"area"`
 	Size        string    `json:"size"`
 	Risk        string    `json:"risk"`
+	HoldReason  string    `json:"hold_reason"`
 	Resources   []string  `json:"resources"`
 	BounceCount int       `json:"bounce_count"`
 	PR          int       `json:"pr"`
@@ -390,7 +394,12 @@ func cmdShow(c *client, pos []string, _ map[string][]string) error {
 		fmt.Fprintf(w, "ask:      %s\n", it.Ask)
 	}
 	if it.Area != "" {
-		fmt.Fprintf(w, "triage:   area %s, size %s, risk %s, resources [%s]\n", it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","))
+		fmt.Fprintf(w, "triage:   area %s, size %s, resources [%s]\n", it.Area, it.Size, strings.Join(it.Resources, ","))
+	}
+	if it.Risk == "hold" {
+		fmt.Fprintf(w, "risk:     hold (%s)\n", it.HoldReason)
+	} else {
+		fmt.Fprintf(w, "risk:     %s\n", it.Risk)
 	}
 	if it.PR != 0 {
 		fmt.Fprintf(w, "pr:       #%d %s @ %s (bounces %d)\n", it.PR, it.Branch, it.HeadSHA, it.BounceCount)
@@ -589,13 +598,29 @@ func cmdAdvance(c *client, pos []string, f map[string][]string) error {
 		}
 		fields[k] = v
 	}
+	paths := f["path"]
+	for _, file := range f["paths-file"] {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if strings.TrimSpace(line) != "" {
+				paths = append(paths, line)
+			}
+		}
+	}
+	// Refuse locally before uploading evidence the server would then attach to a refused advance.
+	if len(paths) == 0 && (pos[1] == "pr_opened" || pos[1] == "merged" || pos[1] == "hold") {
+		return usageError(pos[1] + " needs the PR's changed paths: --path \"M file\" or --paths-file FILE")
+	}
 	for _, path := range f["evidence"] {
 		if err := c.upload(id, path); err != nil {
 			return fmt.Errorf("evidence %s: %w", path, err)
 		}
 	}
 	var it item
-	if _, err := c.json("POST", "/items/"+id+"/advance", map[string]any{"outcome": pos[1], "fields": fields}, &it); err != nil {
+	if _, err := c.json("POST", "/items/"+id+"/advance", map[string]any{"outcome": pos[1], "fields": fields, "changed_paths": paths}, &it); err != nil {
 		return err
 	}
 	c.moved(it)

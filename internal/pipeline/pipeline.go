@@ -141,6 +141,7 @@ type Item struct {
 	Area         string    `json:"area,omitempty"`
 	Size         string    `json:"size,omitempty"`
 	Risk         string    `json:"risk"`
+	HoldReason   string    `json:"hold_reason,omitempty"`
 	Resources    []string  `json:"resources"`
 	BounceCount  int       `json:"bounce_count"`
 	PR           int       `json:"pr,omitempty"`
@@ -217,6 +218,11 @@ type Advance struct {
 	Evidence int
 	// Agent is the agent id on the lease.
 	Agent string
+	// ChangedPaths are the PR's changed files ("M path", "D path", "R old new"): required by
+	// pr_opened, and by land's merged and hold.
+	ChangedPaths []string
+	// HoldRules are the rules hold risk is computed with (from control).
+	HoldRules []HoldRule
 }
 
 var shaRe = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
@@ -250,6 +256,29 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		data["agent"] = a.Agent
 	}
 	tr := Transition{From: from, Outcome: a.Outcome, Kind: "advanced", Data: data}
+	needPaths := func() ([]ChangedPath, error) {
+		if len(a.ChangedPaths) == 0 {
+			return nil, errf(CodeMissingField, "changed_paths is required for %s", a.Outcome)
+		}
+		paths, err := ParseChangedPaths(a.ChangedPaths)
+		if err != nil {
+			return nil, err
+		}
+		data["changed_paths"] = a.ChangedPaths
+		return paths, nil
+	}
+	// holdReasons computes the rule hits and records them on the event.
+	holdReasons := func(paths []ChangedPath, extra ...string) []string {
+		matches := MatchHoldRules(a.HoldRules, paths)
+		reasons := []string{}
+		for _, m := range matches {
+			reasons = append(reasons, m.String())
+		}
+		if len(matches) > 0 {
+			data["hold_matches"] = matches
+		}
+		return append(reasons, extra...)
+	}
 	needEvidence := func() error {
 		if a.Evidence < 1 {
 			return errf(CodeEvidenceRequired, "%s needs at least one evidence file attached under this lease", a.Outcome)
@@ -278,7 +307,10 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if err := needEvidence(); err != nil {
 			return Transition{}, err
 		}
-		it.Area, it.Size, it.Risk, it.Resources = area, size, risk, res
+		it.Area, it.Size, it.Resources = area, size, res
+		if risk == RiskHold {
+			raiseRisk(&it, []string{"triage: risk hold"})
+		}
 		it.Stage = Build
 	case NotReproducible:
 		summary, err := f.need("summary")
@@ -317,9 +349,22 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if err != nil {
 			return Transition{}, err
 		}
+		paths, err := needPaths()
+		if err != nil {
+			return Transition{}, err
+		}
+		var extra []string
+		switch strings.TrimSpace(a.Fields["needs_review"]) {
+		case "", "false":
+		case "true":
+			extra = append(extra, "marked needs review")
+		default:
+			return Transition{}, errf(CodeInvalidField, "needs_review must be true or false")
+		}
 		if err := needEvidence(); err != nil {
 			return Transition{}, err
 		}
+		raiseRisk(&it, holdReasons(paths, extra...))
 		if it.Approval != nil && it.Approval.HeadSHA != sha {
 			it.Approval = nil // an approval is for the commit the user saw
 			data["approval_voided"] = true
@@ -361,15 +406,43 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if err != nil {
 			return Transition{}, err
 		}
-		if it.Risk == RiskHold && (it.Approval == nil || it.Approval.HeadSHA != it.HeadSHA) {
-			return Transition{}, errf(CodeApprovalRequired, "a hold-risk item merges only with the user's approval of head %s", it.HeadSHA)
+		head, err := f.sha("head_sha")
+		if err != nil {
+			return Transition{}, err
 		}
+		paths, err := needPaths()
+		if err != nil {
+			return Transition{}, err
+		}
+		// Risk is recomputed on what was actually merged; the approval must be for that head.
+		raiseRisk(&it, holdReasons(paths))
+		if it.Risk == RiskHold && (it.Approval == nil || it.Approval.HeadSHA != head) {
+			return Transition{}, errf(CodeApprovalRequired, "on the hold list (%s): merged head %s needs the user's approval for that commit",
+				it.HoldReason, head)
+		}
+		it.HeadSHA = head
 		it.MergeSHA = sha
 		it.Stage = Done
 	case Hold:
-		if _, err := f.need("reason"); err != nil {
+		reason, err := f.need("reason")
+		if err != nil {
 			return Transition{}, err
 		}
+		head, err := f.sha("head_sha")
+		if err != nil {
+			return Transition{}, err
+		}
+		paths, err := needPaths()
+		if err != nil {
+			return Transition{}, err
+		}
+		// The held message must show the commit the user would approve.
+		if it.Approval != nil && it.Approval.HeadSHA != head {
+			it.Approval = nil
+			data["approval_voided"] = true
+		}
+		it.HeadSHA = head
+		raiseRisk(&it, holdReasons(paths, "land: "+reason))
 		it.Stage = Held
 	case BackToBuild:
 		if _, err := f.need("reason"); err != nil {

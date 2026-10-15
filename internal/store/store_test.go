@@ -199,20 +199,20 @@ func TestClaimAdvanceAndLeaseRules(t *testing.T) {
 	}
 
 	// Only the lease holder advances, and evidence is per lease.
-	_, err := s.Advance(ctx, "other-runner", it.ID, pipeline.Reproduced, nil)
+	_, err := s.Advance(ctx, "other-runner", it.ID, pipeline.Reproduced, nil, nil)
 	if code(err) != CodeNotYourLease {
 		t.Fatalf("other runner advanced: %v", err)
 	}
 	f := map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": "gpu"}
-	if _, err := s.Advance(ctx, runner, it.ID, pipeline.Reproduced, f); code(err) != pipeline.CodeEvidenceRequired {
+	if _, err := s.Advance(ctx, runner, it.ID, pipeline.Reproduced, f, nil); code(err) != pipeline.CodeEvidenceRequired {
 		t.Fatalf("no evidence: %v", err)
 	}
 	evidence(t, s, it.ID)
-	got, err := s.Advance(ctx, runner, it.ID, pipeline.Reproduced, f)
+	got, err := s.Advance(ctx, runner, it.ID, pipeline.Reproduced, f, nil)
 	if err != nil || got.Stage != pipeline.Build || got.Resources[0] != "gpu" {
 		t.Fatalf("advance: %+v %v", got, err)
 	}
-	if _, err := s.Advance(ctx, runner, it.ID, pipeline.PROpened, nil); code(err) != CodeNoLease {
+	if _, err := s.Advance(ctx, runner, it.ID, pipeline.PROpened, nil, nil); code(err) != CodeNoLease {
 		t.Fatalf("advance without a lease: %v", err)
 	}
 	if _, err := s.AddEvidence(ctx, runner, it.ID, "", "x", strings.NewReader("x")); code(err) != CodeNoLease {
@@ -316,7 +316,7 @@ func TestStopAndUsageLimit(t *testing.T) {
 	if c = claim(t, s, "a"); c == nil {
 		t.Fatal("no claim after resume")
 	}
-	if _, err := s.Advance(ctx, runner, it.ID, pipeline.UsageLimit, map[string]string{"error": "429", "reset": "17:00"}); err != nil {
+	if _, err := s.Advance(ctx, runner, it.ID, pipeline.UsageLimit, map[string]string{"error": "429", "reset": "17:00"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	ctl, _ := s.Control(ctx)
@@ -448,7 +448,7 @@ func TestHumanActionsAndRefusals(t *testing.T) {
 		t.Fatalf("approve at triage: %v", err)
 	}
 	claim(t, s, "a")
-	if _, err := s.Advance(ctx, runner, it.ID, pipeline.Question, map[string]string{"question": "which repo?"}); err != nil {
+	if _, err := s.Advance(ctx, runner, it.ID, pipeline.Question, map[string]string{"question": "which repo?"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.Answer(ctx, user, it.ID, "jarvis-server")
@@ -467,5 +467,55 @@ func TestHumanActionsAndRefusals(t *testing.T) {
 	}
 	if refused != 2 {
 		t.Fatalf("want 2 refused events, got %d", refused)
+	}
+}
+
+func TestHoldRulesPersist(t *testing.T) {
+	dir := t.TempDir()
+	clk := clock.NewFake(t0)
+	s, err := Open(dir, clk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	ctl, _ := s.Control(ctx)
+	if len(ctl.HoldRules) != len(pipeline.DefaultHoldRules()) || ctl.HoldRules[0].Name != "auth" {
+		t.Fatalf("default hold rules: %+v", ctl.HoldRules)
+	}
+	rules := []pipeline.HoldRule{{Name: "secrets", Glob: "**/*.env"}, {Name: "auth", Glob: "internal/modules/auth/**"}}
+	if _, err := s.SetControl(ctx, user, ControlPatch{HoldRules: &rules}); err != nil {
+		t.Fatal(err)
+	}
+	bad := []pipeline.HoldRule{{Name: "x", Glob: "/etc/**"}}
+	if _, err := s.SetControl(ctx, user, ControlPatch{HoldRules: &bad}); code(err) != pipeline.CodeInvalidField {
+		t.Fatalf("bad rule: %v", err)
+	}
+	s.Close()
+	s, err = Open(dir, clk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctl, _ = s.Control(ctx)
+	if len(ctl.HoldRules) != 2 || ctl.HoldRules[0].Name != "secrets" {
+		t.Fatalf("hold rules after reopen: %+v", ctl.HoldRules)
+	}
+
+	// The rules in control are the ones advance uses, and hold_reason is stored.
+	it := add(t, s, "x", "")
+	claim(t, s, "t")
+	evidence(t, s, it.ID)
+	if _, err := s.Advance(ctx, runner, it.ID, pipeline.Reproduced, map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": ""}, nil); err != nil {
+		t.Fatal(err)
+	}
+	claim(t, s, "b")
+	evidence(t, s, it.ID)
+	if _, err := s.Advance(ctx, runner, it.ID, pipeline.PROpened, map[string]string{"repo": "r", "pr": "1", "branch": "b", "head_sha": shaA},
+		[]string{"A config/prod.env"}); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := s.GetItem(ctx, it.ID)
+	if d.Item.Risk != pipeline.RiskHold || d.Item.HoldReason != "secrets: A config/prod.env" {
+		t.Fatalf("risk %q reason %q", d.Item.Risk, d.Item.HoldReason)
 	}
 }

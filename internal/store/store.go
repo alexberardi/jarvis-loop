@@ -198,7 +198,7 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 // ---- items ----
 
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
-	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at`
+	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason`
 
 type scanner interface{ Scan(...any) error }
 
@@ -211,7 +211,7 @@ func scanItem(row scanner) (pipeline.Item, error) {
 	)
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
-		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated)
+		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason)
 	if err != nil {
 		return it, err
 	}
@@ -257,10 +257,10 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 	}
 	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
-		summary=?, approval=?, updated_at=? WHERE id=?`,
+		summary=?, approval=?, updated_at=?, hold_reason=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
-		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.ID)
+		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.ID)
 	return err
 }
 
@@ -493,14 +493,21 @@ func loadControl(q interface {
 }) (pipeline.Control, error) {
 	var c pipeline.Control
 	var stopped int
-	var limits string
-	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits FROM control WHERE id = 1`).
-		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits)
+	var limits, rules string
+	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules FROM control WHERE id = 1`).
+		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules)
 	if err != nil {
 		return c, err
 	}
 	c.Stopped = stopped != 0
-	err = json.Unmarshal([]byte(limits), &c.Limits)
+	if err := json.Unmarshal([]byte(limits), &c.Limits); err != nil {
+		return c, err
+	}
+	if rules == "" {
+		c.HoldRules = pipeline.DefaultHoldRules()
+		return c, nil
+	}
+	err = json.Unmarshal([]byte(rules), &c.HoldRules)
 	return c, err
 }
 
@@ -509,12 +516,19 @@ func saveControl(tx *sql.Tx, c pipeline.Control) error {
 	if err != nil {
 		return err
 	}
+	if c.HoldRules == nil {
+		c.HoldRules = []pipeline.HoldRule{}
+	}
+	rules, err := json.Marshal(c.HoldRules)
+	if err != nil {
+		return err
+	}
 	stopped := 0
 	if c.Stopped {
 		stopped = 1
 	}
-	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=? WHERE id = 1`,
-		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits))
+	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=? WHERE id = 1`,
+		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules))
 	return err
 }
 
@@ -523,12 +537,14 @@ func (s *Store) Control(ctx context.Context) (pipeline.Control, error) {
 	return loadControl(s.r)
 }
 
-// ControlPatch changes some of the control row; Limits are merged key by key.
+// ControlPatch changes some of the control row; Limits are merged key by key, HoldRules
+// replace the whole list.
 type ControlPatch struct {
-	ActiveAgents  *int           `json:"active_agents"`
-	Stopped       *bool          `json:"stopped"`
-	MaxRunMinutes *int           `json:"max_run_minutes"`
-	Limits        map[string]int `json:"limits"`
+	ActiveAgents  *int                 `json:"active_agents"`
+	Stopped       *bool                `json:"stopped"`
+	MaxRunMinutes *int                 `json:"max_run_minutes"`
+	Limits        map[string]int       `json:"limits"`
+	HoldRules     *[]pipeline.HoldRule `json:"hold_rules"`
 }
 
 // SetControl applies a patch to the control row and records it.
@@ -555,6 +571,9 @@ func (s *Store) SetControl(ctx context.Context, actor string, p ControlPatch) (p
 		}
 		for k, v := range p.Limits {
 			c.Limits[k] = v
+		}
+		if p.HoldRules != nil {
+			c.HoldRules = *p.HoldRules
 		}
 		if err := c.Validate(); err != nil {
 			return err
@@ -798,7 +817,8 @@ func heldLease(tx *sql.Tx, id int64, runnerName string) (Lease, error) {
 }
 
 // Advance finishes the stage runnerName holds a lease on, with an outcome.
-func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcome pipeline.Outcome, fields map[string]string) (pipeline.Item, error) {
+// changedPaths are the PR's changed files, required by pr_opened, merged and land's hold.
+func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcome pipeline.Outcome, fields map[string]string, changedPaths []string) (pipeline.Item, error) {
 	var out pipeline.Item
 	actor := "runner:" + runnerName
 	err := s.tx(ctx, func(tx *sql.Tx) error {
@@ -818,7 +838,12 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM evidence WHERE lease_id = ?`, l.ID).Scan(&n); err != nil {
 			return err
 		}
-		tr, err := pipeline.ApplyAdvance(it, pipeline.Advance{Outcome: outcome, Fields: fields, Evidence: n, Agent: l.Agent}, now)
+		ctl, err := loadControl(tx)
+		if err != nil {
+			return err
+		}
+		tr, err := pipeline.ApplyAdvance(it, pipeline.Advance{Outcome: outcome, Fields: fields, Evidence: n, Agent: l.Agent,
+			ChangedPaths: changedPaths, HoldRules: ctl.HoldRules}, now)
 		if err != nil {
 			return err
 		}

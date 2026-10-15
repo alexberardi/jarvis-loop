@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"net/http/httptest"
 	"os"
@@ -76,33 +77,44 @@ func TestCLISmoke(t *testing.T) {
 	ev := filepath.Join(t.TempDir(), "repro.log")
 	os.WriteFile(ev, []byte("missed 3/10\n"), 0o600)
 	out = c.ok(runnerTok, "advance", "1", "reproduced", "--field", "area=voice", "--field", "size=S",
-		"--field", "risk=hold", "--field", "resources=", "--evidence", ev)
+		"--field", "risk=normal", "--field", "resources=", "--evidence", ev)
 	if !strings.Contains(out, "evidence 1: repro.log") || !strings.Contains(out, "#1 → build") {
 		t.Fatalf("advance: %q", out)
 	}
 	c.ok(runnerTok, "claim", "--agent", "builder")
-	c.ok(runnerTok, "advance", "1", "pr_opened", "--field", "repo=jarvis-server", "--field", "pr=142", "--field", "branch=fix/x", "--field", "head_sha="+sha, "--evidence", ev)
+	// The diff, as `git diff --name-status main...HEAD` prints it: deleting a test puts it on the hold list.
+	diff := filepath.Join(t.TempDir(), "diff.txt")
+	os.WriteFile(diff, []byte("M\tinternal/y.go\nD\tinternal/x_test.go\n"), 0o600)
+	if code, _, errs := c.run(runnerTok, "advance", "1", "pr_opened", "--field", "repo=jarvis-server", "--field", "pr=142", "--field", "branch=fix/x",
+		"--field", "head_sha="+sha, "--evidence", ev); code != 2 || !strings.Contains(errs, "changed paths") {
+		t.Fatalf("pr_opened without changed paths: %d %q", code, errs)
+	}
+	if n := len(evidenceOf(t, c, 1)); n != 1 {
+		t.Fatalf("a refused advance uploaded its evidence anyway: %d files", n)
+	}
+	c.ok(runnerTok, "advance", "1", "pr_opened", "--field", "repo=jarvis-server", "--field", "pr=142", "--field", "branch=fix/x", "--field", "head_sha="+sha,
+		"--paths-file", diff, "--evidence", ev)
 	if out := c.ok(runnerTok, "claim", "--agent", "builder"); !strings.Contains(out, "nothing to do") {
 		t.Fatalf("builder got its own review: %q", out)
 	}
 	c.ok(runnerTok, "claim", "--agent", "reviewer")
 	c.ok(runnerTok, "advance", "1", "approved", "--field", "summary=ok", "--field", "head_sha="+sha)
 	c.ok(runnerTok, "claim", "--agent", "lander")
-	if code, _, errs := c.run(runnerTok, "advance", "1", "merged", "--field", "merge_sha="+sha); code != 1 || !strings.Contains(errs, "approval_required") {
+	if code, _, errs := c.run(runnerTok, "advance", "1", "merged", "--field", "merge_sha="+sha, "--field", "head_sha="+sha, "--path", "M internal/y.go"); code != 1 || !strings.Contains(errs, "approval_required") {
 		t.Fatalf("merging a hold-risk item without approval: %d %q", code, errs)
 	}
-	c.ok(runnerTok, "advance", "1", "hold", "--field", "reason=risk is hold")
+	c.ok(runnerTok, "advance", "1", "hold", "--field", "reason=on the hold list", "--field", "head_sha="+sha, "--paths-file", diff)
 	if code, _, errs := c.run(userTok, "approve", "1", "--sha", "deadbeef"); code != 1 || !strings.Contains(errs, "sha_mismatch") {
 		t.Fatalf("wrong-sha approve: %d %q", code, errs)
 	}
 	c.ok(userTok, "approve", "1", "--sha", sha, "--words", "fine")
 	c.ok(runnerTok, "claim", "--agent", "lander")
-	if out := c.ok(runnerTok, "advance", "1", "merged", "--field", "merge_sha="+sha); !strings.Contains(out, "#1 → done") {
+	if out := c.ok(runnerTok, "advance", "1", "merged", "--field", "merge_sha="+sha, "--field", "head_sha="+sha, "--paths-file", diff); !strings.Contains(out, "#1 → done") {
 		t.Fatalf("merged: %q", out)
 	}
 
 	out = c.ok(userTok, "show", "1")
-	for _, want := range []string{"#1 wake word misses", "stage:    done", "approval: user:alex", "advanced", "pr_opened", "evidence", "repro.log"} {
+	for _, want := range []string{"#1 wake word misses", "stage:    done", "approval: user:alex", "triage:   area voice, size S, resources []", "risk:     hold (deleted-test: D internal/x_test.go; land: on the hold list)", "advanced", "pr_opened", "evidence", "repro.log"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show lacks %q:\n%s", want, out)
 		}
@@ -148,4 +160,17 @@ func TestCLISmoke(t *testing.T) {
 	if code, _, _ := c.run(runnerTok, "claim", "--runner", "mac", "--agent", "a"); code != 1 {
 		t.Fatalf("claiming as another runner: %d", code)
 	}
+}
+
+func evidenceOf(t *testing.T, c cli, id int) []string {
+	t.Helper()
+	out := c.ok(userTok, "show", fmt.Sprint(id))
+	_, ev, _ := strings.Cut(out, "\nevidence:\n")
+	var lines []string
+	for _, l := range strings.Split(strings.TrimSpace(ev), "\n") {
+		if l != "" {
+			lines = append(lines, l)
+		}
+	}
+	return lines
 }

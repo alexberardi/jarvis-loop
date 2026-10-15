@@ -338,13 +338,14 @@ func (s *server) advance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Outcome string            `json:"outcome"`
-		Fields  map[string]string `json:"fields"`
+		Outcome      string            `json:"outcome"`
+		Fields       map[string]string `json:"fields"`
+		ChangedPaths []string          `json:"changed_paths"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	it, err := s.st.Advance(r.Context(), PrincipalFrom(r.Context()).Name, id, pipeline.Outcome(body.Outcome), body.Fields)
+	it, err := s.st.Advance(r.Context(), PrincipalFrom(r.Context()).Name, id, pipeline.Outcome(body.Outcome), body.Fields, body.ChangedPaths)
 	if err != nil {
 		s.fail(w, err)
 		return

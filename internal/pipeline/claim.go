@@ -15,6 +15,7 @@ type Control struct {
 	Stopped       bool           `json:"stopped"`
 	MaxRunMinutes int            `json:"max_run_minutes"`
 	Limits        map[string]int `json:"limits"`
+	HoldRules     []HoldRule     `json:"hold_rules"`
 }
 
 // LimitKeys are the resources and stages that can carry a limit. Build has none: it is bounded
@@ -27,6 +28,7 @@ func DefaultControl() Control {
 		ActiveAgents:  4,
 		MaxRunMinutes: 45,
 		Limits:        map[string]int{"gpu": 2, "voice": 1, "emulator": 1, "triage": 1, "review": 2, "land": 1},
+		HoldRules:     DefaultHoldRules(),
 	}
 }
 
@@ -48,6 +50,16 @@ func (c Control) Validate() error {
 		if v < 0 {
 			return errf(CodeInvalidField, "limit %s must be 0 or more", k)
 		}
+	}
+	names := map[string]bool{}
+	for _, r := range c.HoldRules {
+		if err := r.Validate(); err != nil {
+			return err
+		}
+		if names[r.Name] {
+			return errf(CodeInvalidField, "duplicate hold rule name %q", r.Name)
+		}
+		names[r.Name] = true
 	}
 	return nil
 }
