@@ -319,7 +319,7 @@ func TestItemThread(t *testing.T) {
 			t.Fatalf("reply outside the thread: %+v", r.Body)
 		}
 	}
-	if !strings.Contains(allText(replies[1]), "Evidence attached") || strings.Contains(allText(replies[1]), "note.txt") {
+	if !strings.Contains(allText(replies[1]), "Evidence 1 attached") || strings.Contains(allText(replies[1]), "note.txt") {
 		t.Fatalf("evidence reply %s", allText(replies[1]))
 	}
 	q := allText(replies[2])
@@ -454,6 +454,19 @@ func heldSetup(t *testing.T) (*botEnv, int64, string) {
 func TestHeldMessageHasButtons(t *testing.T) {
 	e, id, ts := heldSetup(t)
 	cs := only(t, e.calls(), "chat.postMessage")
+	// Replies describe the event as it happened, even when posted after the item moved on.
+	var sawTriage bool
+	for _, c := range cs {
+		if txt := allText(c); strings.HasPrefix(txt, "Reproduced:") {
+			sawTriage = true
+			if !strings.Contains(txt, "risk normal") {
+				t.Errorf("triage reply shows the later risk: %s", txt)
+			}
+		}
+	}
+	if !sawTriage {
+		t.Error("no triage reply")
+	}
 	held := cs[len(cs)-1]
 	if held.Body["thread_ts"] != ts {
 		t.Fatalf("held message outside the thread")

@@ -390,7 +390,7 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 		text = fmt.Sprintf("Claimed for %s.", e.From)
 	case "evidence":
 		// Never the contents or the file name: a count and a link-free pointer.
-		text = fmt.Sprintf("Evidence attached (%d on the item; `loop show %d`).", len(d.Evidence), id)
+		text = fmt.Sprintf("Evidence %v attached (`loop show %d`).", e.Data["n"], id)
 	case "lease_expired":
 		text = fmt.Sprintf("Lease expired; back in the %s queue.", e.From)
 	case "stopped":
@@ -423,7 +423,8 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 	case "advanced":
 		switch pipeline.Outcome(e.Outcome) {
 		case pipeline.Reproduced:
-			text = fmt.Sprintf("Reproduced: area %s, size %s, risk %s → ready.", Escape(it.Area), Escape(it.Size), it.Risk)
+			// From the event, not the item: the item may have moved on by the time this posts.
+			text = fmt.Sprintf("Reproduced: area %s, size %s, risk %s → ready.", f("area", 100), f("size", 10), f("risk", 10))
 		case pipeline.NotReproducible:
 			text = "Closed, not reproducible: " + f("summary", 600)
 		case pipeline.PROpened:

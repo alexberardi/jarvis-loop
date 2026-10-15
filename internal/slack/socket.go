@@ -133,6 +133,9 @@ func (s *Socket) session(ctx context.Context, work chan<- Envelope) (hello, refr
 		}
 		switch e.Type {
 		case "hello":
+			if !hello {
+				s.Log.Info("slack socket: connected")
+			}
 			hello = true
 			continue
 		case "disconnect":
