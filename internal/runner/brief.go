@@ -295,6 +295,19 @@ func Brief(stage string, it Item, r RunInfo) string {
 	return b.String()
 }
 
+// RetryHeading opens the section RetryBrief adds.
+const RetryHeading = "## Your previous result was refused"
+
+// RetryBrief is the brief for the one retry of a stage whose result the runner refused: the same
+// brief (the prompt cache keeps its prefix), with why at the end.
+func RetryBrief(brief, why string) string {
+	return strings.TrimRight(brief, "\n") + "\n\n" + RetryHeading + "\n\n" +
+		"An earlier run of this stage ended, but the runner could not accept its `.loop/result.json`:\n\n> " +
+		oneLine(why) + "\n\n" +
+		"Your work so far is still here (the worktree, `.loop/evidence/`). Fix what the runner refused, then write " +
+		"`.loop/result.json` again. This is the one retry: a second refusal goes to the user as a runner error.\n"
+}
+
 // BuildBrief is the build stage's brief.
 func BuildBrief(it Item, r RunInfo) string { return Brief(StageBuild, it, r) }
 

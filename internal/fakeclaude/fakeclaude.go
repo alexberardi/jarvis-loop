@@ -43,7 +43,8 @@ const (
 	NoArm      = "noarm"       // run tools without the hooks (settings not applied)
 	WrongMode  = "wrong_mode"  // start in default mode whatever was asked
 	SymlinkEv  = "symlink_evidence"
-	LowCache   = "low_cache" // good, but with a cold prompt cache (10% read over 6 turns)
+	LyingOnce  = "lying_once" // lying, then good on the runner's one retry
+	LowCache   = "low_cache"  // good, but with a cold prompt cache (10% read over 6 turns)
 	// SuggestVerify is good, but the agent also leaves a verify script of its own in .loop/ and
 	// asks for it in the PR body; the runner must never run it (it would touch
 	// <scripts dir>/../agent-verify-ran).
@@ -67,6 +68,12 @@ const (
 	ReviewCommit = "review_commit" // tries to commit a fixup (the guard refuses), then approves
 	ApproveHold  = "approve_hold"  // approved, with needs_review (content a path rule cannot see)
 	ApproveQA    = "approve_qa"    // approved, with needs_qa (the user should check it once merged)
+	// ApproveToolState is approve, with a tool's own state left in .loop/evidence/.claude/ (as on
+	// #26); ApproveNamesDir also names that directory as evidence, which the runner refuses;
+	// ApproveNamesDirOnce names it only until the runner's one retry.
+	ApproveToolState    = "approve_tool_state"
+	ApproveNamesDir     = "approve_names_dir"
+	ApproveNamesDirOnce = "approve_names_dir_once"
 
 	// Plan turns (a prompt with "- Plan: P<id>" and "- Persona: <persona>"; the script is
 	// <dir>/P<id>-<persona>.json). Every play writes out/result.json with a reply.
@@ -82,7 +89,7 @@ const (
 
 var stagePlays = map[string][]string{
 	"triage": {Reproduce, Duplicate, TriageQuestion, TriageBadRepo, Route, Hang, UsageLimit, Exit3},
-	"review": {Approve, Bounce, ReviewCommit, ApproveHold, ApproveQA, Hang, UsageLimit, Exit3},
+	"review": {Approve, Bounce, ReviewCommit, ApproveHold, ApproveQA, ApproveToolState, ApproveNamesDir, ApproveNamesDirOnce, Hang, UsageLimit, Exit3},
 	// Plan personas.
 	"product":     {PlanBrief, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
 	"engineering": {PlanBlueprint, BackToBrief, PlanCycle, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
@@ -291,7 +298,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f.bash("ln -s /etc/hostname .loop/evidence/host.txt")
 	}
 	head := strings.TrimSpace(git(f.cwd, "rev-parse", "HEAD"))
-	if scenario == Lying {
+	if scenario == Lying || scenario == LyingOnce && !isRetry(brief) {
 		head = strings.Repeat("0", 40)
 	}
 	commits := strings.TrimSpace(git(f.cwd, "rev-list", "--count", "origin/"+base+"..HEAD"))
@@ -316,6 +323,12 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	f.result("Ready for a PR.")
 	return 0
 }
+
+// retryHeading opens the section the runner adds to the brief of its one retry after refusing a
+// result (runner.RetryHeading; not imported, as the runner's tests import this package).
+const retryHeading = "## Your previous result was refused"
+
+func isRetry(brief []byte) bool { return bytes.Contains(brief, []byte(retryHeading)) }
 
 func find(re string, b []byte) string {
 	m := regexp.MustCompile(re).FindSubmatch(b)
@@ -546,6 +559,13 @@ func (f *fake) review(play string, brief []byte) int {
 		}
 		if play == ApproveQA {
 			r["needs_qa"] = true
+		}
+	}
+	switch play {
+	case ApproveToolState, ApproveNamesDir, ApproveNamesDirOnce:
+		f.write(".loop/evidence/.claude/settings.local.json", "{}\n")
+		if play == ApproveNamesDir || play == ApproveNamesDirOnce && !isRetry(brief) {
+			r["evidence"] = append(r["evidence"].([]any), map[string]string{"file": "evidence/.claude", "label": "tool state"})
 		}
 	}
 	res, _ := json.Marshal(r)

@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -503,6 +505,9 @@ func TestGuardRefusalIsReported(t *testing.T) {
 }
 
 func TestBadResultsFail(t *testing.T) {
+	// The runner's refusals of a result are retried once, then reported as a runner error; the
+	// others fail at once.
+	refused := map[string]bool{fakeclaude.Lying: true, fakeclaude.Malformed: true, fakeclaude.SymlinkEv: true, fakeclaude.Dirty: true}
 	cases := map[string]string{
 		fakeclaude.Lying:     "head_sha",
 		fakeclaude.Malformed: "not valid JSON",
@@ -521,6 +526,16 @@ func TestBadResultsFail(t *testing.T) {
 			if d.Item.Stage != pipeline.NeedsYou || !strings.Contains(d.Item.Question, want) {
 				t.Fatalf("stage %s, question %q, want it to mention %q; log:\n%s", d.Item.Stage, d.Item.Question, want, g.logs.String())
 			}
+			runs := 1
+			if refused[scenario] {
+				runs = 2
+				if !strings.HasPrefix(d.Item.Question, "the build's result couldn't be accepted: ") || !strings.Contains(d.Item.Question, "(again, after one retry)") {
+					t.Fatalf("a refused result is a runner error, not a question: %q", d.Item.Question)
+				}
+			}
+			if n := g.starts(id); n != runs {
+				t.Fatalf("%d runs, want %d", n, runs)
+			}
 			if scenario == fakeclaude.Exit3 && !strings.Contains(d.Item.Question, "the tests do not compile") {
 				t.Fatalf("the agent's last output belongs in the question: %q", d.Item.Question)
 			}
@@ -531,6 +546,48 @@ func TestBadResultsFail(t *testing.T) {
 			g.cleanedUp(id)
 		})
 	}
+}
+
+// A refused build result gets one retry; the retry's good result is pushed and opened as a PR.
+func TestRefusedBuildResultIsRetried(t *testing.T) {
+	g := newRig(t, fakeclaude.LyingOnce)
+	id := g.toBuild("Lies once")
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.Review || g.starts(id) != 2 || g.prs.calls() != 1 {
+		t.Fatalf("stage %s %q after %d runs; log:\n%s", d.Item.Stage, d.Item.Question, g.starts(id), g.logs.String())
+	}
+	ev := g.advanced(id)
+	if ev.Data["result_retried"] != "true" || ev.Data["head_sha"] != g.remoteHead(fmt.Sprintf("loop/%d-lies-once", id)) {
+		t.Fatalf("advance %+v", ev.Data)
+	}
+	// The run's numbers cover both attempts.
+	dir := g.lastRun(id, StageBuild)
+	first, retry := streamResult(t, filepath.Join(dir, "stream-1.jsonl")), streamResult(t, filepath.Join(dir, "stream.jsonl"))
+	if ev.Data["total_cost_usd"] != "0.8400" || ev.Data["duration_ms"] != "2468" ||
+		ev.Data["num_turns"] != strconv.Itoa(first.NumTurns+retry.NumTurns) || ev.Data["first_session_id"] == nil {
+		t.Fatalf("advance %+v; attempts' turns %d + %d", ev.Data, first.NumTurns, retry.NumTurns)
+	}
+}
+
+// streamResult is the result event of a run's stream file.
+func streamResult(t *testing.T, path string) resultEvent {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		var ev struct {
+			Type string `json:"type"`
+			resultEvent
+		}
+		if json.Unmarshal([]byte(line), &ev) == nil && ev.Type == "result" {
+			return ev.resultEvent
+		}
+	}
+	t.Fatalf("no result event in %s", path)
+	return resultEvent{}
 }
 
 // An open PR for the branch (a bounced item) is updated, not opened again.
