@@ -170,10 +170,10 @@ func TestLoopQACommands(t *testing.T) {
 		t.Fatalf("someone else's reopen: %q", out)
 	}
 	out := e.command(Approver, fmt.Sprintf("reopen #%d the code is still tiny", a))
-	if !strings.Contains(out, fmt.Sprintf("#%d done; filed #%d (P2)", a, b+1)) {
+	if !strings.Contains(out, fmt.Sprintf("#%d bigger pairing code done; filed #%d (P2)", a, b+1)) {
 		t.Fatalf("reopen: %q", out)
 	}
-	if out := e.command(Approver, fmt.Sprintf("verified %d", b)); !strings.Contains(out, fmt.Sprintf("#%d verified", b)) || e.item(b).Item.Stage != pipeline.Done {
+	if out := e.command(Approver, fmt.Sprintf("verified %d", b)); !strings.Contains(out, fmt.Sprintf("#%d louder chime verified", b)) || e.item(b).Item.Stage != pipeline.Done {
 		t.Fatalf("verified: %q", out)
 	}
 	help := e.command(other, "help")

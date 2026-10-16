@@ -1109,7 +1109,7 @@ func TestGuardRefusedLineHidesTheCommand(t *testing.T) {
 	}
 	ev := store.Event{ItemID: it.ID, Actor: "runner:devbox", Kind: "guard_refused",
 		Data: map[string]any{"rule": "protected_path", "tool": "Bash", "target": "cat /home/alex/secret-host.lan"}}
-	m, ok := e.b.describe(ev, store.Detail{Item: it})
+	m, ok := e.b.describe(e.ctx, ev, store.Detail{Item: it})
 	if !ok || !strings.Contains(m.Text, "Guard refused a Bash call (protected_path)") || strings.Contains(m.Text, "secret-host") {
 		t.Fatalf("got %q", m.Text)
 	}
@@ -1193,7 +1193,7 @@ func TestAddAfter(t *testing.T) {
 	ts := e.thread(2)
 	var asked bool
 	for _, c := range only(t, e.calls(), "chat.postMessage") {
-		if c.Body["thread_ts"] == ts && strings.Contains(allText(c), "#2 needs you: #1 it depends on was dropped: keep, change or drop this one?") {
+		if c.Body["thread_ts"] == ts && strings.Contains(allText(c), "#2 show the plan link needs you: #1 it depends on was dropped: keep, change or drop this one?") {
 			asked = true
 		}
 	}

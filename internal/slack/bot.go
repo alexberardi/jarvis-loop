@@ -224,7 +224,7 @@ func (b *Bot) handleEvent(ctx context.Context, e store.Event) {
 				b.c.Log.Error("slack: control message", "err", err.Error())
 			}
 			if str(e.Data, "reason") == "usage_limit" {
-				b.post(ctx, "usage limit", b.usageLimitMessage(e))
+				b.post(ctx, "usage limit", b.usageLimitMessage(ctx, e))
 			}
 		}
 		return
@@ -255,7 +255,7 @@ func (b *Bot) handleEvent(ctx context.Context, e store.Event) {
 	} else if e.Kind == "created" {
 		return
 	}
-	if m, ok := b.describe(e, d); ok {
+	if m, ok := b.describe(ctx, e, d); ok {
 		m.Channel, m.ThreadTS = ChannelLoop, ts
 		b.post(ctx, "reply", m)
 	}
@@ -280,6 +280,15 @@ func (b *Bot) hint(id int64) string {
 		return fmt.Sprintf("%s/items/%d", b.c.LinkBase, id)
 	}
 	return fmt.Sprintf("loop show %d", id)
+}
+
+// refID is ref for an item known only by its id: the bare "#N" when it cannot be loaded.
+func (b *Bot) refID(ctx context.Context, id int64) string {
+	d, err := b.c.Store.GetItem(ctx, id)
+	if err != nil {
+		return fmt.Sprintf("#%d", id)
+	}
+	return ref(id, d.Item.Title)
 }
 
 // field is a piece of agent or user text made safe and short for a message.
@@ -446,7 +455,7 @@ func str(d map[string]any, k string) string {
 
 // describe is the thread reply for an event: one or two lines, or the question and held
 // messages, which mention the approver.
-func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
+func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Message, bool) {
 	it := d.Item
 	id := it.ID
 	f := func(k string, max int) string { return b.field(str(e.Data, k), max, id) }
@@ -457,7 +466,7 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 		if it.Stage != pipeline.NeedsYou {
 			q = str(e.Data, "question")
 		}
-		text := fmt.Sprintf("<@%s> #%d needs you: %s\nReply in this thread to answer.", Approver, id, b.field(q, 1500, id))
+		text := fmt.Sprintf("<@%s> %s needs you: %s\nReply in this thread to answer.", Approver, ref(id, it.Title), b.field(q, 1500, id))
 		return Message{Text: text, Blocks: []map[string]any{section(text),
 			{"type": "actions", "block_id": "needs_you", "elements": []any{dropButton(id, strconv.FormatInt(id, 10))}},
 		}}, true
@@ -513,7 +522,7 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 	case "land_waiting":
 		return Message{}, false // pending CI does not post; the parent's stage line says it
 	case "main_ci":
-		text = b.mainCILine(e, id)
+		text = b.mainCILine(ctx, e, id)
 	case "dropped":
 		text = "Dropped by " + who(e.Actor)
 		if w := str(e.Data, "words"); w != "" {
@@ -589,7 +598,7 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 }
 
 // mainCILine is main's CI on an item's merge commit, as the land script recorded it.
-func (b *Bot) mainCILine(e store.Event, id int64) string {
+func (b *Bot) mainCILine(ctx context.Context, e store.Event, id int64) string {
 	sha := short(str(e.Data, "merge_sha"))
 	switch str(e.Data, "result") {
 	case "green":
@@ -603,7 +612,7 @@ func (b *Bot) mainCILine(e store.Event, id int64) string {
 		}
 		failing := b.field(strings.Join(names, ", "), 300, id)
 		if p1, ok := e.Data["p1_item"].(float64); ok && p1 > 0 {
-			return fmt.Sprintf("main red on `%s` (failing: %s): filed #%d (P1).", sha, failing, int64(p1))
+			return fmt.Sprintf("main red on `%s` (failing: %s): filed %s (P1).", sha, failing, b.refID(ctx, int64(p1)))
 		}
 		return fmt.Sprintf("main red on `%s` (failing: %s); no P1 item could be filed, see `loop show %d`.", sha, failing, id)
 	case "superseded":
@@ -622,10 +631,10 @@ func (b *Bot) heldMessage(e store.Event, d store.Detail) Message {
 		sha = it.HeadSHA
 	}
 	reasons := it.HoldReason
-	text := fmt.Sprintf("<@%s> #%d is held for your approval: %s at `%s`.\nWhy: %s\nApprove with the button or a reply here (\"approve\", \"lgtm\", …).",
-		Approver, it.ID, b.prLink(it), short(sha), b.field(reasons, 800, it.ID))
+	text := fmt.Sprintf("<@%s> %s is held for your approval: %s at `%s`.\nWhy: %s\nApprove with the button or a reply here (\"approve\", \"lgtm\", …).",
+		Approver, ref(it.ID, it.Title), b.prLink(it), short(sha), b.field(reasons, 800, it.ID))
 	value := fmt.Sprintf("%d:%s", it.ID, sha)
-	return Message{Text: fmt.Sprintf("<@%s> #%d is held for your approval (%s)", Approver, it.ID, short(sha)), Blocks: []map[string]any{
+	return Message{Text: fmt.Sprintf("<@%s> %s is held for your approval (%s)", Approver, ref(it.ID, it.Title), short(sha)), Blocks: []map[string]any{
 		section(text),
 		{"type": "actions", "block_id": "held", "elements": []any{
 			button("Approve merge", "approve", value, "primary"),
@@ -637,7 +646,7 @@ func (b *Bot) heldMessage(e store.Event, d store.Detail) Message {
 
 // usageLimitMessage tells the approver in #loop-digest that a usage limit set the active agents
 // to 0, with the reset time when the run reported one. Nothing raises the number again on its own.
-func (b *Bot) usageLimitMessage(e store.Event) Message {
+func (b *Bot) usageLimitMessage(ctx context.Context, e store.Event) Message {
 	var id int64
 	switch v := e.Data["item"].(type) {
 	case float64:
@@ -649,7 +658,7 @@ func (b *Bot) usageLimitMessage(e store.Event) Message {
 	}
 	text := fmt.Sprintf("<@%s> Usage limit hit", Approver)
 	if id != 0 {
-		text += fmt.Sprintf(" on #%d", id)
+		text += " on " + b.refID(ctx, id)
 	}
 	text += ": " + b.field(str(e.Data, "error"), 300, id)
 	if r := str(e.Data, "reset"); r != "" {

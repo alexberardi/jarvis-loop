@@ -37,6 +37,23 @@ func Clip(s string, max int, hint string) string {
 	return strings.TrimRight(string(r[:keep]), " \n") + suffix
 }
 
+// refTitleMax is the most characters of an item's title that ref keeps.
+const refTitleMax = 80
+
+// ref names an item as "#N <title>" for a ping or a one-line status reply, so a push notification
+// says which item it is. The title is cut to refTitleMax characters with a plain "…" (Clip's
+// "full text on loopd" hint is too long for a notification), then escaped.
+func ref(id int64, title string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "#" + strconv.FormatInt(id, 10)
+	}
+	if r := []rune(title); len(r) > refTitleMax {
+		title = strings.TrimRight(string(r[:refTitleMax-1]), " \n") + "…"
+	}
+	return "#" + strconv.FormatInt(id, 10) + " " + Escape(title)
+}
+
 var mentionRe = regexp.MustCompile(`<[@!#][^>]*>`)
 
 // stripMentions removes Slack's <@U…>, <!…> and <#C…> tokens from a message's text.

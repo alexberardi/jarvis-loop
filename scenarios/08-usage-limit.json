@@ -44,7 +44,7 @@
           "channel": "digest",
           "from": "bot",
           "pinned": false,
-          "text": "^<@U0C9AFPAMD4> Usage limit hit on #\\d+: .+ \\(resets .+\\)\\.\\nActive agents set to 0\\."
+          "text": "^<@U0C9AFPAMD4> Usage limit hit on #\\d+ Explain the hold list: .+ \\(resets .+\\)\\.\\nActive agents set to 0\\."
         }
       ]
     },

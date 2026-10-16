@@ -32,7 +32,7 @@
       {"thread": "a", "text": "^Merged .*sandbox/demo#101> as `[0-9a-f]{7}`; watching main's CI\\.$"},
       {"channel": "loop", "text": "^\\*#2 main red after #101: test\\*\\nPriority \\*P1\\* · Stage \\*intake\\* · Source finding · Repo sandbox/demo"},
       {"channel": "loop", "text": "^<@U0C9AFPAMD4> P1, filed by the loop: main red after #101: test$"},
-      {"thread": "a", "text": "^main red on `[0-9a-f]{7}` \\(failing: test\\): filed #2 \\(P1\\)\\.$"}
+      {"thread": "a", "text": "^main red on `[0-9a-f]{7}` \\(failing: test\\): filed #2 main red after #101: test \\(P1\\)\\.$"}
     ]
   }
 }

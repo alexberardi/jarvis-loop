@@ -128,7 +128,7 @@
       {
         "thread": "a",
         "from": "bot",
-        "text": "^Cancelled: 'approve' was not applied\\. #\\d+ stays held\\.$"
+        "text": "^Cancelled: 'approve' was not applied\\. #\\d+ Rotate the session signing key stays held\\.$"
       },
       {
         "thread": "a",

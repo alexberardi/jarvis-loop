@@ -27,10 +27,10 @@ func (b *Bot) qaMessage(e store.Event, d store.Detail) Message {
 	if str(e.Data, "main_ci") == "watching" {
 		merged += "; watching main's CI"
 	}
-	text := fmt.Sprintf("<@%s> #%d: Merged — waiting for your check. %s.\nPress Verified when it works; Reopen, then reply here with what is wrong, files a new item.",
-		Approver, it.ID, merged)
+	text := fmt.Sprintf("<@%s> %s: Merged — waiting for your check. %s.\nPress Verified when it works; Reopen, then reply here with what is wrong, files a new item.",
+		Approver, ref(it.ID, it.Title), merged)
 	value := strconv.FormatInt(it.ID, 10)
-	return Message{Text: fmt.Sprintf("<@%s> #%d: Merged — waiting for your check", Approver, it.ID), Blocks: []map[string]any{
+	return Message{Text: fmt.Sprintf("<@%s> %s: Merged — waiting for your check", Approver, ref(it.ID, it.Title)), Blocks: []map[string]any{
 		section(text),
 		{"type": "actions", "block_id": "qa", "elements": []any{
 			button("Verified", "qa_verified", value, "primary"),
@@ -43,7 +43,7 @@ func (b *Bot) qaMessage(e store.Event, d store.Detail) Message {
 func (b *Bot) reopenButton(ctx context.Context, channel, user string, id int64) {
 	d, err := b.c.Store.GetItem(ctx, id)
 	if err != nil || d.Item.Stage != pipeline.QA {
-		msg := fmt.Sprintf("#%d is not waiting for your check.", id)
+		msg := fmt.Sprintf("%s is not waiting for your check.", ref(id, d.Item.Title))
 		if err != nil {
 			msg = Escape(errMessage(err))
 		}
@@ -106,14 +106,14 @@ func (b *Bot) qaCommand(ctx context.Context, actor, verb string, args []string, 
 		if err != nil {
 			return Escape(errMessage(err))
 		}
-		return fmt.Sprintf("#%d waits in qa for your check once merged.", it.ID)
+		return ref(it.ID, it.Title) + " waits in qa for your check once merged."
 	case "verified":
 		b.clearReopen(id)
 		it, err := b.c.Store.Verified(ctx, actor, id, words)
 		if err != nil {
 			return Escape(errMessage(err))
 		}
-		return fmt.Sprintf("#%d verified (done).", it.ID)
+		return ref(it.ID, it.Title) + " verified (done)."
 	}
 	if words == "" {
 		return "Say what is wrong: `/loop reopen <id> <what is wrong>`."
@@ -123,5 +123,5 @@ func (b *Bot) qaCommand(ctx context.Context, actor, verb string, args []string, 
 		return Escape(errMessage(err))
 	}
 	b.clearReopen(id)
-	return fmt.Sprintf("#%d done; filed #%d (%s): %s.", old.ID, filed.ID, filed.Priority, Escape(filed.Title))
+	return fmt.Sprintf("%s done; filed #%d (%s): %s.", ref(old.ID, old.Title), filed.ID, filed.Priority, Escape(filed.Title))
 }
