@@ -23,7 +23,7 @@ import (
 
 const usage = `usage: loop <command> [args]
 
-  add "<title>" [--ask TEXT] [--repo REPO] [--priority P1-P5] [--source SRC]
+  add "<title>" [--ask TEXT] [--repo REPO] [--priority P1-P5] [--source SRC] [--after 12,13]
   status [--stage STAGE] [--priority P]
   show <id>
   answer <id> "<text>"
@@ -155,7 +155,7 @@ type command struct {
 }
 
 var commands = map[string]command{
-	"add":       {1, 1, []string{"ask", "repo", "priority", "source"}, cmdAdd},
+	"add":       {1, 1, []string{"ask", "repo", "priority", "source", "after"}, cmdAdd},
 	"status":    {0, 0, []string{"stage", "priority"}, cmdStatus},
 	"show":      {1, 1, nil, cmdShow},
 	"answer":    {2, 2, nil, cmdAnswer},
@@ -253,6 +253,7 @@ type item struct {
 	MergeSHA    string    `json:"merge_sha"`
 	NeedsQA     bool      `json:"needs_qa"`
 	ReopenOf    int64     `json:"reopen_of"`
+	DependsOn   []int64   `json:"depends_on"`
 	CreatedAt   time.Time `json:"created_at"`
 	Approval    *struct {
 		By      string    `json:"by"`
@@ -288,15 +289,40 @@ func (c *client) moved(it item) {
 // ---- commands ----
 
 func cmdAdd(c *client, pos []string, f map[string][]string) error {
+	var after []int64
+	for _, a := range f["after"] {
+		for _, s := range strings.Split(a, ",") {
+			id, err := itemID(strings.TrimSpace(s))
+			if err != nil {
+				return err
+			}
+			n, _ := strconv.ParseInt(id, 10, 64)
+			after = append(after, n)
+		}
+	}
 	var it item
-	_, err := c.json("POST", "/items", map[string]string{
+	_, err := c.json("POST", "/items", map[string]any{
 		"title": pos[0], "ask": last(f, "ask"), "repo": last(f, "repo"), "priority": last(f, "priority"), "source": last(f, "source"),
+		"depends_on": after,
 	}, &it)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(c.out, "added #%d %s (%s)\n", it.ID, it.Title, it.Priority)
+	line := fmt.Sprintf("added #%d %s (%s)", it.ID, it.Title, it.Priority)
+	if len(it.DependsOn) > 0 {
+		line += ", after " + ids(it.DependsOn)
+	}
+	fmt.Fprintln(c.out, line)
 	return nil
+}
+
+// ids lists item ids as "#1, #2".
+func ids(ns []int64) string {
+	out := make([]string, len(ns))
+	for i, n := range ns {
+		out[i] = fmt.Sprintf("#%d", n)
+	}
+	return strings.Join(out, ", ")
 }
 
 func cmdStatus(c *client, _ []string, f map[string][]string) error {
@@ -366,9 +392,10 @@ func cmdShow(c *client, pos []string, _ map[string][]string) error {
 		return err
 	}
 	var d struct {
-		Item    item   `json:"item"`
-		Display string `json:"display"`
-		Lease   *struct {
+		Item      item    `json:"item"`
+		Display   string  `json:"display"`
+		WaitingOn []int64 `json:"waiting_on"`
+		Lease     *struct {
 			ID        string    `json:"id"`
 			Runner    string    `json:"runner"`
 			Agent     string    `json:"agent"`
@@ -399,6 +426,9 @@ func cmdShow(c *client, pos []string, _ map[string][]string) error {
 	w := c.out
 	fmt.Fprintf(w, "#%d %s\n", it.ID, it.Title)
 	fmt.Fprintf(w, "stage:    %s (%s)\n", it.Stage, d.Display)
+	if len(d.WaitingOn) > 0 {
+		fmt.Fprintf(w, "blocked:  waiting on %s\n", ids(d.WaitingOn))
+	}
 	repo := it.Repo
 	switch {
 	case repo != "":

@@ -362,6 +362,9 @@ func (b *Bot) parentMessage(d store.Detail) Message {
 	if it.ReopenOf != 0 {
 		line += fmt.Sprintf(" · Reopens #%d", it.ReopenOf)
 	}
+	if len(d.WaitingOn) > 0 {
+		line += " · Waiting on " + itemRefs(d.WaitingOn)
+	}
 	text := "*" + head + "*\n" + line
 	if it.Risk == pipeline.RiskHold && it.HoldReason != "" {
 		text += "\nOn the hold list: " + b.field(it.HoldReason, 400, it.ID)
@@ -372,6 +375,15 @@ func (b *Bot) parentMessage(d store.Detail) Message {
 		sec["accessory"] = selectMenu("priority", priorityNames, []string{"P1", "P2", "P3", "P4", "P5"}, it.Priority)
 	}
 	return Message{Channel: ChannelLoop, Text: fmt.Sprintf("%s — %s, %s", head, it.Priority, d.Display), Blocks: []map[string]any{sec}}
+}
+
+// itemRefs lists item ids as "#12, #13".
+func itemRefs(ids []int64) string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = fmt.Sprintf("#%d", id)
+	}
+	return strings.Join(out, ", ")
 }
 
 // landWaiting is what a land run has been waiting on for a while (its land_waiting event, while
@@ -848,12 +860,13 @@ func (b *Bot) onMention(ctx context.Context, m slackEvent) {
 }
 
 func (b *Bot) add(ctx context.Context, user, text string) (pipeline.Item, error) {
-	repo, rest := ParseRepo(text, b.c.Repos, b.c.Aliases)
+	after, rest := ParseAfter(text)
+	repo, rest := ParseRepo(rest, b.c.Repos, b.c.Aliases)
 	pri, title := ParsePriority(rest)
 	if title == "" {
 		return pipeline.Item{}, &pipeline.Error{Code: pipeline.CodeMissingField, Message: "Say what to add."}
 	}
-	return b.c.Store.AddItem(ctx, actorPrefix+user, store.NewItem{Title: title, Ask: text, Repo: repo, Priority: pri, Source: "user"})
+	return b.c.Store.AddItem(ctx, actorPrefix+user, store.NewItem{Title: title, Ask: text, Repo: repo, Priority: pri, Source: "user", DependsOn: after})
 }
 
 func (b *Bot) onActions(ctx context.Context, p interaction) {

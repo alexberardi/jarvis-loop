@@ -32,7 +32,7 @@ there).
 ### Item dependencies and the plan link (the first piece, useful on its own)
 
 - `items.depends_on` (a list of item ids) and `items.plan_id`, `items.plan_piece` (migration
-  `0006_deps_plans.sql`).
+  `0007_deps_plans.sql`).
 - **Claim skips an item whose dependencies are not all `done`** (`qa` counts as not done: the
   piece it depends on isn't verified yet). Pure function in `pipeline.Choose`, table-tested.
 - A dependency that is `dropped` or `closed` → the dependent item goes to `needs-you` with
@@ -42,6 +42,22 @@ there).
   unknown ids are refused (400).
 - `loop show` and the thread header say "waiting on #12" while blocked; the board shows it on
   the card.
+
+**As built (piece 1, 2026-10-15):** migration `0007_deps_plans.sql` (`depends_on` is a
+comma-separated id list like `resources`; `plan_id`, `plan_piece` default 0, no `plans` table yet);
+`pipeline.WaitingOn`, `Choose(c, items, deps, live, req)` with the dependencies' stages (unknown
+counts as not done), `DependencyCycle`, `ApplyDependencyClosed`. On a dependency's drop or
+`not_reproducible` close, in the same transaction, loopd (actor `loopd`, kind `dependency_closed`)
+**removes that id from the dependent's `depends_on`** (it can never be done, so "keep" would
+otherwise wait forever) and moves an open dependent to `needs_you` with the spec's question; one
+already in `needs_you` keeps its own question, and qa/done/closed ones are left alone. Ids are
+checked after the insert in the add's transaction: an unknown id, or the new item's own id, is
+refused as `no item #N`, and a **closed** id as `#N is closed` (it would wait forever; done and qa
+ones are allowed), all `invalid_field` (400); a cycle is refused too; repeats are dropped. `GET /items/{id}` has `waiting_on`; `loop show` prints
+`blocked:  waiting on #12`, `/loop show` and the thread header `· waiting on #12` / `· Waiting on
+#12`, the board card a `waiting on #12` label. The header updates on the dependent's own next event
+(its claim), not when the dependency finishes. Harness: `scenarios/36-deps.json` (`add` takes
+`after`).
 
 ### Plans
 

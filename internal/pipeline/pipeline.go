@@ -167,7 +167,12 @@ type Item struct {
 	ReopenOf int64 `json:"reopen_of,omitempty"`
 	// CIRedSHA is the head land sent back to build for red CI; a pr_opened with the same head
 	// goes to the user, not review (the build changed nothing, so CI would stay red).
-	CIRedSHA  string    `json:"ci_red_sha,omitempty"`
+	CIRedSHA string `json:"ci_red_sha,omitempty"`
+	// DependsOn are the items this one waits for: claim skips it until they are all done.
+	DependsOn []int64 `json:"depends_on"`
+	// PlanID and PlanPiece link an item filed from a plan to its piece (docs/phases/07-planning.md).
+	PlanID    int64     `json:"plan_id,omitempty"`
+	PlanPiece int       `json:"plan_piece,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -209,7 +214,7 @@ func NewItem(title, ask, repo, priority, source string, now time.Time) (Item, er
 	return Item{
 		Title: title, Ask: strings.TrimSpace(ask), Repo: strings.TrimSpace(repo),
 		Source: source, Priority: priority, Stage: Triage, Risk: RiskNormal,
-		Resources: []string{}, CreatedAt: now, UpdatedAt: now,
+		Resources: []string{}, DependsOn: []int64{}, CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
 
