@@ -138,7 +138,30 @@ func (r *Runner) planTurn(ctx context.Context, cl *Claim, agent string) {
 	log.Info("agent starting", "dir", ru.wt, "resume", ru.resume)
 	out := r.runAgent(ctx, ru, prompt)
 	log.Info("agent ended", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
+	if r.sessionGone(ru, out) {
+		// claude no longer has the session (its store was cleared, or the directory moved): start
+		// a new one, with the persona's whole brief, rather than fail every later turn.
+		log.Warn("the session to resume is gone; starting a new one", "session", ru.resume)
+		ru.resume = ""
+		ru.dir = uniqueRunDir(ru.dir)
+		if prompt, err = r.preparePlan(ctx, ru); err != nil {
+			r.postTurn(cleanupCtx, ru, outcome{}, "the runner could not prepare the turn: "+clip(err.Error(), 1000), log)
+			return
+		}
+		out = r.runAgent(ctx, ru, prompt)
+		log.Info("agent ended", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
+	}
 	r.reportPlan(cleanupCtx, ru, out, log)
+}
+
+// sessionGone says a resumed turn ended before its session started because claude has no such
+// session ("No conversation found with session ID: ...").
+func (r *Runner) sessionGone(ru *run, out outcome) bool {
+	if ru.resume == "" || out.reason != endExited || out.exitCode == 0 || out.stats.sessionID != "" {
+		return false
+	}
+	b, _ := os.ReadFile(filepath.Join(ru.dir, "stderr.log"))
+	return bytes.Contains(b, []byte("No conversation found"))
 }
 
 // newPlanRun works out where a plan turn happens. A claim it cannot run still gets a run (with

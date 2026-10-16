@@ -95,8 +95,10 @@ cannot silently check nothing. Steps (`"do"`):
 | `triage` / `review` `item` | claim the stage by hand (a `hand` runner token, as `loop claim`/`loop advance`) and finish it: reproduced with evidence / approved for the PR head |
 | `land` `item`, `outcome` (`hold`\|`merged`\|`back_to_build`), [`reason`] | the land stage by hand, with the PR's changed paths (a scenario whose `stages` include `land` lets the runner's land script do it instead) |
 | `script` `item`, `play`, [`file`], [`for`], [`picks`] | how the fake claude plays the item's runs of a stage (`for`: `triage`, `build` (default), `review`). Build: `good`, `escape`, `hang`, `ignore_term`, `usage_limit`, `question`, `exit3`, …; `file`: the path it changes; after a bounce it addresses `.loop/review/`. Triage: `reproduce` (default; `picks`: the repo it names when the item has none), `duplicate`, `triage_question`, `triage_bad_repo`. Review: `approve` (default), `bounce`, `review_commit` |
-| `runner` [`claims`: alias\|`none`] | the runner polls once: closes the PRs of dropped items (as `Run` does each poll), then claims (and works in the background) or finds nothing |
-| `agent_running` `item` | wait until the item's agent is mid-run (a hanging fake) |
+| `script` `plan`, `for` (`product`\|`engineering`), `play`, [`picks`] | how the fake claude plays the plan's turns of a persona. Product: `brief` (default: `out/brief.md` naming the turn's messages, ready; `picks`: the `repos` it sets). Engineering: `blueprint` (default: 3 pieces, 2 and 3 depending on 1, ready), `back_to_brief`, `cycle`. Both: `wait` (reports `waiting`, finishes after `release`), `plan_escape` (a write outside `out/` first, refused), `hang`, `usage_limit`, `exit3`. Every plan turn starts a session `fake-session-P<id>-<persona>` or resumes one, which must have been started in the same directory (else it exits as claude does: "No conversation found") |
+| `runner` [`claims`: alias\|`none`] | the runner polls once: closes the PRs of dropped items (as `Run` does each poll), then claims (and works in the background) or finds nothing. A plan's alias: it must claim that plan's next turn (a scenario whose `stages` include `plan`) |
+| `agent_running` `item` or `plan` | wait until the item's agent is mid-run (a hanging fake), or the plan's is waiting (`wait`) |
+| `release` `plan` | let the plan's waiting fake agent finish its turn |
 | `runner_idle` | wait until no run is working |
 | `clock` `advance` (`"2m"`, `"45m"`) | move the fake clock, in 30-second steps |
 | `reply` / `mention` `item`, `as` (`approver`\|`other`), `text` | a thread reply / mention in the item's thread |
@@ -108,7 +110,7 @@ cannot silently check nothing. Steps (`"do"`):
 | `github` [`refuse_merges`: n], [`item` + `merge_by_hand`], [`item` + `close_by_hand`] | GitHub refuses the next n merges; the item's PR is merged (or closed) on GitHub outside the loop |
 | `plan` `plan` (alias), `title`, [`priority`], [`text`] | start a plan (`POST /plans`, repos `sandbox/demo`) |
 | `plan_say` `plan`, `text` | the user's message to the plan (`POST /plans/{id}/messages`) |
-| `plan_turn` `plan`, [`text` (the reply)], [`brief`], [`blueprint`], [`ready`], [`back_to_brief`], [`fails` regexp] | a fake runner (the hand runner, `kinds: [plan]`) claims the plan's next turn and reports that result; the turn must be done, or failed with `fails` |
+| `plan_turn` `plan`, [`text` (the reply)], [`brief`], [`blueprint`], [`ready`], [`back_to_brief`], [`fails` regexp] | a fake runner (the hand runner, `kinds: [plan]`) claims the plan's next turn and reports that result; the turn must be done, or failed with `fails` (the real runner's turns: `runner` with the plan's alias) |
 | `plan_approve` `plan`, `doc` (`brief`\|`blueprint`), [`version`, 0: latest], [`text`], [`refused` regexp] | approve that version's sha256; with `refused`, the approval must be refused with a matching error |
 | `plan_drop` `plan`, [`text`] | drop the plan |
 | `plan_items` `plan`, `pieces`: [aliases] | name the items the plan's hand-off filed, in piece order |
@@ -125,7 +127,8 @@ negative ones are checked once the loop has gone quiet:
 | `control`: {`active_agents`, `stopped`} | loopd's control |
 | `prs`: n | PRs opened on the fake GitHub |
 | `pr`: {alias: {`number`, `repo`, `title` regexp, `body` regexp, `edits`, `comments`, `comment` regexp, `state`, `merge_calls`}} | the PR the runner opened for the item, at its branch's head: how often it updated it, how many comments (review verdicts) it posted, the newest |
-| `same_prefix`: [stages] | each stage ran at least twice, and every run's prompt starts with that stage's static brief and has the same argv |
+| `same_prefix`: [stages] | each stage ran at least twice, and every run's prompt starts with that stage's static brief and has the same argv. For a persona (`product`, `engineering`): it took at least two turns; a new session's prompt starts with the persona's static brief, a resumed one's is the turn alone (`## This turn`), and the argv differ only by `--resume <session>` |
+| `run_files`: [{`item` or `plan`, `stage` (a plan's: the persona), [`run`, 0: the latest], `file`, `text` regexp, `no_text` regexp, `absent`}] | a file of that agent run's dir (`brief.md`, the prompt; `argv.json`; `setup.log`; `verify/<step>/output.log`) |
 | `remote`: {`branches`: {alias: head-subject regexp}, `files`: {alias: [paths]}, `only`, `main`: alias} | the remote's branches; `main` is where it started or where a merge or `push` put it, and (`main`) is that item's squash commit |
 | `agent_runs`: {stage: n} | the runner started n agent runs for that stage (land starts none) |
 | `absent`: [paths under the stack dir] | they do not exist |

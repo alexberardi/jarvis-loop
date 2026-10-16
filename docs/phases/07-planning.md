@@ -163,6 +163,39 @@ and `plans`/`depends_on` expectations (04b), `scenarios/37-plan-stale-approve.js
 - Limits: `plan_turn_minutes` (config, default 15), same overtime handling as items. A failed turn
   posts "that turn failed: <reason>; reply to try again" and keeps the session.
 
+**As built (piece 3, 2026-10-16):** `internal/runner/plan.go`. A runner takes plan turns when its
+config `stages` names `plan` (never by default); the client then sends `kinds` (`[item, plan]`, or
+`[plan]` alone with no item stages) and `plan` is not sent as a stage. The plan's directory is
+`<work_root>/plan-<id>/`: `repos/<key>/` (a fresh detached worktree per repo at
+`origin/<base>` after a fetch, every turn; a repo the plan no longer has is removed), `.loop/context/`
+(rewritten every turn: `repos.md`, the latest `brief.md` and `blueprint.md` from
+`GET /plans/{id}/docs/{kind}`), `.loop/scratch/` and `out/` (both emptied before every turn). The
+guard's write roots are `out/` and the scratch dir (its `worktree` is `out/`), read-only (no
+commits); the settings are the read-only ones, one file per persona (`settings/plan-<persona>.json`),
+the same bytes for every plan. Run logs are `work/runs/P<id>-<persona>-<time>/` (prompt as
+`brief.md`, `argv.json`, the stream). **The prompt:** a persona's first turn (loopd has no session
+for it) is its static brief (the skill and the result contract; goldens
+`internal/runner/testdata/brief_product.golden.md` and `brief_engineering.golden.md`) followed by
+`## This turn` (plan, persona, turn, the checkouts, the context files, the messages verbatim as
+quotes, engineering's reason first after a hand-back); a resumed turn (`--resume <session>`, the
+only argv difference) gets the `## This turn` part alone. The session id comes from the stream's
+`init` event and goes with every result, failed or not. **The result** `out/result.json` is
+`{reply, brief, blueprint, ready, back_to_brief, repos}` (no other fields; documents are plain
+files in `out/`, at most 256 KB); the runner checks what loopd checks that it can (reply length,
+persona fields, `repos` and pieces' repos against its configured slugs, `pipeline.ParseBlueprint`)
+and posts the documents' markdown. Any failure (those checks, no result, the time cap at
+`plan_turn_minutes` or loopd's `max_run_minutes`, whichever is lower, the usage limit, a boundary
+check) posts `error` with reply "That turn failed: <why>; reply to try again." and the session id;
+a stopped or shut-down turn posts nothing (loopd requeues it). **Not in this piece:** a usage limit
+on a plan turn fails the turn but does not set active agents to 0 as an item's does (loopd's turn
+result has no such outcome); guard refusals stay in the run's log (loopd's events API is per item);
+plan directories are not removed when a plan is split or dropped. A session claude no longer has
+(`--resume` exits with "No conversation found") is replaced in the same turn: the runner starts a
+new session with the persona's whole brief, whose id loopd then stores. Harness: `scripts/loop-sandbox` with `stages` including `plan` (the `runner`, `script`,
+`agent_running`, `release` steps and `run_files`/`same_prefix` for plans, 04b), the fake claude's
+plan plays and per-directory sessions, `scenarios/40-plan-runner.json` (2, end to end),
+`41-plan-reply-joins.json` (3), `42-plan-back-to-brief.json` (5), `43-plan-resume.json` (7).
+
 ## Slack
 
 - The bot joins `#plan` (`C0C8Y132YRM`; already a member). A top-level message there from the

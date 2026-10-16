@@ -1,0 +1,36 @@
+{
+  "name": "plan-runner",
+  "about": "Plans, scenario 2 end to end (docs/phases/07-planning.md) through the real runner with the fake claude: a runner with stage plan claims the plan's turns. The product turn runs in work/plan-1/ (a new session; the prompt opens with the product brief) and writes out/brief.md, ready; the brief is approved; engineering's first turn (its own session, no message) writes a blueprint with 3 pieces (2 and 3 depend on 1), ready; approving it files 3 items with those dependencies, and the runner claims only piece 1.",
+  "stages": ["triage", "build", "review", "plan"],
+  "steps": [
+    {"do": "plan", "plan": "p", "title": "Pantry list", "priority": "P2", "text": "I want a pantry list in the app"},
+    {"do": "runner", "claims": "p"},
+    {"do": "runner_idle"},
+    {"do": "expect", "plans": {"p": {"stage": "brief", "turn": "you", "turns": 1, "last_turn": "done", "docs": {"brief": 1}}},
+     "events": [{"plan": "p", "kind": "plan_turn_done", "actor": "runner", "data": {"persona": "^product$", "ready": "^true$"}, "count": 1}],
+     "run_files": [{"plan": "p", "stage": "product", "file": "brief.md", "text": "^# Product \\(planning\\)[\\s\\S]*\\n## This turn\\n[\\s\\S]*> I want a pantry list in the app"},
+                   {"plan": "p", "stage": "product", "file": "argv.json", "no_text": "--resume"}]},
+    {"do": "plan_approve", "plan": "p", "doc": "brief", "text": "yes"},
+    {"do": "runner", "claims": "p"},
+    {"do": "runner_idle"},
+    {"do": "expect", "plans": {"p": {"stage": "blueprint", "turn": "you", "turns": 2, "last_turn": "done", "docs": {"brief": 1, "blueprint": 1}}},
+     "events": [{"plan": "p", "kind": "plan_turn_done", "actor": "runner", "data": {"persona": "^engineering$", "ready": "^true$"}, "count": 1}],
+     "run_files": [{"plan": "p", "stage": "engineering", "file": "brief.md", "text": "^# Engineering \\(planning\\)[\\s\\S]*The brief was approved: start the blueprint\\."},
+                   {"plan": "p", "stage": "engineering", "file": "argv.json", "no_text": "--resume"}]},
+    {"do": "plan_approve", "plan": "p", "doc": "blueprint", "text": "go"},
+    {"do": "expect", "plans": {"p": {"stage": "split", "items": 3, "turn": "none"}}},
+    {"do": "plan_items", "plan": "p", "pieces": ["p1", "p2", "p3"]},
+    {"do": "expect", "stage": {"p1": "triage", "p2": "triage", "p3": "triage"},
+     "repo": {"p1": "sandbox/demo", "p2": "sandbox/demo", "p3": "sandbox/demo"},
+     "depends_on": {"p1": [], "p2": ["p1"], "p3": ["p1"]}},
+    {"do": "script", "item": "p1", "for": "triage", "play": "triage_question"},
+    {"do": "runner", "claims": "p1"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"p1": "needs_you", "p2": "triage", "p3": "triage"}},
+    {"do": "runner", "claims": "none"}
+  ],
+  "expect": {
+    "plans": {"p": {"stage": "split", "items": 3}},
+    "agent_runs": {"product": 1, "engineering": 1, "triage": 1}
+  }
+}

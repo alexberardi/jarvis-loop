@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -125,6 +126,9 @@ type Expect struct {
 	AgentRuns map[string]int `json:"agent_runs,omitempty"`
 	// SamePrefix: for each stage named, the runner ran it at least twice, and every run's prompt
 	// starts with that stage's static brief and has the same command line (one cacheable prefix).
+	// For a plan persona (product, engineering): every session's first prompt starts with the
+	// persona's static brief, a resumed turn's prompt is the turn alone, and the command lines
+	// differ only by --resume <session>.
 	SamePrefix []string `json:"same_prefix,omitempty"`
 	// RunFiles check files in an item's agent run dirs (the brief, the verify output).
 	RunFiles []RunMatch `json:"run_files,omitempty"`
@@ -143,9 +147,11 @@ type BoardMatch struct {
 	Card   string `json:"card,omitempty"`
 }
 
-// RunMatch checks a file in one of an item's run dirs (work/runs/<id>-<stage>-<time>[-n]/).
+// RunMatch checks a file in one of an item's run dirs (work/runs/<id>-<stage>-<time>[-n]/), or
+// of a plan's turns (Plan, with the persona as Stage: work/runs/P<id>-<persona>-<time>[-n]/).
 type RunMatch struct {
-	Item  string `json:"item"`
+	Item  string `json:"item,omitempty"`
+	Plan  string `json:"plan,omitempty"`
 	Stage string `json:"stage"`
 	// Run is which run of the stage, 1 for the first; 0 for the latest.
 	Run int `json:"run,omitempty"`
@@ -349,33 +355,71 @@ func (p *player) step(st Step) error {
 		}
 		return s.hand.Advance(p.ctx, r.id, "reproduced", map[string]string{"area": "sandbox", "size": "S", "risk": "normal", "resources": ""}, nil)
 	case "script":
+		if st.Plan != "" {
+			id, err := p.planRef(st.Plan)
+			if err != nil {
+				return err
+			}
+			return s.PlanScript(id, st.For, st.Play, st.Picks)
+		}
 		r, err := p.ref(st.Item)
 		if err != nil {
 			return err
 		}
 		return s.SetScript(r.id, st.For, st.Play, st.File, st.Picks)
 	case "runner":
-		id, err := s.Poll(30 * time.Second)
+		c, err := s.Poll(30 * time.Second)
 		if err != nil {
 			return err
+		}
+		got := "nothing"
+		switch {
+		case c.Item != 0:
+			got = fmt.Sprintf("#%d", c.Item)
+		case c.Plan != 0:
+			got = fmt.Sprintf("a turn of P%d", c.Plan)
 		}
 		switch st.Claims {
 		case "":
 		case "none":
-			if id != 0 {
-				return fmt.Errorf("the runner claimed #%d, want nothing", id)
+			if got != "nothing" {
+				return fmt.Errorf("the runner claimed %s, want nothing", got)
 			}
 		default:
+			if id, ok := p.plans[st.Claims]; ok {
+				if c.Plan != id {
+					return fmt.Errorf("the runner claimed %s, want a turn of plan %s (P%d)", got, st.Claims, id)
+				}
+				return nil
+			}
 			r, err := p.ref(st.Claims)
 			if err != nil {
 				return err
 			}
-			if id != r.id {
-				return fmt.Errorf("the runner claimed #%d, want %s (#%d)", id, st.Claims, r.id)
+			if c.Item != r.id {
+				return fmt.Errorf("the runner claimed %s, want %s (#%d)", got, st.Claims, r.id)
 			}
 		}
 		return nil
+	case "release":
+		id, err := p.planRef(st.Plan)
+		if err != nil {
+			return err
+		}
+		return s.ReleasePlan(id)
 	case "agent_running":
+		if st.Plan != "" {
+			id, err := p.planRef(st.Plan)
+			if err != nil {
+				return err
+			}
+			return eventually(30*time.Second, func() error {
+				if slices.Contains(s.PlanAgentState(id), "waiting") {
+					return nil
+				}
+				return fmt.Errorf("the agent for plan %s is not waiting yet (state %v)", st.Plan, s.PlanAgentState(id))
+			})
+		}
 		r, err := p.ref(st.Item)
 		if err != nil {
 			return err

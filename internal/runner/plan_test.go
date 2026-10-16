@@ -212,6 +212,21 @@ func TestPlanTurnsResumeTheSession(t *testing.T) {
 	if ctx, _ := os.ReadFile(filepath.Join(dir, ".loop", "context", "brief.md")); !strings.Contains(string(ctx), "Turn 1 heard") {
 		t.Fatalf("the latest brief is not in the context: %q", ctx)
 	}
+	// claude lost the session: the next turn starts a new one, with the whole product brief.
+	os.RemoveAll(filepath.Join(g.scripts, "sessions"))
+	g.st.PlanMessage(g.ctx, "user:alex", p.ID, "and the fridge")
+	g.runOnce()
+	d = g.plan(p.ID)
+	if last := d.Turns[2]; last.Status != pipeline.TurnDone || !strings.Contains(g.logs.String(), "the session to resume is gone") {
+		t.Fatalf("third turn %+v\n%s", last, g.logs.String())
+	}
+	runs = g.planRuns(p.ID, "product")
+	if len(runs) != 4 || slices.Contains(argvOf(t, runs[3]), "--resume") {
+		t.Fatalf("runs %v", runs)
+	}
+	if prompt, _ := os.ReadFile(filepath.Join(runs[3], "brief.md")); !strings.HasPrefix(string(prompt), StaticBrief("product")) {
+		t.Fatal("a new session's prompt starts with the persona's brief")
+	}
 	// Both turns ran with the same settings file, shared by every plan.
 	if s := argvOf(t, runs[0]); s[slices.Index(s, "--settings")+1] != filepath.Join(g.r.Cfg.WorkRoot, "settings", "plan-product.json") {
 		t.Fatalf("settings %q", s)
