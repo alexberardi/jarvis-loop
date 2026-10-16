@@ -67,11 +67,25 @@ const (
 	ReviewCommit = "review_commit" // tries to commit a fixup (the guard refuses), then approves
 	ApproveHold  = "approve_hold"  // approved, with needs_review (content a path rule cannot see)
 	ApproveQA    = "approve_qa"    // approved, with needs_qa (the user should check it once merged)
+
+	// Plan turns (a prompt with "- Plan: P<id>" and "- Persona: <persona>"; the script is
+	// <dir>/P<id>-<persona>.json). Every play writes out/result.json with a reply.
+	PlanBrief     = "brief"         // product: out/brief.md (the turn's messages in it), ready
+	PlanBlueprint = "blueprint"     // engineering: a 3-piece blueprint (2 and 3 depend on 1), ready
+	BackToBrief   = "back_to_brief" // engineering: sends the plan back to the brief
+	PlanCycle     = "cycle"         // engineering: a blueprint whose pieces depend on each other
+	PlanEscape    = "plan_escape"   // tries to write outside out/ (refused), then the persona's usual
+	// PlanWait waits until the harness releases it (the file <dir>/P<id>.release), reporting
+	// "waiting", then plays the persona's usual.
+	PlanWait = "wait"
 )
 
 var stagePlays = map[string][]string{
 	"triage": {Reproduce, Duplicate, TriageQuestion, TriageBadRepo, Route, Hang, UsageLimit, Exit3},
 	"review": {Approve, Bounce, ReviewCommit, ApproveHold, ApproveQA, Hang, UsageLimit, Exit3},
+	// Plan personas.
+	"product":     {PlanBrief, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
+	"engineering": {PlanBlueprint, BackToBrief, PlanCycle, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
 }
 
 type fake struct {
@@ -79,6 +93,7 @@ type fake struct {
 	cwd       string
 	mode      string
 	pre, sess string
+	session   string
 	runHooks  bool
 	n         int
 	turns     int
@@ -93,9 +108,12 @@ func (f *fake) emit(v any) {
 // Main runs the fake with claude's arguments and returns its exit code.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	f := &fake{out: stdout, runHooks: true}
-	var settings string
+	var settings, resume string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--resume":
+			i++
+			resume = args[i]
 		case "--settings":
 			i++
 			settings = args[i]
@@ -114,6 +132,10 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	base := find("base branch `([^`]+)`", brief)
 	item := find(`Item: #(\d+)`, brief)
 	stage := find(`(?m)^- Stage: (\w+)$`, brief)
+	if persona := find(`(?m)^- Persona: (\w+)$`, brief); persona != "" {
+		// A plan turn: the plan stands in for the item, the persona for the stage.
+		item, stage = "P"+find(`(?m)^- Plan: P(\d+):`, brief), persona
+	}
 	if stage == "" {
 		stage = "build"
 	}
@@ -167,7 +189,23 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if scenario == WrongMode {
 		mode = "default"
 	}
-	f.emit(map[string]any{"type": "system", "subtype": "init", "session_id": "fake-session-" + scenario, "cwd": f.cwd, "model": "fake-model",
+	// Sessions: an item run's is named after its scenario; a plan turn starts a session of its own
+	// (one per plan and persona) or resumes one, which, as claude's, must have been made in the
+	// same working directory.
+	f.session = "fake-session-" + scenario
+	if strings.HasPrefix(item, "P") {
+		f.session = "fake-session-" + item + "-" + stage
+	}
+	if resume != "" {
+		if err := checkSession(os.Getenv("FAKE_CLAUDE_SCRIPTS"), resume, f.cwd); err != nil {
+			fmt.Fprintf(stderr, "No conversation found with session ID: %s (%v)\n", resume, err)
+			return 1
+		}
+		f.session = resume
+	} else if strings.HasPrefix(item, "P") {
+		saveSession(os.Getenv("FAKE_CLAUDE_SCRIPTS"), f.session, f.cwd)
+	}
+	f.emit(map[string]any{"type": "system", "subtype": "init", "session_id": f.session, "cwd": f.cwd, "model": "fake-model",
 		"permissionMode": mode, "tools": []string{"Bash", "Read", "Edit", "Write"}, "apiKeySource": "none", "claude_code_version": "fake"})
 
 	switch scenario {
@@ -206,6 +244,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return f.triage(scenario, brief, sc)
 	case "review":
 		return f.review(scenario, brief)
+	case "product", "engineering":
+		return f.planTurn(scenario, stage, item, brief, sc, progress)
 	}
 
 	// The common path: a change, committed on the item's branch (a resumed run finds it there).
@@ -305,7 +345,7 @@ func (f *fake) result(text string) {
 	}
 	f.emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": f.turns + 1,
 		"duration_ms": 1234, "total_cost_usd": 0.42, "result": text, "permission_denials": []any{}, "usage": usage,
-		"session_id": "fake-session-" + f.scenario})
+		"session_id": f.session})
 }
 
 // hook runs a hook command as Claude Code does (bash, JSON on stdin) and reports a deny.
@@ -515,3 +555,82 @@ func (f *fake) review(play string, brief []byte) int {
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// checkSession finds a session the fake started: it must exist and have been started in cwd
+// (claude keeps sessions per working directory).
+func checkSession(dir, id, cwd string) error {
+	if dir == "" {
+		return nil
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "sessions", id))
+	if err != nil {
+		return fmt.Errorf("no such session")
+	}
+	if string(b) != cwd {
+		return fmt.Errorf("it was started in %s, not %s", b, cwd)
+	}
+	return nil
+}
+
+func saveSession(dir, id, cwd string) {
+	if dir == "" {
+		return
+	}
+	os.MkdirAll(filepath.Join(dir, "sessions"), 0o755)
+	os.WriteFile(filepath.Join(dir, "sessions", id), []byte(cwd), 0o644)
+}
+
+// planTurn plays a plan turn: it reads the turn's messages from the prompt and writes the
+// persona's documents and out/result.json.
+func (f *fake) planTurn(play, persona, plan string, brief []byte, sc script, progress func(string)) int {
+	if play == PlanWait {
+		progress("waiting")
+		release := filepath.Join(os.Getenv("FAKE_CLAUDE_SCRIPTS"), plan+".release")
+		for deadline := time.Now().Add(2 * time.Minute); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			if os.Remove(release) == nil {
+				break
+			}
+		}
+	}
+	if play == PlanEscape {
+		f.write("notes.md", "outside out/\n")
+	}
+	if play == PlanWait || play == PlanEscape {
+		play = stagePlays[persona][0]
+	}
+	var msgs []string
+	for _, l := range strings.Split(string(brief), "\n") {
+		if strings.HasPrefix(l, "> ") {
+			msgs = append(msgs, strings.TrimPrefix(l, "> "))
+		}
+	}
+	turn := find(`(?m)^- Turn: (\d+)`, brief)
+	title := find(`(?m)^- Plan: P\d+: (.*)$`, brief)
+	f.bash("ls -a .loop/context")
+	r := map[string]any{}
+	switch play {
+	case PlanBrief:
+		f.write("out/brief.md", fmt.Sprintf("# %s\n\nTurn %s heard: %s\n", title, turn, strings.Join(msgs, " / ")))
+		r = map[string]any{"reply": fmt.Sprintf("Here is the brief (turn %s, %d message(s)).", turn, len(msgs)), "brief": "brief.md", "ready": true}
+		if sc.Repo != "" {
+			r["repos"] = []string{sc.Repo}
+		}
+	case PlanBlueprint, PlanCycle:
+		dep2, dep1 := "1", "none"
+		if play == PlanCycle {
+			dep1 = "2"
+		}
+		f.write("out/blueprint.md", fmt.Sprintf("# Blueprint: %s\n\nApproach: one table, then a reader and a page.\n\n## Pieces\n\n"+
+			"### 1. The table\n- size: S\n- depends on: %s\n\nThe table and its migration.\n\n"+
+			"### 2. The API\n- size: S\n- depends on: %s\n\nList and add.\n\n"+
+			"### 3. The page\n- size: S\n- depends on: 1\n\nShow the list.\n\n## Risks\n\nNone.\n", title, dep1, dep2))
+		r = map[string]any{"reply": fmt.Sprintf("Here is the blueprint (turn %s): three pieces.", turn), "blueprint": "out/blueprint.md", "ready": true}
+	case BackToBrief:
+		r = map[string]any{"reply": "This is bigger than the brief says; sending it back.",
+			"back_to_brief": "the brief needs offline sync, which is a project of its own: narrow it to online only"}
+	}
+	res, _ := json.Marshal(r)
+	f.write("out/result.json", string(res))
+	f.result("Turn done.")
+	return 0
+}

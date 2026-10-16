@@ -1,0 +1,31 @@
+{
+  "name": "plan-back-to-brief",
+  "about": "Plans, scenario 5 (docs/phases/07-planning.md) through the real runner: engineering's first turn returns back_to_brief; the plan goes back to brief and the product session resumes (--resume) with the reason at the start of its turn; after the revised brief is approved, the blueprint stage restarts and engineering resumes its own session.",
+  "stages": ["plan"],
+  "steps": [
+    {"do": "plan", "plan": "p", "title": "Pantry list", "priority": "P2", "text": "a pantry list that syncs offline"},
+    {"do": "runner", "claims": "p"},
+    {"do": "runner_idle"},
+    {"do": "plan_approve", "plan": "p", "doc": "brief"},
+    {"do": "script", "plan": "p", "for": "engineering", "play": "back_to_brief"},
+    {"do": "runner", "claims": "p"},
+    {"do": "runner_idle"},
+    {"do": "expect", "plans": {"p": {"stage": "brief", "turn": "agent", "docs": {"brief": 1, "blueprint": 0}}},
+     "events": [{"plan": "p", "kind": "back_to_brief", "actor": "runner", "data": {"reason": "offline sync"}, "count": 1}]},
+    {"do": "runner", "claims": "p"},
+    {"do": "runner_idle"},
+    {"do": "expect", "plans": {"p": {"stage": "brief", "turn": "you", "docs": {"brief": 2}}},
+     "run_files": [{"plan": "p", "stage": "product", "run": 2, "file": "argv.json", "text": "\"--resume\",\"fake-session-P1-product\""},
+                   {"plan": "p", "stage": "product", "run": 2, "file": "brief.md", "text": "^## This turn\\n[\\s\\S]*Engineering sent the plan back to the brief:\\*\\*\\n\\n> the brief needs offline sync"}]},
+    {"do": "plan_approve", "plan": "p", "doc": "brief", "text": "online only, then"},
+    {"do": "script", "plan": "p", "for": "engineering", "play": "blueprint"},
+    {"do": "runner", "claims": "p"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "plans": {"p": {"stage": "blueprint", "turn": "you", "turns": 4, "last_turn": "done", "docs": {"brief": 2, "blueprint": 1}}},
+    "run_files": [{"plan": "p", "stage": "engineering", "run": 2, "file": "argv.json", "text": "\"--resume\",\"fake-session-P1-engineering\""}],
+    "events": [{"plan": "p", "kind": "plan_approved", "data": {"kind": "^brief$"}, "count": 2}],
+    "agent_runs": {"product": 2, "engineering": 2}
+  }
+}

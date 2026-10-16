@@ -481,9 +481,10 @@ func TestReviewOfAMovedPRFails(t *testing.T) {
 }
 
 // Every stage's prompt starts with the same bytes for every item (the static brief, a golden file
-// per stage), and its runs share the argv and settings bytes: one cacheable prefix per stage.
+// per stage), and its runs share the argv and settings bytes: one cacheable prefix per stage. A
+// plan persona's first prompt starts with its own (brief_product, brief_engineering).
 func TestStagePrefixesAreStable(t *testing.T) {
-	for _, stage := range AgentStages {
+	for _, stage := range append(slices.Clone(AgentStages), Personas...) {
 		got := StaticBrief(stage)
 		path := filepath.Join("testdata", "brief_"+stage+".golden.md")
 		if *update {
@@ -498,8 +499,8 @@ func TestStagePrefixesAreStable(t *testing.T) {
 		if got != string(want) {
 			t.Errorf("%s differs from the %s brief's static part; review and rerun with -update", path, stage)
 		}
-		if strings.Contains(got, ItemHeading) {
-			t.Errorf("the %s skill contains the item heading", stage)
+		if strings.Contains(got, ItemHeading) || strings.Contains(got, TurnHeading) {
+			t.Errorf("the %s skill contains the item or turn heading", stage)
 		}
 	}
 

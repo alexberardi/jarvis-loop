@@ -422,12 +422,17 @@ func (s *Stack) Close() {
 	}
 }
 
-// Poll has the runner claim once, as its poll loop would, and work the item in the background.
-// It returns once the claim is decided: the item claimed (it reports which), or nothing to claim.
-func (s *Stack) Poll(timeout time.Duration) (int64, error) {
+// Claimed is what one poll of the runner claimed: an item, or a plan's turn (zero: nothing).
+type Claimed struct {
+	Item, Plan int64
+}
+
+// Poll has the runner claim once, as its poll loop would, and work the item (or plan turn) in the
+// background. It returns once the claim is decided: what it claimed, or nothing.
+func (s *Stack) Poll(timeout time.Duration) (Claimed, error) {
 	before, err := s.lastEventID()
 	if err != nil {
-		return 0, err
+		return Claimed{}, err
 	}
 	s.runsMu.Lock()
 	s.inflight++
@@ -446,19 +451,19 @@ func (s *Stack) Poll(timeout time.Duration) (int64, error) {
 	}()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if id, ok := s.claimedSince(before); ok {
-			return id, nil
+		if c, ok := s.claimedSince(before); ok {
+			return c, nil
 		}
 		select {
 		case <-ended:
-			if id, ok := s.claimedSince(before); ok {
-				return id, nil
+			if c, ok := s.claimedSince(before); ok {
+				return c, nil
 			}
-			return 0, nil
+			return Claimed{}, nil
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	return 0, errors.New("the runner neither claimed nor gave up")
+	return Claimed{}, errors.New("the runner neither claimed nor gave up")
 }
 
 func (s *Stack) runEnded() {
@@ -541,14 +546,20 @@ func (s *Stack) lastEventID() (int64, error) {
 	return evs[len(evs)-1].ID, nil
 }
 
-func (s *Stack) claimedSince(id int64) (int64, bool) {
+func (s *Stack) claimedSince(id int64) (Claimed, bool) {
 	evs, _ := s.Events()
 	for _, e := range evs {
-		if e.ID > id && e.Kind == "claimed" && e.Actor == "runner:"+RunnerName {
-			return e.ItemID, true
+		if e.ID <= id || e.Actor != "runner:"+RunnerName {
+			continue
+		}
+		switch e.Kind {
+		case "claimed":
+			return Claimed{Item: e.ItemID}, true
+		case "plan_turn_claimed":
+			return Claimed{Plan: e.PlanID}, true
 		}
 	}
-	return 0, false
+	return Claimed{}, false
 }
 
 // SetScript sets how the fake claude plays item id's next runs of a stage ("" or "build": its
@@ -566,6 +577,25 @@ func (s *Stack) SetScript(id int64, stage, play, file, repo string) error {
 func (s *Stack) AgentState(id int64) []string {
 	b, _ := os.ReadFile(filepath.Join(s.scripts, fmt.Sprintf("%d.state", id)))
 	return strings.Fields(string(b))
+}
+
+// PlanScript sets how the fake claude plays a plan's next turns of a persona; repo is the repo the
+// product agent names (repos), if any.
+func (s *Stack) PlanScript(id int64, persona, play, repo string) error {
+	b, _ := json.Marshal(map[string]string{"play": play, "repo": repo})
+	return os.WriteFile(filepath.Join(s.scripts, fmt.Sprintf("P%d-%s.json", id, persona)), b, 0o644)
+}
+
+// PlanAgentState is what the fake claude reported for a plan's turns so far ("started",
+// "waiting").
+func (s *Stack) PlanAgentState(id int64) []string {
+	b, _ := os.ReadFile(filepath.Join(s.scripts, fmt.Sprintf("P%d.state", id)))
+	return strings.Fields(string(b))
+}
+
+// ReleasePlan lets a plan's waiting fake agent (play "wait") finish its turn.
+func (s *Stack) ReleasePlan(id int64) error {
+	return os.WriteFile(filepath.Join(s.scripts, fmt.Sprintf("P%d.release", id)), nil, 0o644)
 }
 
 // Thread is an item's Slack thread ts ("" before its parent is posted).

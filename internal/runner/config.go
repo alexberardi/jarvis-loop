@@ -29,7 +29,7 @@ type Config struct {
 	// the total.
 	Slots int `json:"slots"`
 	// Stages are the stages this runner claims: triage, build and review (the default, all
-	// three), or a subset.
+	// three), or a subset; land, and plan (plan turns, docs/phases/07-planning.md), only when named.
 	Stages   []string `json:"stages,omitempty"`
 	WorkRoot string   `json:"work_root"`
 	// Claude and Guard are the binaries; Guard defaults to loop-guard next to the runner.
@@ -57,6 +57,9 @@ type Config struct {
 	// default "30m" each.
 	LandCIWait   string `json:"land_ci_wait,omitempty"`
 	LandMainWait string `json:"land_main_wait,omitempty"`
+	// PlanTurnMinutes caps one plan turn (stage plan): the agent is stopped and the turn fails
+	// after it, as an item's run is at loopd's max_run_minutes. Default 15.
+	PlanTurnMinutes int `json:"plan_turn_minutes,omitempty"`
 	// VerifyLock is the lock file that keeps the repos' verify steps one at a time on this
 	// machine (the GPU model, the emulator and the mobile build dir are single). Default
 	// ~/.cache/jarvis-loop/verify.lock, shared by every runner of the user.
@@ -253,6 +256,12 @@ func (c *Config) normalize() error {
 		*w.to = d
 	}
 	c.Stages = uniq(c.Stages)
+	switch {
+	case c.PlanTurnMinutes < 0:
+		return fmt.Errorf("config: plan_turn_minutes must be positive, not %d", c.PlanTurnMinutes)
+	case c.PlanTurnMinutes == 0:
+		c.PlanTurnMinutes = DefaultPlanTurnMinutes
+	}
 	if c.VerifyLock == "" {
 		c.VerifyLock = "~/.cache/jarvis-loop/verify.lock"
 	}
