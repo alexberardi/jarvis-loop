@@ -19,9 +19,12 @@ covered by a test or a scenario:
   land's own merge of a docs-only conflict (`landConflict`, which pushes and goes back to review)
   is not reused here, because it needs a land lease and the mirror lock for an item nobody claimed.
   A docs-only conflict therefore costs a build run instead of none.
-- **The note (Slack).** In a held thread, the approver's reply that `ClassifyReply` does not take
-  as an approval is a note when `IsHeldNote` says so. The match is positive: after mentions and
-  a leading "please", "ok" or "actually", the reply opens with a change verb (rebuild, rebase,
+- **The note (Slack).** In a held thread, the approver's reply is a note when `IsHeldNote` says
+  so. It is checked **before** `ClassifyReply`, so a change request wins over consent words in it:
+  "ok, rebuild", "yes, but rebase first" and "merge it after adding a test" go back to build, not
+  to a merge; "lgtm", "ship it", "merge it" and "merge it please" are not notes and still start
+  an approval. The match is positive: after mentions and leading "please", "ok", "yes", "sure",
+  "but" or "actually", the reply opens with a change verb (rebuild, rebase,
   fix, rename, change, add, remove, update, use, revert, resolve, …), or is "merge main …", or
   "merge …" with a change verb later ("merge it after adding a test"). A question mark, a
   question opening or a negation or "wait"/"hold"/"stop" word anywhere is never a note. Strict

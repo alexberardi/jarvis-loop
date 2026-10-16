@@ -33,7 +33,7 @@ var (
 	changeVerbs = []string{"rebuild", "rebase", "fix", "rename", "change", "add", "remove", "drop", "update", "use",
 		"make", "move", "revert", "resolve", "rework", "rewrite", "refactor", "replace", "delete", "split",
 		"tune", "fine-tune", "tweak", "adjust", "redo", "retry", "reword", "bump", "simplify", "test", "document"}
-	leadWords      = []string{"please", "pls", "also", "just", "then", "ok", "okay", "actually"}
+	leadWords      = []string{"please", "pls", "also", "just", "then", "ok", "okay", "actually", "yes", "yeah", "yep", "sure", "but"}
 	questionStarts = []string{"is", "are", "can", "could", "should", "would", "will", "does", "did", "why", "what", "how", "when", "where", "who", "which", "shall"}
 )
 
@@ -67,10 +67,11 @@ func ClassifyReply(text string) bool {
 	return consent
 }
 
-// IsHeldNote decides whether a reply in a held item's thread that is not an approval is the
-// user's note for the builder ("rebuild", "rebase and fix X"), which sends the item back to
-// build. Like ClassifyReply it is strict and has no model, and a match must be positive: the
-// reply (after mentions and a leading "please", "ok", "actually") opens with a change verb, or is
+// IsHeldNote decides whether a reply in a held item's thread is the user's note for the builder
+// ("rebuild", "rebase and fix X"), which sends the item back to build. The bot checks it before
+// ClassifyReply, so a change request wins over consent words in it ("ok, rebuild"). Like
+// ClassifyReply it is strict and has no model, and a match must be positive: the reply (after
+// mentions and leading "please", "ok", "yes", "but", "actually") opens with a change verb, or is
 // "merge main …", or "merge …" with a change verb later ("merge it after adding a test"). A
 // question (a question mark or a question opening) or any negation or "wait" word is never a
 // note. Anything else ("looks good", "let me check", "later", "merge it please") is not a note,

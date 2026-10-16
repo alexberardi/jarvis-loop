@@ -870,15 +870,16 @@ func (b *Bot) onMessage(ctx context.Context, m slackEvent) {
 			b.refuse(ctx, m.Channel, m.User, id, "approve")
 			return
 		}
+		// A change request wins over consent words in it ("ok, rebuild", "merge it after adding a test").
 		switch {
-		case ClassifyReply(text):
-			b.startApproval(ctx, d.Item, text, m.ThreadTS)
 		case IsHeldNote(text):
 			// The user's note for the builder: back to build with it (the event's line says so).
 			b.cancelPending(id)
 			if _, err := b.c.Store.Rebuild(ctx, actorPrefix+m.User, id, text); err != nil {
 				b.threadReply(ctx, m.ThreadTS, "Could not send it back to build: "+Escape(errMessage(err)))
 			}
+		case ClassifyReply(text):
+			b.startApproval(ctx, d.Item, text, m.ThreadTS)
 		default:
 			b.threadReply(ctx, m.ThreadTS, "Not taken as an approval; the item stays held. Reply 'approve' or use the button, or say what to change to send it back to build.")
 		}

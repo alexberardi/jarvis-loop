@@ -86,6 +86,12 @@ func TestIsHeldNote(t *testing.T) {
 		{"actually, rebuild with the new name", true},
 		{"merge after removing the flag", true},
 		{"merge once dropping the old route", true},
+		// Consent words before a change request: still a note (the bot checks this before approval).
+		{"ok, rebuild", true},
+		{"okay fix the typo", true},
+		{"actually ok, rebase", true},
+		{"yes, but rebase first", true},
+		{"sure, use the store's clock", true},
 		// Stays held.
 		{"", false},
 		{"looks fine?", false},
@@ -103,6 +109,13 @@ func TestIsHeldNote(t *testing.T) {
 		{"Thank you!", false},
 		{"merge", false},
 		{"merge it please", false},
+		{"merge it", false},
+		{"ok", false},
+		{"yes", false},
+		{"sure, go ahead", false},
+		{"lgtm", false},
+		{"ship it", false},
+		{"approve", false},
 		// Praise and stalling ask for no change: a note must start with a change verb.
 		{"looks good", false},
 		{"sounds good", false},

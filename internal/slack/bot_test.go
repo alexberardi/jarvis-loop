@@ -630,6 +630,48 @@ func TestHeldReplySendsBackToBuild(t *testing.T) {
 	}
 }
 
+// A change request wins over consent words: "merge it after adding a test" and "ok, rebuild" go
+// back to build with the reply as the notes, and no approval starts; "merge it please" and "lgtm"
+// still start one.
+func TestHeldChangeRequestBeatsConsent(t *testing.T) {
+	for _, r := range []string{"merge it after adding a test", "ok, rebuild", "okay fix the typo", "yes, but rebase first", "sure, use the store's clock"} {
+		e, id, ts := heldSetup(t)
+		e.calls()
+		e.reply(Approver, ts, r)
+		d := e.item(id)
+		if ev := lastEvent(d); d.Item.Stage != pipeline.Build || ev.Kind != "rebuild" || ev.Data["notes"] != r {
+			t.Fatalf("%q: stage %s, last %+v", r, d.Item.Stage, ev)
+		}
+		for _, c := range only(t, e.calls(), "chat.postMessage") {
+			if strings.Contains(allText(c), "Approved by you") {
+				t.Fatalf("%q: approval echo %+v", r, c)
+			}
+		}
+		e.clk.Advance(time.Hour)
+		e.b.Tick(e.ctx)
+		if d := e.item(id); d.Item.Stage != pipeline.Build || d.Item.Approval != nil {
+			t.Fatalf("%q: stage %s approval %+v", r, d.Item.Stage, d.Item.Approval)
+		}
+	}
+	for _, r := range []string{"merge it please", "lgtm", "merge it", "ship it", "approve"} {
+		e, id, ts := heldSetup(t)
+		e.calls()
+		e.reply(Approver, ts, r)
+		var echo bool
+		for _, c := range only(t, e.calls(), "chat.postMessage") {
+			if strings.Contains(allText(c), "Approved by you") {
+				echo = true
+			}
+		}
+		if !echo {
+			t.Fatalf("%q: no approval echo", r)
+		}
+		if d := e.item(id); d.Item.Stage != pipeline.Held {
+			t.Fatalf("%q: stage %s", r, d.Item.Stage)
+		}
+	}
+}
+
 // A pending reply approval is cancelled when a note sends the item back to build.
 func TestHeldNoteCancelsPendingApproval(t *testing.T) {
 	e, id, ts := heldSetup(t)
