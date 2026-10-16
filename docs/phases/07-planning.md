@@ -102,9 +102,11 @@ Rules in `pipeline/plans.go`: `ApplyPlanApprove` (stale sha → `sha_mismatch`, 
 changed; approve v3 instead"), `ApplyPlanDrop`, `ApplyTurnResult`, `ParseBlueprint`,
 `PlanItems`, `PlanSettled`, and `ChooseWork` in `claim.go`. **Blueprint format:** a heading
 named `Pieces`; under it one sub-heading per piece, `N. Title`, numbered from 1 in order, with
-optional `repo:`, `size:` (S/M/L) and `depends on:` (piece numbers, or `none`) lines; the piece's
-section (its heading to the next) is the item's ask after "Piece N of plan P<id> (<title>).". A
-piece without a repo gets the plan's when it has exactly one. **A turn's result** is checked by
+optional `repo:`, `size:` (S/M/L), `builder:` (`qwen`/`claude`, stored on the item; `claude` when
+missing: `docs/decisions/2026-10-16-qwen-builder-plans.md`) and `depends on:` (piece numbers, or
+`none`) lines; the piece's section (its heading to the next, numbered steps since that decision)
+is the item's ask after "Piece N of plan P<id> (<title>).". A piece without a repo gets the plan's
+when it has exactly one. **A turn's result** is checked by
 loopd too: content the agent got wrong (no reply, a reply over 3,000 characters, a blueprint
 that does not parse, loops or names an unconfigured repo, `ready` with no document, product
 writing a blueprint or sending the plan back, engineering writing the brief or setting repos)

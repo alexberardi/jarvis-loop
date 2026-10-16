@@ -249,6 +249,9 @@ func (b *Bot) show(ctx context.Context, id int64) string {
 	if len(d.WaitingOn) > 0 {
 		sb.WriteString(" · waiting on " + itemRefs(d.WaitingOn))
 	}
+	if it.Builder != "" {
+		sb.WriteString(" · builder " + it.Builder)
+	}
 	if pr := b.prLink(it); pr != "" {
 		fmt.Fprintf(&sb, "\n%s, head `%s`", pr, short(it.HeadSHA))
 	}

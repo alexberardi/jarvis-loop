@@ -31,12 +31,14 @@ Approach: two tables and a route.
 ### 1. Tables
 - repo: alexberardi/jarvis-loop
 - size: S
+- builder: qwen
 - depends on: none
 
 The migration.
 
 ### 2. Store
 - **Repo:** alexberardi/jarvis-loop
+- **Builder:** Claude
 - **Depends on:** 1
 
 The store methods.
@@ -160,17 +162,17 @@ func TestParseBlueprint(t *testing.T) {
 		t.Fatalf("%d pieces", len(ps))
 	}
 	want := []struct {
-		title, repo, size string
-		deps              []int
-		section           string
+		title, repo, size, builder string
+		deps                       []int
+		section                    string
 	}{
-		{"Tables", "alexberardi/jarvis-loop", "S", nil, "The migration."},
-		{"Store", "alexberardi/jarvis-loop", "", []int{1}, "The store methods."},
-		{"API", "", "", []int{1}, "The routes."},
+		{"Tables", "alexberardi/jarvis-loop", "S", "qwen", nil, "The migration."},
+		{"Store", "alexberardi/jarvis-loop", "", "claude", []int{1}, "The store methods."},
+		{"API", "", "", "", []int{1}, "The routes."},
 	}
 	for i, w := range want {
 		p := ps[i]
-		if p.N != i+1 || p.Title != w.title || p.Repo != w.repo || p.Size != w.size || !slices.Equal(p.DependsOn, w.deps) {
+		if p.N != i+1 || p.Title != w.title || p.Repo != w.repo || p.Size != w.size || p.Builder != w.builder || !slices.Equal(p.DependsOn, w.deps) {
 			t.Errorf("piece %d: %+v", i+1, p)
 		}
 		if !strings.HasPrefix(p.Section, "### ") || !strings.HasSuffix(p.Section, w.section) {
@@ -179,6 +181,10 @@ func TestParseBlueprint(t *testing.T) {
 		if strings.Contains(p.Section, "Risks") {
 			t.Errorf("piece %d section runs past the pieces: %q", i+1, p.Section)
 		}
+	}
+
+	if ps, err := ParseBlueprint("## Pieces\n### 1. A\n- builder: `QWEN`\n"); err != nil || ps[0].Builder != "qwen" {
+		t.Errorf("backticked builder: %+v %v", ps, err)
 	}
 
 	bad := []struct{ name, md, msg string }{
@@ -190,6 +196,7 @@ func TestParseBlueprint(t *testing.T) {
 		{"cycle", "## Pieces\n### 1. A\n- depends on: 3\n### 2. B\n- depends on: 1\n### 3. C\n- depends on: 2\n", "cycle: 1 → 3 → 2 → 1"},
 		{"bad size", "## Pieces\n### 1. A\n- size: XL\n", "piece 1: size must be S, M or L"},
 		{"no title", "## Pieces\n### 1.\n", "piece 1 has no title"},
+		{"bad builder", "## Pieces\n### 1. A\n- builder: gpt\n", `piece 1: builder must be qwen or claude, not "gpt"`},
 	}
 	for _, tc := range bad {
 		t.Run(tc.name, func(t *testing.T) {
@@ -222,6 +229,10 @@ func TestPlanItems(t *testing.T) {
 		if !strings.HasPrefix(it.Ask, "Piece "+string(rune('1'+i))+" of plan P7 (Pantry).") || !strings.HasSuffix(it.Ask, ps[i].Section) {
 			t.Errorf("item %d ask %q", i, it.Ask)
 		}
+	}
+	// The builder goes onto the item; a piece without one gets claude, the safe builder.
+	if b := []string{items[0].Builder, items[1].Builder, items[2].Builder}; !slices.Equal(b, []string{"qwen", "claude", "claude"}) {
+		t.Errorf("builders %q", b)
 	}
 	// A piece without a repo takes the plan's only repo.
 	if items[0].Repo != "alexberardi/jarvis-loop" || items[2].Repo != "alexberardi/jarvis-server" {

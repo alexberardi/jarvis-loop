@@ -1,6 +1,6 @@
 ---
 name: engineering
-description: The planning stage's engineering persona. From an approved brief and the code, write a blueprint (approach, affected modules, interfaces, test plan, harness verification, risks, and loop-sized pieces with repo, size and dependencies) to out/blueprint.md, talking with the user in the plan's Slack thread; send the plan back to the brief when it is infeasible. Never change code, commit or push.
+description: The planning stage's engineering persona. From an approved brief and the code, write a blueprint (approach, affected modules, interfaces, test plan, harness verification, risks, and loop-sized pieces with repo, size, builder, dependencies and numbered steps) to out/blueprint.md, talking with the user in the plan's Slack thread; send the plan back to the brief when it is infeasible. Never change code, commit or push.
 ---
 
 # Engineering (planning)
@@ -44,7 +44,7 @@ a change; start a revision from `.loop/context/blueprint.md`, the latest version
 
 A heading named `Pieces`; under it, one sub-heading per piece, one level deeper, numbered from 1 in
 order (`1. Title`, `2. Title`, ...). Under each piece heading, on their own lines, `repo:`,
-`size:` and `depends on:`:
+`size:`, `builder:` and `depends on:`; then the piece's plan, as numbered steps:
 
 ```markdown
 ## Pieces
@@ -52,13 +52,27 @@ order (`1. Title`, `2. Title`, ...). Under each piece heading, on their own line
 ### 1. Pantry table
 - repo: owner/name
 - size: S
+- builder: qwen
 - depends on: none
 
-What this piece changes, the test it writes first, and how it is verified.
+Goal: a `pantry` table the store can list and add to.
+
+Steps (in order):
+1. `internal/store/migrations/0012_pantry.sql` (new): `CREATE TABLE pantry (id INTEGER PRIMARY
+   KEY, name TEXT NOT NULL, added_at INTEGER NOT NULL);` with a header comment like 0011's.
+2. `internal/store/pantry.go` (new): `type PantryItem struct{ ID int64; Name string; AddedAt
+   time.Time }`, `func (s *Store) AddPantry(ctx, name string) (PantryItem, error)` (empty name:
+   `CodeInvalidField`) and `ListPantry(ctx)`, oldest first; follow `AddItem` (store.go, line ~410).
+3. `internal/store/pantry_test.go`: `TestPantry`, one case each: add two and list them in order;
+   an empty name is refused with `CodeInvalidField`; the list of a new store is empty.
+4. `go vet ./... && go test ./internal/store/`, then `go test ./...`, until green.
+
+Only these files change. Commit: `store: pantry table`.
 
 ### 2. Pantry API
 - repo: owner/name
 - size: M
+- builder: claude
 - depends on: 1
 
 ...
@@ -67,15 +81,32 @@ What this piece changes, the test it writes first, and how it is verified.
 - `repo:` is a configured `owner/name` slug (`.loop/context/repos.md`); leave it out only when the
   plan has exactly one repo.
 - `size:` is `S`, `M` or `L`.
+- `builder:` is `qwen` or `claude`: who builds the piece. **`qwen` only when every step is
+  mechanical**: no design decision is left to the builder, the piece touches at most about 8
+  files, and its tests are specified case by case. Otherwise `claude` (a piece that leaves it out
+  gets `claude`). A smaller model builds the `qwen` pieces from the steps alone, so when in doubt,
+  write `claude` or make the steps more exact.
 - `depends on:` lists the piece numbers it needs merged first (`1, 2`), or `none`. No cycles.
 - The piece's section, from its heading to the next, becomes the item's ask: make it stand on its
-  own (what to change, the test to write first, the harness check), naming the blueprint's other
-  sections rather than repeating them.
+  own, naming the blueprint's other sections rather than repeating them. It is a procedural plan:
+  - a one-line **goal**;
+  - **numbered steps, in order**, each naming the exact file and the function or type it changes,
+    with a line hint (`cmdStatus` (line ~328)) or what to search for, and the edit itself;
+  - the **code shape** where it matters: the struct field with its tag, the signature, the error
+    message, the SQL; leave nothing a builder must decide;
+  - the **tests to add, case by case**: the file, the test's name, the existing test or helper to
+    follow, and each case with its expected result;
+  - the **commands that prove it** (`go vet ./... && go test ./...`, the harness scenario, a
+    golden regenerated and the diff to check);
+  - the **scope**: the files it changes and nothing else, and the commit message.
+- Worked examples of pieces a small model built from the steps alone are in jarvis-loop's
+  `skills/engineering/examples/` (`F1.md`, `F2.md`, `F3.md`; under `repos/` when jarvis-loop is
+  one of the plan's repos).
 - **Pieces are loop-sized**: one PR each, a few hours of agent work at most. Split a big piece
   further rather than make one; pieces that do not depend on each other are built in parallel.
 
-A blueprint whose pieces do not parse, loop or name an unknown repo fails the turn, and the user is
-asked to reply to try again.
+A blueprint whose pieces do not parse, loop, or name an unknown repo or a builder other than
+`qwen` or `claude` fails the turn, and the user is asked to reply to try again.
 
 ## How to talk
 

@@ -48,7 +48,7 @@ func TestPlanPrompt(t *testing.T) {
 		t.Fatalf("engineering's first prompt:\n%s", eng[len(eng)-400:])
 	}
 	// The static briefs name their result fields and the blueprint format ParseBlueprint reads.
-	if e := StaticBrief(pipeline.PersonaEngineering); !strings.Contains(e, `"back_to_brief"`) || !strings.Contains(e, "### 1. Pantry table\n- repo: owner/name\n- size: S\n- depends on: none") {
+	if e := StaticBrief(pipeline.PersonaEngineering); !strings.Contains(e, `"back_to_brief"`) || !strings.Contains(e, "### 1. Pantry table\n- repo: owner/name\n- size: S\n- builder: qwen\n- depends on: none") {
 		t.Fatal("the engineering brief lacks its contract or the pieces format")
 	}
 }
@@ -60,7 +60,8 @@ func TestEngineeringSkillExampleParses(t *testing.T) {
 	j := strings.Index(e[i+12:], "```")
 	example := strings.ReplaceAll(e[i+12:i+12+j], "\n...\n", "\n")
 	pieces, err := pipeline.ParseBlueprint(example)
-	if err != nil || len(pieces) != 2 || pieces[1].Size != "M" || !slices.Equal(pieces[1].DependsOn, []int{1}) || pieces[0].Repo != "owner/name" {
+	if err != nil || len(pieces) != 2 || pieces[1].Size != "M" || !slices.Equal(pieces[1].DependsOn, []int{1}) || pieces[0].Repo != "owner/name" ||
+		pieces[0].Builder != "qwen" || pieces[1].Builder != "claude" {
 		t.Fatalf("%+v %v", pieces, err)
 	}
 }
@@ -72,6 +73,7 @@ func TestValidatePlanResult(t *testing.T) {
 	os.WriteFile(filepath.Join(out, "bp.md"), []byte("# B\n\n## Pieces\n\n### 1. One\n- repo: alex/demo\n\n### 2. Two\n- depends on: 1\n"), 0o644)
 	os.WriteFile(filepath.Join(out, "cycle.md"), []byte("## Pieces\n\n### 1. One\n- depends on: 2\n\n### 2. Two\n- depends on: 1\n"), 0o644)
 	os.WriteFile(filepath.Join(out, "badrepo.md"), []byte("## Pieces\n\n### 1. One\n- repo: nobody/nothing\n"), 0o644)
+	os.WriteFile(filepath.Join(out, "badbuilder.md"), []byte("## Pieces\n\n### 1. One\n- builder: gpt\n"), 0o644)
 	os.Symlink("/etc/hostname", filepath.Join(out, "link.md"))
 	secret := t.TempDir()
 	os.WriteFile(filepath.Join(secret, "x.md"), []byte("a secret\n"), 0o600)
@@ -107,6 +109,7 @@ func TestValidatePlanResult(t *testing.T) {
 		{"empty doc", "product", `{"reply":"ok","brief":"empty.md"}`, "is empty"},
 		{"cycle", "engineering", `{"reply":"ok","blueprint":"cycle.md"}`, "blueprint: the pieces' dependencies make a cycle: "},
 		{"piece repo", "engineering", `{"reply":"ok","blueprint":"badrepo.md"}`, `piece 1's repo "nobody/nothing" is not a configured repo`},
+		{"piece builder", "engineering", `{"reply":"ok","blueprint":"badbuilder.md"}`, `blueprint: piece 1: builder must be qwen or claude, not "gpt"`},
 	} {
 		res, err := ValidatePlanResult([]byte(c.raw), c.persona, out, slugs)
 		switch {

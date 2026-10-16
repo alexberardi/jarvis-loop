@@ -175,8 +175,11 @@ type Item struct {
 	// DependsOn are the items this one waits for: claim skips it until they are all done.
 	DependsOn []int64 `json:"depends_on"`
 	// PlanID and PlanPiece link an item filed from a plan to its piece (docs/phases/07-planning.md).
-	PlanID    int64     `json:"plan_id,omitempty"`
-	PlanPiece int       `json:"plan_piece,omitempty"`
+	PlanID    int64 `json:"plan_id,omitempty"`
+	PlanPiece int   `json:"plan_piece,omitempty"`
+	// Builder is who the plan's piece says should build it (BuilderQwen, BuilderClaude; "": not
+	// from a plan). Nothing reads it yet beyond /loop show and the board.
+	Builder   string    `json:"builder,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
