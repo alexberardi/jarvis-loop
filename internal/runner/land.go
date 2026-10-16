@@ -188,7 +188,10 @@ func Decide(f LandFacts) Decision {
 		}
 	}
 	if len(fails) > 0 {
-		return advance("back_to_build", map[string]string{"reason": fmt.Sprintf("CI failed on `%s`: %s", short7(pr.HeadRefOid), strings.Join(fails, ", "))})
+		return advance("back_to_build", map[string]string{
+			"reason":      fmt.Sprintf("CI failed on `%s`: %s", short7(pr.HeadRefOid), strings.Join(fails, ", ")),
+			"ci_head_sha": pr.HeadRefOid,
+		})
 	}
 	if len(pr.Checks) == 0 {
 		// A repo with no CI configured is a configuration error, not a pass.

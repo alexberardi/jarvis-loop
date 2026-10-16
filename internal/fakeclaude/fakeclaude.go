@@ -48,6 +48,9 @@ const (
 	// asks for it in the PR body; the runner must never run it (it would touch
 	// <scripts dir>/../agent-verify-ran).
 	SuggestVerify = "suggest_verify"
+	// NoChange is good on a fresh branch; on a resumed one (a rerun after a bounce) it commits
+	// nothing and reports the same head, as an agent that found nothing to fix would.
+	NoChange = "no_change"
 
 	// Triage plays (a triage run of a build play plays Reproduce).
 	Reproduce      = "reproduce"       // reproduced, with notes and a repro file; picks the script's repo when the item has none
@@ -208,7 +211,10 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// The common path: a change, committed on the item's branch (a resumed run finds it there).
 	// After a bounce, the review's notes are in .loop/review/: address them in a new commit.
 	reviewed := ""
-	if ents, err := os.ReadDir(filepath.Join(f.cwd, ".loop", "review")); err == nil && len(ents) > 0 {
+	resumed := strings.TrimSpace(git(f.cwd, "rev-list", "--count", "origin/"+base+"..HEAD")) != "0"
+	if scenario == NoChange && resumed {
+		// Nothing to fix: no commit.
+	} else if ents, err := os.ReadDir(filepath.Join(f.cwd, ".loop", "review")); err == nil && len(ents) > 0 {
 		var names []string
 		for _, e := range ents {
 			names = append(names, ".loop/review/"+e.Name())

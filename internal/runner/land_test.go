@@ -64,6 +64,9 @@ func TestDecide(t *testing.T) {
 		{"CI failed", func(f *LandFacts) {
 			f.PR.Checks = []Check{{Name: "check", Bucket: BucketPass}, {Name: "lint", Bucket: BucketFail, URL: "https://ci/lint"}}
 		}, ActAdvance, "back_to_build", "reason=lint (https://ci/lint)"},
+		{"CI failed names the head", func(f *LandFacts) {
+			f.PR.Checks = []Check{{Name: "lint", Bucket: BucketFail}}
+		}, ActAdvance, "back_to_build", "ci_head_sha=" + headA},
 		{"CI cancelled", func(f *LandFacts) { f.PR.Checks = []Check{{Name: "check", Bucket: BucketCancel}} }, ActAdvance, "back_to_build", "reason=check"},
 		{"CI fail beats pending", func(f *LandFacts) {
 			f.PR.Checks = []Check{{Name: "a", Bucket: BucketPending}, {Name: "b", Bucket: BucketFail}}

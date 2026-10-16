@@ -164,7 +164,10 @@ type Item struct {
 	// NeedsQA: once merged, the item waits in qa for the user's check instead of going to done.
 	NeedsQA bool `json:"needs_qa"`
 	// ReopenOf is the qa item whose Reopen filed this one.
-	ReopenOf  int64     `json:"reopen_of,omitempty"`
+	ReopenOf int64 `json:"reopen_of,omitempty"`
+	// CIRedSHA is the head land sent back to build for red CI; a pr_opened with the same head
+	// goes to the user, not review (the build changed nothing, so CI would stay red).
+	CIRedSHA  string    `json:"ci_red_sha,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -424,6 +427,13 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		}
 		it.Repo, it.PR, it.Branch, it.HeadSHA = repo, pr, branch, sha
 		it.BuilderAgent = a.Agent
+		if it.CIRedSHA != "" && it.CIRedSHA == sha {
+			// Another review and land would see the same red CI: the user decides. An answer
+			// returns to land, which reads CI again (a rerun may have passed).
+			it = toNeedsYou(it, Land, fmt.Sprintf("CI failed on %s and the build changed nothing: rerun CI, fix main, or drop", sha[:7]))
+			break
+		}
+		it.CIRedSHA = ""
 		it.Stage = Review
 	case Approved:
 		summary, err := f.need("summary")
@@ -526,7 +536,8 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		raiseRisk(&it, holdReasons(paths, "land: "+reason))
 		it.Stage = Held
 	case BackToBuild:
-		if _, err := f.need("reason"); err != nil {
+		reason, err := f.need("reason")
+		if err != nil {
 			return Transition{}, err
 		}
 		// The land script sends the paths it computed; risk is recomputed on them.
@@ -536,6 +547,17 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 				return Transition{}, err
 			}
 			raiseRisk(&it, holdReasons(paths))
+		}
+		// Red CI names the head it failed on and counts as a bounce; a conflict or missing
+		// evidence does not.
+		if _, ok := a.Fields["ci_head_sha"]; ok {
+			head, err := f.sha("ci_head_sha")
+			if err != nil {
+				return Transition{}, err
+			}
+			it.CIRedSHA = head
+			it = bounce(it, data, reason)
+			break
 		}
 		it.Stage = Build
 	case BackToReview:

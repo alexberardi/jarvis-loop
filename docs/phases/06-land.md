@@ -46,7 +46,9 @@ Everything is re-derived from GitHub and git, never from an agent's words.
 4. **CI:** every check on the head (`gh pr checks <n> --json name,state,bucket` or the status
    rollup; *as built:* the rollup, in the same `gh pr view` as the head, bucketed as gh does;
    the failing checks go in `back_to_build`'s `reason`, which loopd requires). All `pass` → go on. Any `fail`/`cancel` → `back_to_build` with the failing check names
-   and links as notes. Any pending → wait: poll every 30 s with heartbeats, up to `land_ci_wait`
+   and links as notes. *As built (2026-10-15, item #18): it also sends `ci_head_sha`, the head that failed;
+   loopd counts it as a bounce, and a build that reports `pr_opened` with that same head goes to
+   needs-you instead of review (`docs/decisions/2026-10-15-ci-red-unchanged-head.md`).* Any pending → wait: poll every 30 s with heartbeats, up to `land_ci_wait`
    (config, default 30 min), then `failed` ("CI still pending after 30m"). No checks at all → wait
    the same way (a repo with no CI configured is a config error, not a pass).
 5. **Harness evidence:** the item has at least one evidence file from build (`pr_opened`) and the
