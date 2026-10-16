@@ -1,0 +1,27 @@
+{
+  "name": "evidence-tool-state",
+  "about": "As on #26: the review agent approves, and a tool it ran left its own state in .loop/evidence/.claude/. The runner skips the directory (logged), uploads the real evidence, posts the review and the item goes on to land; nothing goes to the user.",
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "script", "item": "a", "for": "review", "play": "approve_tool_state"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "land"},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "approved", "actor": "runner", "count": 1}
+    ],
+    "no_events": [{"item": "a", "kind": "advanced", "outcome": "failed"}],
+    "messages": [
+      {"thread": "a", "text": "^Claimed for review\\.$"},
+      {"thread": "a", "text": "^Review approved → land"}
+    ],
+    "no_messages": [{"thread": "a", "text": "needs you"}],
+    "pr": {"a": {"comments": 1, "comment": "(?s)^## Loop review: approved.*- `review-check\\.txt`: review check"}},
+    "prs": 1
+  }
+}

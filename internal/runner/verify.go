@@ -349,7 +349,7 @@ func (r *Runner) verifyStep(ctx context.Context, ru *run, n int, st VerifyStep, 
 		return res, err
 	}
 	res.LogFile = EvidenceFile{Name: tag + ".log", Path: tailPath, Size: int64(len(res.Log))}
-	files, err := EvidenceFiles(dir)
+	files, _, err := EvidenceFiles(dir)
 	if err != nil {
 		res.Err = "its evidence: " + err.Error()
 	}

@@ -59,3 +59,17 @@ func TestBuildBriefResumeAndTriage(t *testing.T) {
 		t.Error("a failed triage copy is said in the brief")
 	}
 }
+
+func TestRetryBrief(t *testing.T) {
+	b := BuildBrief(Item{ID: 12, Title: "Fix the timer"}, RunInfo{Slug: "a/b", Base: "main", Branch: "loop/12-x", Worktree: "/w", Scratch: "/s", Sandbox: "loop-12"})
+	r := RetryBrief(b, "evidence: evidence key.txt is not a regular file")
+	if !strings.HasPrefix(r, strings.TrimRight(b, "\n")) {
+		t.Error("the retry keeps the brief as it was, for the prompt cache")
+	}
+	tail := r[len(b)-1:]
+	for _, want := range []string{RetryHeading, "> evidence: evidence key.txt is not a regular file", "`.loop/result.json` again", "one retry"} {
+		if !strings.Contains(tail, want) {
+			t.Errorf("the retry section lacks %q:\n%s", want, tail)
+		}
+	}
+}

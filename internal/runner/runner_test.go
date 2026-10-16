@@ -503,6 +503,9 @@ func TestGuardRefusalIsReported(t *testing.T) {
 }
 
 func TestBadResultsFail(t *testing.T) {
+	// The runner's refusals of a result are retried once, then reported as a runner error; the
+	// others fail at once.
+	refused := map[string]bool{fakeclaude.Lying: true, fakeclaude.Malformed: true, fakeclaude.SymlinkEv: true, fakeclaude.Dirty: true}
 	cases := map[string]string{
 		fakeclaude.Lying:     "head_sha",
 		fakeclaude.Malformed: "not valid JSON",
@@ -521,6 +524,16 @@ func TestBadResultsFail(t *testing.T) {
 			if d.Item.Stage != pipeline.NeedsYou || !strings.Contains(d.Item.Question, want) {
 				t.Fatalf("stage %s, question %q, want it to mention %q; log:\n%s", d.Item.Stage, d.Item.Question, want, g.logs.String())
 			}
+			runs := 1
+			if refused[scenario] {
+				runs = 2
+				if !strings.HasPrefix(d.Item.Question, "the build's result couldn't be accepted: ") || !strings.Contains(d.Item.Question, "(again, after one retry)") {
+					t.Fatalf("a refused result is a runner error, not a question: %q", d.Item.Question)
+				}
+			}
+			if n := g.starts(id); n != runs {
+				t.Fatalf("%d runs, want %d", n, runs)
+			}
 			if scenario == fakeclaude.Exit3 && !strings.Contains(d.Item.Question, "the tests do not compile") {
 				t.Fatalf("the agent's last output belongs in the question: %q", d.Item.Question)
 			}
@@ -530,6 +543,20 @@ func TestBadResultsFail(t *testing.T) {
 			g.userUntouched()
 			g.cleanedUp(id)
 		})
+	}
+}
+
+// A refused build result gets one retry; the retry's good result is pushed and opened as a PR.
+func TestRefusedBuildResultIsRetried(t *testing.T) {
+	g := newRig(t, fakeclaude.LyingOnce)
+	id := g.toBuild("Lies once")
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.Review || g.starts(id) != 2 || g.prs.calls() != 1 {
+		t.Fatalf("stage %s %q after %d runs; log:\n%s", d.Item.Stage, d.Item.Question, g.starts(id), g.logs.String())
+	}
+	if ev := g.advanced(id); ev.Data["result_retried"] != "true" || ev.Data["head_sha"] != g.remoteHead(fmt.Sprintf("loop/%d-lies-once", id)) {
+		t.Fatalf("advance %+v", ev.Data)
 	}
 }
 

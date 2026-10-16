@@ -184,8 +184,11 @@ func ValidateResult(raw []byte, want Expect, facts GitFacts, loopDir string) (Va
 			return Valid{}, fmt.Errorf("the commits contain the runner's .loop/ files (%s)", p)
 		}
 	}
-	files, err := EvidenceFiles(loopDir)
+	files, skipped, err := EvidenceFiles(loopDir)
 	if err != nil {
+		return Valid{}, err
+	}
+	if err := checkNamedNotSkipped(r, skipped); err != nil {
 		return Valid{}, err
 	}
 	if len(files) == 0 {
@@ -229,42 +232,58 @@ type EvidenceFile struct {
 }
 
 // EvidenceFiles lists .loop/evidence: regular files only (a symlink could point at a secret),
-// at most MaxEvidenceFiles, each at most MaxEvidenceBytes.
-func EvidenceFiles(loopDir string) ([]EvidenceFile, error) {
+// at most MaxEvidenceFiles, each at most MaxEvidenceBytes. Directories and dotfiles (a tool's own
+// state, like .claude/) are not evidence: they are skipped and named in skipped, not uploaded.
+// A symlink or any other irregular entry is still refused.
+func EvidenceFiles(loopDir string) (files []EvidenceFile, skipped []string, err error) {
 	dir := filepath.Join(loopDir, "evidence")
 	st, err := os.Lstat(dir)
 	if os.IsNotExist(err) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !st.IsDir() {
-		return nil, fmt.Errorf(".loop/evidence is not a directory")
+		return nil, nil, fmt.Errorf(".loop/evidence is not a directory")
 	}
 	ents, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if len(ents) > MaxEvidenceFiles {
-		return nil, fmt.Errorf(".loop/evidence has %d entries; at most %d", len(ents), MaxEvidenceFiles)
-	}
-	var out []EvidenceFile
 	for _, e := range ents {
 		p := filepath.Join(dir, e.Name())
 		fi, err := os.Lstat(p)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if !fi.Mode().IsRegular() {
-			return nil, fmt.Errorf("evidence %s is not a regular file", e.Name())
+		if !fi.Mode().IsRegular() && !fi.IsDir() {
+			return nil, nil, fmt.Errorf("evidence %s is not a regular file", e.Name())
+		}
+		if fi.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			skipped = append(skipped, e.Name())
+			continue
 		}
 		if fi.Size() > MaxEvidenceBytes {
-			return nil, fmt.Errorf("evidence %s is %d bytes; at most 20 MB", e.Name(), fi.Size())
+			return nil, nil, fmt.Errorf("evidence %s is %d bytes; at most 20 MB", e.Name(), fi.Size())
 		}
-		out = append(out, EvidenceFile{Name: e.Name(), Path: p, Size: fi.Size()})
+		files = append(files, EvidenceFile{Name: e.Name(), Path: p, Size: fi.Size()})
 	}
-	return out, nil
+	if len(files) > MaxEvidenceFiles {
+		return nil, nil, fmt.Errorf(".loop/evidence has %d files; at most %d", len(files), MaxEvidenceFiles)
+	}
+	return files, skipped, nil
+}
+
+// checkNamedNotSkipped refuses a result that names, as its evidence, an entry EvidenceFiles
+// skipped: the agent meant it as evidence, and it would not be uploaded.
+func checkNamedNotSkipped(r Result, skipped []string) error {
+	for _, e := range r.Evidence {
+		if name := strings.TrimPrefix(path.Clean(e.File), "evidence/"); slices.Contains(skipped, name) {
+			return fmt.Errorf("evidence entry %q is a directory or a dotfile, not a file the runner uploads", e.File)
+		}
+	}
+	return nil
 }
 
 // checkEvidenceEntries checks the result's evidence entries name files directly in evidence/.

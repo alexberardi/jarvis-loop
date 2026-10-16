@@ -344,6 +344,20 @@ func TestLongTextIsClipped(t *testing.T) {
 	}
 }
 
+// A run the runner could not accept goes to the user as a runner error to retry or drop, not as
+// a question to answer.
+func TestFailedRunIsARunnerErrorNotAQuestion(t *testing.T) {
+	e := newBotEnv(t)
+	id := e.add("refused")
+	e.calls()
+	e.runner(id, "a1", pipeline.Failed, map[string]string{"error": "the triage's result couldn't be accepted: evidence: evidence key.txt is not a regular file (again, after one retry). Last output: done"})
+	q := allText(only(t, e.calls(), "chat.postMessage")[2])
+	want := fmt.Sprintf("<@%s> #%d needs you: the triage's result couldn't be accepted: evidence: evidence key.txt is not a regular file (again, after one retry). Last output: done\nReply \"retry\" to run it again, or drop.", Approver, id)
+	if !strings.HasPrefix(q, want) || strings.Contains(q, "to answer") {
+		t.Fatalf("needs-you reply\n%s\nwant\n%s", q, want)
+	}
+}
+
 func TestThreadIsCreatedForItemsThatHaveNone(t *testing.T) {
 	e := newBotEnv(t)
 	e.f.failNext("chat.postMessage", "channel_not_found") // the parent post fails once

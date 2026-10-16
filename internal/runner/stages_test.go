@@ -552,3 +552,79 @@ func TestStagePrefixesAreStable(t *testing.T) {
 		}
 	}
 }
+
+// starts counts the fake claude's runs of an item (every stage).
+func (g *rig) starts(id int64) int {
+	b, _ := os.ReadFile(filepath.Join(g.scripts, fmt.Sprintf("%d.state", id)))
+	return strings.Count(string(b), "started\n")
+}
+
+// Seen on #26: a tool's own state in .loop/evidence/.claude/ is skipped, not a refused result.
+func TestReviewSkipsToolStateInEvidence(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	id := g.toReview("Add a feature")
+	g.stages(StageReview)
+	g.script(id, StageReview, fakeclaude.ApproveToolState, "")
+	before := g.starts(id)
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.Land || g.starts(id)-before != 1 {
+		t.Fatalf("stage %s %q after %d runs; log:\n%s", d.Item.Stage, d.Item.Question, g.starts(id)-before, g.logs.String())
+	}
+	if c := g.prs.comments[7]; len(c) != 1 || strings.Contains(c[0], ".claude") || !strings.Contains(c[0], "review-check.txt") {
+		t.Fatalf("comment %q", c)
+	}
+	if !strings.Contains(g.logs.String(), "skipped directories and dotfiles") {
+		t.Fatalf("the skip is not logged:\n%s", g.logs.String())
+	}
+}
+
+// A result the runner refuses (here: it names a directory as evidence) gets one retry, with the
+// reason in the brief; the retry's good result advances.
+func TestReviewRetriesARefusedResultOnce(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	id := g.toReview("Add a feature")
+	g.stages(StageReview)
+	g.script(id, StageReview, fakeclaude.ApproveNamesDirOnce, "")
+	before := g.starts(id)
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.Land || g.starts(id)-before != 2 {
+		t.Fatalf("stage %s %q after %d runs; log:\n%s", d.Item.Stage, d.Item.Question, g.starts(id)-before, g.logs.String())
+	}
+	if ev := g.advanced(id); ev.Outcome != "approved" || ev.Data["result_retried"] != "true" {
+		t.Fatalf("advance %s %+v", ev.Outcome, ev.Data)
+	}
+	if c := g.prs.comments[7]; len(c) != 1 {
+		t.Fatalf("the review is posted once: %q", c)
+	}
+	brief := g.read(filepath.Join(g.lastRun(id, StageReview), "brief.md"))
+	if i := strings.Index(brief, RetryHeading); i < 0 || !strings.Contains(brief[i:], `evidence entry "evidence/.claude" is a directory or a dotfile`) {
+		t.Fatalf("the retry's brief lacks the reason:\n%s", brief[strings.Index(brief, ItemHeading):])
+	}
+}
+
+// Refused twice: the item goes to the user as a runner error (to retry or drop), not a question;
+// nothing is posted on the PR.
+func TestReviewRefusedTwiceIsARunnerError(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	id := g.toReview("Add a feature")
+	g.stages(StageReview)
+	g.script(id, StageReview, fakeclaude.ApproveNamesDir, "")
+	before := g.starts(id)
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.NeedsYou || d.Item.ReturnStage != pipeline.Review || g.starts(id)-before != 2 {
+		t.Fatalf("stage %s (returns to %s) after %d runs; log:\n%s", d.Item.Stage, d.Item.ReturnStage, g.starts(id)-before, g.logs.String())
+	}
+	want := `the review's result couldn't be accepted: evidence: evidence entry "evidence/.claude" is a directory or a dotfile, not a file the runner uploads (again, after one retry)`
+	if !strings.HasPrefix(d.Item.Question, want) {
+		t.Fatalf("question %q", d.Item.Question)
+	}
+	if ev := g.advanced(id); ev.Outcome != "failed" || ev.Data["result_retried"] != "true" {
+		t.Fatalf("advance %s %+v", ev.Outcome, ev.Data)
+	}
+	if len(g.prs.comments[7]) != 0 {
+		t.Fatalf("a refused review is not posted: %q", g.prs.comments[7])
+	}
+}

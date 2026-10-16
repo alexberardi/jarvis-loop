@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,11 @@ func evidenceDir(t *testing.T, files ...string) string {
 	dir := filepath.Join(t.TempDir(), ".loop")
 	os.MkdirAll(filepath.Join(dir, "evidence"), 0o755)
 	for _, f := range files {
+		if strings.HasSuffix(f, "/") { // a directory, with a file in it
+			os.MkdirAll(filepath.Join(dir, "evidence", f), 0o755)
+			os.WriteFile(filepath.Join(dir, "evidence", f, "state.json"), []byte("{}"), 0o644)
+			continue
+		}
 		os.WriteFile(filepath.Join(dir, "evidence", f), []byte("x"), 0o644)
 	}
 	return dir
@@ -65,6 +71,9 @@ func TestValidateResult(t *testing.T) {
 		{"no change at all", goodResult(), func(f *GitFacts) { f.ChangedPaths = nil }, []string{"after.txt"}, "no commits"},
 		{"brief committed", goodResult(), func(f *GitFacts) { f.ChangedPaths = append(f.ChangedPaths, "A\t.loop/brief.md") }, []string{"after.txt"}, ".loop"},
 		{"no evidence", goodResult(), nil, nil, "evidence"},
+		{"a tool's state dir and a dotfile are skipped", goodResult(), nil, []string{"after.txt", ".claude/", ".DS_Store"}, ""},
+		{"skipped entries are not evidence", goodResult(), nil, []string{".claude/", ".DS_Store"}, "at least one evidence file"},
+		{"a named directory is refused", strings.Replace(goodResult(), "evidence/after.txt", "evidence/shots", 1), nil, []string{"after.txt", "shots/"}, "directory or a dotfile"},
 		{"evidence entry outside the folder", strings.Replace(goodResult(), "evidence/after.txt", "../../etc/passwd", 1), nil, []string{"after.txt"}, "evidence"},
 	}
 	for _, c := range cases {
@@ -91,37 +100,84 @@ func TestValidateResult(t *testing.T) {
 }
 
 func TestEvidenceFiles(t *testing.T) {
-	dir := evidenceDir(t, "a.png", "b.txt")
 	outside := filepath.Join(t.TempDir(), "id_ed25519")
 	os.WriteFile(outside, []byte("secret"), 0o600)
-	files, err := EvidenceFiles(dir)
-	if err != nil || len(files) != 2 {
-		t.Fatalf("%v %v", files, err)
+	ev := func(dir string) string { return filepath.Join(dir, "evidence") }
+	cases := []struct {
+		name    string
+		files   []string
+		setup   func(dir string)
+		want    []string // the files kept
+		skipped []string
+		err     string // "" = no error
+	}{
+		{"regular files", []string{"a.png", "b.txt"}, nil, []string{"a.png", "b.txt"}, nil, ""},
+		{"no evidence folder", nil, func(dir string) { os.Remove(ev(dir)) }, nil, nil, ""},
+		// Seen on #26: a tool left its own state in evidence/; that is not the agent's evidence.
+		{"a .claude dir is skipped", []string{".claude/", "repro.log"}, nil, []string{"repro.log"}, []string{".claude"}, ""},
+		{"a plain dir is skipped", []string{"a.png", "sub/"}, nil, []string{"a.png"}, []string{"sub"}, ""},
+		{"a dotfile is skipped", []string{".DS_Store", "a.png"}, nil, []string{"a.png"}, []string{".DS_Store"}, ""},
+		{"an oversize dotfile is skipped, not refused", []string{"a.png"}, func(dir string) {
+			os.Truncate(touch(ev(dir), ".big"), MaxEvidenceBytes+1)
+		}, []string{"a.png"}, []string{".big"}, ""},
+		{"skipped entries take no slot", append(names(MaxEvidenceFiles), ".claude/", ".x"), nil, names(MaxEvidenceFiles), []string{".claude", ".x"}, ""},
+		// A symlink to a file outside is refused, never followed and uploaded.
+		{"a symlinked file is refused", []string{"a.png"}, func(dir string) { os.Symlink(outside, filepath.Join(ev(dir), "key.txt")) }, nil, nil, "not a regular file"},
+		{"a symlinked dotfile is refused", []string{"a.png"}, func(dir string) { os.Symlink(outside, filepath.Join(ev(dir), ".key")) }, nil, nil, "not a regular file"},
+		{"a symlinked dir is refused", []string{"a.png"}, func(dir string) { os.Symlink(filepath.Dir(outside), filepath.Join(ev(dir), ".claude")) }, nil, nil, "not a regular file"},
+		{"an oversize file is refused", []string{"a.png"}, func(dir string) {
+			os.Truncate(touch(ev(dir), "big.log"), MaxEvidenceBytes+1)
+		}, nil, nil, "at most 20 MB"},
+		{"too many files", names(MaxEvidenceFiles + 1), nil, nil, nil, "at most 20"},
+		{"the evidence folder as a symlink is refused", nil, func(dir string) {
+			os.Remove(ev(dir))
+			os.Symlink(filepath.Dir(outside), ev(dir))
+		}, nil, nil, "not a directory"},
+		{"the evidence folder as a file is refused", nil, func(dir string) {
+			os.Remove(ev(dir))
+			os.WriteFile(ev(dir), []byte("x"), 0o644)
+		}, nil, nil, "not a directory"},
 	}
-	// A symlink to a file outside is refused, never followed and uploaded.
-	os.Symlink(outside, filepath.Join(dir, "evidence", "key.txt"))
-	if _, err := EvidenceFiles(dir); err == nil || !strings.Contains(err.Error(), "not a regular file") {
-		t.Fatalf("symlink: %v", err)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := evidenceDir(t, c.files...)
+			if c.setup != nil {
+				c.setup(dir)
+			}
+			files, skipped, err := EvidenceFiles(dir)
+			if c.err != "" {
+				if err == nil || !strings.Contains(err.Error(), c.err) {
+					t.Fatalf("err = %v, want it to mention %q", err, c.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, f := range files {
+				got = append(got, f.Name)
+			}
+			if strings.Join(got, ",") != strings.Join(c.want, ",") || strings.Join(skipped, ",") != strings.Join(c.skipped, ",") {
+				t.Fatalf("files %v skipped %v, want %v and %v", got, skipped, c.want, c.skipped)
+			}
+		})
 	}
-	os.Remove(filepath.Join(dir, "evidence", "key.txt"))
-	os.Mkdir(filepath.Join(dir, "evidence", "sub"), 0o755)
-	if _, err := EvidenceFiles(dir); err == nil {
-		t.Fatal("a directory is not evidence")
+}
+
+// names returns n evidence file names, in the order ReadDir lists them.
+func names(n int) []string {
+	var out []string
+	for i := 0; i < n; i++ {
+		out = append(out, fmt.Sprintf("f%02d.txt", i))
 	}
-	os.Remove(filepath.Join(dir, "evidence", "sub"))
-	for i := 0; i < 20; i++ {
-		os.WriteFile(filepath.Join(dir, "evidence", strings.Repeat("x", i+1)), []byte("x"), 0o644)
-	}
-	if _, err := EvidenceFiles(dir); err == nil || !strings.Contains(err.Error(), "20") {
-		t.Fatalf("too many: %v", err)
-	}
-	// The evidence folder itself being a symlink is refused too.
-	dir2 := filepath.Join(t.TempDir(), ".loop")
-	os.MkdirAll(dir2, 0o755)
-	os.Symlink(filepath.Dir(outside), filepath.Join(dir2, "evidence"))
-	if _, err := EvidenceFiles(dir2); err == nil {
-		t.Fatal("a symlinked evidence folder must be refused")
-	}
+	return out
+}
+
+func touch(dir, name string) string {
+	p := filepath.Join(dir, name)
+	os.WriteFile(p, []byte("x"), 0o644)
+	return p
 }
 
 func resolver(name string) (string, bool) {

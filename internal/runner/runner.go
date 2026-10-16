@@ -229,6 +229,12 @@ type run struct {
 
 	reported int // refusals already sent
 	refusals int
+	// rejected is why the runner refused the agent's result, before publishing anything; work
+	// runs the stage once more (retried) with it in the brief. spent is the time the earlier
+	// attempt used, which the retry's time cap leaves out.
+	rejected string
+	retried  bool
+	spent    time.Duration
 	// done closes when the run must stop (the runner shutting down): its reports go on, but a
 	// verify step is ended.
 	done <-chan struct{}
@@ -308,6 +314,77 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 	log.Info("agent ended", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
 	// Reporting and saving work must finish even when the runner is shutting down.
 	r.report(cleanupCtx, ru, out, log)
+	why := ru.rejected
+	if why == "" {
+		return
+	}
+	// The result was refused before anything was published: run the stage once more, with the
+	// reason in the brief, unless the runner is stopping or the run's time is nearly used up.
+	ru.rejected, ru.retried, ru.spent = "", true, r.Clock.Now().Sub(ru.started)
+	if ctx.Err() != nil || r.maxRun(ctx, ru)-ru.spent < MinRetryTime {
+		r.fail(cleanupCtx, ru, out, rejectedMsg(ru.stage, why, false))
+		return
+	}
+	log.Warn("result refused; running the stage once more", "why", why)
+	brief = RetryBrief(brief, why)
+	if err := r.writeBrief(ru, brief); err != nil {
+		r.fail(cleanupCtx, ru, out, rejectedMsg(ru.stage, why, false)+"; the retry could not start: "+err.Error())
+		return
+	}
+	os.Remove(filepath.Join(ru.wt, ".loop", "result.json"))
+	out = r.runAgent(ctx, ru, brief)
+	log.Info("agent ended (retry)", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
+	r.report(cleanupCtx, ru, out, log)
+}
+
+// MinRetryTime: a refused result is retried only when at least this much of the run's time cap
+// is left.
+const MinRetryTime = 5 * time.Minute
+
+// rejectedMsg is what the user reads when the runner could not accept a stage's result: a runner
+// error, not a question.
+func rejectedMsg(stage, why string, retried bool) string {
+	msg := fmt.Sprintf("the %s's result couldn't be accepted: %s", stage, why)
+	if retried {
+		msg += " (again, after one retry)"
+	}
+	return msg
+}
+
+// reject reports a result the runner cannot accept. The first time it only records why, and work
+// runs the stage again; so call it only before anything was pushed, posted or uploaded.
+func (r *Runner) reject(ctx context.Context, ru *run, out outcome, why string) {
+	if !ru.retried {
+		ru.rejected = why
+		return
+	}
+	r.fail(ctx, ru, out, rejectedMsg(ru.stage, why, true))
+}
+
+// evidence lists the run's evidence files; what it skipped (a tool's state, dotfiles) is logged,
+// and refused only when the result names it.
+func (r *Runner) evidence(ru *run, v Result) ([]EvidenceFile, error) {
+	files, skipped, err := EvidenceFiles(filepath.Join(ru.wt, ".loop"))
+	if err != nil {
+		return nil, err
+	}
+	if len(skipped) > 0 {
+		r.Log.Warn("evidence: skipped directories and dotfiles", "item", ru.item.ID, "stage", ru.stage, "skipped", strings.Join(skipped, ", "))
+	}
+	if err := checkNamedNotSkipped(v, skipped); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+// writeBrief writes the brief the agent reads (the run dir's copy is its stdin).
+func (r *Runner) writeBrief(ru *run, brief string) error {
+	for _, p := range []string{filepath.Join(ru.wt, ".loop", "brief.md"), filepath.Join(ru.dir, "brief.md")} {
+		if err := os.WriteFile(p, []byte(brief), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // prepare makes the working directory (per stage), the context files, the brief, the guard
@@ -342,10 +419,8 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 		}
 	}
 	brief := Brief(ru.stage, ru.item, info)
-	for _, p := range []string{filepath.Join(ru.wt, ".loop", "brief.md"), filepath.Join(ru.dir, "brief.md")} {
-		if err := os.WriteFile(p, []byte(brief), 0o644); err != nil {
-			return "", err
-		}
+	if err := r.writeBrief(ru, brief); err != nil {
+		return "", err
 	}
 	if ru.repoDir != "" {
 		for _, c := range ru.repo.Prepare {
@@ -647,6 +722,18 @@ func (r *Runner) agentCommand(ru *run) *exec.Cmd {
 	return cmd
 }
 
+// maxRun is the run's time cap: loopd's max_run_minutes (45 by default), or a plan turn's own.
+func (r *Runner) maxRun(ctx context.Context, ru *run) time.Duration {
+	maxRun := 45 * time.Minute
+	if ctl, err := r.Client.Control(ctx); err == nil && ctl.MaxRunMinutes > 0 {
+		maxRun = time.Duration(ctl.MaxRunMinutes) * time.Minute
+	}
+	if ru.maxRun > 0 && ru.maxRun < maxRun {
+		maxRun = ru.maxRun // a plan turn's own cap
+	}
+	return maxRun
+}
+
 // runAgent runs claude for one item, in its own process group, with heartbeats and the time cap.
 func (r *Runner) runAgent(ctx context.Context, ru *run, brief string) outcome {
 	out := outcome{reason: endExited, exitCode: -1}
@@ -703,18 +790,14 @@ func (r *Runner) runAgent(ctx context.Context, ru *run, brief string) outcome {
 		exited <- ps
 	}()
 
-	maxRun := 45 * time.Minute
-	if ctl, err := r.Client.Control(ctx); err == nil && ctl.MaxRunMinutes > 0 {
-		maxRun = time.Duration(ctl.MaxRunMinutes) * time.Minute
-	}
-	if ru.maxRun > 0 && ru.maxRun < maxRun {
-		maxRun = ru.maxRun // a plan turn's own cap
-	}
-	// Stop a little before loopd's own cap, so the run is saved and reported by the runner.
+	maxRun := r.maxRun(ctx, ru)
+	// Stop a little before loopd's own cap, so the run is saved and reported by the runner. A
+	// retry has what the first attempt left.
 	capAt := maxRun - 30*time.Second
 	if capAt <= 0 {
 		capAt = maxRun
 	}
+	capAt -= ru.spent
 	hb := r.Clock.NewTimer(r.heartbeatEvery())
 	capT := r.Clock.NewTimer(capAt)
 	var killT Timer
@@ -874,6 +957,9 @@ func (r *Runner) metrics(ru *run, out outcome, f map[string]string) map[string]s
 	if ru.refusals > 0 {
 		f["guard_refusals"] = strconv.Itoa(ru.refusals)
 	}
+	if ru.retried {
+		f["result_retried"] = "true"
+	}
 	return f
 }
 
@@ -975,16 +1061,16 @@ func (r *Runner) reportBuild(ctx context.Context, ru *run, out outcome, raw []by
 	}
 	v, err := ValidateResult(raw, Expect{Stage: StageBuild}, facts, filepath.Join(ru.wt, ".loop"))
 	if err != nil {
-		fail("result rejected: " + err.Error())
+		r.reject(ctx, ru, out, err.Error())
 		return
 	}
 	if v.Outcome == "question" {
 		r.advance(ctx, ru, "question", r.metrics(ru, out, map[string]string{"question": clip(v.Question, 2000)}), nil)
 		return
 	}
-	files, err := EvidenceFiles(filepath.Join(ru.wt, ".loop"))
+	files, err := r.evidence(ru, v.Result)
 	if err != nil {
-		fail("evidence: " + err.Error())
+		r.reject(ctx, ru, out, "evidence: "+err.Error())
 		return
 	}
 	// The runner's own verify steps, before anything is pushed (verify.go).
