@@ -31,7 +31,7 @@
     {"do": "expect", "stage": {"a": "closed", "b": "review"}, "pr": {"a": {"state": "CLOSED", "comments": 2, "comment": "^Dropped by the owner$"}, "b": {"state": "OPEN"}},
      "events": [{"item": "a", "kind": "pr_closed", "actor": "runner", "data": {"state": "^closed$"}, "count": 1}]},
     {"do": "github", "item": "b", "close_by_hand": true},
-    {"do": "command", "as": "approver", "text": "drop 2 no bulb to test with", "answer": "^#2 dropped \\(closed\\)\\.$"},
+    {"do": "command", "as": "approver", "text": "drop 2 no bulb to test with", "answer": "^#2 Support LIFX bulbs dropped \\(closed\\)\\.$"},
     {"do": "runner", "claims": "none"},
     {"do": "runner", "claims": "none"}
   ],

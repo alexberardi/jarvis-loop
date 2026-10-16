@@ -33,7 +33,7 @@
       {"item": "a", "kind": "advanced", "outcome": "merged"}
     ],
     "messages": [
-      {"thread": "a", "text": "^#\\d+: approved by you for `[0-9a-f]{7}` \\(button\\)\\.$"},
+      {"thread": "a", "text": "^#\\d+ Shorten the session timeout: approved by you for `[0-9a-f]{7}` \\(button\\)\\.$"},
       {"thread": "a", "text": "^Claimed for land\\.$"},
       {"thread": "a", "text": "^Back to review: The PR's head is `[0-9a-f]{7}`, but the review approved `[0-9a-f]{7}`"}
     ]

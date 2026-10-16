@@ -14,7 +14,7 @@
     {"do": "runner", "claims": "a"},
     {"do": "clock", "advance": "10m"},
     {"do": "expect", "stage": {"a": "land"}, "leased": {"a": true}, "pr": {"a": {"merge_calls": 0}}},
-    {"do": "command", "as": "approver", "text": "drop 1 changed my mind", "answer": "^#1 dropped \\(closed\\)\\.$"},
+    {"do": "command", "as": "approver", "text": "drop 1 changed my mind", "answer": "^#1 Fix the digest wording dropped \\(closed\\)\\.$"},
     {"do": "ci", "item": "a", "checks": {"check": "pass"}},
     {"do": "clock", "advance": "30s"},
     {"do": "clock", "advance": "1m"},

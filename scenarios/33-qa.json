@@ -5,7 +5,7 @@
   "steps": [
     {"do": "add", "item": "a", "title": "Show the pairing code larger"},
     {"do": "command", "as": "other", "text": "qa 1", "answer": "only the approver"},
-    {"do": "command", "as": "approver", "text": "qa 1", "answer": "^#1 waits in qa for your check once merged\\.$"},
+    {"do": "command", "as": "approver", "text": "qa 1", "answer": "^#1 Show the pairing code larger waits in qa for your check once merged\\.$"},
     {"do": "triage", "item": "a"},
     {"do": "ci", "main": {"ci": "pass"}},
     {"do": "runner", "claims": "a"},

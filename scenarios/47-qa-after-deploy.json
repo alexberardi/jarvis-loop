@@ -16,7 +16,7 @@
     {"do": "runner_idle"},
     {"do": "expect", "stage": {"a": "qa"}, "pr": {"a": {"repo": "sandbox/jarvis-loop", "state": "MERGED", "merge_calls": 1}},
      "events": [{"item": "a", "kind": "advanced", "outcome": "merged", "data": {"needs_qa": "^true$", "qa_after_deploy": "^true$", "awaiting_deploy": "^true$"}, "count": 1}],
-     "messages": [{"thread": "a", "from": "bot", "text": "#[0-9]+: Merged; I'll ask for your check once it's deployed\\. <https://github.com/sandbox/jarvis-loop/pull/101\\|sandbox/jarvis-loop#101> merged as `[0-9a-f]{7}`; watching main's CI\\.\\nNothing to check until a loop build that contains it is running\\.", "buttons": []}]},
+     "messages": [{"thread": "a", "from": "bot", "text": "#[0-9]+ make the digest shorter: Merged; I'll ask for your check once it's deployed\\. <https://github.com/sandbox/jarvis-loop/pull/101\\|sandbox/jarvis-loop#101> merged as `[0-9a-f]{7}`; watching main's CI\\.\\nNothing to check until a loop build that contains it is running\\.", "buttons": []}]},
     {"do": "reply", "item": "a", "as": "approver", "text": "looks fine"},
     {"do": "expect", "stage": {"a": "qa"}, "messages": [{"thread": "a", "from": "bot", "text": "^Not taken: I'll ask for your check once it's deployed \\(or `/loop verified [0-9]+`, `/loop reopen [0-9]+ <what is wrong>`\\)\\.$"}]},
     {"do": "deploy", "build": "base"},
@@ -26,7 +26,7 @@
     {"do": "deploy", "build": "main"},
     {"do": "expect", "stage": {"a": "qa"},
      "events": [{"item": "a", "kind": "deployed", "actor": "runner", "data": {"revision": "^[0-9a-f]{40}$", "merge_sha": "^[0-9a-f]{40}$"}, "count": 1}],
-     "messages": [{"thread": "a", "from": "bot", "text": "#[0-9]+: Deployed — waiting for your check\\. <https://github.com/sandbox/jarvis-loop/pull/101\\|sandbox/jarvis-loop#101> \\(merged as `[0-9a-f]{7}`\\) is running in the build `[0-9a-f]{7}`\\.\\nPress Verified when it works", "buttons": ["Verified", "Reopen"]}]},
+     "messages": [{"thread": "a", "from": "bot", "text": "#[0-9]+ make the digest shorter: Deployed — waiting for your check\\. <https://github.com/sandbox/jarvis-loop/pull/101\\|sandbox/jarvis-loop#101> \\(merged as `[0-9a-f]{7}`\\) is running in the build `[0-9a-f]{7}`\\.\\nPress Verified when it works", "buttons": ["Verified", "Reopen"]}]},
     {"do": "runner", "claims": "none"},
     {"do": "press", "item": "a", "button": "qa_verified", "as": "approver"}
   ],

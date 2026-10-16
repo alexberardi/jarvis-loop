@@ -34,11 +34,11 @@
 
     {"do": "add", "item": "c", "title": "Plans table"},
     {"do": "add", "item": "d", "title": "Plan turns", "after": ["c"]},
-    {"do": "command", "as": "approver", "text": "drop 3 not now", "answer": "^#3 dropped \\(closed\\)\\.$"},
+    {"do": "command", "as": "approver", "text": "drop 3 not now", "answer": "^#3 Plans table dropped \\(closed\\)\\.$"},
     {"do": "expect", "stage": {"c": "closed", "d": "needs_you"},
      "question": {"d": "^#3 it depends on was dropped: keep, change or drop this one\\?$"},
      "events": [{"item": "d", "kind": "dependency_closed", "actor": "loopd", "data": {"question": "^#3 it depends on"}, "count": 1}],
-     "messages": [{"thread": "d", "from": "bot", "text": "#4 needs you: #3 it depends on was dropped: keep, change or drop this one\\?"}]},
+     "messages": [{"thread": "d", "from": "bot", "text": "#4 Plan turns needs you: #3 it depends on was dropped: keep, change or drop this one\\?"}]},
 
     {"do": "script", "item": "b", "for": "triage", "play": "reproduce", "picks": "jarvis-loop"},
     {"do": "runner", "claims": "b"},

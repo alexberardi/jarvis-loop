@@ -20,6 +20,10 @@ func TestLandLines(t *testing.T) {
 	it.PR, it.Repo = 7, "alexberardi/jarvis-loop"
 	d := store.Detail{Item: it}
 	merge := "ff0f006aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	p1, err := e.st.AddItem(e.ctx, "runner:devbox", store.NewItem{Title: "main red after #7: ci", Repo: "alexberardi/jarvis-loop", Priority: "P1", Source: "finding"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct {
 		ev   store.Event
 		want string // "" for no reply
@@ -36,8 +40,10 @@ func TestLandLines(t *testing.T) {
 			"^Back to build: CI failed on `aaaaaaa`: check$"},
 		{store.Event{Kind: "main_ci", Data: map[string]any{"result": "green", "merge_sha": merge}},
 			"^main green on `ff0f006`\\.$"},
-		{store.Event{Kind: "main_ci", Data: map[string]any{"result": "red", "merge_sha": merge, "failing": []any{"ci", "<!channel>"}, "p1_item": float64(12)}},
-			"^main red on `ff0f006` \\(failing: ci, &lt;!channel&gt;\\): filed #12 \\(P1\\)\\.$"},
+		{store.Event{Kind: "main_ci", Data: map[string]any{"result": "red", "merge_sha": merge, "failing": []any{"ci", "<!channel>"}, "p1_item": float64(p1.ID)}},
+			fmt.Sprintf("^main red on `ff0f006` \\(failing: ci, &lt;!channel&gt;\\): filed #%d main red after #7: ci \\(P1\\)\\.$", p1.ID)},
+		{store.Event{Kind: "main_ci", Data: map[string]any{"result": "red", "merge_sha": merge, "failing": []any{"ci"}, "p1_item": float64(99)}},
+			"^main red on `ff0f006` \\(failing: ci\\): filed #99 \\(P1\\)\\.$"},
 		{store.Event{Kind: "main_ci", Data: map[string]any{"result": "red", "merge_sha": merge, "failing": []any{"ci"}}},
 			"^main red on `ff0f006` \\(failing: ci\\); no P1 item could be filed, see `loop show \\d+`\\.$"},
 		{store.Event{Kind: "main_ci", Data: map[string]any{"result": "superseded", "merge_sha": merge}},
@@ -48,7 +54,7 @@ func TestLandLines(t *testing.T) {
 	}
 	for _, c := range cases {
 		c.ev.ItemID = id
-		m, ok := e.b.describe(c.ev, d)
+		m, ok := e.b.describe(e.ctx, c.ev, d)
 		if c.want == "" {
 			if ok {
 				t.Errorf("%s posted %q, want no reply", c.ev.Kind, m.Text)

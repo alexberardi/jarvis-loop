@@ -1,0 +1,51 @@
+{
+  "name": "ping-names-the-item",
+  "about": "Messages that ping the approver, and one-line status answers, name the item as '#N <title>', so a phone notification says which item it is: the title cut to 80 characters with a plain '…' and escaped, in the message's text (what the notification shows).",
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Fix the pantry list <b>sorting</b> so the shopping order stays put when two people edit it at once"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "question"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "needs_you"
+      },
+      "messages": [
+        {
+          "thread": "a",
+          "from": "bot",
+          "text": "^<@U0C9AFPAMD4> #1 Fix the pantry list &lt;b&gt;sorting&lt;/b&gt; so the shopping order stays put when two peo… needs you: "
+        }
+      ]
+    },
+    {
+      "do": "command",
+      "as": "approver",
+      "text": "priority 1 P2",
+      "answer": "^#1 Fix the pantry list &lt;b&gt;sorting&lt;/b&gt; so the shopping order stays put when two peo… is now P2\\.$"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "needs_you"
+    }
+  }
+}

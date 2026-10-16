@@ -352,7 +352,7 @@ func TestFailedRunIsARunnerErrorNotAQuestion(t *testing.T) {
 	e.calls()
 	e.runner(id, "a1", pipeline.Failed, map[string]string{"error": "the triage's result couldn't be accepted: evidence: evidence key.txt is not a regular file (again, after one retry). Last output: done"})
 	q := allText(only(t, e.calls(), "chat.postMessage")[2])
-	want := fmt.Sprintf("<@%s> #%d needs you: the triage's result couldn't be accepted: evidence: evidence key.txt is not a regular file (again, after one retry). Last output: done\nReply \"retry\" to run it again, or drop.", Approver, id)
+	want := fmt.Sprintf("<@%s> #%d refused needs you: the triage's result couldn't be accepted: evidence: evidence key.txt is not a regular file (again, after one retry). Last output: done\nReply \"retry\" to run it again, or drop.", Approver, id)
 	if !strings.HasPrefix(q, want) || strings.Contains(q, "to answer") {
 		t.Fatalf("needs-you reply\n%s\nwant\n%s", q, want)
 	}
@@ -1123,7 +1123,7 @@ func TestGuardRefusedLineHidesTheCommand(t *testing.T) {
 	}
 	ev := store.Event{ItemID: it.ID, Actor: "runner:devbox", Kind: "guard_refused",
 		Data: map[string]any{"rule": "protected_path", "tool": "Bash", "target": "cat /home/alex/secret-host.lan"}}
-	m, ok := e.b.describe(ev, store.Detail{Item: it})
+	m, ok := e.b.describe(e.ctx, ev, store.Detail{Item: it})
 	if !ok || !strings.Contains(m.Text, "Guard refused a Bash call (protected_path)") || strings.Contains(m.Text, "secret-host") {
 		t.Fatalf("got %q", m.Text)
 	}
@@ -1207,7 +1207,7 @@ func TestAddAfter(t *testing.T) {
 	ts := e.thread(2)
 	var asked bool
 	for _, c := range only(t, e.calls(), "chat.postMessage") {
-		if c.Body["thread_ts"] == ts && strings.Contains(allText(c), "#2 needs you: #1 it depends on was dropped: keep, change or drop this one?") {
+		if c.Body["thread_ts"] == ts && strings.Contains(allText(c), "#2 show the plan link needs you: #1 it depends on was dropped: keep, change or drop this one?") {
 			asked = true
 		}
 	}

@@ -170,10 +170,10 @@ func TestLoopQACommands(t *testing.T) {
 		t.Fatalf("someone else's reopen: %q", out)
 	}
 	out := e.command(Approver, fmt.Sprintf("reopen #%d the code is still tiny", a))
-	if !strings.Contains(out, fmt.Sprintf("#%d done; filed #%d (P2)", a, b+1)) {
+	if !strings.Contains(out, fmt.Sprintf("#%d bigger pairing code done; filed #%d (P2)", a, b+1)) {
 		t.Fatalf("reopen: %q", out)
 	}
-	if out := e.command(Approver, fmt.Sprintf("verified %d", b)); !strings.Contains(out, fmt.Sprintf("#%d verified", b)) || e.item(b).Item.Stage != pipeline.Done {
+	if out := e.command(Approver, fmt.Sprintf("verified %d", b)); !strings.Contains(out, fmt.Sprintf("#%d louder chime verified", b)) || e.item(b).Item.Stage != pipeline.Done {
 		t.Fatalf("verified: %q", out)
 	}
 	help := e.command(other, "help")
@@ -240,6 +240,9 @@ func TestQAAfterDeployMessages(t *testing.T) {
 			t.Errorf("merged message lacks %q: %s", want, txt)
 		}
 	}
+	if head := fmt.Sprintf("<@%s> #%d loop change: Merged; I'll ask for your check once it's deployed", Approver, id); fmt.Sprint(msg.Body["text"]) != head {
+		t.Errorf("merged Text = %q, want %q", msg.Body["text"], head)
+	}
 	if strings.Contains(txt, "Press Verified") {
 		t.Errorf("merged message asks for the check before the deploy: %s", txt)
 	}
@@ -266,6 +269,9 @@ func TestQAAfterDeployMessages(t *testing.T) {
 		if !strings.Contains(txt, want) {
 			t.Errorf("deployed message lacks %q: %s", want, txt)
 		}
+	}
+	if head := fmt.Sprintf("<@%s> #%d loop change: Deployed — waiting for your check", Approver, id); fmt.Sprint(msg.Body["text"]) != head {
+		t.Errorf("deployed Text = %q, want %q", msg.Body["text"], head)
 	}
 	if ids := actionIDs(msg); len(ids) != 2 || ids[0] != "qa_verified" || ids[1] != "qa_reopen" {
 		t.Fatalf("buttons after the deploy: %v", ids)
