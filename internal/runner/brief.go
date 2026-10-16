@@ -25,6 +25,7 @@ type Item struct {
 	PR          int      `json:"pr"`
 	Branch      string   `json:"branch"`
 	HeadSHA     string   `json:"head_sha"`
+	MergeSHA    string   `json:"merge_sha,omitempty"`
 	Summary     string   `json:"summary"`
 	// Source is who filed it (finding: the loop itself, as a red main's P1).
 	Source string `json:"source"`
