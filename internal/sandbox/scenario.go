@@ -79,6 +79,9 @@ type Step struct {
 	RefuseMerges *int `json:"refuse_merges,omitempty"`
 	MergeByHand  bool `json:"merge_by_hand,omitempty"`
 	CloseByHand  bool `json:"close_by_hand,omitempty"`
+	// deploy: the runner restarts on a loop build, "base" (jarvis-loop's main when the stack
+	// started) or "main" (its main now)
+	Build string `json:"build,omitempty"`
 	// control (as the CLI's PUT /control)
 	ActiveAgents  *int  `json:"active_agents,omitempty"`
 	MaxRunMinutes *int  `json:"max_run_minutes,omitempty"`
@@ -431,6 +434,8 @@ func (p *player) step(st Step) error {
 			}
 		}
 		return nil
+	case "deploy":
+		return s.Deploy(st.Build)
 	case "release":
 		id, err := p.planRef(st.Plan)
 		if err != nil {

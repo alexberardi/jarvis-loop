@@ -264,6 +264,9 @@ func (r *Runner) landAdvance(ctx context.Context, lr *landRun, d Decision, paths
 	if d.Outcome == "merged" && lr.repo.QA {
 		fields["needs_qa"] = "true" // the repo's default: loopd puts the item in qa
 	}
+	if d.Outcome == "merged" && lr.repo.QAAfterDeploy {
+		fields["qa_after_deploy"] = "true" // and asks for the check once a build with it runs
+	}
 	if d.Outcome == "failed" {
 		paths = nil
 	}

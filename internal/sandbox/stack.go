@@ -101,6 +101,7 @@ type Stack struct {
 	// LoopRemote is the second repo's remote (LoopSlug), MobileRemote the third's.
 	LoopRemote   string
 	MobileRemote string
+	LoopMainSHA  string // LoopRemote's main when the stack started
 
 	// Secrets are every token the stack holds: none may appear in a Slack message.
 	Secrets []string
@@ -284,7 +285,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 	if s.Remote, s.MainSHA, err = makeRemote(dir, "demo"); err != nil {
 		return nil, err
 	}
-	if s.LoopRemote, _, err = makeRemote(dir, "jarvis-loop"); err != nil {
+	if s.LoopRemote, s.LoopMainSHA, err = makeRemote(dir, "jarvis-loop"); err != nil {
 		return nil, err
 	}
 	if s.MobileRemote, _, err = makeRemote(dir, "jarvis-node-mobile"); err != nil {
@@ -306,7 +307,8 @@ func StartStack(opts Options) (st *Stack, err error) {
 		VerifyLock: filepath.Join(dir, "verify.lock"),
 		Repos: map[string]runner.RepoConfig{
 			RepoKey: {Remote: s.Remote, Slug: RepoSlug, Base: "main", Group: "server", Description: "the sandbox's demo app"},
-			LoopKey: {Remote: s.LoopRemote, Slug: LoopSlug, Base: "main", Group: "loop", Description: "the loop itself (loopd, the runner, the Slack bot)"},
+			LoopKey: {Remote: s.LoopRemote, Slug: LoopSlug, Base: "main", Group: "loop", Description: "the loop itself (loopd, the runner, the Slack bot)",
+				QAAfterDeploy: true},
 			MobileKey: {Remote: s.MobileRemote, Slug: MobileSlug, Base: "main", Group: "mobile", Aliases: []string{"mobile", "node app"},
 				Description: "the household's phone app (screens, chat, pairing)", Verify: MobileVerify(dir), QA: true},
 		},
@@ -333,6 +335,26 @@ func StartStack(opts Options) (st *Stack, err error) {
 		go func() { defer s.bg.Done(); s.Runner.Run(s.ctx) }()
 	}
 	return s, nil
+}
+
+// Deploy is the runner restarting on a loop build (docs/decisions/2026-10-16-qa-after-deploy.md):
+// "base", jarvis-loop's main when the stack started, or "main", its main now. As on its start, it
+// reports deployed for the qa items awaiting a deploy whose merge that build contains.
+func (s *Stack) Deploy(build string) error {
+	rev := s.LoopMainSHA
+	switch build {
+	case "base":
+	case "main":
+		out, err := exec.Command("git", "-C", s.LoopRemote, "rev-parse", "refs/heads/main").Output()
+		if err != nil {
+			return fmt.Errorf("jarvis-loop's main: %w", err)
+		}
+		rev = strings.TrimSpace(string(out))
+	default:
+		return fmt.Errorf("deploy build must be base or main, not %q", build)
+	}
+	s.Runner.Revision = rev
+	return s.Runner.ReportDeployed(s.ctx)
 }
 
 // Repos are the sandbox loopd's --repos, and Aliases its --repos-file aliases.
@@ -465,9 +487,12 @@ func (s *Stack) Poll(timeout time.Duration) (Claimed, error) {
 	go func() {
 		defer close(ended)
 		defer s.runEnded(run)
-		// As Run does each poll: close the PRs of dropped items, then claim.
+		// As Run does each poll: close the PRs of dropped items, report the deploys, then claim.
 		if err := s.Runner.CloseDropped(s.ctx); err != nil {
 			s.log.Warn("close dropped PRs", "err", err)
+		}
+		if err := s.Runner.ReportDeployed(s.ctx); err != nil {
+			s.log.Warn("report deployed", "err", err)
 		}
 		if stages == nil {
 			return

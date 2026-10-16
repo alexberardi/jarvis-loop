@@ -113,3 +113,47 @@ func TestReopen(t *testing.T) {
 		t.Fatalf("items: %d", len(rows))
 	}
 }
+
+// QA after deploy (docs/decisions/2026-10-16-qa-after-deploy.md): the land script's
+// qa_after_deploy puts the item in qa awaiting a deploy, listed for the runners; a runner's
+// deployed ends the wait once, with no refusal recorded for a second report.
+func TestMergedAwaitsDeployThenDeployed(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	it := toMerged(t, s, runner, nil, map[string]string{"qa_after_deploy": "true"})
+	d, _ := s.GetItem(ctx, it.ID)
+	if d.Item.Stage != pipeline.QA || !d.Item.NeedsQA || !d.Item.AwaitingDeploy {
+		t.Fatalf("after merged: %+v", d.Item)
+	}
+	rows, err := s.ListItemsFilter(ctx, ListFilter{AwaitingDeploy: true})
+	if err != nil || len(rows) != 1 || rows[0].ID != it.ID {
+		t.Fatalf("awaiting deploy list: %+v %v", rows, err)
+	}
+	rev := "abcdef0123456789abcdef0123456789abcdef01"
+	if _, err := s.Deployed(ctx, "other-runner", it.ID, map[string]any{"revision": "nope"}); code(err) != pipeline.CodeInvalidField {
+		t.Fatalf("bad revision: %v", err)
+	}
+	if _, err := s.Deployed(ctx, "other-runner", it.ID, map[string]any{"revision": rev, "x": "y"}); code(err) != pipeline.CodeInvalidField {
+		t.Fatalf("extra data: %v", err)
+	}
+	ev, err := s.Deployed(ctx, "other-runner", it.ID, map[string]any{"revision": rev})
+	if err != nil || ev.Kind != "deployed" || ev.Actor != "runner:other-runner" || ev.Data["revision"] != rev {
+		t.Fatalf("deployed: %+v %v", ev, err)
+	}
+	d, _ = s.GetItem(ctx, it.ID)
+	if d.Item.Stage != pipeline.QA || d.Item.AwaitingDeploy {
+		t.Fatalf("after deployed: %+v", d.Item)
+	}
+	if rows, _ := s.ListItemsFilter(ctx, ListFilter{AwaitingDeploy: true}); len(rows) != 0 {
+		t.Fatalf("still listed: %+v", rows)
+	}
+	if _, err := s.Deployed(ctx, runner, it.ID, map[string]any{"revision": rev}); code(err) != pipeline.CodeWrongStage {
+		t.Fatalf("second deployed: %v", err)
+	}
+	if ev := lastEvent(t, s, it.ID, "refused"); ev != nil {
+		t.Fatalf("a runner's late deployed is not a refusal: %+v", ev)
+	}
+	if _, err := s.Verified(ctx, user, it.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+}

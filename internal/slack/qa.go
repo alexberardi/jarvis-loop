@@ -17,7 +17,9 @@ import (
 // VerifiedWords are the words a Verified button press records.
 const VerifiedWords = "Verified button"
 
-// qaMessage asks the approver to check a merged item.
+// qaMessage asks the approver to check a merged item, or, for a repo whose change runs only once
+// deployed (the loop itself), says the ask comes then, with no buttons
+// (docs/decisions/2026-10-16-qa-after-deploy.md).
 func (b *Bot) qaMessage(e store.Event, d store.Detail) Message {
 	it := d.Item
 	merged := fmt.Sprintf("%s merged as `%s`", b.prLink(it), short(str(e.Data, "merge_sha")))
@@ -27,10 +29,27 @@ func (b *Bot) qaMessage(e store.Event, d store.Detail) Message {
 	if str(e.Data, "main_ci") == "watching" {
 		merged += "; watching main's CI"
 	}
-	text := fmt.Sprintf("<@%s> #%d: Merged — waiting for your check. %s.\nPress Verified when it works; Reopen, then reply here with what is wrong, files a new item.",
-		Approver, it.ID, merged)
+	if e.Data["awaiting_deploy"] == true {
+		head := fmt.Sprintf("<@%s> #%d: Merged; I'll ask for your check once it's deployed", Approver, it.ID)
+		text := fmt.Sprintf("%s. %s.\nNothing to check until a loop build that contains it is running.", head, merged)
+		return Message{Text: head, Blocks: []map[string]any{section(text)}}
+	}
+	return b.qaAsk(it, "Merged", merged)
+}
+
+// deployedMessage is the ask once a runner reports a build that contains the merge.
+func (b *Bot) deployedMessage(e store.Event, d store.Detail) Message {
+	it := d.Item
+	deployed := fmt.Sprintf("%s (merged as `%s`) is running in the build `%s`", b.prLink(it), short(str(e.Data, "merge_sha")), short(str(e.Data, "revision")))
+	return b.qaAsk(it, "Deployed", deployed)
+}
+
+// qaAsk is the ask with the Verified and Reopen buttons.
+func (b *Bot) qaAsk(it pipeline.Item, what, detail string) Message {
+	text := fmt.Sprintf("<@%s> #%d: %s — waiting for your check. %s.\nPress Verified when it works; Reopen, then reply here with what is wrong, files a new item.",
+		Approver, it.ID, what, detail)
 	value := strconv.FormatInt(it.ID, 10)
-	return Message{Text: fmt.Sprintf("<@%s> #%d: Merged — waiting for your check", Approver, it.ID), Blocks: []map[string]any{
+	return Message{Text: fmt.Sprintf("<@%s> #%d: %s — waiting for your check", Approver, it.ID, what), Blocks: []map[string]any{
 		section(text),
 		{"type": "actions", "block_id": "qa", "elements": []any{
 			button("Verified", "qa_verified", value, "primary"),
@@ -80,6 +99,10 @@ func (b *Bot) qaReply(ctx context.Context, m slackEvent, id int64, text string) 
 	asked := b.reopening[id]
 	b.mu.Unlock()
 	if !asked {
+		if d, err := b.c.Store.GetItem(ctx, id); err == nil && d.Item.AwaitingDeploy {
+			b.threadReply(ctx, m.ThreadTS, fmt.Sprintf("Not taken: I'll ask for your check once it's deployed (or `/loop verified %d`, `/loop reopen %d <what is wrong>`).", id, id))
+			return
+		}
 		b.threadReply(ctx, m.ThreadTS, "Not taken: press Verified if it works, or Reopen and then reply with what is wrong.")
 		return
 	}

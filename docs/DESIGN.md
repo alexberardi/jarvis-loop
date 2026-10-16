@@ -26,7 +26,7 @@ Work moves one stage at a time and cannot skip one; only the two gates wait on t
 | Land | a script | merged with `main` green, or held; red CI goes back to build as a counted bounce, and a rebuild that leaves the red head unchanged goes to needs-you ([decision](decisions/2026-10-15-ci-red-unchanged-head.md)) | 1 at a time |
 | Needs-you | the user, in the item's thread | answered; it returns to the stage that asked | none |
 | Held | the user, button or reply | approved (merge, then done) or kept holding | none |
-| QA | the user, after merge (opt-in) | **Verified** → done, or **Reopen** with words → done, and a new P2 item with those words. Only items marked needs_qa (by triage, review, `/loop qa <id>` before land, or the repo's `qa: true`) come here instead of done; nothing claims it ([decision](decisions/2026-10-15-qa.md)) | none |
+| QA | the user, after merge (opt-in) | **Verified** → done, or **Reopen** with words → done, and a new P2 item with those words. Only items marked needs_qa (by triage, review, `/loop qa <id>` before land, or the repo's `qa: true`) come here instead of done; nothing claims it ([decision](decisions/2026-10-15-qa.md)). For the loop's own repo (`qa_after_deploy: true`) the check is asked for once a runner built from a commit containing the merge reports `deployed` ([decision](decisions/2026-10-16-qa-after-deploy.md)) | none |
 
 ## Priority
 
