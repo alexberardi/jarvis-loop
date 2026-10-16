@@ -233,3 +233,33 @@ func TestCLIQA(t *testing.T) {
 		t.Fatalf("reopen in triage: %d %q", code, errs)
 	}
 }
+
+func TestCLIAfter(t *testing.T) {
+	st, err := store.Open(t.TempDir(), clock.NewFake(time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	toks, _ := api.ParseTokens(strings.NewReader(userTok + "\tuser\talex\n" + runnerTok + "\trunner\tdevbox\n"))
+	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler)))
+	defer srv.Close()
+	c := cli{t: t, url: srv.URL}
+
+	c.ok(userTok, "add", "a")
+	c.ok(userTok, "add", "b")
+	if out := c.ok(userTok, "add", "c", "--after", "1, #2"); !strings.Contains(out, "added #3 c (P3), after #1, #2") {
+		t.Fatalf("add --after: %q", out)
+	}
+	if out := c.ok(userTok, "show", "3"); !strings.Contains(out, "blocked:  waiting on #1, #2") {
+		t.Fatalf("show: %q", out)
+	}
+	if out := c.ok(userTok, "show", "1"); strings.Contains(out, "waiting on") {
+		t.Fatalf("show without dependencies: %q", out)
+	}
+	if code, _, errs := c.run(userTok, "add", "d", "--after", "9"); code != 1 || !strings.Contains(errs, "no item #9") {
+		t.Fatalf("unknown dependency: %d %q", code, errs)
+	}
+	if code, _, errs := c.run(userTok, "add", "d", "--after", "x"); code != 2 || !strings.Contains(errs, "not an item id") {
+		t.Fatalf("bad --after: %d %q", code, errs)
+	}
+}

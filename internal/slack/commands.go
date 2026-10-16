@@ -13,7 +13,7 @@ import (
 
 const helpText = "*/loop commands*\n" +
 	"`/loop help` this list\n" +
-	"`/loop add <what>` add work; say \"urgent\", \"high priority\", \"low priority\" or \"someday\" to set its priority (default P3), and \"in <repo>\", \"<repo>:\" or \"[<repo>]\" to name its repo, also by a short word at the start or end (\"[mobile] …\", \"nest: …\", \"… in docs\"; default: triage picks one)\n" +
+	"`/loop add <what>` add work; say \"urgent\", \"high priority\", \"low priority\" or \"someday\" to set its priority (default P3), and \"in <repo>\", \"<repo>:\" or \"[<repo>]\" to name its repo, also by a short word at the start or end (\"[mobile] …\", \"nest: …\", \"… in docs\"; default: triage picks one), and \"after #12\" or \"after #12, #13\" to wait for those items to be done\n" +
 	"`/loop status` the board\n" +
 	"`/loop show <id>` one item\n" +
 	"`/loop priority <id> P1`\u2013`P5` change a priority\n" +
@@ -90,6 +90,9 @@ func (b *Bot) runCommand(ctx context.Context, c command) string {
 		where := it.Priority
 		if it.Repo != "" {
 			where += ", " + Escape(it.Repo)
+		}
+		if len(it.DependsOn) > 0 {
+			where += ", after " + itemRefs(it.DependsOn)
 		}
 		return fmt.Sprintf("Added #%d (%s): %s. Its thread is in <#%s>.", it.ID, where, Escape(it.Title), ChannelLoop)
 	case "status":
@@ -233,6 +236,9 @@ func (b *Bot) show(ctx context.Context, id int64) string {
 	fmt.Fprintf(&sb, "*#%d %s*\nStage *%s* · Priority *%s* · repo %s · risk %s", it.ID, b.field(it.Title, 300, id), d.Display, it.Priority, repoText(it), it.Risk)
 	if it.HoldReason != "" {
 		sb.WriteString(" — " + b.field(it.HoldReason, 300, id))
+	}
+	if len(d.WaitingOn) > 0 {
+		sb.WriteString(" · waiting on " + itemRefs(d.WaitingOn))
 	}
 	if pr := b.prLink(it); pr != "" {
 		fmt.Fprintf(&sb, "\n%s, head `%s`", pr, short(it.HeadSHA))

@@ -87,8 +87,8 @@ var stageOrder = map[Stage]int{Land: 0, Review: 1, Build: 2, Triage: 3}
 
 // Choose picks the item a runner should get, or false when there is nothing for it. items are the
 // candidates (callers pass the waiting items; anything claimed or not in a work stage is skipped
-// here too); live are the leases still running.
-func Choose(c Control, items []Item, live []LiveLease, req ClaimRequest) (Item, bool) {
+// here too); deps are the stages of the items they depend on; live are the leases still running.
+func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req ClaimRequest) (Item, bool) {
 	// 1. Control.
 	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
 		return Item{}, false
@@ -118,6 +118,10 @@ func Choose(c Control, items []Item, live []LiveLease, req ClaimRequest) (Item, 
 			continue
 		}
 		if !subset(it.Resources, req.Capabilities) {
+			continue
+		}
+		// Dependencies: every item it depends on is done.
+		if len(WaitingOn(*it, deps)) > 0 {
 			continue
 		}
 		// 3. Per-resource limits.

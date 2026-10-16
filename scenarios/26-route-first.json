@@ -74,7 +74,7 @@
           "run": 1,
           "file": "brief.md",
           "text": "(?s)- Repository: none yet\\. \\*\\*Route it\\*\\*.*\\n- Checkouts: none\\n- Context from the runner \\(read these\\): `\\.loop/context/repos\\.md` \\(the configured repos: group, aliases, what each is, recent PR titles\\); `\\.loop/context/open-items\\.md`",
-          "no_text": "## The item(?s:.*)(repos/|merged-prs-)"
+          "no_text": "## The item(?s:.*)(`repos/|merged-prs-)"
         },
         {
           "item": "a",
