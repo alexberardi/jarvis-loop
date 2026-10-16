@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -777,5 +778,23 @@ func TestOpenResetsACopyOfBuiltInRules(t *testing.T) {
 				t.Fatalf("rules after reopen: %d rules, want %d", len(ctl.HoldRules), len(want))
 			}
 		})
+	}
+}
+
+// The head land bounced for red CI survives a save and a load.
+func TestCIRedSHARoundTrip(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	it, err := s.AddItem(ctx, user, NewItem{Title: "ci red"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	it.CIRedSHA = "0123456789abcdef0123456789abcdef01234567"
+	if err := s.tx(ctx, func(tx *sql.Tx) error { return saveItem(tx, it) }); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadItem(s.w, it.ID)
+	if err != nil || got.CIRedSHA != it.CIRedSHA {
+		t.Fatalf("loaded %q (%v)", got.CIRedSHA, err)
 	}
 }

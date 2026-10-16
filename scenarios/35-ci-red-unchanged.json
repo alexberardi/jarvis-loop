@@ -1,0 +1,39 @@
+{
+  "name": "ci-red-unchanged",
+  "about": "CI fails on the PR's head and land sends the item back to build (a counted bounce). The build finds nothing to fix and reports the same head: loopd sends the item to the user (needs-you, return stage land) instead of another review, and nothing merges.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "no_change"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "fail", "lint": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "back_to_build", "actor": "runner",
+       "data": {"reason": "^CI failed on `[0-9a-f]{7}`: check", "ci_head_sha": "^[0-9a-f]{40}$", "bounce_count": "^1$"}, "count": 1}]},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "none"}
+  ],
+  "expect": {
+    "stage": {"a": "needs_you"},
+    "question": {"a": "^CI failed on [0-9a-f]{7} and the build changed nothing: rerun CI, fix main, or drop$"},
+    "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
+    "remote": {"branches": {"a": "^feat: add a feature$"}, "only": true},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "count": 2},
+      {"item": "a", "kind": "advanced", "outcome": "approved", "actor": "runner", "count": 1},
+      {"item": "a", "kind": "advanced", "outcome": "back_to_build", "actor": "runner", "count": 1}
+    ],
+    "messages": [
+      {"thread": "a", "text": "^Back to build: CI failed on `[0-9a-f]{7}`: check"},
+      {"thread": "a", "text": "needs you: CI failed on [0-9a-f]{7} and the build changed nothing: rerun CI, fix main, or drop"}
+    ],
+    "prs": 1
+  }
+}

@@ -725,3 +725,55 @@ func TestApprovedNeedsReview(t *testing.T) {
 		}
 	}
 }
+
+// Land's back_to_build for red CI names the head it saw: it counts as a bounce, and the item
+// remembers the head so a build that changes nothing does not cycle (docs/decisions/2026-10-15-ci-red-unchanged-head.md).
+func TestCIRedBackToBuildCounts(t *testing.T) {
+	ci := func(head string) Advance {
+		return Advance{Outcome: BackToBuild, Agent: "lander", Fields: map[string]string{"reason": "CI failed on `0123456`: check", "ci_head_sha": head}}
+	}
+	tr, err := ApplyAdvance(item(Land), ci(sha1), t0)
+	wantCode(t, err, "")
+	if tr.Item.Stage != Build || tr.Item.BounceCount != 1 || tr.Item.CIRedSHA != sha1 || tr.Data["bounce_count"] != 1 {
+		t.Fatalf("first CI bounce: %+v %v", tr.Item, tr.Data)
+	}
+	second := item(Land)
+	second.BounceCount = 1
+	tr, err = ApplyAdvance(second, ci(sha1), t0)
+	wantCode(t, err, "")
+	if tr.Item.Stage != NeedsYou || tr.Item.ReturnStage != Build || tr.Item.BounceCount != 2 {
+		t.Fatalf("second bounce: %+v", tr.Item)
+	}
+	_, err = ApplyAdvance(item(Land), ci("HEAD"), t0)
+	wantCode(t, err, CodeInvalidField)
+
+	// A conflict or missing-evidence back_to_build names no CI head and is not counted.
+	tr, err = ApplyAdvance(item(Land), Advance{Outcome: BackToBuild, Fields: map[string]string{"reason": "conflict"}}, t0)
+	wantCode(t, err, "")
+	if tr.Item.Stage != Build || tr.Item.BounceCount != 0 || tr.Item.CIRedSHA != "" {
+		t.Fatalf("conflict bounce: %+v", tr.Item)
+	}
+}
+
+func TestPROpenedOnTheCIRedHead(t *testing.T) {
+	it := item(Build)
+	it.BounceCount, it.CIRedSHA = 1, sha2
+	tr, err := ApplyAdvance(it, prOpened(sha2, []string{"M internal/x.go"}, nil), t0)
+	wantCode(t, err, "")
+	if tr.Item.Stage != NeedsYou || tr.Item.ReturnStage != Land {
+		t.Fatalf("same head: %+v", tr.Item)
+	}
+	if want := "CI failed on fedcba9 and the build changed nothing: rerun CI, fix main, or drop"; tr.Item.Question != want {
+		t.Fatalf("question %q", tr.Item.Question)
+	}
+	if tr.Item.HeadSHA != sha2 {
+		t.Fatalf("head %q", tr.Item.HeadSHA)
+	}
+
+	// A new head goes to review and clears the mark.
+	tr, err = ApplyAdvance(it, prOpened(sha1, []string{"M internal/x.go"}, nil), t0)
+	wantCode(t, err, "")
+	if tr.Item.Stage != Review || tr.Item.CIRedSHA != "" {
+		t.Fatalf("new head: %+v", tr.Item)
+	}
+}

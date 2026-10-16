@@ -300,7 +300,7 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 // ---- items ----
 
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
-	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of`
+	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of, ci_red_sha`
 
 type scanner interface{ Scan(...any) error }
 
@@ -313,7 +313,7 @@ func scanItem(row scanner) (pipeline.Item, error) {
 	)
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
-		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf)
+		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf, &it.CIRedSHA)
 	if err != nil {
 		return it, err
 	}
@@ -359,10 +359,10 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 	}
 	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
-		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=? WHERE id=?`,
+		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
-		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.ID)
+		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, it.ID)
 	return err
 }
 

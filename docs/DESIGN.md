@@ -23,7 +23,7 @@ Work moves one stage at a time and cannot skip one; only the two gates wait on t
 | Ready | the queue | a runner with the right resources claims it, highest priority first, then oldest | per resource (Runners) |
 | Build | a worker agent in its own worktree | a test-first fix, harness before/after attached, `scripts/check` green, PR open | the active-agents number |
 | Review | a different agent from the builder | it re-ran the evidence and reviewed the code: approve, or bounce to build with notes (after 2 bounces → needs-you) | 2 at a time |
-| Land | a script | merged with `main` green, or held | 1 at a time |
+| Land | a script | merged with `main` green, or held; red CI goes back to build as a counted bounce, and a rebuild that leaves the red head unchanged goes to needs-you ([decision](decisions/2026-10-15-ci-red-unchanged-head.md)) | 1 at a time |
 | Needs-you | the user, in the item's thread | answered; it returns to the stage that asked | none |
 | Held | the user, button or reply | approved (merge, then done) or kept holding | none |
 | QA | the user, after merge (opt-in) | **Verified** → done, or **Reopen** with words → done, and a new P2 item with those words. Only items marked needs_qa (by triage, review, `/loop qa <id>` before land, or the repo's `qa: true`) come here instead of done; nothing claims it ([decision](decisions/2026-10-15-qa.md)) | none |
