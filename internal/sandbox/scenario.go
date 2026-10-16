@@ -83,6 +83,23 @@ type Step struct {
 	MaxRunMinutes *int  `json:"max_run_minutes,omitempty"`
 	Stopped       *bool `json:"stopped,omitempty"`
 
+	// plans (docs/phases/07-planning.md), driven through the API: Plan is a plan's alias. plan
+	// starts one (title, priority, text); plan_say is the user's message; plan_turn is a fake
+	// runner taking the plan's next turn and reporting Text as the reply with Brief, Blueprint,
+	// Ready, BackToBrief (Fails: the turn must fail, a regexp on why); plan_approve approves Doc
+	// ("brief", "blueprint") at Version (0: the latest; Refused: must be refused, a regexp);
+	// plan_drop drops it; plan_items names the items its hand-off filed, in piece order (Pieces).
+	Plan        string   `json:"plan,omitempty"`
+	Brief       string   `json:"brief,omitempty"`
+	Blueprint   string   `json:"blueprint,omitempty"`
+	Ready       bool     `json:"ready,omitempty"`
+	BackToBrief string   `json:"back_to_brief,omitempty"`
+	Fails       string   `json:"fails,omitempty"`
+	Doc         string   `json:"doc,omitempty"`
+	Version     int      `json:"version,omitempty"`
+	Refused     string   `json:"refused,omitempty"`
+	Pieces      []string `json:"pieces,omitempty"`
+
 	Expect
 }
 
@@ -114,6 +131,10 @@ type Expect struct {
 	// Board: alias -> the item's card on the web board, read from the board listener with a
 	// board token through the ?t= cookie flow.
 	Board map[string]BoardMatch `json:"board,omitempty"`
+	// Plans: alias -> the plan as loopd has it; DependsOn: item alias -> the aliases of the items
+	// it depends on, exactly.
+	Plans     map[string]PlanMatch `json:"plans,omitempty"`
+	DependsOn map[string][]string  `json:"depends_on,omitempty"`
 }
 
 // BoardMatch is an item's card on the board: its column, and a regexp on the card's HTML.
@@ -139,6 +160,7 @@ type RunMatch struct {
 // EventMatch selects loopd events.
 type EventMatch struct {
 	Item    string            `json:"item,omitempty"`
+	Plan    string            `json:"plan,omitempty"` // a plan's alias
 	Kind    string            `json:"kind,omitempty"`
 	Actor   string            `json:"actor,omitempty"` // approver, other, runner, hand, user, loopd, or literal
 	Outcome string            `json:"outcome,omitempty"`
@@ -233,6 +255,7 @@ type player struct {
 	s     *Stack
 	sc    *Scenario
 	items map[string]itemRef
+	plans map[string]int64
 	ctx   context.Context
 }
 
@@ -264,7 +287,7 @@ func randSHA() string {
 // problem is a failure in the result.
 func Play(sc *Scenario, s *Stack) Result {
 	start := time.Now()
-	p := &player{s: s, sc: sc, items: map[string]itemRef{}, ctx: context.Background()}
+	p := &player{s: s, sc: sc, items: map[string]itemRef{}, plans: map[string]int64{}, ctx: context.Background()}
 	res := Result{Name: sc.Name, Steps: len(sc.Steps)}
 	fail := func(format string, args ...any) { res.Failures = append(res.Failures, fmt.Sprintf(format, args...)) }
 	for i, st := range sc.Steps {
@@ -297,7 +320,8 @@ func Play(sc *Scenario, s *Stack) Result {
 func describeStep(st Step) string {
 	parts := []string{st.Do}
 	for _, kv := range [][2]string{{"item", st.Item}, {"as", st.As}, {"text", st.Text}, {"button", st.Button},
-		{"play", st.Play}, {"advance", st.Advance}, {"outcome", st.Outcome}, {"claims", st.Claims}} {
+		{"play", st.Play}, {"advance", st.Advance}, {"outcome", st.Outcome}, {"claims", st.Claims},
+		{"plan", st.Plan}, {"doc", st.Doc}} {
 		if kv[1] != "" {
 			parts = append(parts, kv[0]+"="+strconv.Quote(kv[1]))
 		}
@@ -529,6 +553,8 @@ func (p *player) step(st Step) error {
 		return s.user.do("PUT", "/control", patch, nil)
 	case "expect", "wait":
 		return p.check(st.Expect)
+	case "plan", "plan_say", "plan_turn", "plan_approve", "plan_drop", "plan_items":
+		return p.planStep(st)
 	}
 	return fmt.Errorf("unknown step %q", st.Do)
 }

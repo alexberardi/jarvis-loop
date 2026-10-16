@@ -106,6 +106,12 @@ cannot silently check nothing. Steps (`"do"`):
 | `ci` [`item`, `checks`: {name: `pass`\|`fail`\|`pending`\|`cancel`\|`skip`}], [`main`: {name: `pass`\|`fail`\|`pending`}] | the CI checks on the item's PR head now (a new head has none), and how the workflow runs on main's merge commits go (phase 6) |
 | `push` `item` or `branch` (`main`), `file`, `text` | someone else's commit on the item's branch, or on demo's main |
 | `github` [`refuse_merges`: n], [`item` + `merge_by_hand`], [`item` + `close_by_hand`] | GitHub refuses the next n merges; the item's PR is merged (or closed) on GitHub outside the loop |
+| `plan` `plan` (alias), `title`, [`priority`], [`text`] | start a plan (`POST /plans`, repos `sandbox/demo`) |
+| `plan_say` `plan`, `text` | the user's message to the plan (`POST /plans/{id}/messages`) |
+| `plan_turn` `plan`, [`text` (the reply)], [`brief`], [`blueprint`], [`ready`], [`back_to_brief`], [`fails` regexp] | a fake runner (the hand runner, `kinds: [plan]`) claims the plan's next turn and reports that result; the turn must be done, or failed with `fails` |
+| `plan_approve` `plan`, `doc` (`brief`\|`blueprint`), [`version`, 0: latest], [`text`], [`refused` regexp] | approve that version's sha256; with `refused`, the approval must be refused with a matching error |
+| `plan_drop` `plan`, [`text`] | drop the plan |
+| `plan_items` `plan`, `pieces`: [aliases] | name the items the plan's hand-off filed, in piece order |
 | `expect` / `wait` + expectations | as below, at that point |
 
 Expectations (`expect`, in a step or at the end) are retried for `within` (default 10 s); the
@@ -114,7 +120,7 @@ negative ones are checked once the loop has gone quiet:
 | Field | Holds when |
 | --- | --- |
 | `stage`: {alias: stage}, `question`: {alias: regexp}, `leased`: {alias: bool}, `repo`: {alias: slug} | the item is there (its repo exactly; `""` for none) |
-| `events` / `no_events`: [{`item`, `kind`, `actor` (`approver`, `other`, `runner`, `hand`, `user`, `loopd`), `outcome`, `data`: {key: regexp}, `count`}] | such events exist (exactly `count`) / none do |
+| `events` / `no_events`: [{`item` or `plan`, `kind`, `actor` (`approver`, `other`, `runner`, `hand`, `user`, `loopd`), `outcome`, `data`: {key: regexp}, `count`}] | such events exist (exactly `count`) / none do |
 | `messages` (in this order) / `no_messages`: [{`thread` or `parent`: alias, `channel` (`loop`\|`digest`), `from` (`bot`, `approver`, `other`), `kind` (`message`, `ephemeral`, `command`, `response`), `to`, `text` regexp, `buttons`: [labels], `pinned`}] | such messages exist, as they stand after edits / none do |
 | `control`: {`active_agents`, `stopped`} | loopd's control |
 | `prs`: n | PRs opened on the fake GitHub |
@@ -124,6 +130,8 @@ negative ones are checked once the loop has gone quiet:
 | `agent_runs`: {stage: n} | the runner started n agent runs for that stage (land starts none) |
 | `absent`: [paths under the stack dir] | they do not exist |
 | `board`: {alias: {`column`, `card` regexp}} | the item's card is in that column of the web board (read from the stack's board listener with a board token, through the `?t=` cookie flow), its HTML matching `card` |
+| `plans`: {alias: {`stage`, `items`, `turn` (`you`\|`agent`\|`none`), `docs`: {kind: latest version}, `turns`, `last_turn` (status), `last_error` regexp}} | the plan as loopd has it |
+| `depends_on`: {alias: [aliases]} | the item depends on exactly those items |
 
 **Always checked, after every step (must-not):** no bot call to a channel other than `#loop` and
 `#loop-digest`; no token (Slack, loopd user, runner or hand) in any call to Slack or any message; the

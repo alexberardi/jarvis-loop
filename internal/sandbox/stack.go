@@ -106,6 +106,7 @@ type Stack struct {
 	Secrets []string
 	user    *apiClient
 	hand    *runner.Client
+	handAPI *apiClient // the hand runner's raw API, for plan turns (the runner has no client for them yet)
 	scripts string
 	log     *slog.Logger
 
@@ -317,6 +318,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 		VerifyPR: s.GitHub.Verify, Land: s.GitHub, Close: s.GitHub, HeartbeatEvery: 60 * time.Second}
 	s.user = &apiClient{base: s.LoopdURL, token: userTok}
 	s.hand = &runner.Client{Base: s.LoopdURL, Token: handTok}
+	s.handAPI = &apiClient{base: s.LoopdURL, token: handTok}
 	if opts.RealClock {
 		s.bg.Add(1)
 		go func() { defer s.bg.Done(); s.Runner.Run(s.ctx) }()

@@ -68,6 +68,7 @@ func (p *player) settle() {
 func (p *player) problems(e Expect, negatives bool) []string {
 	var out []string
 	add := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
+	out = append(out, p.planProblems(e)...)
 	for _, alias := range sortedKeys(e.Stage) {
 		r, err := p.ref(alias)
 		if err != nil {
@@ -341,9 +342,17 @@ func (p *player) countEvents(evs []store.Event, m EventMatch) (int, error) {
 		}
 		id = r.id
 	}
+	var plan int64 = -1
+	if m.Plan != "" {
+		pid, err := p.planRef(m.Plan)
+		if err != nil {
+			return 0, err
+		}
+		plan = pid
+	}
 	n := 0
 	for _, e := range evs {
-		if id >= 0 && e.ItemID != id || m.Kind != "" && e.Kind != m.Kind || m.Actor != "" && e.Actor != actor(m.Actor) ||
+		if id >= 0 && e.ItemID != id || plan >= 0 && e.PlanID != plan || m.Kind != "" && e.Kind != m.Kind || m.Actor != "" && e.Actor != actor(m.Actor) ||
 			m.Outcome != "" && e.Outcome != m.Outcome {
 			continue
 		}

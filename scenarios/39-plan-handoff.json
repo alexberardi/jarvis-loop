@@ -1,0 +1,29 @@
+{
+  "name": "plan-handoff",
+  "about": "Plans, the hand-off half of scenario 2 (docs/phases/07-planning.md), through the API: the brief and a blueprint with 3 pieces (2 and 3 depend on 1) are approved; in the same transaction loopd files 3 items (source plan, P2, plan_id, plan_piece, depends_on mapped to the new ids) and the plan goes to split. The items are posted to #loop as usual, 2 and 3 'waiting on #1'. Only piece 1 is claimable: the runner claims it, it asks a question, and then the runner has nothing to do.",
+  "steps": [
+    {"do": "plan", "plan": "p", "title": "Pantry list", "priority": "P2", "text": "a pantry list"},
+    {"do": "plan_turn", "plan": "p", "text": "Brief ready.", "brief": "# Pantry list\n\nA list of what is in the pantry.", "ready": true},
+    {"do": "plan_approve", "plan": "p", "doc": "brief"},
+    {"do": "plan_turn", "plan": "p", "text": "Blueprint ready.", "ready": true,
+     "blueprint": "# Blueprint\n\nApproach: a table, then two readers.\n\n## Pieces\n\n### 1. Pantry table\n- repo: sandbox/demo\n- size: S\n- depends on: none\n\nThe table and its migration.\n\n### 2. Pantry API\n- depends on: 1\n\nList and add.\n\n### 3. Pantry page\n- depends on: 1\n\nShow the list.\n\n## Risks\n\nNone.\n"},
+    {"do": "plan_approve", "plan": "p", "doc": "blueprint", "text": "go"},
+    {"do": "expect", "plans": {"p": {"stage": "split", "items": 3, "turn": "none"}},
+     "events": [{"plan": "p", "kind": "split", "actor": "loopd", "data": {"items": "^\\[1,2,3\\]$", "blueprint": "^1$"}, "count": 1}]},
+    {"do": "plan_items", "plan": "p", "pieces": ["p1", "p2", "p3"]},
+    {"do": "expect", "stage": {"p1": "triage", "p2": "triage", "p3": "triage"},
+     "repo": {"p1": "sandbox/demo", "p2": "sandbox/demo", "p3": "sandbox/demo"},
+     "depends_on": {"p1": [], "p2": ["p1"], "p3": ["p1"]},
+     "events": [{"item": "p2", "kind": "created", "data": {"source": "^plan$", "priority": "^P2$", "depends_on": "^\\[1\\]$"}, "count": 1}],
+     "messages": [{"parent": "p1", "text": "Pantry table"}, {"parent": "p2", "text": "· Waiting on #1"}, {"parent": "p3", "text": "· Waiting on #1"}]},
+    {"do": "script", "item": "p1", "for": "triage", "play": "triage_question"},
+    {"do": "runner", "claims": "p1"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"p1": "needs_you", "p2": "triage", "p3": "triage"}},
+    {"do": "runner", "claims": "none"}
+  ],
+  "expect": {
+    "plans": {"p": {"stage": "split", "items": 3}},
+    "agent_runs": {"triage": 1}
+  }
+}
