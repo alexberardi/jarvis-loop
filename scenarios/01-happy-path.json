@@ -78,7 +78,7 @@
       "messages": [
         {
           "thread": "a",
-          "text": "<@U0C9AFPAMD4> #\\d+ is held for your approval: .*sandbox/demo#101.* at `[0-9a-f]{7}`",
+          "text": "<@U0C9AFPAMD4> #\\d+ Shorten the session timeout is held for your approval: .*sandbox/demo#101.* at `[0-9a-f]{7}`",
           "buttons": [
             "Approve merge",
             "Keep holding"

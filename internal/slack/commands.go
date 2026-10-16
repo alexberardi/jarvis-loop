@@ -121,7 +121,7 @@ func (b *Bot) runCommand(ctx context.Context, c command) string {
 		if err != nil {
 			return Escape(errMessage(err))
 		}
-		return fmt.Sprintf("#%d is now %s.", it.ID, it.Priority)
+		return fmt.Sprintf("%s is now %s.", ref(it.ID, it.Title), it.Priority)
 	case "plans":
 		return b.plansList(ctx)
 	case "plan":
@@ -143,7 +143,7 @@ func (b *Bot) runCommand(ctx context.Context, c command) string {
 			return Escape(errMessage(err))
 		}
 		b.cancelPending(it.ID)
-		return fmt.Sprintf("#%d dropped (closed).", it.ID)
+		return ref(it.ID, it.Title) + " dropped (closed)."
 	case "qa", "verified", "reopen":
 		return b.qaCommand(ctx, actor, verb, args, rest)
 	case "agents":

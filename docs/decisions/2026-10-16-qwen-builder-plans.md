@@ -20,7 +20,7 @@ the third after one mechanical round. The plans are kept as `skills/engineering/
   runner checks a turn's blueprint with it, so a bad builder fails the turn like a bad size.
 - **Missing builder → `claude`**: a piece without the line is filed with `claude`, the safe
   builder, so blueprints written before this change still hand off.
-- **Stored, not acted on**: `items.builder` (migration 0010; `''` for items not from a plan) is set
+- **Stored, not acted on**: `items.builder` (migration 0011; `''` for items not from a plan) is set
   when the hand-off files the item and never changes. Nothing routes on it yet: it shows on
   `/loop show` (`· builder qwen`) and on the board card (`builder: qwen`). Routing `qwen` pieces to
   the Qwen builder is a later item (#32).

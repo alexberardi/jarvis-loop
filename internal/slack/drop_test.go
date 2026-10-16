@@ -93,8 +93,8 @@ func TestLoopDropCommand(t *testing.T) {
 		want             string
 		stage            pipeline.Stage
 	}{
-		{"approver", Approver, "drop 1 no hardware to verify", "#1 dropped", pipeline.Closed},
-		{"approver, hash", Approver, "drop #1", "#1 dropped", pipeline.Closed},
+		{"approver", Approver, "drop 1 no hardware to verify", "#1 device-lifx dropped", pipeline.Closed},
+		{"approver, hash", Approver, "drop #1", "#1 device-lifx dropped", pipeline.Closed},
 		{"someone else", other, "drop 1", "only the approver", pipeline.Triage},
 		{"bad id", Approver, "drop one", "/loop drop", pipeline.Triage},
 		{"no id", Approver, "drop", "/loop drop", pipeline.Triage},

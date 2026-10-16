@@ -28,7 +28,7 @@
       {"item": "a", "kind": "run_overtime"}
     ],
     "messages": [
-      {"thread": "a", "text": "<@U0C9AFPAMD4> #\\d+ needs you: CI \\(no checks reported yet\\) still pending after 30m"}
+      {"thread": "a", "text": "<@U0C9AFPAMD4> #\\d+ Fix the digest wording needs you: CI \\(no checks reported yet\\) still pending after 30m"}
     ]
   }
 }

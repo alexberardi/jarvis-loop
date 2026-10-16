@@ -165,6 +165,10 @@ type Item struct {
 	NeedsQA bool `json:"needs_qa"`
 	// ReopenOf is the qa item whose Reopen filed this one.
 	ReopenOf int64 `json:"reopen_of,omitempty"`
+	// AwaitingDeploy: the item is in qa, but its repo's change runs only once deployed (the loop
+	// itself): the user is asked to check after a runner reports a build that contains the merge
+	// (docs/decisions/2026-10-16-qa-after-deploy.md).
+	AwaitingDeploy bool `json:"awaiting_deploy,omitempty"`
 	// CIRedSHA is the head land sent back to build for red CI; a pr_opened with the same head
 	// goes to the user, not review (the build changed nothing, so CI would stay red).
 	CIRedSHA string `json:"ci_red_sha,omitempty"`
@@ -504,8 +508,13 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if err != nil {
 			return Transition{}, err
 		}
-		// The land script sends needs_qa for a repo whose config has qa: true.
+		// The land script sends needs_qa for a repo whose config has qa: true, and
+		// qa_after_deploy (which implies it) for the loop's own repo.
 		qa, err := f.needsQA()
+		if err != nil {
+			return Transition{}, err
+		}
+		afterDeploy, err := f.boolean("qa_after_deploy")
 		if err != nil {
 			return Transition{}, err
 		}
@@ -517,10 +526,14 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		}
 		it.HeadSHA = head
 		it.MergeSHA = sha
-		it.NeedsQA = it.NeedsQA || qa
+		it.NeedsQA = it.NeedsQA || qa || afterDeploy
 		it.Stage = Done
 		if it.NeedsQA {
 			it.Stage = QA
+		}
+		if afterDeploy {
+			it.AwaitingDeploy = true
+			data["awaiting_deploy"] = true
 		}
 	case Hold:
 		reason, err := f.need("reason")
@@ -716,7 +729,7 @@ func ApplyVerified(it Item, words string) (Transition, error) {
 	if it.Stage != QA {
 		return Transition{}, errf(CodeWrongStage, "item is %s, not qa", it.Stage)
 	}
-	it.Stage = Done
+	it.Stage, it.AwaitingDeploy = Done, false
 	return Transition{Item: it, From: QA, To: Done, Kind: "verified", Data: map[string]any{"words": strings.TrimSpace(words)}}, nil
 }
 
@@ -730,8 +743,22 @@ func ApplyReopen(it Item, words string) (Transition, error) {
 	if words == "" {
 		return Transition{}, errf(CodeMissingField, "say what is wrong: the words are the new item's ask")
 	}
-	it.Stage = Done
+	it.Stage, it.AwaitingDeploy = Done, false
 	return Transition{Item: it, From: QA, To: Done, Kind: "reopened", Data: map[string]any{"words": words}}, nil
+}
+
+// ApplyDeployed is a runner reporting that a loop build containing the item's merge commit is
+// running (revision is that build's commit): the wait ends and the user is asked to check.
+func ApplyDeployed(it Item, revision string) (Transition, error) {
+	if !shaRe.MatchString(revision) {
+		return Transition{}, errf(CodeInvalidField, "revision must be a lowercase hex commit sha")
+	}
+	if it.Stage != QA || !it.AwaitingDeploy {
+		return Transition{}, errf(CodeWrongStage, "item is %s and not waiting for a deploy", it.Stage)
+	}
+	it.AwaitingDeploy = false
+	return Transition{Item: it, From: QA, To: QA, Kind: "deployed",
+		Data: map[string]any{"revision": revision, "merge_sha": it.MergeSHA}}, nil
 }
 
 // ReopenPriority is a reopened item's priority: something merged is broken.
@@ -802,14 +829,17 @@ func (f fields) need(k string) (string, error) {
 }
 
 // needsQA reads an optional needs_qa: "" and "false" are false.
-func (f fields) needsQA() (bool, error) {
-	switch strings.TrimSpace(f["needs_qa"]) {
+func (f fields) needsQA() (bool, error) { return f.boolean("needs_qa") }
+
+// boolean reads an optional true/false field: "" and "false" are false.
+func (f fields) boolean(k string) (bool, error) {
+	switch strings.TrimSpace(f[k]) {
 	case "", "false":
 		return false, nil
 	case "true":
 		return true, nil
 	}
-	return false, errf(CodeInvalidField, "needs_qa must be true or false")
+	return false, errf(CodeInvalidField, "%s must be true or false", k)
 }
 
 func (f fields) oneOf(k string, allowed []string) (string, error) {

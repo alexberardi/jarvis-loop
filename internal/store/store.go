@@ -305,7 +305,7 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
 	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of, ci_red_sha,
-	depends_on, plan_id, plan_piece, builder`
+	depends_on, plan_id, plan_piece, awaiting_deploy, builder`
 
 type scanner interface{ Scan(...any) error }
 
@@ -320,7 +320,7 @@ func scanItem(row scanner) (pipeline.Item, error) {
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
 		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf, &it.CIRedSHA,
-		&dependsOn, &it.PlanID, &it.PlanPiece, &it.Builder)
+		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder)
 	if err != nil {
 		return it, err
 	}
@@ -389,10 +389,10 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 	}
 	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
-		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, depends_on=? WHERE id=?`,
+		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, depends_on=?, awaiting_deploy=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
-		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, joinIDs(it.DependsOn), it.ID)
+		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, joinIDs(it.DependsOn), it.AwaitingDeploy, it.ID)
 	return err
 }
 
@@ -471,6 +471,8 @@ type ListFilter struct {
 	Open bool
 	// PRToClose keeps the dropped items with a PR the runner has not closed yet (pr_closed).
 	PRToClose bool
+	// AwaitingDeploy keeps the qa items waiting for a deploy that contains their merge.
+	AwaitingDeploy bool
 }
 
 // ListItems is the board, highest priority first, then oldest. Empty filters match everything.
@@ -498,6 +500,9 @@ func (s *Store) ListItemsFilter(ctx context.Context, f ListFilter) ([]BoardRow, 
 		q += ` AND i.stage = 'closed' AND i.pr > 0
 			AND EXISTS (SELECT 1 FROM events e WHERE e.item_id = i.id AND e.kind = 'dropped')
 			AND NOT EXISTS (SELECT 1 FROM events e WHERE e.item_id = i.id AND e.kind = 'pr_closed')`
+	}
+	if f.AwaitingDeploy {
+		q += ` AND i.stage = 'qa' AND i.awaiting_deploy = 1`
 	}
 	q += ` ORDER BY i.priority, i.created_at, i.id`
 	rows, err := s.r.QueryContext(ctx, q, args...)

@@ -26,7 +26,7 @@
     {"do": "expect", "stage": {"b": "needs_you"},
      "question": {"b": "^the review's result couldn't be accepted: evidence: evidence entry \"evidence/\\.claude\" is a directory or a dotfile, not a file the runner uploads \\(again, after one retry\\)\\. Last output: "},
      "events": [{"item": "b", "kind": "advanced", "outcome": "failed", "actor": "runner", "data": {"result_retried": "^true$"}, "count": 1}],
-     "messages": [{"thread": "b", "text": "^<@U0C9AFPAMD4> #\\d+ needs you: the review's result couldn't be accepted: .*\\nReply \"retry\" to run it again, or drop\\.$"}],
+     "messages": [{"thread": "b", "text": "^<@U0C9AFPAMD4> #\\d+ Fix the usage wording needs you: the review's result couldn't be accepted: .*\\nReply \"retry\" to run it again, or drop\\.$"}],
      "no_messages": [{"thread": "b", "text": "Reply in this thread to answer"}]},
     {"do": "reply", "item": "b", "as": "approver", "text": "retry"},
     {"do": "expect", "stage": {"b": "review"}}

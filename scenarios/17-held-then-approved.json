@@ -17,7 +17,7 @@
     {"do": "expect", "stage": {"a": "held"}, "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
      "events": [{"item": "a", "kind": "advanced", "outcome": "hold", "actor": "runner",
                  "data": {"reason": "^on the hold list$", "changed_paths": "internal/modules/auth/session\\.go"}, "count": 1}],
-     "messages": [{"thread": "a", "text": "<@U0C9AFPAMD4> #\\d+ is held for your approval: .*sandbox/demo#101.* at `[0-9a-f]{7}`\\.\\nWhy: auth: A internal/modules/auth/session\\.go; land: on the hold list",
+     "messages": [{"thread": "a", "text": "<@U0C9AFPAMD4> #\\d+ Shorten the session timeout is held for your approval: .*sandbox/demo#101.* at `[0-9a-f]{7}`\\.\\nWhy: auth: A internal/modules/auth/session\\.go; land: on the hold list",
                    "buttons": ["Approve merge", "Keep holding"]}]},
     {"do": "runner", "claims": "none"},
     {"do": "reply", "item": "a", "as": "approver", "text": "approve"},

@@ -264,7 +264,17 @@ func (s *server) listItems(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "pr_to_close must be 1 or 0"})
 		return
 	}
-	rows, err := s.st.ListItemsFilter(r.Context(), store.ListFilter{Stage: stage, Priority: pri, Open: open, PRToClose: toClose})
+	awaiting := false
+	switch r.URL.Query().Get("awaiting_deploy") {
+	case "":
+	case "1", "true":
+		awaiting = true
+	case "0", "false":
+	default:
+		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "awaiting_deploy must be 1 or 0"})
+		return
+	}
+	rows, err := s.st.ListItemsFilter(r.Context(), store.ListFilter{Stage: stage, Priority: pri, Open: open, PRToClose: toClose, AwaitingDeploy: awaiting})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -422,6 +432,10 @@ const KindMainCI = "main_ci"
 // lease), once, by any runner (store.PRClosed).
 const KindPRClosed = "pr_closed"
 
+// KindDeployed is a runner reporting that the loop build it runs contains a qa item's merge
+// commit (docs/decisions/2026-10-16-qa-after-deploy.md): there is no lease, any runner may.
+const KindDeployed = "deployed"
+
 func (s *server) runnerEvent(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	if !ok {
@@ -443,10 +457,12 @@ func (s *server) runnerEvent(w http.ResponseWriter, r *http.Request) {
 		ev, err = s.st.MainCI(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Data)
 	case body.Kind == KindPRClosed:
 		ev, err = s.st.PRClosed(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Data)
+	case body.Kind == KindDeployed:
+		ev, err = s.st.Deployed(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Data)
 	case slices.Contains(RunnerEventKinds, body.Kind):
 		ev, err = s.st.RunnerEvent(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Kind, body.Data)
 	default:
-		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kind must be one of " + strings.Join(append(RunnerEventKinds, KindMainCI, KindPRClosed), ", ")})
+		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kind must be one of " + strings.Join(append(RunnerEventKinds, KindMainCI, KindPRClosed, KindDeployed), ", ")})
 		return
 	}
 	if err != nil {

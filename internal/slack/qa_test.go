@@ -170,10 +170,10 @@ func TestLoopQACommands(t *testing.T) {
 		t.Fatalf("someone else's reopen: %q", out)
 	}
 	out := e.command(Approver, fmt.Sprintf("reopen #%d the code is still tiny", a))
-	if !strings.Contains(out, fmt.Sprintf("#%d done; filed #%d (P2)", a, b+1)) {
+	if !strings.Contains(out, fmt.Sprintf("#%d bigger pairing code done; filed #%d (P2)", a, b+1)) {
 		t.Fatalf("reopen: %q", out)
 	}
-	if out := e.command(Approver, fmt.Sprintf("verified %d", b)); !strings.Contains(out, fmt.Sprintf("#%d verified", b)) || e.item(b).Item.Stage != pipeline.Done {
+	if out := e.command(Approver, fmt.Sprintf("verified %d", b)); !strings.Contains(out, fmt.Sprintf("#%d louder chime verified", b)) || e.item(b).Item.Stage != pipeline.Done {
 		t.Fatalf("verified: %q", out)
 	}
 	help := e.command(other, "help")
@@ -217,5 +217,63 @@ func TestDigestListsQA(t *testing.T) {
 		if !strings.Contains(txt, want) {
 			t.Errorf("digest lacks %q: %s", want, txt)
 		}
+	}
+}
+
+// QA after deploy (docs/decisions/2026-10-16-qa-after-deploy.md): merged with qa_after_deploy
+// says the check comes once deployed, with no buttons; the runner's deployed posts the usual ask
+// with Verified and Reopen, naming the build.
+func TestQAAfterDeployMessages(t *testing.T) {
+	e := newBotEnv(t)
+	id := e.add("loop change")
+	e.runner(id, "a1", pipeline.Reproduced, map[string]string{"area": "loop", "size": "S", "risk": "normal", "resources": ""})
+	e.runner(id, "builder", pipeline.PROpened, map[string]string{"repo": "jarvis-server", "pr": "142", "branch": "fix/x", "head_sha": shaA},
+		"M internal/x.go")
+	e.runner(id, "reviewer", pipeline.Approved, map[string]string{"summary": "tests cover it", "head_sha": shaA})
+	e.runner(id, "lander", pipeline.Merged, map[string]string{"merge_sha": shaM, "head_sha": shaA, "qa_after_deploy": "true"}, "M internal/x.go")
+	e.drain()
+	cs := only(t, e.calls(), "chat.postMessage")
+	msg := cs[len(cs)-1]
+	txt := allText(msg)
+	for _, want := range []string{"<@" + Approver + ">", "Merged; I'll ask for your check once it's deployed", "pull/142", "`ccccccc`"} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("merged message lacks %q: %s", want, txt)
+		}
+	}
+	if head := fmt.Sprintf("<@%s> #%d loop change: Merged; I'll ask for your check once it's deployed", Approver, id); fmt.Sprint(msg.Body["text"]) != head {
+		t.Errorf("merged Text = %q, want %q", msg.Body["text"], head)
+	}
+	if strings.Contains(txt, "Press Verified") {
+		t.Errorf("merged message asks for the check before the deploy: %s", txt)
+	}
+	if ids := actionIDs(msg); len(ids) != 0 {
+		t.Fatalf("buttons before the deploy: %v", ids)
+	}
+
+	// A reply before the deploy is not taken, and says what happens next.
+	e.reply(Approver, e.thread(id), "ok")
+	cs = only(t, e.calls(), "chat.postMessage")
+	if len(cs) != 1 || !strings.Contains(allText(cs[0]), "once it's deployed") {
+		t.Fatalf("reply before the deploy: %v", cs)
+	}
+
+	rev := "abcdef0123456789abcdef0123456789abcdef01"
+	if _, err := e.st.Deployed(e.ctx, "r1", id, map[string]any{"revision": rev}); err != nil {
+		t.Fatal(err)
+	}
+	e.drain()
+	cs = only(t, e.calls(), "chat.postMessage")
+	msg = cs[len(cs)-1]
+	txt = allText(msg)
+	for _, want := range []string{"<@" + Approver + ">", "Deployed — waiting for your check", "`abcdef0`", "`ccccccc`", "Press Verified when it works"} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("deployed message lacks %q: %s", want, txt)
+		}
+	}
+	if head := fmt.Sprintf("<@%s> #%d loop change: Deployed — waiting for your check", Approver, id); fmt.Sprint(msg.Body["text"]) != head {
+		t.Errorf("deployed Text = %q, want %q", msg.Body["text"], head)
+	}
+	if ids := actionIDs(msg); len(ids) != 2 || ids[0] != "qa_verified" || ids[1] != "qa_reopen" {
+		t.Fatalf("buttons after the deploy: %v", ids)
 	}
 }

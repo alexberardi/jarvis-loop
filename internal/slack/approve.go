@@ -181,7 +181,7 @@ func (b *Bot) approveButton(ctx context.Context, channel, msgTS, user string, it
 	switch {
 	case err == nil:
 		b.update(ctx, "held message", Message{Channel: channel, TS: msgTS,
-			Text: fmt.Sprintf("#%d: approved by you for `%s` (button).", itemID, short(sha))})
+			Text: fmt.Sprintf("%s: approved by you for `%s` (button).", b.refID(ctx, itemID), short(sha))})
 	case errors.As(err, &pe) && pe.Code == pipeline.CodeSHAMismatch:
 		d, _ := b.c.Store.GetItem(ctx, itemID)
 		_, ts, _ := b.c.Store.SlackThread(ctx, itemID)
@@ -210,5 +210,5 @@ func (b *Bot) cancelApproval(ctx context.Context, channel, msgTS, user, id strin
 	b.c.Store.Record(ctx, store.Event{ItemID: pa.itemID, Actor: actorPrefix + user, Kind: "approval_cancelled",
 		Data: map[string]any{"words": pa.words, "head_sha": pa.sha}})
 	b.update(ctx, "approval echo", Message{Channel: channel, TS: msgTS,
-		Text: fmt.Sprintf("Cancelled: '%s' was not applied. #%d stays held.", b.field(pa.words, 500, pa.itemID), pa.itemID)})
+		Text: fmt.Sprintf("Cancelled: '%s' was not applied. %s stays held.", b.field(pa.words, 500, pa.itemID), b.refID(ctx, pa.itemID))})
 }
