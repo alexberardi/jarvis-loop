@@ -1,0 +1,21 @@
+{
+  "name": "plan-cycle",
+  "about": "Plans, scenario 8 (docs/phases/07-planning.md), at the loopd level: engineering's turn reports a blueprint whose pieces depend on each other in a cycle. loopd fails the turn with the cycle, adds no blueprint version and files nothing; the plan stays at blueprint, waiting on the user. A reply queues the next turn, whose good blueprint is kept.",
+  "steps": [
+    {"do": "plan", "plan": "p", "title": "Recipes", "text": "recipes from the pantry"},
+    {"do": "plan_turn", "plan": "p", "text": "Brief ready.", "brief": "# Recipes\n\nSuggest recipes from what is in the pantry.", "ready": true},
+    {"do": "plan_approve", "plan": "p", "doc": "brief"},
+    {"do": "plan_turn", "plan": "p", "text": "Blueprint ready.", "ready": true,
+     "blueprint": "# Blueprint\n\n## Pieces\n\n### 1. Recipe store\n- depends on: 2\n\nThe store.\n\n### 2. Suggestions\n- depends on: 1\n\nThe matcher.\n",
+     "fails": "^blueprint: the pieces' dependencies make a cycle: 1 → 2 → 1$"},
+    {"do": "expect", "plans": {"p": {"stage": "blueprint", "turn": "you", "items": 0, "docs": {"blueprint": 0}, "last_turn": "failed", "last_error": "cycle: 1 → 2 → 1"}},
+     "events": [{"plan": "p", "kind": "plan_turn_failed", "actor": "hand", "data": {"error": "cycle"}, "count": 1}]},
+    {"do": "plan_say", "plan": "p", "text": "the store comes first"},
+    {"do": "plan_turn", "plan": "p", "text": "Fixed the order.", "ready": true,
+     "blueprint": "# Blueprint\n\n## Pieces\n\n### 1. Recipe store\n- depends on: none\n\nThe store.\n\n### 2. Suggestions\n- depends on: 1\n\nThe matcher.\n"}
+  ],
+  "expect": {
+    "plans": {"p": {"stage": "blueprint", "items": 0, "docs": {"blueprint": 1}, "last_turn": "done"}},
+    "no_events": [{"kind": "created"}, {"kind": "split"}]
+  }
+}

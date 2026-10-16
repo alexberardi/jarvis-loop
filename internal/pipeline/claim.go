@@ -81,6 +81,79 @@ type ClaimRequest struct {
 	Capabilities []string
 	// Stages, when set, limits the claim to these stages (a runner that only builds).
 	Stages []Stage
+	// Kinds is the work the runner takes: WorkItem, WorkPlan (plan turns). Empty: items only, so a
+	// runner that predates plans never gets a turn.
+	Kinds []string
+}
+
+// The kinds of work a claim may return.
+const (
+	WorkItem = "item"
+	WorkPlan = "plan"
+)
+
+// PlanTurnStage is the stage a running plan turn counts as among the live leases.
+const PlanTurnStage Stage = "plan"
+
+func (r ClaimRequest) wants(kind string) bool {
+	if len(r.Kinds) == 0 {
+		return kind == WorkItem
+	}
+	return slices.Contains(r.Kinds, kind)
+}
+
+// TurnCandidate is a queued plan turn a runner could take: its plan has no turn running.
+type TurnCandidate struct {
+	TurnID    int64
+	PlanID    int64
+	Priority  string // the plan's
+	CreatedAt time.Time
+}
+
+// Work is what a claim gets: an item or a plan turn.
+type Work struct {
+	Item *Item
+	Turn *TurnCandidate
+}
+
+// ChooseWork picks an item (Choose) or a queued plan turn. Turns share the active-agents limit
+// with items (live includes the running turns); a turn's priority is its plan's, and a turn beats
+// an item of the same priority: the user is in the conversation.
+func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, req ClaimRequest) (Work, bool) {
+	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
+		return Work{}, false
+	}
+	var it Item
+	okItem := false
+	if req.wants(WorkItem) {
+		it, okItem = Choose(c, items, deps, live, req)
+	}
+	var best *TurnCandidate
+	if req.wants(WorkPlan) {
+		for i := range turns {
+			t := &turns[i]
+			if best == nil || turnBefore(*t, *best) {
+				best = t
+			}
+		}
+	}
+	switch {
+	case best != nil && (!okItem || PriorityRank(best.Priority) <= PriorityRank(it.Priority)):
+		return Work{Turn: best}, true
+	case okItem:
+		return Work{Item: &it}, true
+	}
+	return Work{}, false
+}
+
+func turnBefore(a, b TurnCandidate) bool {
+	if pa, pb := PriorityRank(a.Priority), PriorityRank(b.Priority); pa != pb {
+		return pa < pb
+	}
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.Before(b.CreatedAt)
+	}
+	return a.TurnID < b.TurnID
 }
 
 var stageOrder = map[Stage]int{Land: 0, Review: 1, Build: 2, Triage: 3}

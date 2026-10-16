@@ -63,6 +63,14 @@ func New(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
 	route("POST /items/{id}/qa", user, s.setQA)
 	route("POST /items/{id}/verified", user, s.verified)
 	route("POST /items/{id}/reopen", user, s.reopen)
+	route("POST /plans", user, s.createPlan)
+	route("GET /plans", both, s.listPlans)
+	route("GET /plans/{id}", both, s.getPlan)
+	route("GET /plans/{id}/docs/{kind}", both, s.getPlanDoc)
+	route("POST /plans/{id}/messages", user, s.planMessage)
+	route("POST /plans/{id}/approve", user, s.approvePlan)
+	route("POST /plans/{id}/drop", user, s.dropPlan)
+	route("POST /plans/{id}/turns/{turn}/result", runner, s.planTurnResult)
 	route("GET /control", both, s.getControl)
 	route("PUT /control", user, s.putControl)
 	return Logged(log, mux)
@@ -312,9 +320,17 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		Agent        string   `json:"agent"`
 		Capabilities []string `json:"capabilities"`
 		Stages       []string `json:"stages"`
+		// Kinds: item, plan (plan turns); empty is items only.
+		Kinds []string `json:"kinds"`
 	}
 	if !decode(w, r, &body) {
 		return
+	}
+	for _, k := range body.Kinds {
+		if k != pipeline.WorkItem && k != pipeline.WorkPlan {
+			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kinds may be item and plan, got " + strconv.Quote(k)})
+			return
+		}
 	}
 	p := PrincipalFrom(r.Context())
 	var stages []pipeline.Stage
@@ -339,7 +355,7 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, Stages: stages})
+	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, Stages: stages, Kinds: body.Kinds})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -348,8 +364,12 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	if c.Kind == pipeline.WorkPlan {
+		writeJSON(w, http.StatusOK, map[string]any{"kind": c.Kind, "plan": c.Plan, "turn": c.Turn, "lease": c.Lease})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"item": c.Item, "stage": c.Stage, "lease": c.Lease, "brief": Brief{Stage: c.Stage, Item: c.Item},
+		"kind": c.Kind, "item": c.Item, "stage": c.Stage, "lease": c.Lease, "brief": Brief{Stage: c.Stage, Item: c.Item},
 	})
 }
 
@@ -677,4 +697,167 @@ func (s *server) putControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
+}
+
+// ---- plans (docs/phases/07-planning.md, "API") ----
+
+// planPathID reads a plan id from the path: "3" or "P3".
+func planPathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	raw := strings.TrimPrefix(strings.TrimPrefix(r.PathValue("id"), "P"), "p")
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		badRequest(w, "plan id must be a positive number (or P<n>)")
+		return 0, false
+	}
+	return id, true
+}
+
+func (s *server) createPlan(w http.ResponseWriter, r *http.Request) {
+	var n store.NewPlan
+	if !decode(w, r, &n) {
+		return
+	}
+	p, err := s.st.CreatePlan(r.Context(), PrincipalFrom(r.Context()).Actor(), n)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, p)
+}
+
+func (s *server) listPlans(w http.ResponseWriter, r *http.Request) {
+	open := false
+	switch r.URL.Query().Get("open") {
+	case "", "0", "false":
+	case "1", "true":
+		open = true
+	default:
+		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "open must be 1 or 0"})
+		return
+	}
+	rows, err := s.st.ListPlans(r.Context(), open)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"plans": rows})
+}
+
+func (s *server) getPlan(w http.ResponseWriter, r *http.Request) {
+	id, ok := planPathID(w, r)
+	if !ok {
+		return
+	}
+	d, err := s.st.GetPlan(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+func (s *server) getPlanDoc(w http.ResponseWriter, r *http.Request) {
+	id, ok := planPathID(w, r)
+	if !ok {
+		return
+	}
+	v := 0
+	if raw := r.URL.Query().Get("v"); raw != "" {
+		n, err := strconv.Atoi(strings.TrimPrefix(raw, "v"))
+		if err != nil || n <= 0 {
+			badRequest(w, "v must be a positive version number")
+			return
+		}
+		v = n
+	}
+	d, err := s.st.GetPlanDoc(r.Context(), id, r.PathValue("kind"), v)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+// planMessage is the user talking in a plan's thread: the message joins the plan's next turn.
+func (s *server) planMessage(w http.ResponseWriter, r *http.Request) {
+	id, ok := planPathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Text string `json:"text"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	t, err := s.st.PlanMessage(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Text)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+// approvePlan approves a plan's brief or blueprint, bound to the version's sha256.
+func (s *server) approvePlan(w http.ResponseWriter, r *http.Request) {
+	id, ok := planPathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Kind   string `json:"kind"`
+		SHA256 string `json:"sha256"`
+		Words  string `json:"words"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	a, err := s.st.ApprovePlan(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Kind, body.SHA256, body.Words)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
+}
+
+func (s *server) dropPlan(w http.ResponseWriter, r *http.Request) {
+	id, ok := planPathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Words string `json:"words"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	p, err := s.st.DropPlan(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Words)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+// planTurnResult is a runner finishing the plan turn it holds the lease on.
+func (s *server) planTurnResult(w http.ResponseWriter, r *http.Request) {
+	id, ok := planPathID(w, r)
+	if !ok {
+		return
+	}
+	turn, err := strconv.ParseInt(r.PathValue("turn"), 10, 64)
+	if err != nil || turn <= 0 {
+		badRequest(w, "turn must be a positive number")
+		return
+	}
+	var body pipeline.TurnResult
+	if !decode(w, r, &body) {
+		return
+	}
+	p, t, err := s.st.PlanTurnResult(r.Context(), PrincipalFrom(r.Context()).Name, id, turn, body)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"plan": p, "turn": t})
 }

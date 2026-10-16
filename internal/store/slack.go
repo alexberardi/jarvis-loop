@@ -104,13 +104,13 @@ func scanEvents(rows *sql.Rows) ([]Event, error) {
 	out := []Event{}
 	for rows.Next() {
 		var e Event
-		var item sql.NullInt64
+		var item, plan sql.NullInt64
 		var at int64
 		var data string
-		if err := rows.Scan(&e.ID, &item, &at, &e.Actor, &e.Kind, &e.From, &e.To, &e.Outcome, &data); err != nil {
+		if err := rows.Scan(&e.ID, &item, &plan, &at, &e.Actor, &e.Kind, &e.From, &e.To, &e.Outcome, &data); err != nil {
 			return nil, err
 		}
-		e.ItemID = item.Int64
+		e.ItemID, e.PlanID = item.Int64, plan.Int64
 		e.At = fromNanos(at)
 		if err := json.Unmarshal([]byte(data), &e.Data); err != nil {
 			return nil, err
@@ -120,7 +120,7 @@ func scanEvents(rows *sql.Rows) ([]Event, error) {
 	return out, rows.Err()
 }
 
-const eventCols = `id, item_id, at, actor, kind, from_stage, to_stage, outcome, data`
+const eventCols = `id, item_id, plan_id, at, actor, kind, from_stage, to_stage, outcome, data`
 
 // EventsBetween returns every event with after < at <= upTo, oldest first.
 func (s *Store) EventsBetween(ctx context.Context, after, upTo time.Time) ([]Event, error) {

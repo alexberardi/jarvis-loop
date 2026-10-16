@@ -47,7 +47,10 @@ func (s *Store) Reopen(ctx context.Context, actor string, id int64, words string
 		}
 		tr.Data["reopen_item"] = n.ID
 		old, filed = tr.Item, n
-		return s.event(tx, transitionEvent(id, actor, tr))
+		if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
+			return err
+		}
+		return s.planItemSettled(tx, tr.Item)
 	})
 	if err != nil {
 		return old, filed, s.refuse(ctx, actor, id, "reopen", err)

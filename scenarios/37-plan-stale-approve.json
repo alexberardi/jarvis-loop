@@ -1,0 +1,25 @@
+{
+  "name": "plan-stale-approve",
+  "about": "Plans, scenario 4 (docs/phases/07-planning.md), at the loopd level through the API: a fake runner's product turns write brief v1, then v2 after the user's message; approving v1's sha256 is refused with 'the brief changed; approve v2 instead' (recorded, plan still at brief); approving v2 moves the plan to blueprint and queues engineering's first turn. The sandbox's real runner sends no kinds, so it never takes a plan turn.",
+  "steps": [
+    {"do": "plan", "plan": "p", "title": "Pantry list", "priority": "P2", "text": "I want a pantry list in the app"},
+    {"do": "expect", "plans": {"p": {"stage": "brief", "turn": "agent", "turns": 1}}},
+    {"do": "runner", "claims": "none"},
+    {"do": "plan_turn", "plan": "p", "text": "Here is a first brief.", "brief": "# Pantry list\n\nv1: every room", "ready": true},
+    {"do": "expect", "plans": {"p": {"stage": "brief", "turn": "you", "docs": {"brief": 1}}},
+     "events": [{"plan": "p", "kind": "plan_doc", "actor": "hand", "data": {"kind": "^brief$", "version": "^1$"}, "count": 1}]},
+    {"do": "plan_say", "plan": "p", "text": "only for the kitchen"},
+    {"do": "plan_turn", "plan": "p", "text": "Narrowed it to the kitchen.", "brief": "# Pantry list\n\nv2: the kitchen only", "ready": true},
+    {"do": "plan_approve", "plan": "p", "doc": "brief", "version": 1, "text": "looks good", "refused": "HTTP 409.*the brief changed; approve v2 instead"},
+    {"do": "expect", "plans": {"p": {"stage": "brief", "turn": "you", "docs": {"brief": 2}}},
+     "events": [{"plan": "p", "kind": "refused", "actor": "user", "data": {"code": "^sha_mismatch$", "message": "approve v2 instead"}, "count": 1}]},
+    {"do": "plan_approve", "plan": "p", "doc": "brief", "text": "yes, v2"},
+    {"do": "expect", "plans": {"p": {"stage": "blueprint", "turn": "agent", "turns": 3}},
+     "events": [{"plan": "p", "kind": "plan_approved", "actor": "user", "data": {"kind": "^brief$", "version": "^2$"}, "count": 1}]},
+    {"do": "runner", "claims": "none"}
+  ],
+  "expect": {
+    "plans": {"p": {"stage": "blueprint", "items": 0, "docs": {"brief": 2, "blueprint": 0}}},
+    "no_events": [{"kind": "created"}]
+  }
+}

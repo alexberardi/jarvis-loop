@@ -88,6 +88,50 @@ ones are allowed), all `invalid_field` (400); a cycle is refused too; repeats ar
 - Runner: `POST /plans/{id}/turns/{turn}/result` with the agent's result (below) and evidence.
 - User: `POST /plans/{id}/approve` (kind, sha256), `POST /plans/{id}/drop`.
 
+**As built (piece 2, 2026-10-16):** migration `0008_plans.sql`: `plans` (repos comma-separated
+like `resources`; `brief_approved`/`blueprint_approved` hold the approved versions), `plan_docs`
+(append-only by trigger, primary key plan + kind + version; loopd computes the sha256),
+`plan_turns` and **`plan_leases`** (a turn's lease: `leases.item_id` must name an item; lease ids
+are one namespace, so `POST /leases/{id}/heartbeat` finds either), and `events.plan_id` (a plan's
+history: `plan_created`, `plan_turn_queued`, `plan_turn_claimed`, `plan_doc`, `plan_turn_done`,
+`plan_turn_failed`, `plan_turn_expired`, `plan_turn_stopped`, `back_to_brief`, `plan_approved`,
+`split`, `plan_dropped`, `plan_done`, `refused`). Partial unique indexes allow one queued and one
+running turn per plan; a queued turn is claimable only while none of its plan's runs, and the
+persona is set at claim from the plan's stage (brief → product, blueprint → engineering).
+Rules in `pipeline/plans.go`: `ApplyPlanApprove` (stale sha → `sha_mismatch`, "the brief
+changed; approve v3 instead"), `ApplyPlanDrop`, `ApplyTurnResult`, `ParseBlueprint`,
+`PlanItems`, `PlanSettled`, and `ChooseWork` in `claim.go`. **Blueprint format:** a heading
+named `Pieces`; under it one sub-heading per piece, `N. Title`, numbered from 1 in order, with
+optional `repo:`, `size:` (S/M/L) and `depends on:` (piece numbers, or `none`) lines; the piece's
+section (its heading to the next) is the item's ask after "Piece N of plan P<id> (<title>).". A
+piece without a repo gets the plan's when it has exactly one. **A turn's result** is checked by
+loopd too: content the agent got wrong (no reply, a reply over 3,000 characters, a blueprint
+that does not parse, loops or names an unconfigured repo, `ready` with no document, product
+writing a blueprint or sending the plan back, engineering writing the brief or setting repos)
+**fails the turn** with that reason and keeps the session id, rather than refusing the call; a
+result for a persona the plan has moved past (approved or dropped mid-turn) keeps only the
+reply. Approving the brief queues engineering's first turn (no message); `back_to_brief` moves
+the plan to brief and queues a product turn carrying the reason. Leases: an expired turn waits
+again (merged into a turn queued meanwhile), an overtime one fails, Stop puts it back in the
+queue; dropping a plan ends its lease and fails its turns. The hand-off inserts the items
+dependencies first, so each `created` event names its dependencies. Approving the blueprint is
+not refused while a message waits: the queued turn fails in the same transaction ("the plan was
+split before this turn ran", a `plan_turn_failed` event), since turns run only at brief and
+blueprint; a running turn keeps its lease (its result is ignored), and if that lease expires or
+is stopped the turn fails rather than waiting again. A split plan becomes `done`
+when an item of it reaches done or closed and all of them are settled with at least one done.
+API as above plus **`POST /plans/{id}/messages`** (user, `{text}`: joins the queued turn) and
+`GET /plans?open=1`; `POST /plans` takes `title`, `priority`, `repos`, `text` (the first
+message; default the title), `slack_channel`, `slack_ts` and queues the first product turn;
+plan ids in paths may be `3` or `P3`. `POST /claim` takes `kinds` (`item`, `plan`; empty means
+items only, so runners that predate plans never get a turn) and answers a turn as `{kind: plan,
+plan, turn, lease}` (items now carry `kind: item` too). **Not in this piece:** the echo, Cancel and
+2-minute grace of a plan approval are the Slack side's, as for merges (`slack/approve.go`), and
+come with the `#plan` buttons (piece 4): loopd applies an approval at once, bound to the sha256;
+evidence uploads for plan turns (the evidence table is per item). Harness: the `plan*` steps
+and `plans`/`depends_on` expectations (04b), `scenarios/37-plan-stale-approve.json` (4),
+`38-plan-cycle.json` (8), `39-plan-handoff.json` (the hand-off half of 2).
+
 ## Runner: conversational turns
 
 - A plan turn runs **one short agent** in a stable directory `<work_root>/plan-<id>/`, so

@@ -48,7 +48,10 @@ func (s *Store) Drop(ctx context.Context, actor string, id int64, words string) 
 		if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
 			return err
 		}
-		return s.dependencyClosed(tx, id)
+		if err := s.dependencyClosed(tx, id); err != nil {
+			return err
+		}
+		return s.planItemSettled(tx, tr.Item)
 	})
 	if err != nil {
 		return out, s.refuse(ctx, actor, id, "drop", err)

@@ -239,6 +239,7 @@ func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
 type Event struct {
 	ID      int64          `json:"id"`
 	ItemID  int64          `json:"item_id,omitempty"`
+	PlanID  int64          `json:"plan_id,omitempty"`
 	At      time.Time      `json:"at"`
 	Actor   string         `json:"actor"`
 	Kind    string         `json:"kind"`
@@ -256,13 +257,16 @@ func (s *Store) event(tx *sql.Tx, e Event) error {
 	if err != nil {
 		return err
 	}
-	var item any
+	var item, plan any
 	if e.ItemID != 0 {
 		item = e.ItemID
 	}
+	if e.PlanID != 0 {
+		plan = e.PlanID
+	}
 	at := s.clock.Now()
-	res, err := tx.Exec(`INSERT INTO events (item_id, at, actor, kind, from_stage, to_stage, outcome, data) VALUES (?,?,?,?,?,?,?,?)`,
-		item, at.UnixNano(), e.Actor, e.Kind, e.From, e.To, e.Outcome, string(data))
+	res, err := tx.Exec(`INSERT INTO events (item_id, plan_id, at, actor, kind, from_stage, to_stage, outcome, data) VALUES (?,?,?,?,?,?,?,?,?)`,
+		item, plan, at.UnixNano(), e.Actor, e.Kind, e.From, e.To, e.Outcome, string(data))
 	if err != nil {
 		return err
 	}
@@ -661,7 +665,10 @@ func (s *Store) human(ctx context.Context, actor string, id int64, action string
 			return err
 		}
 		out = tr.Item
-		return s.event(tx, transitionEvent(id, actor, tr))
+		if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
+			return err
+		}
+		return s.planItemSettled(tx, tr.Item)
 	})
 	if err != nil {
 		return out, s.refuse(ctx, actor, id, action, err)
@@ -808,11 +815,15 @@ func (s *Store) SetControl(ctx context.Context, actor string, p ControlPatch) (p
 
 // ---- claims and leases ----
 
-// Claim is what a runner gets: the item, the stage it is to work, and the lease.
+// Claim is what a runner gets: the item, the stage it is to work, and the lease; or, with Kind
+// plan, a plan turn (Plan, Turn) and its lease (stage "plan").
 type Claim struct {
-	Item  pipeline.Item  `json:"item"`
-	Stage pipeline.Stage `json:"stage"`
-	Lease Lease          `json:"lease"`
+	Kind  string             `json:"kind"`
+	Item  pipeline.Item      `json:"item"`
+	Stage pipeline.Stage     `json:"stage"`
+	Lease Lease              `json:"lease"`
+	Plan  *pipeline.Plan     `json:"plan,omitempty"`
+	Turn  *pipeline.PlanTurn `json:"turn,omitempty"`
 }
 
 func newLeaseID() (string, error) {
@@ -823,7 +834,8 @@ func newLeaseID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// Claim gives runnerName the best waiting item for req, or nil when there is nothing to do.
+// Claim gives runnerName the best waiting item (or, when req.Kinds has plan, a queued plan turn)
+// for req, or nil when there is nothing to do.
 func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.ClaimRequest) (*Claim, error) {
 	var out *Claim
 	err := s.tx(ctx, func(tx *sql.Tx) error {
@@ -850,6 +862,13 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		for i, l := range live {
 			snap[i] = pipeline.LiveLease{ItemID: l.ItemID, Stage: l.Stage, Resources: l.Resources}
 		}
+		turnLeases, err := livePlanLeases(tx)
+		if err != nil {
+			return err
+		}
+		for range turnLeases {
+			snap = append(snap, pipeline.LiveLease{Stage: pipeline.PlanTurnStage})
+		}
 		waiting, err := waitingItems(tx)
 		if err != nil {
 			return err
@@ -858,10 +877,19 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		if err != nil {
 			return err
 		}
-		it, ok := pipeline.Choose(ctl, waiting, deps, snap, req)
+		turns, err := turnCandidates(tx)
+		if err != nil {
+			return err
+		}
+		w, ok := pipeline.ChooseWork(ctl, waiting, deps, snap, turns, req)
 		if !ok {
 			return nil
 		}
+		if w.Turn != nil {
+			out, err = s.claimTurn(tx, runnerName, req.Agent, *w.Turn)
+			return err
+		}
+		it := *w.Item
 		id, err := newLeaseID()
 		if err != nil {
 			return err
@@ -872,7 +900,7 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 			l.ID, l.ItemID, string(l.Stage), l.Runner, l.Agent, strings.Join(l.Resources, ","), now.UnixNano(), l.ExpiresAt.UnixNano()); err != nil {
 			return err
 		}
-		out = &Claim{Item: it, Stage: it.Stage, Lease: l}
+		out = &Claim{Kind: pipeline.WorkItem, Item: it, Stage: it.Stage, Lease: l}
 		return s.event(tx, Event{ItemID: it.ID, Actor: "runner:" + runnerName, Kind: "claimed", From: string(it.Stage), To: string(it.Stage),
 			Data: map[string]any{"runner": runnerName, "agent": req.Agent, "lease": l.ID}})
 	})
@@ -928,7 +956,8 @@ func (s *Store) Sweep(ctx context.Context) error {
 		return err
 	}
 	var due int
-	err = s.r.QueryRowContext(ctx, `SELECT COUNT(*) FROM leases WHERE ended_at IS NULL AND (expires_at <= ? OR claimed_at <= ?)`,
+	err = s.r.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM leases WHERE ended_at IS NULL AND (expires_at <= ?1 OR claimed_at <= ?2))
+		+ (SELECT COUNT(*) FROM plan_leases WHERE ended_at IS NULL AND (expires_at <= ?1 OR claimed_at <= ?2))`,
 		now.UnixNano(), now.Add(-ctl.MaxRun()).UnixNano()).Scan(&due)
 	if err != nil || due == 0 {
 		return err
@@ -975,7 +1004,7 @@ func (s *Store) sweep(tx *sql.Tx) error {
 			}
 		}
 	}
-	return nil
+	return s.sweepPlans(tx, now, ctl.MaxRun())
 }
 
 // Heartbeat keeps a lease alive. stop is true when the runner should stop: control is stopped
@@ -988,6 +1017,10 @@ func (s *Store) Heartbeat(ctx context.Context, runnerName, leaseID, note string)
 		now := s.clock.Now()
 		l, err := scanLease(tx.QueryRow(`SELECT `+leaseCols+` FROM leases WHERE id = ?`, leaseID))
 		if errors.Is(err, sql.ErrNoRows) {
+			var found bool
+			if stop, found, err = s.planHeartbeat(tx, runnerName, leaseID, note); found || err != nil {
+				return err
+			}
 			return errf(CodeNotFound, "no lease %s", leaseID)
 		}
 		if err != nil {
@@ -1110,6 +1143,9 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 			if err := s.dependencyClosed(tx, id); err != nil {
 				return err
 			}
+		}
+		if err := s.planItemSettled(tx, tr.Item); err != nil {
+			return err
 		}
 		if tr.ActiveAgentsZero {
 			ctl, err := s.loadControl(tx)
