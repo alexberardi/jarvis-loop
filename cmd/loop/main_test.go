@@ -178,6 +178,39 @@ func evidenceOf(t *testing.T, c cli, id int) []string {
 	return lines
 }
 
+func TestCLIStatusFilters(t *testing.T) {
+	st, err := store.Open(t.TempDir(), clock.NewFake(time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	toks, _ := api.ParseTokens(strings.NewReader(userTok + "\tuser\talex\n" + runnerTok + "\trunner\tdevbox\n"))
+	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler)))
+	defer srv.Close()
+	c := cli{t: t, url: srv.URL}
+
+	c.ok(userTok, "add", "fix the loop cli", "--repo", "alexberardi/jarvis-loop")
+	c.ok(userTok, "add", "fix the wake word", "--repo", "alexberardi/jarvis-server")
+	if out := c.ok(userTok, "status", "--repo", "jarvis-loop"); !strings.Contains(out, "fix the loop cli") || strings.Contains(out, "wake word") {
+		t.Fatalf("status --repo jarvis-loop: %q", out)
+	}
+	if out := c.ok(userTok, "status", "--repo", "alexberardi/jarvis-server"); !strings.Contains(out, "fix the wake word") || strings.Contains(out, "loop cli") {
+		t.Fatalf("status --repo full path: %q", out)
+	}
+	if out := c.ok(userTok, "status", "--repo", "nope"); !strings.Contains(out, "no items") {
+		t.Fatalf("status --repo nope: %q", out)
+	}
+	if out := c.ok(userTok, "drop", "2", "--words", "duplicate"); !strings.Contains(out, "#2 dropped") {
+		t.Fatalf("drop: %q", out)
+	}
+	if out := c.ok(userTok, "status", "--open"); !strings.Contains(out, "fix the loop cli") || strings.Contains(out, "wake word") {
+		t.Fatalf("status --open: %q", out)
+	}
+	if out := c.ok(userTok, "status"); !strings.Contains(out, "fix the wake word") {
+		t.Fatalf("status without --open hides the closed item: %q", out)
+	}
+}
+
 func TestCLIDrop(t *testing.T) {
 	st, err := store.Open(t.TempDir(), clock.NewFake(time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)))
 	if err != nil {

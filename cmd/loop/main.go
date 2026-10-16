@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -24,7 +25,7 @@ import (
 const usage = `usage: loop <command> [args]
 
   add "<title>" [--ask TEXT] [--repo REPO] [--priority P1-P5] [--source SRC] [--after 12,13]
-  status [--stage STAGE] [--priority P]
+  status [--stage STAGE] [--priority P] [--repo REPO] [--open]
   show <id>
   answer <id> "<text>"
   approve <id> --sha <head sha> [--words TEXT]
@@ -105,8 +106,11 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	return 0
 }
 
+// boolFlags are flags whose presence is the value: --open, not --open VALUE.
+var boolFlags = map[string]bool{"open": true}
+
 // parseArgs separates positionals from --flags (anywhere on the line, as --k v or --k=v).
-// allowed lists the flags a command takes; all take a value and may repeat.
+// allowed lists the flags a command takes; all take a value and may repeat, except boolFlags.
 func parseArgs(args []string, allowed []string) ([]string, map[string][]string, error) {
 	var pos []string
 	flags := map[string][]string{}
@@ -129,6 +133,10 @@ func parseArgs(args []string, allowed []string) ([]string, map[string][]string, 
 			return nil, nil, usageError("unknown flag --" + name)
 		}
 		if !hasVal {
+			if boolFlags[name] {
+				flags[name] = append(flags[name], "")
+				continue
+			}
 			if i+1 >= len(args) {
 				return nil, nil, usageError("--" + name + " needs a value")
 			}
@@ -156,7 +164,7 @@ type command struct {
 
 var commands = map[string]command{
 	"add":       {1, 1, []string{"ask", "repo", "priority", "source", "after"}, cmdAdd},
-	"status":    {0, 0, []string{"stage", "priority"}, cmdStatus},
+	"status":    {0, 0, []string{"stage", "priority", "repo", "open"}, cmdStatus},
 	"show":      {1, 1, nil, cmdShow},
 	"answer":    {2, 2, nil, cmdAnswer},
 	"approve":   {1, 1, []string{"sha", "words"}, cmdApprove},
@@ -333,22 +341,42 @@ func cmdStatus(c *client, _ []string, f map[string][]string) error {
 	if p := last(f, "priority"); p != "" {
 		q.Set("priority", p)
 	}
-	path := "/items"
+	u := "/items"
 	if len(q) > 0 {
-		path += "?" + q.Encode()
+		u += "?" + q.Encode()
 	}
 	var board struct {
 		Items []struct {
 			ID         int64  `json:"id"`
 			Title      string `json:"title"`
 			Priority   string `json:"priority"`
+			Repo       string `json:"repo"`
+			Stage      string `json:"stage"`
 			Display    string `json:"display"`
 			ClaimedBy  string `json:"claimed_by"`
 			AgeSeconds int64  `json:"age_seconds"`
 		} `json:"items"`
 	}
-	if _, err := c.json("GET", path, nil, &board); err != nil {
+	if _, err := c.json("GET", u, nil, &board); err != nil {
 		return err
+	}
+	if want := last(f, "repo"); want != "" {
+		kept := board.Items[:0]
+		for _, r := range board.Items {
+			if r.Repo == want || path.Base(r.Repo) == want {
+				kept = append(kept, r)
+			}
+		}
+		board.Items = kept
+	}
+	if _, open := f["open"]; open {
+		kept := board.Items[:0]
+		for _, r := range board.Items {
+			if r.Stage != "done" && r.Stage != "closed" {
+				kept = append(kept, r)
+			}
+		}
+		board.Items = kept
 	}
 	var ctl control
 	if _, err := c.json("GET", "/control", nil, &ctl); err != nil {
