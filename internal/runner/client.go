@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,10 +33,14 @@ type APIError struct {
 
 func (e *APIError) Error() string { return fmt.Sprintf("loopd %d %s: %s", e.Status, e.Code, e.Msg) }
 
-// Claim is loopd's answer to a claim.
+// Claim is loopd's answer to a claim: an item in a stage, or (Kind plan) a plan's turn.
 type Claim struct {
+	Kind  string `json:"kind"`
 	Item  Item   `json:"item"`
 	Stage string `json:"stage"`
+	// Plan and Turn are a plan turn's (Kind plan).
+	Plan  *pipeline.Plan     `json:"plan,omitempty"`
+	Turn  *pipeline.PlanTurn `json:"turn,omitempty"`
 	Lease struct {
 		ID        string    `json:"id"`
 		ExpiresAt time.Time `json:"expires_at"`
@@ -119,10 +125,20 @@ func (c *Client) json(ctx context.Context, method, path string, in, out any) (in
 	return c.do(ctx, method, path, ct, body, out)
 }
 
-// Claim asks for work in the given stages; nil when there is none.
+// Claim asks for work in the given stages; nil when there is none. Stage plan is not an item
+// stage: it asks for plan turns too (kinds), and alone, for plan turns only.
 func (c *Client) Claim(ctx context.Context, agent string, caps, stages []string) (*Claim, error) {
+	body := map[string]any{"agent": agent, "capabilities": caps, "stages": stages}
+	if slices.Contains(stages, StagePlan) {
+		items := slices.DeleteFunc(slices.Clone(stages), func(s string) bool { return s == StagePlan })
+		kinds := []string{pipeline.WorkPlan}
+		if len(items) > 0 {
+			kinds = []string{pipeline.WorkItem, pipeline.WorkPlan}
+		}
+		body["stages"], body["kinds"] = items, kinds
+	}
 	var cl Claim
-	st, err := c.json(ctx, "POST", "/claim", map[string]any{"agent": agent, "capabilities": caps, "stages": stages}, &cl)
+	st, err := c.json(ctx, "POST", "/claim", body, &cl)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +146,29 @@ func (c *Client) Claim(ctx context.Context, agent string, caps, stages []string)
 		return nil, nil
 	}
 	return &cl, nil
+}
+
+// PlanTurnResult finishes the plan turn this runner holds the lease on.
+func (c *Client) PlanTurnResult(ctx context.Context, plan, turn int64, r pipeline.TurnResult) (pipeline.PlanTurn, error) {
+	var out struct {
+		Turn pipeline.PlanTurn `json:"turn"`
+	}
+	_, err := c.json(ctx, "POST", fmt.Sprintf("/plans/%d/turns/%d/result", plan, turn), r, &out)
+	return out.Turn, err
+}
+
+// PlanDoc is a plan's latest document of a kind (brief, blueprint); nil when it has none yet.
+func (c *Client) PlanDoc(ctx context.Context, plan int64, kind string) (*pipeline.PlanDoc, error) {
+	var d pipeline.PlanDoc
+	_, err := c.json(ctx, "GET", fmt.Sprintf("/plans/%d/docs/%s", plan, kind), nil, &d)
+	var ae *APIError
+	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
 }
 
 // Heartbeat keeps a lease alive; true means stop.

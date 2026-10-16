@@ -17,3 +17,13 @@ var Triage string
 //
 //go:embed review/SKILL.md
 var Review string
+
+// Product is the planning stage's product persona (skills/product/SKILL.md).
+//
+//go:embed product/SKILL.md
+var Product string
+
+// Engineering is the planning stage's engineering persona (skills/engineering/SKILL.md).
+//
+//go:embed engineering/SKILL.md
+var Engineering string
