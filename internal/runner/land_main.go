@@ -75,8 +75,7 @@ func (r *Runner) watchMain(ctx context.Context, lr *landRun, mergeSHA string) {
 	}
 	if result == "red" {
 		title := clip(fmt.Sprintf("main red after #%d: %s", lr.item.PR, strings.Join(failing, ", ")), 200)
-		ask := fmt.Sprintf("main's CI failed on `%s`, the squash merge of %s#%d.\n\nCaused by item #%d / merge %s.\n\nRuns:\n- %s\n",
-			short7(mergeSHA), lr.repo.Slug, lr.item.PR, lr.item.ID, mergeSHA, strings.Join(urls, "\n- "))
+		ask := MainRedAsk(lr.repo.Slug, lr.item.PR, lr.item.ID, mergeSHA, urls)
 		id, err := r.Client.AddItem(report, NewItem{Title: title, Ask: ask, Repo: lr.repo.Slug, Priority: "P1", Source: "finding"})
 		if err != nil {
 			lr.log.Error("filing the P1 for a red main", "err", err)
@@ -89,4 +88,11 @@ func (r *Runner) watchMain(ctx context.Context, lr *landRun, mergeSHA string) {
 		return
 	}
 	lr.log.Info("main CI", "result", result, "merge", short7(mergeSHA))
+}
+
+// MainRedAsk is the ask of a red main's P1. MainRedCommit reads the commit back from it when the
+// runner triages the P1, to attach the failing CI log (it holds no lease on the P1 before).
+func MainRedAsk(slug string, pr int, item int64, mergeSHA string, urls []string) string {
+	return fmt.Sprintf("main's CI failed on `%s`, the squash merge of %s#%d.\n\nCaused by item #%d / merge %s.\n\nRuns:\n- %s\n",
+		short7(mergeSHA), slug, pr, item, mergeSHA, strings.Join(urls, "\n- "))
 }

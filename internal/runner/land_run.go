@@ -117,6 +117,9 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 				}
 				return
 			}
+			if d.Outcome == "back_to_build" && d.Fields["ci_head_sha"] != "" {
+				r.landCIFailure(ctx, lr, f.PR)
+			}
 			r.landAdvance(report, lr, d, f.Paths)
 			return
 		case ActWait:
@@ -277,6 +280,23 @@ func (r *Runner) landAdvance(ctx context.Context, lr *landRun, d Decision, paths
 		}
 	}
 	return false
+}
+
+// landCIFailure attaches the failing CI log of the PR's head to the item (ci-failure.log), while
+// land still holds its lease, before it sends the item back to build. A failure is logged: the
+// item goes back either way.
+func (r *Runner) landCIFailure(ctx context.Context, lr *landRun, pr LandPR) {
+	runs := ciRunsFromChecks(pr.Checks)
+	if len(runs) == 0 {
+		lr.log.Info("no CI log to attach: no failed check names an Actions run")
+		return
+	}
+	label, err := r.attachCIFailure(ctx, lr.item.ID, lr.repo.Slug, pr.HeadRefOid, runs, "")
+	if err != nil {
+		lr.log.Warn("attaching the CI failure log", "err", err)
+		return
+	}
+	lr.log.Info("attached the CI failure log", "label", label)
 }
 
 func roundDur(d time.Duration) string {

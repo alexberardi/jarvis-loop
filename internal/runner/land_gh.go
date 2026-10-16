@@ -36,9 +36,18 @@ func (g GH) CommitRuns(ctx context.Context, slug, sha string) ([]WorkflowRun, er
 	if !shaRe.MatchString(sha) {
 		return nil, fmt.Errorf("not a commit sha: %q", sha)
 	}
-	out, err := g.run(ctx, "run", "list", "--repo", slug, "--commit", sha, "--limit", "50", "--json", "name,workflowName,status,conclusion,url")
+	out, err := g.run(ctx, "run", "list", "--repo", slug, "--commit", sha, "--limit", "50", "--json", "databaseId,name,workflowName,status,conclusion,url")
 	if err != nil {
 		return nil, err
 	}
 	return ParseRuns([]byte(out))
+}
+
+// FailedLog is the log of a run's failed jobs (gh run view --log-failed): one line per log line,
+// "job<TAB>step<TAB>timestamp text".
+func (g GH) FailedLog(ctx context.Context, slug string, runID int64) (string, error) {
+	if runID <= 0 {
+		return "", fmt.Errorf("not a run id: %d", runID)
+	}
+	return g.run(ctx, "run", "view", strconv.FormatInt(runID, 10), "--repo", slug, "--log-failed")
 }

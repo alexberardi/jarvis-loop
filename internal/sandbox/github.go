@@ -58,6 +58,9 @@ type GitHub struct {
 	// scripted push. Anything else moving main is a failure.
 	mainHead map[string]string
 	runIDs   int
+	// runs are the Actions runs the fake has shown (a PR check's or a main run's id -> its job
+	// name and how it went), for gh run view --log-failed.
+	runs map[int64]fakeRun
 	// refuse is how many of the next merges GitHub refuses anyway (as when the base moved).
 	refuse int
 }
@@ -69,7 +72,8 @@ var (
 
 // NewGitHub returns a fake over these remotes (owner/name -> bare repo).
 func NewGitHub(repos map[string]string) *GitHub {
-	g := &GitHub{next: 101, repos: repos, checks: map[string]map[string]string{}, mainCI: map[string]string{}, mainHead: map[string]string{}, runIDs: 9000}
+	g := &GitHub{next: 101, repos: repos, checks: map[string]map[string]string{}, mainCI: map[string]string{}, mainHead: map[string]string{}, runIDs: 9000,
+		runs: map[int64]fakeRun{}}
 	for slug := range repos {
 		g.mainHead[slug] = g.RemoteHead(slug, "main")
 	}
@@ -346,7 +350,8 @@ func (g *GitHub) LandView(_ context.Context, slug string, number int) (runner.La
 		if b == "" {
 			b = runner.BucketFail
 		}
-		pr.Checks = append(pr.Checks, runner.Check{Name: n, Bucket: b, URL: fmt.Sprintf("https://github.com/%s/actions/runs/%s", slug, n)})
+		id := g.runID(slug, pr.HeadRefOid, n, b == runner.BucketFail)
+		pr.Checks = append(pr.Checks, runner.Check{Name: n, Bucket: b, URL: fmt.Sprintf("https://github.com/%s/actions/runs/%d/job/%d", slug, id, id+1)})
 	}
 	return pr, nil
 }
@@ -421,7 +426,9 @@ func (g *GitHub) CommitRuns(_ context.Context, slug, sha string) ([]runner.Workf
 	sort.Strings(names)
 	var runs []runner.WorkflowRun
 	for i, n := range names {
-		r := runner.WorkflowRun{Name: n, Workflow: n, URL: fmt.Sprintf("https://github.com/%s/actions/runs/%d", slug, g.runIDs+i)}
+		id := int64(g.runIDs + i)
+		r := runner.WorkflowRun{ID: id, Name: n, Workflow: n, URL: fmt.Sprintf("https://github.com/%s/actions/runs/%d", slug, id)}
+		g.runs[id] = fakeRun{slug: slug, job: n, failed: g.mainCI[n] == "fail"}
 		switch g.mainCI[n] {
 		case "pass":
 			r.Status, r.Conclusion = "completed", "success"
@@ -435,6 +442,53 @@ func (g *GitHub) CommitRuns(_ context.Context, slug, sha string) ([]runner.Workf
 		runs = append(runs, r)
 	}
 	return runs, nil
+}
+
+// fakeRun is an Actions run the fake has shown.
+type fakeRun struct {
+	slug, sha, job string
+	failed         bool
+}
+
+// runID is the id of a PR check's run: the same for the same repo, commit and check (ids from
+// 7000, below main's).
+func (g *GitHub) runID(slug, sha, name string, failed bool) int64 {
+	for id, r := range g.runs {
+		if r.slug == slug && r.sha == sha && r.job == name {
+			r.failed = failed
+			g.runs[id] = r
+			return id
+		}
+	}
+	id := int64(7000 + 2*len(g.runs))
+	g.runs[id] = fakeRun{slug: slug, sha: sha, job: name, failed: failed}
+	return id
+}
+
+// FailedLog answers gh run view --log-failed: for a failed run, a short Go test failure in gh's
+// format (job, step, timestamp), with colour codes and a token-like string the runner must strip.
+func (g *GitHub) FailedLog(_ context.Context, slug string, id int64) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	r, ok := g.runs[id]
+	if !ok || r.slug != slug {
+		return "", fmt.Errorf("could not find any workflow run with ID %d", id)
+	}
+	if !r.failed {
+		return "", nil
+	}
+	var b strings.Builder
+	for i, l := range []string{
+		"ok  \tgithub.com/sandbox/demo/internal/fine\t0.1s",
+		"\x1b[31m--- FAIL: TestDigest (0.02s)\x1b[0m",
+		"    digest_test.go:12: got \"old wording\", want \"new wording\" (GH_TOKEN=ghp_sandboxfaketoken0123456789)",
+		"FAIL",
+		"FAIL\tgithub.com/sandbox/demo/internal/digest\t0.3s",
+		"##[error]Process completed with exit code 1.",
+	} {
+		fmt.Fprintf(&b, "%s\ttest\t2026-10-16T12:00:%02d.0000000Z %s\n", r.job, i, l)
+	}
+	return b.String(), nil
 }
 
 // Push commits content to a file on a branch of the remote, as someone else would (a teammate's

@@ -3,6 +3,7 @@ package sandbox
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -115,6 +116,11 @@ func (p *player) problems(e Expect, negatives bool) []string {
 		d, _ := p.s.Store.GetItem(p.ctx, r.id)
 		if (d.Lease != nil) != e.Leased[alias] {
 			add("%s leased = %v, want %v", alias, d.Lease != nil, e.Leased[alias])
+		}
+	}
+	for _, m := range e.Evidence {
+		if msg := p.evidenceProblem(m); msg != "" {
+			add("%s", msg)
 		}
 	}
 	evs, err := p.s.Events()
@@ -820,4 +826,51 @@ func prNumber(gh *GitHub, r itemRef) int {
 		}
 	}
 	return 0
+}
+
+// evidenceProblem checks an item's evidence files against m ("" when they match).
+func (p *player) evidenceProblem(m EvidenceMatch) string {
+	r, err := p.ref(m.Item)
+	if err != nil {
+		return err.Error()
+	}
+	d, err := p.s.Store.GetItem(p.ctx, r.id)
+	if err != nil {
+		return fmt.Sprintf("%s: %v", m.Item, err)
+	}
+	n := 0
+	var seen []string
+	for _, ev := range d.Evidence {
+		seen = append(seen, fmt.Sprintf("%s (%s)", ev.Name, ev.Label))
+		if ev.Name != m.Name {
+			continue
+		}
+		if ok, err := matches(m.Label, ev.Label); err != nil || !ok {
+			continue
+		}
+		if m.Text != "" || m.NoText != "" {
+			_, f, err := p.s.Store.OpenEvidence(p.ctx, r.id, ev.N)
+			if err != nil {
+				return fmt.Sprintf("%s's evidence %d: %v", m.Item, ev.N, err)
+			}
+			b, _ := io.ReadAll(f)
+			f.Close()
+			if ok, err := matches(m.Text, string(b)); err != nil || !ok {
+				continue
+			}
+			if m.NoText != "" {
+				if bad, err := matches(m.NoText, string(b)); err != nil || bad {
+					continue
+				}
+			}
+		}
+		n++
+	}
+	switch {
+	case m.Count != nil && n != *m.Count:
+		return fmt.Sprintf("%s has %d evidence file(s) %s /%s/ text /%s/ no_text /%s/, want %d; it has %v", m.Item, n, m.Name, m.Label, m.Text, m.NoText, *m.Count, seen)
+	case m.Count == nil && n == 0:
+		return fmt.Sprintf("%s has no evidence file %s /%s/ text /%s/ no_text /%s/; it has %v", m.Item, m.Name, m.Label, m.Text, m.NoText, seen)
+	}
+	return ""
 }
