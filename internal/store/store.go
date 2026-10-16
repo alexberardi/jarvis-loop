@@ -305,7 +305,7 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
 	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of, ci_red_sha,
-	depends_on, plan_id, plan_piece`
+	depends_on, plan_id, plan_piece, builder`
 
 type scanner interface{ Scan(...any) error }
 
@@ -320,7 +320,7 @@ func scanItem(row scanner) (pipeline.Item, error) {
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
 		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf, &it.CIRedSHA,
-		&dependsOn, &it.PlanID, &it.PlanPiece)
+		&dependsOn, &it.PlanID, &it.PlanPiece, &it.Builder)
 	if err != nil {
 		return it, err
 	}
@@ -430,9 +430,9 @@ func (s *Store) insertItem(tx *sql.Tx, actor string, it *pipeline.Item) error {
 		it.DependsOn = []int64{}
 	}
 	res, err := tx.Exec(`INSERT INTO items (title, ask, repo, source, priority, stage, risk, created_at, updated_at, reopen_of,
-		depends_on, plan_id, plan_piece) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		depends_on, plan_id, plan_piece, builder) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), it.Risk, it.CreatedAt.UnixNano(), it.UpdatedAt.UnixNano(), it.ReopenOf,
-		joinIDs(it.DependsOn), it.PlanID, it.PlanPiece)
+		joinIDs(it.DependsOn), it.PlanID, it.PlanPiece, it.Builder)
 	if err != nil {
 		return err
 	}

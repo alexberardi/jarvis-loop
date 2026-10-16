@@ -641,7 +641,7 @@ func (f *fake) planTurn(play, persona, plan string, brief []byte, sc script, pro
 			dep1 = "2"
 		}
 		f.write("out/blueprint.md", fmt.Sprintf("# Blueprint: %s\n\nApproach: one table, then a reader and a page.\n\n## Pieces\n\n"+
-			"### 1. The table\n- size: S\n- depends on: %s\n\nThe table and its migration.\n\n"+
+			"### 1. The table\n- size: S\n- builder: qwen\n- depends on: %s\n\nThe table and its migration.\n\n"+
 			"### 2. The API\n- size: S\n- depends on: %s\n\nList and add.\n\n"+
 			"### 3. The page\n- size: S\n- depends on: 1\n\nShow the list.\n\n## Risks\n\nNone.\n", title, dep1, dep2))
 		r = map[string]any{"reply": fmt.Sprintf("Here is the blueprint (turn %s): three pieces.", turn), "blueprint": "out/blueprint.md", "ready": true}

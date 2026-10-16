@@ -394,10 +394,12 @@ func ApplyTurnResult(p Plan, t PlanTurn, r TurnResult, latest map[string]PlanDoc
 
 // Piece is one loop-sized part of a blueprint: it becomes one item.
 type Piece struct {
-	N         int    `json:"n"`
-	Title     string `json:"title"`
-	Repo      string `json:"repo,omitempty"`
-	Size      string `json:"size,omitempty"`
+	N     int    `json:"n"`
+	Title string `json:"title"`
+	Repo  string `json:"repo,omitempty"`
+	Size  string `json:"size,omitempty"`
+	// Builder is who should build it: BuilderQwen or BuilderClaude ("": not said).
+	Builder   string `json:"builder,omitempty"`
 	DependsOn []int  `json:"depends_on,omitempty"`
 	// Section is the piece's part of the blueprint, heading included: the item's ask ends with it.
 	Section string `json:"section"`
@@ -406,12 +408,19 @@ type Piece struct {
 var (
 	headingRe = regexp.MustCompile(`^(#{1,6})\s+(.*?)\s*#*\s*$`)
 	pieceRe   = regexp.MustCompile(`(?i)^(?:piece\s+)?(\d+)\s*[.):]?\s*(.*)$`)
-	fieldRe   = regexp.MustCompile(`(?i)^\s*(?:[-*]\s+)?\**\s*(repo|size|depends on)\s*\**\s*:\s*\**\s*(.*?)\s*$`)
+	fieldRe   = regexp.MustCompile(`(?i)^\s*(?:[-*]\s+)?\**\s*(repo|size|builder|depends on)\s*\**\s*:\s*\**\s*(.*?)\s*$`)
 	numRe     = regexp.MustCompile(`\d+`)
 )
 
+// The builders a piece names (docs/decisions/2026-10-16-qwen-builder-plans.md): qwen only when
+// every step is mechanical, claude otherwise and when the piece does not say.
+const (
+	BuilderQwen   = "qwen"
+	BuilderClaude = "claude"
+)
+
 // ParseBlueprint finds a blueprint's pieces: under a "Pieces" heading, one sub-heading per piece,
-// "N. Title", numbered from 1 in order, with optional "repo:", "size:" and "depends on:" lines
+// "N. Title", numbered from 1 in order, with optional "repo:", "size:", "builder:" and "depends on:" lines
 // (piece numbers; "none"). Dependencies must name other pieces and must not loop.
 func ParseBlueprint(md string) ([]Piece, error) {
 	lines := strings.Split(strings.ReplaceAll(md, "\r\n", "\n"), "\n")
@@ -478,6 +487,12 @@ func ParseBlueprint(md string) ([]Piece, error) {
 				return nil, fmt.Errorf("piece %d: size must be S, M or L, not %q", pc.N, val)
 			}
 			pc.Size = strings.ToUpper(val)
+		case "builder":
+			b := strings.ToLower(val)
+			if b != BuilderQwen && b != BuilderClaude {
+				return nil, fmt.Errorf("piece %d: builder must be qwen or claude, not %q", pc.N, val)
+			}
+			pc.Builder = b
 		case "depends on":
 			for _, d := range numRe.FindAllString(val, -1) {
 				n, _ := strconv.Atoi(d)
@@ -516,7 +531,8 @@ func ParseBlueprint(md string) ([]Piece, error) {
 
 // PlanItems are the items a split plan files, one per piece, in piece order: source plan, the
 // plan's priority, linked to the plan and piece, the piece's section as the ask's tail. A piece
-// without a repo takes the plan's, when it has exactly one. Dependencies are piece numbers here
+// without a repo takes the plan's, when it has exactly one; one without a builder gets claude.
+// Dependencies are piece numbers here
 // (Piece.DependsOn); the store maps them to the new items' ids.
 func PlanItems(p Plan, pieces []Piece, configured []string, now time.Time) ([]Item, error) {
 	out := make([]Item, 0, len(pieces))
@@ -533,7 +549,10 @@ func PlanItems(p Plan, pieces []Piece, configured []string, now time.Time) ([]It
 		if err != nil {
 			return nil, err
 		}
-		it.Source, it.PlanID, it.PlanPiece = SourcePlan, p.ID, pc.N
+		it.Source, it.PlanID, it.PlanPiece, it.Builder = SourcePlan, p.ID, pc.N, pc.Builder
+		if it.Builder == "" {
+			it.Builder = BuilderClaude
+		}
 		out = append(out, it)
 	}
 	return out, nil

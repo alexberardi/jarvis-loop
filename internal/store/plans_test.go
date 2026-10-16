@@ -18,11 +18,13 @@ const blueprint3 = `# Blueprint
 
 ### 1. Tables
 - repo: alexberardi/jarvis-loop
+- builder: qwen
 - depends on: none
 
 The migration.
 
 ### 2. Store
+- builder: claude
 - depends on: 1
 
 The store.
@@ -154,6 +156,9 @@ func TestPlanConversationAndHandoff(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := d.Item
+		if b := []string{"qwen", "claude", "claude"}[i]; got.Builder != b {
+			t.Fatalf("item %d builder %q, want %q", i+1, got.Builder, b)
+		}
 		if got.Source != pipeline.SourcePlan || got.PlanID != p.ID || got.PlanPiece != i+1 || got.Priority != "P2" || got.Repo != planRepo ||
 			!strings.HasSuffix(got.Ask, "The "+[]string{"migration.", "store.", "routes."}[i]) {
 			t.Fatalf("item %d: %+v", i+1, got)
@@ -164,6 +169,15 @@ func TestPlanConversationAndHandoff(t *testing.T) {
 		}
 		if !slices.Equal(got.DependsOn, want) {
 			t.Fatalf("piece %d depends on %v, want %v", i+1, got.DependsOn, want)
+		}
+	}
+	cards, err := s.BoardItems(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cards {
+		if c.ID == ids[0] && c.Builder != "qwen" || c.ID == 1 && c.Builder != "" {
+			t.Fatalf("card #%d builder %q", c.ID, c.Builder)
 		}
 	}
 	d, _ = s.GetPlan(ctx, p.ID)

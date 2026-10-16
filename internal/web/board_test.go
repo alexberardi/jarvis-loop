@@ -227,7 +227,7 @@ func goldenItems() []store.BoardItem {
 			SlackChannel: "C0LOOP", SlackTS: "1760000000.000100", UpdatedAt: now},
 		{BoardRow: row(4, "Retry the TTS call", "P2", "build", "ready", "alexberardi/jarvis-server", 0, "", 26*time.Hour), UpdatedAt: now},
 		{BoardRow: row(12, "Show the plan link", "P2", "triage", "intake", "alexberardi/jarvis-loop", 0, "", time.Hour),
-			WaitingOn: []int64{5, 8}, PlanID: 2, UpdatedAt: now},
+			WaitingOn: []int64{5, 8}, PlanID: 2, Builder: "qwen", UpdatedAt: now},
 		{BoardRow: row(5, "Board page", "P2", "review", "review", "alexberardi/jarvis-loop", 14, "devbox/reviewer-1", 2*day), UpdatedAt: now},
 		{BoardRow: row(6, "Bump sqlite", "P3", "land", "land (queued)", "alexberardi/jarvis-server", 31, "", 4*day), UpdatedAt: now},
 		{BoardRow: row(7, "Which emulator?", "P1", "needs_you", "needs-you", "alexberardi/jarvis-server", 0, "", 1*day),

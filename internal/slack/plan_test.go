@@ -10,7 +10,7 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/store"
 )
 
-const planBlueprint = "# Blueprint\n\n## Pieces\n\n### 1. Table\n- depends on: none\n\nThe table.\n\n### 2. API\n- depends on: 1\n\nThe routes.\n"
+const planBlueprint = "# Blueprint\n\n## Pieces\n\n### 1. Table\n- builder: qwen\n- depends on: none\n\nThe table.\n\n### 2. API\n- depends on: 1\n\nThe routes.\n"
 
 // planMsg is a message in #plan from user: top-level when threadTS is empty. It returns its ts.
 func (e *botEnv) planMsg(user, threadTS, text string) string {
@@ -308,6 +308,13 @@ func TestPlanApprovalsWaitAndBindToTheVersion(t *testing.T) {
 	}
 	if d := e.plan(1); d.Plan.Stage != pipeline.PlanSplit || len(d.Items) != 2 {
 		t.Fatalf("after the blueprint: %+v", d.Plan)
+	}
+	// /loop show names the builder its piece said, claude when it said none.
+	if out := e.command(other, "show 1"); !strings.Contains(out, " · builder qwen") {
+		t.Fatalf("show 1 %q", out)
+	}
+	if out := e.command(other, "show 2"); !strings.Contains(out, " · builder claude") {
+		t.Fatalf("show 2 %q", out)
 	}
 }
 
