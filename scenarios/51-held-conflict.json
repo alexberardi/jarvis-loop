@@ -1,0 +1,41 @@
+{
+  "name": "held-conflict",
+  "about": "A held PR turns conflicting while it waits for the user: the runner's held watch finds it on its next poll and sends the item back to build on its own, with the conflict as the builder's notes in .loop/review/held.md. Nothing is merged; no approval was needed.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "Change the stage rules", "text": "jarvis-loop: change the stage rules"},
+    {"do": "expect", "repo": {"a": "sandbox/jarvis-loop"}},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "good", "file": "internal/pipeline/rules.go"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"}, "events": [{"item": "a", "kind": "advanced", "outcome": "approved", "actor": "runner"}]},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "held"}},
+    {"do": "runner", "claims": "none"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "held"}, "no_events": [{"item": "a", "kind": "rebuild"}]},
+    {"do": "push", "slug": "sandbox/jarvis-loop", "branch": "main", "file": "internal/pipeline/rules.go", "text": "main's own version of the rules\n"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "pr": {"a": {"repo": "sandbox/jarvis-loop", "state": "OPEN", "merge_calls": 0}},
+    "events": [
+      {"item": "a", "kind": "rebuild", "actor": "runner", "data": {"notes": "^PR #101 conflicts with main while it was held\\. Merge origin/main into the branch"}, "count": 1}
+    ],
+    "no_events": [{"item": "a", "kind": "approved"}],
+    "messages": [
+      {"thread": "a", "text": "is held for your approval"},
+      {"thread": "a", "text": "^Back to build: PR #101 conflicts with main while it was held\\."},
+      {"thread": "a", "text": "^Claimed for build\\.$"}
+    ],
+    "agent_runs": {"build": 2},
+    "run_files": [{"item": "a", "stage": "build", "file": "brief.md",
+      "text": "- Sent back from held; PR #101 is open on this branch\\. Do what `\\.loop/review/held\\.md` asks(?s:.*)`\\.loop/review/held\\.md` \\(why the held PR came back to build, newest last\\)"}]
+  }
+}

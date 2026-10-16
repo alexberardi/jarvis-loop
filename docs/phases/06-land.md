@@ -66,6 +66,11 @@ Everything is re-derived from GitHub and git, never from an agent's words.
    - otherwise → `hold` with `head_sha` and the reason (loopd's hold reasons), and stop. The bot
      already posts the held message with the buttons; the user's approval (after the 2-minute
      Cancel window) moves the item back to land, and the next claim finds the approval.
+     *As built (2026-10-16, `docs/decisions/2026-10-16-held-back-to-build.md`): a held item is in no
+     work stage, so the runner's held watch reads each held PR every land poll; one GitHub calls
+     `CONFLICTING` goes back to build on its own (`rebuild`, the conflict as the builder's notes).
+     A reply in the held thread that is not an approval, a question or a "wait" sends it back to
+     build with the reply as the note.*
 7. **Mergeable:** `mergeable == CONFLICTING` → if every conflicting path is under `docs/`, merge
    `origin/<base>` into the branch in a scratch worktree, resolve by taking both sides only if git
    resolves it (`-X` is not used; a real conflict anywhere → `back_to_build`; *as built: a
@@ -159,6 +164,10 @@ runs on `main` per commit.
     `back_to_review`. *(As built: two files, `conflict-code` and `conflict-docs`.)*
 22. **Someone else's approval** never lands (re-check of scenario 4 through land).
 23. **Self-hold:** a jarvis-loop PR touching `internal/pipeline/` is held even with review approved.
+24. *(Added 2026-10-16.)* **Held, then conflicting** (`held-conflict`): main changes the held PR's
+    file → the next poll sends the item back to build with the conflict, no approval asked.
+    **Held, then a note** (`held-note`): "rebuild, and fix the typo" from the approver → build on
+    the same PR, the brief points at `.loop/review/held.md`; a question still stays held.
 
 Unit tests: the gate order as a table (PR state × review head × CI × evidence × risk × approval ×
 mergeable → outcome); the CI rollup parser on recorded `gh` JSON; per-repo rule matching.

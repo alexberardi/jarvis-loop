@@ -1,6 +1,6 @@
 {
   "name": "not-an-approval",
-  "about": "A question is not consent: \"looks fine?\" leaves the item held and the bot says how to approve; no echo, no window.",
+  "about": "A question is not consent: \"looks fine?\" leaves the item held and the bot says how to approve (or how to send it back to build); \"don't merge yet\" is neither an approval nor a note for the builder. No echo, no window.",
   "steps": [
     {
       "do": "add",
@@ -71,7 +71,7 @@
         {
           "thread": "a",
           "from": "bot",
-          "text": "^Not taken as an approval; the item stays held\\. Reply 'approve' or use the button\\.$"
+          "text": "^Not taken as an approval; the item stays held\\. Reply 'approve' or use the button, or say what to change to send it back to build\\.$"
         }
       ]
     },
