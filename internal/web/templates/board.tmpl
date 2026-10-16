@@ -50,6 +50,7 @@
 <span>{{age .AgeSeconds}}</span>
 {{- if .Label}}<span class="label">{{.Label}}</span>{{end}}
 {{- if .ClaimedBy}}<span>{{.ClaimedBy}}</span>{{end}}
+{{- if .Bounces}}<span class="label" title="bounced {{.Bounces}}×">↻ {{.Bounces}}</span>{{end}}
 {{- if .PRURL}}<a href="{{.PRURL}}">PR #{{.PR}}</a>{{end}}
 {{- if .SlackURL}}<a href="{{.SlackURL}}">thread</a>{{end}}
 {{- if .PlanID}}<a class="label" href="/board/plans/{{.PlanID}}">plan P{{.PlanID}}</a>{{end}}

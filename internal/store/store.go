@@ -458,6 +458,7 @@ type BoardRow struct {
 	Display    string    `json:"display"`
 	Repo       string    `json:"repo,omitempty"`
 	PR         int       `json:"pr,omitempty"`
+	Bounces    int       `json:"bounces,omitempty"`
 	ClaimedBy  string    `json:"claimed_by,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	AgeSeconds int64     `json:"age_seconds"`

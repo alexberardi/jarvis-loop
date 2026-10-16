@@ -18,7 +18,7 @@ func TestBoardItems(t *testing.T) {
 	if _, err := s.w.Exec(`UPDATE items SET stage='needs_you', question='which repo?', updated_at=? WHERE id=?`, clk.Now().UnixNano(), a.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.w.Exec(`UPDATE items SET stage='held', hold_reason='touches auth', pr=7, repo='o/r', plan_id=3, plan_piece=1 WHERE id=?`, b.ID); err != nil {
+	if _, err := s.w.Exec(`UPDATE items SET stage='held', hold_reason='touches auth', pr=7, repo='o/r', plan_id=3, plan_piece=1, bounce_count=2 WHERE id=?`, b.ID); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.BoardItems(ctx)
@@ -33,7 +33,10 @@ func TestBoardItems(t *testing.T) {
 		ga.SlackTS != "1760000000.000100" || !ga.UpdatedAt.Equal(clk.Now()) || ga.AgeSeconds != 3600 || ga.PlanID != 0 {
 		t.Errorf("needs-you row: %+v", ga)
 	}
-	if gb.ID != b.ID || gb.Display != "held" || gb.HoldReason != "touches auth" || gb.PR != 7 || gb.Repo != "o/r" || gb.SlackChannel != "" || gb.PlanID != 3 {
+	if gb.ID != b.ID || gb.Display != "held" || gb.HoldReason != "touches auth" || gb.PR != 7 || gb.Repo != "o/r" || gb.SlackChannel != "" || gb.PlanID != 3 || gb.Bounces != 2 {
 		t.Errorf("held row: %+v", gb)
+	}
+	if ga.Bounces != 0 {
+		t.Errorf("needs-you row bounces: %d", ga.Bounces)
 	}
 }

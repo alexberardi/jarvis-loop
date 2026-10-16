@@ -220,6 +220,8 @@ func goldenItems() []store.BoardItem {
 		return store.BoardRow{ID: id, Title: title, Priority: pri, Stage: stage, Display: display, Repo: repo, PR: pr,
 			ClaimedBy: claimed, CreatedAt: now.Add(-age), AgeSeconds: int64(age / time.Second)}
 	}
+	bounced := row(5, "Board page", "P2", "review", "review", "alexberardi/jarvis-loop", 14, "devbox/reviewer-1", 2*day)
+	bounced.Bounces = 2
 	return []store.BoardItem{
 		{BoardRow: row(1, "Wake word <misses> at night", "P0", "triage", "intake", "", 0, "", 5*time.Minute), UpdatedAt: now},
 		{BoardRow: row(2, "Route to the right repo", "P1", "triage", "triage", "alexberardi/jarvis-loop", 0, "devbox/triage-1", 2*time.Hour), UpdatedAt: now},
@@ -228,7 +230,7 @@ func goldenItems() []store.BoardItem {
 		{BoardRow: row(4, "Retry the TTS call", "P2", "build", "ready", "alexberardi/jarvis-server", 0, "", 26*time.Hour), UpdatedAt: now},
 		{BoardRow: row(12, "Show the plan link", "P2", "triage", "intake", "alexberardi/jarvis-loop", 0, "", time.Hour),
 			WaitingOn: []int64{5, 8}, PlanID: 2, UpdatedAt: now},
-		{BoardRow: row(5, "Board page", "P2", "review", "review", "alexberardi/jarvis-loop", 14, "devbox/reviewer-1", 2*day), UpdatedAt: now},
+		{BoardRow: bounced, UpdatedAt: now},
 		{BoardRow: row(6, "Bump sqlite", "P3", "land", "land (queued)", "alexberardi/jarvis-server", 31, "", 4*day), UpdatedAt: now},
 		{BoardRow: row(7, "Which emulator?", "P1", "needs_you", "needs-you", "alexberardi/jarvis-server", 0, "", 1*day),
 			Question: "Should the test use the sandbox emulator or a fake?", SlackChannel: "C0LOOP", SlackTS: "1760000001.000200", UpdatedAt: now},
