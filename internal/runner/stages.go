@@ -34,6 +34,47 @@ func writeContext(ru *run, info *RunInfo, rel, label, content string) {
 	info.Context = append(info.Context, TriageFile{Name: rel, Label: label})
 }
 
+// mainRedLog gives triage of a red main's P1 the failing CI log, as .loop/context/ci-failure.log:
+// the one already attached to the item, or (first triage) fetched from GitHub and attached now,
+// under triage's lease (the runner held none on the P1 when it filed it).
+func (r *Runner) mainRedLog(ctx context.Context, ru *run, info *RunInfo, sha string) {
+	rel := filepath.Join(".loop", "context", CIFailureLog)
+	dst := filepath.Join(ru.wt, rel)
+	fail := func(err error) { info.ContextErrs = append(info.ContextErrs, "the failing CI log: "+err.Error()) }
+	evs, err := r.Client.Evidence(ctx, ru.item.ID)
+	if err != nil {
+		fail(err)
+		return
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		if e := evs[i]; e.Name == CIFailureLog {
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				fail(err)
+			} else if err := r.Client.DownloadEvidence(ctx, ru.item.ID, e.N, dst); err != nil {
+				fail(err)
+			} else {
+				info.CILog = &TriageFile{Name: rel, Label: e.Label}
+			}
+			return
+		}
+	}
+	if r.Land == nil {
+		fail(fmt.Errorf("the runner has no GitHub client"))
+		return
+	}
+	runs, err := r.Land.CommitRuns(ctx, ru.repo.Slug, sha)
+	if err != nil {
+		fail(err)
+		return
+	}
+	label, err := r.attachCIFailure(ctx, ru.item.ID, ru.repo.Slug, sha, failedRuns(runs), dst)
+	if err != nil {
+		fail(err)
+		return
+	}
+	info.CILog = &TriageFile{Name: rel, Label: label}
+}
+
 // RecentTitlesForRouting is how many recently merged PR titles per repo a routing run sees, and
 // RoutingFetchTimeout how long the runner waits for them (all repos at once) before it notes the
 // ones it could not get.
@@ -71,6 +112,10 @@ func (r *Runner) prepareTriage(ctx context.Context, ru *run, info *RunInfo) erro
 		ru.checkouts = append(ru.checkouts, c)
 		info.Checkouts = append(info.Checkouts, c)
 		ru.repoDir = filepath.Join(ru.wt, dir)
+	}
+
+	if sha := MainRedCommit(ru.item, ru.repo.Slug); sha != "" && ru.repoKey != "" {
+		r.mainRedLog(ctx, ru, info, sha)
 	}
 
 	all := make([]string, 0, len(r.Cfg.Repos))
@@ -342,7 +387,7 @@ func (r *Runner) reportTriage(ctx context.Context, ru *run, out outcome, raw []b
 		return rc.Slug, ok
 	}})
 	if err != nil {
-		r.fail(ctx, ru, out, "result rejected: "+err.Error())
+		r.reject(ctx, ru, out, err.Error())
 		return
 	}
 	switch v.Outcome {
@@ -354,7 +399,12 @@ func (r *Runner) reportTriage(ctx context.Context, ru *run, out outcome, raw []b
 		r.advance(ctx, ru, OutcomeRouted, r.metrics(ru, out, map[string]string{"repo": v.Repo, "why": clip(v.Why, MaxWhy)}), nil)
 		return
 	}
-	if !r.uploadNotesAndEvidence(ctx, ru, out, v, "triage-notes.md", "triage notes") {
+	files, err := r.evidence(ru, v)
+	if err != nil {
+		r.reject(ctx, ru, out, "evidence: "+err.Error())
+		return
+	}
+	if !r.uploadNotesAndEvidence(ctx, ru, out, v, files, "triage-notes.md", "triage notes") {
 		return
 	}
 	fields := map[string]string{"summary": clip(v.Summary, 2000)}
@@ -373,12 +423,7 @@ func (r *Runner) reportTriage(ctx context.Context, ru *run, out outcome, raw []b
 
 // uploadNotesAndEvidence uploads the agent's notes (written by the runner into the run dir, as
 // name) and its evidence files. It reports failure itself.
-func (r *Runner) uploadNotesAndEvidence(ctx context.Context, ru *run, out outcome, v Result, name, label string) bool {
-	files, err := EvidenceFiles(filepath.Join(ru.wt, ".loop"))
-	if err != nil {
-		r.fail(ctx, ru, out, "evidence: "+err.Error())
-		return false
-	}
+func (r *Runner) uploadNotesAndEvidence(ctx context.Context, ru *run, out outcome, v Result, files []EvidenceFile, name, label string) bool {
 	if strings.TrimSpace(v.Notes) != "" {
 		p := filepath.Join(ru.dir, name)
 		if err := os.WriteFile(p, []byte(strings.TrimSpace(v.Notes)+"\n"), 0o600); err != nil {
@@ -404,7 +449,7 @@ func (r *Runner) reportReview(ctx context.Context, ru *run, out outcome, raw []b
 	it := ru.item
 	v, err := ValidateReview(raw, it.HeadSHA)
 	if err != nil {
-		r.fail(ctx, ru, out, "result rejected: "+err.Error())
+		r.reject(ctx, ru, out, err.Error())
 		return
 	}
 	if r.VerifyPR != nil {
@@ -418,9 +463,9 @@ func (r *Runner) reportReview(ctx context.Context, ru *run, out outcome, raw []b
 			return
 		}
 	}
-	files, err := EvidenceFiles(filepath.Join(ru.wt, ".loop"))
+	files, err := r.evidence(ru, v)
 	if err != nil {
-		r.fail(ctx, ru, out, "evidence: "+err.Error())
+		r.reject(ctx, ru, out, "evidence: "+err.Error())
 		return
 	}
 	body := filepath.Join(ru.dir, "review-comment.md")
@@ -435,7 +480,7 @@ func (r *Runner) reportReview(ctx context.Context, ru *run, out outcome, raw []b
 	// A bounce's notes go to loopd as the outcome's field (and are in the comment), not as a file.
 	ev := v
 	ev.Notes = ""
-	if !r.uploadNotesAndEvidence(ctx, ru, out, ev, "", "") {
+	if !r.uploadNotesAndEvidence(ctx, ru, out, ev, files, "", "") {
 		return
 	}
 	fields := map[string]string{"pr_comment": "posted"}

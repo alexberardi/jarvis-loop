@@ -28,7 +28,7 @@ func TestVerifyPasses(t *testing.T) {
 	g := newRig(t, fakeclaude.Good)
 	g.verifyRepo(
 		VerifyStep{Name: "unit tests", Run: `echo "tests pass at $LOOP_HEAD"; pwd > "$LOOP_EVIDENCE_DIR/cwd.txt"; ` +
-			`env | grep '^LOOP_' | sort > "$LOOP_EVIDENCE_DIR/env.txt"; printf '\x89PNG\r\n' > "$LOOP_EVIDENCE_DIR/home-light.png"; test -f feature.txt`},
+			`env | grep '^LOOP_' | sort > "$LOOP_EVIDENCE_DIR/env.txt"; printf '\x89PNG\r\n' > "$LOOP_EVIDENCE_DIR/home-light.png"; mkdir "$LOOP_EVIDENCE_DIR/shots"; test -f feature.txt`},
 		VerifyStep{Name: "admin screenshots", Run: "touch should-not-run", WhenChanged: []string{"web/**"}},
 	)
 	id := g.toBuild("Add a feature")
@@ -54,6 +54,9 @@ func TestVerifyPasses(t *testing.T) {
 		if got, ok := labels[name]; label == "" && ok || label != "" && got != label {
 			t.Errorf("evidence %s: label %q (present %v), want %q; all: %v", name, got, ok, label, labels)
 		}
+	}
+	if logs := g.logs.String(); !strings.Contains(logs, "verify evidence: skipped directories and dotfiles") || !strings.Contains(logs, "skipped=shots") {
+		t.Errorf("a skipped subfolder is not logged:\n%s", logs)
 	}
 	run := g.lastRun(id, StageBuild)
 	ev := filepath.Join(run, "verify", "verify-1-unit-tests", "evidence")

@@ -86,7 +86,8 @@ a forbidden message), with a readable failure. The fake Slack's injection and re
 
 A scenario file is `{"name", "about", ["stages"], "steps": [...], "expect": {...}}`; `stages` are
 the stages the runner claims (default triage, build and review, as a real runner). Items are named by an
-alias (`"a"`) given when added; ids are the stack's own. Unknown fields are refused, so a typo
+alias (`"a"`) given when added; ids are the stack's own. An item the loop filed itself (a red
+main's P1) is named by its id: `"#2"`. Unknown fields are refused, so a typo
 cannot silently check nothing. Steps (`"do"`):
 
 | Step | Does |
@@ -137,6 +138,7 @@ negative ones are checked once the loop has gone quiet:
 | `board`: {alias: {`column`, `card` regexp, `page` regexp}} | the item's (or plan's) card is in that column of the web board (read from the stack's board listener with a board token, through the `?t=` cookie flow), its HTML matching `card`, and its page (`/board/items/{id}` or `/board/plans/{id}`) matching `page` |
 | `plans`: {alias: {`stage`, `items`, `turn` (`you`\|`agent`\|`none`), `docs`: {kind: latest version}, `turns`, `last_turn` (status), `last_error` regexp}} | the plan as loopd has it |
 | `depends_on`: {alias: [aliases]} | the item depends on exactly those items |
+| `evidence`: [{`item`, `name`, `label` regexp, `text` regexp, `no_text` regexp, `count`}] | the item has evidence files with that name whose label and content match (exactly `count`; default at least one) |
 
 **Always checked, after every step (must-not):** no bot call (messages, pins, reactions) to a
 channel other than `#loop`, `#loop-digest` and `#plan`; no token (Slack, loopd user, runner or hand) in any call to Slack or any message; the

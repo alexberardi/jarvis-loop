@@ -466,7 +466,13 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		if it.Stage != pipeline.NeedsYou {
 			q = str(e.Data, "question")
 		}
-		text := fmt.Sprintf("<@%s> %s needs you: %s\nReply in this thread to answer.", Approver, ref(id, it.Title), b.field(q, 1500, id))
+		reply := "Reply in this thread to answer."
+		if pipeline.Outcome(e.Outcome) == pipeline.Failed {
+			// A run that ended without a usable result is a runner error, not a question; any
+			// reply sends the item back to the stage that failed.
+			reply = `Reply "retry" to run it again, or drop.`
+		}
+		text := fmt.Sprintf("<@%s> %s needs you: %s\n%s", Approver, ref(id, it.Title), b.field(q, 1500, id), reply)
 		return Message{Text: text, Blocks: []map[string]any{section(text),
 			{"type": "actions", "block_id": "needs_you", "elements": []any{dropButton(id, strconv.FormatInt(id, 10))}},
 		}}, true

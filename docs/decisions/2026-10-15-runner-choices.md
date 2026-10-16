@@ -118,7 +118,8 @@ The first real item is in this repo, which has no harness, so none is needed yet
   `<id>-build` (the worktree, `-B loop/<id>-<slug>` from the remote branch if an earlier run pushed
   one, else `origin/<base>`), `.loop/scratch` inside it, `runs/<id>-build-<time>/` (guard config,
   refusals, `stream.jsonl`, `stderr.log`, the brief; kept as the run's log, never writable by the
-  agent), `settings/<repo>-build.json`. The user's checkout is never written: tests check its HEAD,
+  agent; a retried stage keeps the refused attempt's as `stream-1.jsonl`, `stderr-1.log`,
+  `brief-1.md`, see `2026-10-16-refused-results.md`), `settings/<repo>-build.json`. The user's checkout is never written: tests check its HEAD,
   status and branches after every scenario.
 - **Unsigned commits:** the user's global git config signs with an SSH key under `~/.ssh`, which
   the sandbox denies, so the mirror turns signing off for loop branches.

@@ -26,6 +26,8 @@ type Item struct {
 	Branch      string   `json:"branch"`
 	HeadSHA     string   `json:"head_sha"`
 	Summary     string   `json:"summary"`
+	// Source is who filed it (finding: the loop itself, as a red main's P1).
+	Source string `json:"source"`
 	// Approval is the user's approval of a held merge, for the head they saw (land reads it).
 	Approval *ItemApproval `json:"approval,omitempty"`
 }
@@ -75,6 +77,9 @@ type RunInfo struct {
 	Context []TriageFile
 	// ContextErrs say what the runner could not fetch (the agent is told; the run goes on).
 	ContextErrs []string
+	// CILog is the failing CI log the runner fetched (triage of a red main's P1; build after land
+	// sent the item back for red CI), relative to the working directory.
+	CILog *TriageFile
 	// PR and HeadSHA are the PR a review run reviews, at that commit.
 	PR      int
 	HeadSHA string
@@ -247,6 +252,10 @@ func Brief(stage string, it Item, r RunInfo) string {
 			fmt.Fprintf(&b, "- The item's triage evidence could not be copied (%s).\n", clip(r.TriageErr, 200))
 		}
 	}
+	if r.CILog != nil {
+		fmt.Fprintf(&b, "- **CI failed; the runner fetched its log**: `%s` (%s): the failing tests, then the lines around each failure (or each job's tail), from GitHub Actions. You cannot open the CI run yourself, and the user cannot reproduce it for you. A test that passes locally but fails in CI is usually a race or a timing assumption that a slower machine exposes: look for the race in the code (in Go, `go test -race -count=20 -run <test>`), don't ask the user.\n",
+			r.CILog.Name, strings.Join(strings.Fields(r.CILog.Label), " "))
+	}
 	if len(r.Context) > 0 {
 		b.WriteString("- Context from the runner (read these):")
 		for _, f := range r.Context {
@@ -284,6 +293,19 @@ func Brief(stage string, it Item, r RunInfo) string {
 	}
 	fmt.Fprintf(&b, "- Scratch dir (temp files, GOTMPDIR): `%s`\n- Sandbox name for the harness: `%s`\n", r.Scratch, r.Sandbox)
 	return b.String()
+}
+
+// RetryHeading opens the section RetryBrief adds.
+const RetryHeading = "## Your previous result was refused"
+
+// RetryBrief is the brief for the one retry of a stage whose result the runner refused: the same
+// brief (the prompt cache keeps its prefix), with why at the end.
+func RetryBrief(brief, why string) string {
+	return strings.TrimRight(brief, "\n") + "\n\n" + RetryHeading + "\n\n" +
+		"An earlier run of this stage ended, but the runner could not accept its `.loop/result.json`:\n\n> " +
+		oneLine(why) + "\n\n" +
+		"Your work so far is still here (the worktree, `.loop/evidence/`). Fix what the runner refused, then write " +
+		"`.loop/result.json` again. This is the one retry: a second refusal goes to the user as a runner error.\n"
 }
 
 // BuildBrief is the build stage's brief.

@@ -142,6 +142,19 @@ type Expect struct {
 	// it depends on, exactly.
 	Plans     map[string]PlanMatch `json:"plans,omitempty"`
 	DependsOn map[string][]string  `json:"depends_on,omitempty"`
+	// Evidence: files attached to an item (by name), their label and content.
+	Evidence []EvidenceMatch `json:"evidence,omitempty"`
+}
+
+// EvidenceMatch is an item's evidence file: Name exactly, Label and Text (its content) regexps,
+// NoText a regexp the content must not match; Count how many such files (default: at least one).
+type EvidenceMatch struct {
+	Item   string `json:"item"`
+	Name   string `json:"name"`
+	Label  string `json:"label,omitempty"`
+	Text   string `json:"text,omitempty"`
+	NoText string `json:"no_text,omitempty"`
+	Count  *int   `json:"count,omitempty"`
 }
 
 // BoardMatch is an item's or a plan's card on the board: its column, a regexp on the card's
@@ -276,6 +289,14 @@ type player struct {
 
 func (p *player) ref(alias string) (itemRef, error) {
 	r, ok := p.items[alias]
+	if n, err := strconv.ParseInt(strings.TrimPrefix(alias, "#"), 10, 64); !ok && strings.HasPrefix(alias, "#") && err == nil {
+		// An item the loop filed itself (a red main's P1), by its id.
+		d, err := p.s.Store.GetItem(p.ctx, n)
+		if err != nil {
+			return r, fmt.Errorf("item %s: %v", alias, err)
+		}
+		return itemRef{id: n, title: d.Item.Title}, nil
+	}
 	if !ok {
 		return r, fmt.Errorf("no item %q in this scenario (add it first)", alias)
 	}

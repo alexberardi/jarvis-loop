@@ -1,0 +1,38 @@
+{
+  "name": "refused-result-retry",
+  "about": "The runner refuses a review's result (it names the directory .loop/evidence/.claude as evidence). It runs the review once more with the reason in the brief: for item a the retry's result is good and the item goes on to land; item b's is refused again, and it goes to the user as a runner error (retry or drop), not a question. A reply of retry sends it back to review.",
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "script", "item": "a", "for": "review", "play": "approve_names_dir_once"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "approved", "actor": "runner", "data": {"result_retried": "^true$"}, "count": 1}],
+     "no_events": [{"item": "a", "kind": "advanced", "outcome": "failed"}],
+     "run_files": [{"item": "a", "stage": "review", "file": "brief.md",
+                    "text": "## Your previous result was refused\\n\\nAn earlier run of this stage ended, but the runner could not accept its `\\.loop/result\\.json`:\\n\\n> evidence: evidence entry \"evidence/\\.claude\" is a directory or a dotfile"}],
+     "pr": {"a": {"comments": 1}}},
+
+    {"do": "add", "item": "b", "title": "Fix the usage wording"},
+    {"do": "triage", "item": "b"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "script", "item": "b", "for": "review", "play": "approve_names_dir"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"b": "needs_you"},
+     "question": {"b": "^the review's result couldn't be accepted: evidence: evidence entry \"evidence/\\.claude\" is a directory or a dotfile, not a file the runner uploads \\(again, after one retry\\)\\. Last output: "},
+     "events": [{"item": "b", "kind": "advanced", "outcome": "failed", "actor": "runner", "data": {"result_retried": "^true$"}, "count": 1}],
+     "messages": [{"thread": "b", "text": "^<@U0C9AFPAMD4> #\\d+ Fix the usage wording needs you: the review's result couldn't be accepted: .*\\nReply \"retry\" to run it again, or drop\\.$"}],
+     "no_messages": [{"thread": "b", "text": "Reply in this thread to answer"}]},
+    {"do": "reply", "item": "b", "as": "approver", "text": "retry"},
+    {"do": "expect", "stage": {"b": "review"}}
+  ],
+  "expect": {
+    "stage": {"a": "land", "b": "review"},
+    "prs": 2
+  }
+}

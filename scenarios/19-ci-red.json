@@ -28,7 +28,7 @@
     "remote": {"branches": {"a": "^feat: add a feature$"}, "only": true},
     "events": [
       {"item": "a", "kind": "advanced", "outcome": "back_to_build", "actor": "runner",
-       "data": {"reason": "^CI failed on `[0-9a-f]{7}`: check \\(https://github\\.com/sandbox/demo/actions/runs/check\\)$", "changed_paths": "feature\\.txt"}, "count": 1}
+       "data": {"reason": "^CI failed on `[0-9a-f]{7}`: check \\(https://github\\.com/sandbox/demo/actions/runs/[0-9]+/job/[0-9]+\\)$", "changed_paths": "feature\\.txt"}, "count": 1}
     ],
     "messages": [
       {"parent": "a", "text": "Stage \\*ready\\*"},
