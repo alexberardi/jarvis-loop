@@ -114,7 +114,11 @@ reply. Approving the brief queues engineering's first turn (no message); `back_t
 the plan to brief and queues a product turn carrying the reason. Leases: an expired turn waits
 again (merged into a turn queued meanwhile), an overtime one fails, Stop puts it back in the
 queue; dropping a plan ends its lease and fails its turns. The hand-off inserts the items
-dependencies first, so each `created` event names its dependencies. A split plan becomes `done`
+dependencies first, so each `created` event names its dependencies. Approving the blueprint is
+not refused while a message waits: the queued turn fails in the same transaction ("the plan was
+split before this turn ran", a `plan_turn_failed` event), since turns run only at brief and
+blueprint; a running turn keeps its lease (its result is ignored), and if that lease expires or
+is stopped the turn fails rather than waiting again. A split plan becomes `done`
 when an item of it reaches done or closed and all of them are settled with at least one done.
 API as above plus **`POST /plans/{id}/messages`** (user, `{text}`: joins the queued turn) and
 `GET /plans?open=1`; `POST /plans` takes `title`, `priority`, `repos`, `text` (the first

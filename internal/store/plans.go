@@ -375,7 +375,13 @@ func (s *Store) ApprovePlan(ctx context.Context, actor string, id int64, kind, s
 		for i, it := range out.Items {
 			ids[i] = it.ID
 		}
-		return s.planEvent(tx, id, "loopd", "split", a.Plan.Stage, a.Plan.Stage, map[string]any{"items": ids, "blueprint": a.Doc.Version})
+		if err := s.planEvent(tx, id, "loopd", "split", a.Plan.Stage, a.Plan.Stage, map[string]any{"items": ids, "blueprint": a.Doc.Version}); err != nil {
+			return err
+		}
+		// A message sent after the blueprint was ready waits in a queued turn that will never
+		// run (turns run only at brief and blueprint): it fails, with an event saying why. A
+		// running turn keeps its lease; its result lands as ignored.
+		return s.failQueuedTurn(tx, a.Plan, "the plan was split before this turn ran")
 	})
 	if err != nil {
 		return out, s.refusePlan(ctx, actor, id, "approve "+kind, err)
@@ -417,6 +423,21 @@ func (s *Store) handOff(tx *sql.Tx, actor string, p pipeline.Plan, pieces []pipe
 		ids[pieces[next].N] = it.ID
 	}
 	return items, nil
+}
+
+// failQueuedTurn fails a plan's queued turn, if it has one, when the plan has left the
+// conversation (split or dropped) before the turn ran.
+func (s *Store) failQueuedTurn(tx *sql.Tx, p pipeline.Plan, why string) error {
+	t, err := openTurn(tx, p.ID, pipeline.TurnQueued)
+	if err != nil || t == nil {
+		return err
+	}
+	t.Status, t.Error, t.UpdatedAt = pipeline.TurnFailed, why, s.clock.Now()
+	if err := saveTurn(tx, *t); err != nil {
+		return err
+	}
+	return s.planEvent(tx, p.ID, "loopd", "plan_turn_failed", p.Stage, p.Stage,
+		map[string]any{"turn": t.ID, "messages": t.Messages, "error": why})
 }
 
 // DropPlan drops an open plan: a running turn's lease ends (its next heartbeat stops it) and its
@@ -622,6 +643,15 @@ func (s *Store) claimTurn(tx *sql.Tx, runnerName, agent string, c pipeline.TurnC
 // when a message already queued the next turn, the two merge (this one's messages first).
 func (s *Store) requeueTurn(tx *sql.Tx, t pipeline.PlanTurn) error {
 	now := s.clock.Now()
+	p, err := loadPlan(tx, t.PlanID)
+	if err != nil {
+		return err
+	}
+	if p.Stage != pipeline.PlanBrief && p.Stage != pipeline.PlanBlueprint {
+		// The plan left the conversation while the turn ran: there is nothing to run it for.
+		t.Status, t.Error, t.UpdatedAt = pipeline.TurnFailed, fmt.Sprintf("its run ended early and the plan is %s", p.Stage), now
+		return saveTurn(tx, t)
+	}
 	q, err := openTurn(tx, t.PlanID, pipeline.TurnQueued)
 	if err != nil {
 		return err

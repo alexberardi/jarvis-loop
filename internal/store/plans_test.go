@@ -253,6 +253,95 @@ func TestPlanHandoffRefusalLeavesThePlan(t *testing.T) {
 	}
 }
 
+func TestPlanHandoffFailsAQueuedTurn(t *testing.T) {
+	s, _ := openPlans(t)
+	ctx := context.Background()
+	p := newPlan(t, s, "Late word", "")
+	toBlueprint(t, s, p)
+	c := claimTurn(t, s, "agent-1")
+	result(t, s, c, pipeline.TurnResult{Reply: "Here it is.", Blueprint: blueprint3, Ready: true})
+	// A message after the blueprint is ready queues a turn; the user approves anyway.
+	q, err := s.PlanMessage(ctx, user, p.ID, "one more thing about piece 2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ApprovePlan(ctx, user, p.ID, pipeline.DocBlueprint, pipeline.DocSHA256(blueprint3), ""); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := s.GetPlan(ctx, p.ID)
+	if d.Plan.Stage != pipeline.PlanSplit || len(d.Items) != 3 {
+		t.Fatalf("plan %+v items %v", d.Plan, d.Items)
+	}
+	i := slices.IndexFunc(d.Turns, func(x pipeline.PlanTurn) bool { return x.ID == q.ID })
+	if i < 0 || d.Turns[i].Status != pipeline.TurnFailed || d.Turns[i].Error != "the plan was split before this turn ran" {
+		t.Fatalf("turns %+v", d.Turns)
+	}
+	if !slices.ContainsFunc(d.Events, func(e Event) bool {
+		return e.Kind == "plan_turn_failed" && e.Data["error"] == "the plan was split before this turn ran"
+	}) {
+		t.Fatalf("no plan_turn_failed event: %+v", d.Events)
+	}
+}
+
+func TestPlanTurnExpiredAfterSplitFails(t *testing.T) {
+	s, advance := openPlans(t)
+	ctx := context.Background()
+	p := newPlan(t, s, "Running late", "")
+	toBlueprint(t, s, p)
+	c := claimTurn(t, s, "agent-1")
+	result(t, s, c, pipeline.TurnResult{Reply: "Here it is.", Blueprint: blueprint3, Ready: true})
+	if _, err := s.PlanMessage(ctx, user, p.ID, "hm"); err != nil {
+		t.Fatal(err)
+	}
+	c = claimTurn(t, s, "agent-1")
+	if _, err := s.ApprovePlan(ctx, user, p.ID, pipeline.DocBlueprint, pipeline.DocSHA256(blueprint3), ""); err != nil {
+		t.Fatal(err)
+	}
+	// The running turn's lease expires after the split: it is not queued again.
+	advance(2 * LeaseTTL)
+	if err := s.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := s.GetPlan(ctx, p.ID)
+	for _, tn := range d.Turns {
+		if tn.Status == pipeline.TurnQueued || tn.Status == pipeline.TurnRunning {
+			t.Fatalf("turn %+v left open on a split plan (claimed %d)", tn, c.Turn.ID)
+		}
+	}
+}
+
+// Only plans in a conversation (brief, blueprint) have claimable turns: a queued turn left on a
+// split or dropped plan is never handed out.
+func TestClaimSkipsTurnsOfClosedPlans(t *testing.T) {
+	s, _ := openPlans(t)
+	ctx := context.Background()
+	split := newPlan(t, s, "Split", "P1")
+	toBlueprint(t, s, split)
+	c := claimTurn(t, s, "agent-1")
+	result(t, s, c, pipeline.TurnResult{Reply: "Here it is.", Blueprint: blueprint3, Ready: true})
+	if _, err := s.ApprovePlan(ctx, user, split.ID, pipeline.DocBlueprint, pipeline.DocSHA256(blueprint3), ""); err != nil {
+		t.Fatal(err)
+	}
+	dropped := newPlan(t, s, "Dropped", "P1")
+	if _, err := s.DropPlan(ctx, user, dropped.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixNano()
+	for _, id := range []int64{split.ID, dropped.ID} {
+		if _, err := s.w.Exec(`INSERT INTO plan_turns (plan_id, messages, back_to_brief, status, created_at, updated_at) VALUES (?,'["stray"]','','queued',?,?)`,
+			id, now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.Claim(ctx, runner, pipeline.ClaimRequest{Runner: runner, Agent: "agent-1", Kinds: planKinds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil && got.Kind == pipeline.WorkPlan {
+		t.Fatalf("claimed a turn of plan %d at %s", got.Plan.ID, got.Plan.Stage)
+	}
+}
+
 func TestPlanBackToBrief(t *testing.T) {
 	s, _ := openPlans(t)
 	ctx := context.Background()
