@@ -47,6 +47,9 @@ type Runner struct {
 	Land LandGitHub
 	// Close closes dropped items' PRs (GH; nil: this runner leaves them to another).
 	Close PRCloser
+	// Revision is the loop commit this runner was built from (BuildRevision; "" when unknown): it
+	// reports deployed for the qa items whose merge it contains (deploy.go).
+	Revision string
 	// HeartbeatEvery and KillGrace default to 60 s and 10 s.
 	HeartbeatEvery time.Duration
 	KillGrace      time.Duration
@@ -97,6 +100,13 @@ func (r *Runner) Run(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 			r.closeDroppedLoop(ctx)
+		}()
+	}
+	if r.Revision != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.reportDeployedLoop(ctx)
 		}()
 	}
 	agent, land := r.Lanes()

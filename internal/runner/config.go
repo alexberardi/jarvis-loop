@@ -120,6 +120,10 @@ type RepoConfig struct {
 	// needs_qa with merged), as for the mobile app, which reaches TestFlight and Play only after
 	// merge (docs/decisions/2026-10-15-qa.md).
 	QA bool `json:"qa,omitempty"`
+	// QAAfterDeploy (implies QA): the repo's change runs only once deployed, as the loop's own
+	// binaries do, so the user is asked to check only when a runner built from a commit that
+	// contains the merge is running (docs/decisions/2026-10-16-qa-after-deploy.md).
+	QAAfterDeploy bool `json:"qa_after_deploy,omitempty"`
 }
 
 // Groups are the kinds of repo a config may name.
@@ -337,6 +341,7 @@ func (c *Config) normalize() error {
 			r.Base = "main"
 		}
 		r.Local = Expand(r.Local)
+		r.QA = r.QA || r.QAAfterDeploy
 		if r.Group != "" && !slices.Contains(Groups, r.Group) {
 			return fmt.Errorf("config: repo %s: group must be one of %s, not %q", name, strings.Join(Groups, ", "), r.Group)
 		}

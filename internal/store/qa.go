@@ -57,3 +57,39 @@ func (s *Store) Reopen(ctx context.Context, actor string, id int64, words string
 	}
 	return old, filed, nil
 }
+
+// Deployed is a runner reporting that the loop build it runs contains a qa item's merge commit
+// (kind deployed, data {revision}; docs/decisions/2026-10-16-qa-after-deploy.md): the deploy wait
+// ends and the Slack bot asks the user to check. Any runner may report it, once; a second report,
+// or one for an item no longer waiting, is wrong_stage and not recorded as a refusal (two runners
+// may race to it).
+func (s *Store) Deployed(ctx context.Context, runnerName string, id int64, data map[string]any) (Event, error) {
+	var out Event
+	for k := range data {
+		if k != "revision" {
+			return out, errf(pipeline.CodeInvalidField, "deployed data may hold revision, not %q", k)
+		}
+	}
+	rev, _ := data["revision"].(string)
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		it, err := loadItem(tx, id)
+		if err != nil {
+			return err
+		}
+		tr, err := pipeline.ApplyDeployed(it, rev)
+		if err != nil {
+			return err
+		}
+		tr.Item.UpdatedAt = s.clock.Now()
+		if err := saveItem(tx, tr.Item); err != nil {
+			return err
+		}
+		out = transitionEvent(id, "runner:"+runnerName, tr)
+		return s.event(tx, out)
+	})
+	if err != nil {
+		return out, err
+	}
+	out.At = s.clock.Now()
+	return out, nil
+}

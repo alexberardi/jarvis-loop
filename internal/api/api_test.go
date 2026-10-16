@@ -950,3 +950,39 @@ func TestQARoutes(t *testing.T) {
 	}
 	e.refused(userTok, "POST", fmt.Sprintf("/items/%d/verified", b), map[string]any{}, 409, "wrong_stage")
 }
+
+// QA after deploy: the land script's qa_after_deploy puts the item in qa awaiting a deploy; the
+// runners list it (awaiting_deploy=1) and one records deployed with its build's revision
+// (docs/decisions/2026-10-16-qa-after-deploy.md).
+func TestQAAfterDeployRoutes(t *testing.T) {
+	e := newEnv(t)
+	id := e.toLand("normal", []string{"M internal/x.go"})
+	e.mustClaim("lander", id, "land")
+	e.advance(id, "merged", map[string]string{"merge_sha": shaB, "head_sha": shaA, "qa_after_deploy": "true"}, 200)
+	awaiting := func() []int64 {
+		e.t.Helper()
+		var out struct{ Items []struct{ ID int64 } }
+		e.do(runnerTok, "GET", "/items?awaiting_deploy=1", nil, 200, &out)
+		var ids []int64
+		for _, it := range out.Items {
+			ids = append(ids, it.ID)
+		}
+		return ids
+	}
+	if ids := awaiting(); len(ids) != 1 || ids[0] != id {
+		t.Fatalf("awaiting deploy: %v", ids)
+	}
+	e.refused(runnerTok, "GET", "/items?awaiting_deploy=maybe", nil, 400, "invalid_field")
+	events := fmt.Sprintf("/items/%d/events", id)
+	ev := map[string]any{"kind": "deployed", "data": map[string]any{"revision": shaA}}
+	e.refused(userTok, "POST", events, ev, 403, "forbidden")
+	e.refused(runnerTok, "POST", events, map[string]any{"kind": "deployed", "data": map[string]any{}}, 400, "invalid_field")
+	e.do(otherTok, "POST", events, ev, 201, nil)
+	e.refused(runnerTok, "POST", events, ev, 409, "wrong_stage")
+	if d := e.get(id); d.Item.Stage != "qa" || d.Events[len(d.Events)-1].Kind != "deployed" {
+		t.Fatalf("after deployed: %s %+v", d.Item.Stage, d.Events[len(d.Events)-1])
+	}
+	if ids := awaiting(); len(ids) != 0 {
+		t.Fatalf("after deployed: %v", ids)
+	}
+}

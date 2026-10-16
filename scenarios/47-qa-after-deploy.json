@@ -1,0 +1,46 @@
+{
+  "name": "qa-after-deploy",
+  "about": "QA after deploy (docs/decisions/2026-10-16-qa-after-deploy.md): jarvis-loop has qa_after_deploy, so land sends it with merged and the item waits in qa awaiting a deploy. The thread says 'Merged; I'll ask for your check once it's deployed' with no buttons, and a reply is not taken. A runner on a build from before the merge reports nothing; restarted on a build that contains the merge, it reports deployed and the thread gets the usual ask with Verified and Reopen; Verified moves it to done. The mobile repo (qa: true) keeps today's ask at merge (scenario 33).",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "Loop change", "text": "jarvis-loop: make the digest shorter"},
+    {"do": "expect", "repo": {"a": "sandbox/jarvis-loop"}},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "qa"}, "pr": {"a": {"repo": "sandbox/jarvis-loop", "state": "MERGED", "merge_calls": 1}},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "merged", "data": {"needs_qa": "^true$", "qa_after_deploy": "^true$", "awaiting_deploy": "^true$"}, "count": 1}],
+     "messages": [{"thread": "a", "from": "bot", "text": "#[0-9]+: Merged; I'll ask for your check once it's deployed\\. <https://github.com/sandbox/jarvis-loop/pull/101\\|sandbox/jarvis-loop#101> merged as `[0-9a-f]{7}`; watching main's CI\\.\\nNothing to check until a loop build that contains it is running\\.", "buttons": []}]},
+    {"do": "reply", "item": "a", "as": "approver", "text": "looks fine"},
+    {"do": "expect", "stage": {"a": "qa"}, "messages": [{"thread": "a", "from": "bot", "text": "^Not taken: I'll ask for your check once it's deployed \\(or `/loop verified [0-9]+`, `/loop reopen [0-9]+ <what is wrong>`\\)\\.$"}]},
+    {"do": "deploy", "build": "base"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "qa"}, "no_events": [{"item": "a", "kind": "deployed"}],
+     "no_messages": [{"thread": "a", "text": "Deployed"}]},
+    {"do": "deploy", "build": "main"},
+    {"do": "expect", "stage": {"a": "qa"},
+     "events": [{"item": "a", "kind": "deployed", "actor": "runner", "data": {"revision": "^[0-9a-f]{40}$", "merge_sha": "^[0-9a-f]{40}$"}, "count": 1}],
+     "messages": [{"thread": "a", "from": "bot", "text": "#[0-9]+: Deployed — waiting for your check\\. <https://github.com/sandbox/jarvis-loop/pull/101\\|sandbox/jarvis-loop#101> \\(merged as `[0-9a-f]{7}`\\) is running in the build `[0-9a-f]{7}`\\.\\nPress Verified when it works", "buttons": ["Verified", "Reopen"]}]},
+    {"do": "runner", "claims": "none"},
+    {"do": "press", "item": "a", "button": "qa_verified", "as": "approver"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "events": [
+      {"item": "a", "kind": "deployed", "count": 1},
+      {"item": "a", "kind": "verified", "actor": "approver", "count": 1}
+    ],
+    "no_events": [
+      {"item": "a", "kind": "refused"}
+    ],
+    "messages": [
+      {"thread": "a", "from": "bot", "text": "^Verified by you\\. Done\\.$"}
+    ]
+  }
+}

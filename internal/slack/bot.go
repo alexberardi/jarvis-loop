@@ -468,6 +468,9 @@ func (b *Bot) describe(e store.Event, d store.Detail) (Message, bool) {
 	if e.Kind == "advanced" && pipeline.Outcome(e.Outcome) == pipeline.Merged && to == pipeline.QA {
 		return b.qaMessage(e, d), true
 	}
+	if e.Kind == "deployed" {
+		return b.deployedMessage(e, d), true
+	}
 
 	var text string
 	switch e.Kind {

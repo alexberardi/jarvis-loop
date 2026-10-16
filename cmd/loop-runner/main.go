@@ -77,7 +77,14 @@ func run(args []string) error {
 	if err := r.ProbeFence(); err != nil {
 		log.Error("fence unavailable: items with setup or verify steps will go to the user", "err", err)
 	}
-	log.Info("loop-runner", "name", cfg.Name, "mode", cfg.Mode, "slots", cfg.Slots, "stages", cfg.Stages, "work_root", cfg.WorkRoot, "dry_run", *dry)
+	// The commit this build contains: the qa items of a qa_after_deploy repo (the loop itself) whose
+	// merge it contains are reported deployed (docs/decisions/2026-10-16-qa-after-deploy.md).
+	rev, why := runner.BuildRevision()
+	r.Revision = rev
+	if rev == "" {
+		log.Warn("build revision unknown: no deployed reports for qa_after_deploy repos (use /loop verified)", "why", why)
+	}
+	log.Info("loop-runner", "revision", rev, "name", cfg.Name, "mode", cfg.Mode, "slots", cfg.Slots, "stages", cfg.Stages, "work_root", cfg.WorkRoot, "dry_run", *dry)
 	if *once {
 		claimed, err := r.ClaimAndRun(ctx)
 		if err == nil && !claimed {

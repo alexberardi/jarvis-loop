@@ -25,6 +25,7 @@ type Item struct {
 	PR          int      `json:"pr"`
 	Branch      string   `json:"branch"`
 	HeadSHA     string   `json:"head_sha"`
+	MergeSHA    string   `json:"merge_sha,omitempty"`
 	Summary     string   `json:"summary"`
 	// Approval is the user's approval of a held merge, for the head they saw (land reads it).
 	Approval *ItemApproval `json:"approval,omitempty"`

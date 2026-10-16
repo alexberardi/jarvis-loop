@@ -217,19 +217,21 @@ func TestDropDuringLandDoesNotMerge(t *testing.T) {
 // (docs/decisions/2026-10-15-qa.md). The review agent's needs_qa marks the item the same way.
 func TestLandQARepoAndReviewNeedsQA(t *testing.T) {
 	for _, c := range []struct {
-		name   string
-		repoQA bool
-		play   string
-		want   pipeline.Stage
+		name        string
+		repoQA      bool
+		afterDeploy bool
+		play        string
+		want        pipeline.Stage
 	}{
-		{"plain", false, fakeclaude.Approve, pipeline.Done},
-		{"repo qa", true, fakeclaude.Approve, pipeline.QA},
-		{"review needs qa", false, fakeclaude.ApproveQA, pipeline.QA},
+		{"plain", false, false, fakeclaude.Approve, pipeline.Done},
+		{"repo qa", true, false, fakeclaude.Approve, pipeline.QA},
+		{"repo qa after deploy", true, true, fakeclaude.Approve, pipeline.QA},
+		{"review needs qa", false, false, fakeclaude.ApproveQA, pipeline.QA},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			g := newRig(t, fakeclaude.Good)
 			rc := g.r.Cfg.Repos["demo"]
-			rc.QA = c.repoQA
+			rc.QA, rc.QAAfterDeploy = c.repoQA, c.afterDeploy
 			g.r.Cfg.Repos["demo"] = rc
 			id := g.toReview("Add a feature")
 			g.stages(StageReview)
@@ -255,6 +257,9 @@ func TestLandQARepoAndReviewNeedsQA(t *testing.T) {
 			}
 			if got := ev.Data["needs_qa"] == "true"; got != c.repoQA {
 				t.Fatalf("merged needs_qa field %v, want %v", ev.Data["needs_qa"], c.repoQA)
+			}
+			if got := ev.Data["qa_after_deploy"] == "true"; got != c.afterDeploy || d.Item.AwaitingDeploy != c.afterDeploy {
+				t.Fatalf("merged qa_after_deploy field %v, awaiting %v, want %v", ev.Data["qa_after_deploy"], d.Item.AwaitingDeploy, c.afterDeploy)
 			}
 		})
 	}
