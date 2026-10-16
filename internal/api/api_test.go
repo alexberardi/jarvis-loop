@@ -275,6 +275,7 @@ func TestBadRequests(t *testing.T) {
 	e := newEnv(t)
 	e.refused(userTok, "POST", "/items", map[string]any{"title": ""}, 400, "missing_field")
 	e.refused(userTok, "POST", "/items", map[string]any{"title": "x", "priority": "P0"}, 400, "invalid_field")
+	e.refused(userTok, "POST", "/items", map[string]any{"title": strings.Repeat("a", pipeline.MaxTitleRunes+1)}, 400, "invalid_field")
 	e.refused(userTok, "POST", "/items", map[string]any{"title": "x", "bogus": 1}, 400, "bad_request")
 	e.refused(userTok, "GET", "/items/abc", nil, 400, "bad_request")
 	e.refused(userTok, "GET", "/items/42", nil, 404, "not_found")

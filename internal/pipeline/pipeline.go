@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Stage is where an item is in the pipeline.
@@ -117,6 +118,9 @@ const (
 	CodeSameAgent        = "same_agent"
 )
 
+// MaxTitleRunes is the longest item title, in characters.
+const MaxTitleRunes = 120
+
 // Error is a refused transition.
 type Error struct {
 	Code    string
@@ -195,6 +199,9 @@ func NewItem(title, ask, repo, priority, source string, now time.Time) (Item, er
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return Item{}, errf(CodeMissingField, "title is required")
+	}
+	if utf8.RuneCountInString(title) > MaxTitleRunes {
+		return Item{}, errf(CodeInvalidField, "title is at most %d characters", MaxTitleRunes)
 	}
 	if source == "" {
 		source = "user"
@@ -770,6 +777,9 @@ func ApplyPatch(it Item, priority, title *string) (Transition, error) {
 		t := strings.TrimSpace(*title)
 		if t == "" {
 			return Transition{}, errf(CodeInvalidField, "title cannot be empty")
+		}
+		if utf8.RuneCountInString(t) > MaxTitleRunes {
+			return Transition{}, errf(CodeInvalidField, "title is at most %d characters", MaxTitleRunes)
 		}
 		data["title"] = map[string]string{"from": it.Title, "to": t}
 		it.Title = t

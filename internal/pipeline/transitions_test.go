@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 var t0 = time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
@@ -526,6 +527,11 @@ func TestApplyPatch(t *testing.T) {
 	wantCode(t, err, CodeInvalidField)
 	_, err = ApplyPatch(item(Build), nil, &empty)
 	wantCode(t, err, CodeInvalidField)
+	long120, long121 := strings.Repeat("a", MaxTitleRunes), strings.Repeat("a", MaxTitleRunes+1)
+	_, err = ApplyPatch(item(Build), nil, &long120)
+	wantCode(t, err, "")
+	_, err = ApplyPatch(item(Build), nil, &long121)
+	wantCode(t, err, CodeInvalidField)
 	_, err = ApplyPatch(item(Build), nil, nil)
 	wantCode(t, err, CodeMissingField)
 	for _, s := range []Stage{Done, Closed} {
@@ -598,6 +604,28 @@ func TestNewItemDefaults(t *testing.T) {
 	}
 	_, err := NewItem(" ", "", "", "", "", t0)
 	wantCode(t, err, CodeMissingField)
+}
+
+func TestNewItemTitleLength(t *testing.T) {
+	ok, err := NewItem(strings.Repeat("a", MaxTitleRunes), "", "", "", "", t0)
+	wantCode(t, err, "")
+	if utf8.RuneCountInString(ok.Title) != MaxTitleRunes {
+		t.Fatalf("title: %q", ok.Title)
+	}
+	_, err = NewItem(strings.Repeat("a", MaxTitleRunes+1), "", "", "", "", t0)
+	wantCode(t, err, CodeInvalidField)
+	// 120 multi-byte characters: runes, not bytes.
+	ok, err = NewItem(strings.Repeat("é", MaxTitleRunes), "", "", "", "", t0)
+	wantCode(t, err, "")
+	if utf8.RuneCountInString(ok.Title) != MaxTitleRunes {
+		t.Fatalf("title: %q", ok.Title)
+	}
+	// Leading and trailing spaces are trimmed and do not count.
+	ok, err = NewItem("  "+strings.Repeat("a", MaxTitleRunes)+"  ", "", "", "", "", t0)
+	wantCode(t, err, "")
+	if ok.Title != strings.Repeat("a", MaxTitleRunes) {
+		t.Fatalf("title: %q", ok.Title)
+	}
 }
 
 func TestControlValidate(t *testing.T) {
