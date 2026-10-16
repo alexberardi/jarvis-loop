@@ -300,6 +300,35 @@ func (r *Runner) prepareReview(ctx context.Context, ru *run, info *RunInfo) erro
 	return nil
 }
 
+// heldNotes writes to rel why a held item came back to build (pipeline.ApplyRebuild): the user's
+// reply in the held thread, or the conflict the runner found, since the build's last PR update.
+func (r *Runner) heldNotes(ctx context.Context, ru *run, info *RunInfo, rel string) {
+	d, err := r.Client.Detail(ctx, ru.item.ID)
+	if err != nil {
+		info.ContextErrs = append(info.ContextErrs, "the held notes from loopd: "+err.Error())
+		return
+	}
+	var notes []string
+	for _, e := range d.Events {
+		switch {
+		case e.Outcome == "pr_opened":
+			notes = nil // addressed by that build
+		case e.Kind == "rebuild":
+			by := "the user"
+			if strings.HasPrefix(e.Actor, "runner:") {
+				by = "the runner (land's held watch)"
+			}
+			n, _ := e.Data["notes"].(string)
+			notes = append(notes, fmt.Sprintf("\n## Sent back by %s (%s)\n\n%s\n", by, e.At.UTC().Format("2006-01-02 15:04 UTC"), strings.TrimSpace(n)))
+		}
+	}
+	if len(notes) == 0 {
+		return
+	}
+	writeContext(ru, info, rel, "why the held PR came back to build, newest last", "# Sent back from held (from loopd)\n"+strings.Join(notes, ""))
+	info.HeldNotes = rel
+}
+
 // reviewContext writes the review notes loopd recorded on the item's bounces to notesRel, and the
 // PR's comments (fetched by the runner, which holds the GitHub credentials) to commentsRel when
 // it is set.

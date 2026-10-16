@@ -72,8 +72,9 @@ type Step struct {
 	Checks map[string]string `json:"checks,omitempty"`
 	Main   map[string]string `json:"main,omitempty"`
 	// push: a commit by someone else to the item's branch, or to Branch ("main") of the demo
-	// repo, changing File to Text
+	// repo (or of Slug), changing File to Text
 	Branch string `json:"branch,omitempty"`
+	Slug   string `json:"slug,omitempty"`
 	// github: GitHub refuses the next RefuseMerges merges; MergeByHand merges the item's PR
 	// outside the loop, CloseByHand closes it
 	RefuseMerges *int `json:"refuse_merges,omitempty"`
@@ -551,6 +552,9 @@ func (p *player) step(st Step) error {
 			return errors.New("push needs file (and text)")
 		}
 		slug, branch := RepoSlug, st.Branch
+		if st.Slug != "" {
+			slug = st.Slug
+		}
 		if st.Item != "" {
 			r, err := p.ref(st.Item)
 			if err != nil {

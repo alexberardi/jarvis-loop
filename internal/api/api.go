@@ -59,6 +59,7 @@ func New(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
 	route("POST /items/{id}/answer", user, s.answer)
 	route("POST /items/{id}/approve", user, s.approve)
 	route("POST /items/{id}/hold", user, s.hold)
+	route("POST /items/{id}/rebuild", both, s.rebuild)
 	route("POST /items/{id}/drop", user, s.drop)
 	route("POST /items/{id}/qa", user, s.setQA)
 	route("POST /items/{id}/verified", user, s.verified)
@@ -608,6 +609,28 @@ func (s *server) hold(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, err := s.st.Hold(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Words)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// rebuild sends a held item back to build with notes (store.Rebuild): the user's reply that is
+// not an approval, or a runner finding the held PR conflicting. It holds no lease: only a held
+// item moves, and only to build.
+func (s *server) rebuild(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Notes string `json:"notes"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.Rebuild(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Notes)
 	if err != nil {
 		s.fail(w, err)
 		return

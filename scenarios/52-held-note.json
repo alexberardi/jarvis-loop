@@ -1,0 +1,40 @@
+{
+  "name": "held-note",
+  "about": "A reply in a held thread that is not an approval or a question is the user's note for the builder: \"rebuild, and fix the typo\" sends the item back to build on the same PR, the next build's brief points at the note in .loop/review/held.md, and a question still leaves the item held.",
+  "steps": [
+    {"do": "add", "item": "a", "title": "Rotate the session signing key"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "good", "file": "internal/modules/auth/keys.go"},
+    {"do": "runner", "claims": "a"},
+    {"do": "wait", "stage": {"a": "review"}, "within": "30s"},
+    {"do": "review", "item": "a"},
+    {"do": "land", "item": "a", "outcome": "hold", "reason": "auth path"},
+    {"do": "wait", "stage": {"a": "held"}, "messages": [{"thread": "a", "text": "is held for your approval"}]},
+    {"do": "reply", "item": "a", "as": "approver", "text": "did you keep the old key?"},
+    {"do": "expect", "stage": {"a": "held"}, "messages": [{"thread": "a", "from": "bot",
+      "text": "^Not taken as an approval; the item stays held\\. Reply 'approve' or use the button, or say what to change to send it back to build\\.$"}]},
+    {"do": "reply", "item": "a", "as": "other", "text": "rebuild it"},
+    {"do": "expect", "stage": {"a": "held"}, "no_events": [{"item": "a", "kind": "rebuild"}]},
+    {"do": "reply", "item": "a", "as": "approver", "text": "rebuild, and fix the typo in the key name"},
+    {"do": "wait", "stage": {"a": "build"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review"},
+    "events": [
+      {"item": "a", "kind": "rebuild", "actor": "approver", "data": {"notes": "^rebuild, and fix the typo in the key name$"}, "count": 1}
+    ],
+    "no_events": [{"item": "a", "kind": "approved"}],
+    "messages": [
+      {"thread": "a", "from": "approver", "text": "^rebuild, and fix the typo in the key name$"},
+      {"thread": "a", "from": "bot", "text": "^Sent back to build by you: 'rebuild, and fix the typo in the key name'\\.$"},
+      {"thread": "a", "text": "^Claimed for build\\.$"},
+      {"thread": "a", "text": "updated, head `[0-9a-f]{7}` → review\\."}
+    ],
+    "prs": 1,
+    "agent_runs": {"build": 2},
+    "run_files": [{"item": "a", "stage": "build", "file": "brief.md",
+      "text": "- Sent back from held; PR #[0-9]+ is open on this branch\\. Do what `\\.loop/review/held\\.md` asks"}]
+  }
+}

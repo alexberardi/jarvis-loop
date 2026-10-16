@@ -654,6 +654,14 @@ func (s *Store) Hold(ctx context.Context, actor string, id int64, words string) 
 	})
 }
 
+// Rebuild sends a held item back to build with notes for the builder (the user's, or a runner's
+// on a held PR that turned conflicting).
+func (s *Store) Rebuild(ctx context.Context, actor string, id int64, notes string) (pipeline.Item, error) {
+	return s.human(ctx, actor, id, "rebuild", func(it pipeline.Item) (pipeline.Transition, error) {
+		return pipeline.ApplyRebuild(it, notes)
+	})
+}
+
 func (s *Store) human(ctx context.Context, actor string, id int64, action string, rule func(pipeline.Item) (pipeline.Transition, error)) (pipeline.Item, error) {
 	var out pipeline.Item
 	err := s.tx(ctx, func(tx *sql.Tx) error {

@@ -25,7 +25,7 @@ Work moves one stage at a time and cannot skip one; only the two gates wait on t
 | Review | a different agent from the builder | it re-ran the evidence and reviewed the code: approve, or bounce to build with notes (after 2 bounces → needs-you) | 2 at a time |
 | Land | a script | merged with `main` green, or held; red CI goes back to build as a counted bounce, and a rebuild that leaves the red head unchanged goes to needs-you ([decision](decisions/2026-10-15-ci-red-unchanged-head.md)) | 1 at a time |
 | Needs-you | the user, in the item's thread | answered; it returns to the stage that asked | none |
-| Held | the user, button or reply | approved (merge, then done) or kept holding | none |
+| Held | the user, button or reply | approved (merge, then done), kept holding, or sent back to build: by the user's reply that is not an approval (a note for the builder), or on its own when the held PR turns conflicting ([decision](decisions/2026-10-16-held-back-to-build.md)) | none |
 | QA | the user, after merge (opt-in) | **Verified** → done, or **Reopen** with words → done, and a new P2 item with those words. Only items marked needs_qa (by triage, review, `/loop qa <id>` before land, or the repo's `qa: true`) come here instead of done; nothing claims it ([decision](decisions/2026-10-15-qa.md)). For the loop's own repo (`qa_after_deploy: true`) the check is asked for once a runner built from a commit containing the merge reports `deployed` ([decision](decisions/2026-10-16-qa-after-deploy.md)) | none |
 
 ## Priority
@@ -83,7 +83,7 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | `POST /items/{id}/advance` | finish a stage with its result and evidence; the server checks the exit criteria and picks the next stage |
 | `POST /items/{id}/evidence` | upload a file |
 | `POST /items/{id}/ask`, `/answer` | put an item in needs-you with a question; record the answer |
-| `POST /items/{id}/approve`, `/hold` | the decision on a held merge |
+| `POST /items/{id}/approve`, `/hold`, `/rebuild` | the decision on a held merge; `/rebuild` (the user, or a runner for a held PR that turned conflicting) sends it back to build with notes |
 | `POST /items/{id}/drop` | the user closes an item they won't land, from any open stage; the runner then closes its PR |
 | `POST /items/{id}/qa`, `/verified`, `/reopen` | the QA lane: mark an item for the user's check before it lands; the check passed (qa → done) or failed (qa → done, and a new P2 item with the words) |
 | `GET`, `PUT /control` | the active-agents number, stop and resume |
@@ -186,7 +186,7 @@ The script then:
 **Hold list (it stays):** jarvis-server's `CLAUDE.md` also holds PRs that change auth or access, update signing or the helper, or prod, that weaken a test or CI check, or that are marked "needs review". They still need the three gates, and then the user's approval, by button or in plain words in the item's thread ("yea, removing that old test is fine"):
 
 - Only the user's member ID (`U0C9AFPAMD4`), in that item's own thread, counts.
-- The bot decides whether the reply approves; anything unclear is a question, answered in the thread while the item stays held.
+- The bot decides whether the reply approves; anything unclear is a question, answered in the thread while the item stays held. *Since 2026-10-16:* a reply that is neither an approval nor a question, a "wait" or a "no" ("rebuild", "rebase and fix X") is a note for the builder: the item goes back to build with it, on the same PR.
 - It posts what it understood ("Approved by you: '…', merging #142") with a **Cancel** button, and merges after 2 minutes.
 - An approval is for the PR's head commit when given; new commits after it expire it, and the bot asks again.
 - The item's history records who, the words, and the commit.

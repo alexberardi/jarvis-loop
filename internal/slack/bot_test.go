@@ -588,10 +588,10 @@ func TestKeepHoldingCancelsAPendingReplyApproval(t *testing.T) {
 func TestNonApprovalReplies(t *testing.T) {
 	e, id, ts := heldSetup(t)
 	e.calls()
-	for _, r := range []string{"looks fine?", "don't merge yet", "ok wait", "no"} {
+	for _, r := range []string{"looks fine?", "don't merge yet", "ok wait", "no", "is the test still there", "hold on", "looks good", "let me check"} {
 		e.reply(Approver, ts, r)
 		cs := only(t, e.calls(), "chat.postMessage")
-		if len(cs) != 1 || !strings.Contains(allText(cs[0]), "Not taken as an approval; the item stays held. Reply 'approve' or use the button.") {
+		if len(cs) != 1 || !strings.Contains(allText(cs[0]), "Not taken as an approval; the item stays held. Reply 'approve' or use the button, or say what to change to send it back to build.") {
 			t.Fatalf("%q: %+v", r, cs)
 		}
 	}
@@ -604,6 +604,83 @@ func TestNonApprovalReplies(t *testing.T) {
 	e.b.Tick(e.ctx)
 	if d := e.item(id); d.Item.Stage != pipeline.Held || lastEvent(d).Kind != "refused" {
 		t.Fatalf("stage %s, last %s", d.Item.Stage, lastEvent(d).Kind)
+	}
+}
+
+// A reply that is neither an approval nor a question or a "wait" is the user's note for the
+// builder: the item goes back to build with it, the PR and the hold kept.
+func TestHeldReplySendsBackToBuild(t *testing.T) {
+	e, id, ts := heldSetup(t)
+	e.calls()
+	e.reply(other, ts, "rebuild it")
+	if d := e.item(id); d.Item.Stage != pipeline.Held || lastEvent(d).Kind != "refused" {
+		t.Fatalf("someone else sent it back: %s", d.Item.Stage)
+	}
+	e.calls()
+	e.reply(Approver, ts, "rebase and fix the typo in the heading")
+	d := e.item(id)
+	ev := lastEvent(d)
+	if d.Item.Stage != pipeline.Build || d.Item.PR != 142 || ev.Kind != "rebuild" || ev.Actor != "slack:"+Approver ||
+		ev.Data["notes"] != "rebase and fix the typo in the heading" {
+		t.Fatalf("stage %s, last %+v", d.Item.Stage, ev)
+	}
+	cs := only(t, e.calls(), "chat.postMessage")
+	if len(cs) != 1 || cs[0].Body["text"] != "Sent back to build by you: 'rebase and fix the typo in the heading'." || cs[0].Body["thread_ts"] != ts {
+		t.Fatalf("posts %+v", cs)
+	}
+}
+
+// A change request wins over consent words: "merge it after adding a test" and "ok, rebuild" go
+// back to build with the reply as the notes, and no approval starts; "merge it please" and "lgtm"
+// still start one.
+func TestHeldChangeRequestBeatsConsent(t *testing.T) {
+	for _, r := range []string{"merge it after adding a test", "ok, rebuild", "okay fix the typo", "yes, but rebase first", "sure, use the store's clock"} {
+		e, id, ts := heldSetup(t)
+		e.calls()
+		e.reply(Approver, ts, r)
+		d := e.item(id)
+		if ev := lastEvent(d); d.Item.Stage != pipeline.Build || ev.Kind != "rebuild" || ev.Data["notes"] != r {
+			t.Fatalf("%q: stage %s, last %+v", r, d.Item.Stage, ev)
+		}
+		for _, c := range only(t, e.calls(), "chat.postMessage") {
+			if strings.Contains(allText(c), "Approved by you") {
+				t.Fatalf("%q: approval echo %+v", r, c)
+			}
+		}
+		e.clk.Advance(time.Hour)
+		e.b.Tick(e.ctx)
+		if d := e.item(id); d.Item.Stage != pipeline.Build || d.Item.Approval != nil {
+			t.Fatalf("%q: stage %s approval %+v", r, d.Item.Stage, d.Item.Approval)
+		}
+	}
+	for _, r := range []string{"merge it please", "lgtm", "merge it", "ship it", "approve"} {
+		e, id, ts := heldSetup(t)
+		e.calls()
+		e.reply(Approver, ts, r)
+		var echo bool
+		for _, c := range only(t, e.calls(), "chat.postMessage") {
+			if strings.Contains(allText(c), "Approved by you") {
+				echo = true
+			}
+		}
+		if !echo {
+			t.Fatalf("%q: no approval echo", r)
+		}
+		if d := e.item(id); d.Item.Stage != pipeline.Held {
+			t.Fatalf("%q: stage %s", r, d.Item.Stage)
+		}
+	}
+}
+
+// A pending reply approval is cancelled when a note sends the item back to build.
+func TestHeldNoteCancelsPendingApproval(t *testing.T) {
+	e, id, ts := heldSetup(t)
+	e.reply(Approver, ts, "lgtm")
+	e.reply(Approver, ts, "actually, rebuild with the new name")
+	e.clk.Advance(3 * time.Minute)
+	e.b.Tick(e.ctx)
+	if d := e.item(id); d.Item.Stage != pipeline.Build || d.Item.Approval != nil {
+		t.Fatalf("stage %s approval %+v", d.Item.Stage, d.Item.Approval)
 	}
 }
 

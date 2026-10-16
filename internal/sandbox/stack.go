@@ -487,9 +487,13 @@ func (s *Stack) Poll(timeout time.Duration) (Claimed, error) {
 	go func() {
 		defer close(ended)
 		defer s.runEnded(run)
-		// As Run does each poll: close the PRs of dropped items, report the deploys, then claim.
+		// As Run does each poll: close the PRs of dropped items, report the deploys, check the held
+		// PRs, then claim.
 		if err := s.Runner.CloseDropped(s.ctx); err != nil {
 			s.log.Warn("close dropped PRs", "err", err)
+		}
+		if err := s.Runner.CheckHeld(s.ctx); err != nil {
+			s.log.Warn("check held PRs", "err", err)
 		}
 		if err := s.Runner.ReportDeployed(s.ctx); err != nil {
 			s.log.Warn("report deployed", "err", err)

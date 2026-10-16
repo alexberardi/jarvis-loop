@@ -111,6 +111,13 @@ func (r *Runner) Run(ctx context.Context) error {
 		}()
 	}
 	agent, land := r.Lanes()
+	if r.Land != nil && land != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.heldWatchLoop(ctx)
+		}()
+	}
 	lane := func(stages []string) {
 		wg.Add(1)
 		go func() {
@@ -508,7 +515,8 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 }
 
 // prepareBuild makes the item's worktree on its branch (continuing an earlier run's commits),
-// with triage's notes and, after a bounce, the review's in .loop/review/.
+// with triage's notes and, after a bounce, the review's in .loop/review/ (and, after a held item
+// came back, why).
 func (r *Runner) prepareBuild(ctx context.Context, ru *run, info *RunInfo) error {
 	unlock := r.lockMirror(ru.mirror)
 	err := r.Git.EnsureMirror(ctx, ru.mirror, ru.repo)
@@ -530,6 +538,9 @@ func (r *Runner) prepareBuild(ctx context.Context, ru *run, info *RunInfo) error
 	}
 	if ru.item.BounceCount > 0 {
 		r.reviewContext(ctx, ru, info, filepath.Join(".loop", "review", "notes.md"), filepath.Join(".loop", "review", "pr-comments.md"))
+	}
+	if ru.item.PR > 0 {
+		r.heldNotes(ctx, ru, info, filepath.Join(".loop", "review", "held.md"))
 	}
 	return nil
 }

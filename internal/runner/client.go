@@ -313,6 +313,21 @@ func (c *Client) AwaitingDeploy(ctx context.Context) ([]BoardRow, error) {
 	return out.Items, err
 }
 
+// Held lists the held items (GET /items?stage=held).
+func (c *Client) Held(ctx context.Context) ([]BoardRow, error) {
+	var out struct {
+		Items []BoardRow `json:"items"`
+	}
+	_, err := c.json(ctx, "GET", "/items?stage=held", nil, &out)
+	return out.Items, err
+}
+
+// Rebuild sends a held item back to build with notes for the builder (POST /items/{id}/rebuild).
+func (c *Client) Rebuild(ctx context.Context, id int64, notes string) error {
+	_, err := c.json(ctx, "POST", fmt.Sprintf("/items/%d/rebuild", id), map[string]string{"notes": notes}, nil)
+	return err
+}
+
 // DownloadEvidence saves evidence file n of an item to dst (at most MaxEvidenceBytes).
 func (c *Client) DownloadEvidence(ctx context.Context, id int64, n int, dst string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(c.Base, "/")+fmt.Sprintf("/items/%d/evidence/%d", id, n), nil)
