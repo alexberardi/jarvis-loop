@@ -26,6 +26,8 @@ type Item struct {
 	Branch      string   `json:"branch"`
 	HeadSHA     string   `json:"head_sha"`
 	Summary     string   `json:"summary"`
+	// Source is who filed it (finding: the loop itself, as a red main's P1).
+	Source string `json:"source"`
 	// Approval is the user's approval of a held merge, for the head they saw (land reads it).
 	Approval *ItemApproval `json:"approval,omitempty"`
 }
@@ -75,6 +77,9 @@ type RunInfo struct {
 	Context []TriageFile
 	// ContextErrs say what the runner could not fetch (the agent is told; the run goes on).
 	ContextErrs []string
+	// CILog is the failing CI log the runner fetched (triage of a red main's P1; build after land
+	// sent the item back for red CI), relative to the working directory.
+	CILog *TriageFile
 	// PR and HeadSHA are the PR a review run reviews, at that commit.
 	PR      int
 	HeadSHA string
@@ -246,6 +251,10 @@ func Brief(stage string, it Item, r RunInfo) string {
 		if r.TriageErr != "" {
 			fmt.Fprintf(&b, "- The item's triage evidence could not be copied (%s).\n", clip(r.TriageErr, 200))
 		}
+	}
+	if r.CILog != nil {
+		fmt.Fprintf(&b, "- **CI failed; the runner fetched its log**: `%s` (%s): the failing tests, then the lines around each failure (or each job's tail), from GitHub Actions. You cannot open the CI run yourself, and the user cannot reproduce it for you. A test that passes locally but fails in CI is usually a race or a timing assumption that a slower machine exposes: look for the race in the code (in Go, `go test -race -count=20 -run <test>`), don't ask the user.\n",
+			r.CILog.Name, strings.Join(strings.Fields(r.CILog.Label), " "))
 	}
 	if len(r.Context) > 0 {
 		b.WriteString("- Context from the runner (read these):")

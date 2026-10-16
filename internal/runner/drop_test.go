@@ -141,6 +141,11 @@ type fakeLand struct {
 	pr     LandPR
 	views  int
 	merges []string
+	// runs are the Actions runs on any commit; logs the failed logs by run id, and logCalls the
+	// run ids asked for.
+	runs     []WorkflowRun
+	logs     map[int64]string
+	logCalls []int64
 }
 
 func (f *fakeLand) LandView(_ context.Context, slug string, pr int) (LandPR, error) {
@@ -159,7 +164,20 @@ func (f *fakeLand) Merge(_ context.Context, slug string, pr int, head string) er
 }
 
 func (f *fakeLand) CommitRuns(context.Context, string, string) ([]WorkflowRun, error) {
-	return nil, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.runs, nil
+}
+
+func (f *fakeLand) FailedLog(_ context.Context, _ string, id int64) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.logCalls = append(f.logCalls, id)
+	l, ok := f.logs[id]
+	if !ok {
+		return "", fmt.Errorf("run %d not found", id)
+	}
+	return l, nil
 }
 
 func (f *fakeLand) setChecks(bucket string) {

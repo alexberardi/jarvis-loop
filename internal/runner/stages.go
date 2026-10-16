@@ -34,6 +34,47 @@ func writeContext(ru *run, info *RunInfo, rel, label, content string) {
 	info.Context = append(info.Context, TriageFile{Name: rel, Label: label})
 }
 
+// mainRedLog gives triage of a red main's P1 the failing CI log, as .loop/context/ci-failure.log:
+// the one already attached to the item, or (first triage) fetched from GitHub and attached now,
+// under triage's lease (the runner held none on the P1 when it filed it).
+func (r *Runner) mainRedLog(ctx context.Context, ru *run, info *RunInfo, sha string) {
+	rel := filepath.Join(".loop", "context", CIFailureLog)
+	dst := filepath.Join(ru.wt, rel)
+	fail := func(err error) { info.ContextErrs = append(info.ContextErrs, "the failing CI log: "+err.Error()) }
+	evs, err := r.Client.Evidence(ctx, ru.item.ID)
+	if err != nil {
+		fail(err)
+		return
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		if e := evs[i]; e.Name == CIFailureLog {
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				fail(err)
+			} else if err := r.Client.DownloadEvidence(ctx, ru.item.ID, e.N, dst); err != nil {
+				fail(err)
+			} else {
+				info.CILog = &TriageFile{Name: rel, Label: e.Label}
+			}
+			return
+		}
+	}
+	if r.Land == nil {
+		fail(fmt.Errorf("the runner has no GitHub client"))
+		return
+	}
+	runs, err := r.Land.CommitRuns(ctx, ru.repo.Slug, sha)
+	if err != nil {
+		fail(err)
+		return
+	}
+	label, err := r.attachCIFailure(ctx, ru.item.ID, ru.repo.Slug, sha, failedRuns(runs), dst)
+	if err != nil {
+		fail(err)
+		return
+	}
+	info.CILog = &TriageFile{Name: rel, Label: label}
+}
+
 // RecentTitlesForRouting is how many recently merged PR titles per repo a routing run sees, and
 // RoutingFetchTimeout how long the runner waits for them (all repos at once) before it notes the
 // ones it could not get.
@@ -71,6 +112,10 @@ func (r *Runner) prepareTriage(ctx context.Context, ru *run, info *RunInfo) erro
 		ru.checkouts = append(ru.checkouts, c)
 		info.Checkouts = append(info.Checkouts, c)
 		ru.repoDir = filepath.Join(ru.wt, dir)
+	}
+
+	if sha := MainRedCommit(ru.item, ru.repo.Slug); sha != "" && ru.repoKey != "" {
+		r.mainRedLog(ctx, ru, info, sha)
 	}
 
 	all := make([]string, 0, len(r.Cfg.Repos))
