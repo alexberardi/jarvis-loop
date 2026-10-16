@@ -67,6 +67,44 @@ func TestClassifyReply(t *testing.T) {
 	}
 }
 
+// A held reply that is not an approval is a note for the builder unless it asks, waits or says
+// nothing to do.
+func TestIsHeldNote(t *testing.T) {
+	cases := []struct {
+		reply string
+		note  bool
+	}{
+		{"rebuild", true},
+		{"rebase and fix the typo in the heading", true},
+		{"Rebuild, and fix the typo", true},
+		{"<@U0BOT> rename the flag to --dry", true},
+		{"fine-tune it first", true},
+		{"merge it after adding a test for the empty case", true},
+		// Stays held.
+		{"", false},
+		{"looks fine?", false},
+		{"is the test still there", false},
+		{"what does this change", false},
+		{"don't merge yet", false},
+		{"don’t merge yet", false},
+		{"ok wait", false},
+		{"no", false},
+		{"not yet", false},
+		{"hold off", false},
+		{"stop", false},
+		{"fix it but don't touch the store", false}, // a negation anywhere: the safe side
+		{"thanks", false},
+		{"Thank you!", false},
+		{"merge", false},
+		{"merge it please", false},
+	}
+	for _, c := range cases {
+		if got := IsHeldNote(c.reply); got != c.note {
+			t.Errorf("IsHeldNote(%q) = %v, want %v", c.reply, got, c.note)
+		}
+	}
+}
+
 func TestParsePriority(t *testing.T) {
 	cases := []struct {
 		text, priority, title string

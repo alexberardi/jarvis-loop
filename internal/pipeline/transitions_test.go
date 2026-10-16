@@ -513,6 +513,33 @@ func TestHumanTransitions(t *testing.T) {
 		_, err := ApplyHold(item(Review), "")
 		wantCode(t, err, CodeWrongStage)
 	})
+	t.Run("rebuild sends a held item to build with the notes, no bounce", func(t *testing.T) {
+		it := item(Held)
+		it.PR, it.Branch, it.Risk, it.HoldReason = 12, "loop/7-t", RiskHold, "land: on the hold list"
+		it.Approval = &Approval{By: "alex", HeadSHA: sha1}
+		tr, err := ApplyRebuild(it, " rebase and fix the typo ")
+		wantCode(t, err, "")
+		got := tr.Item
+		if tr.From != Held || tr.To != Build || tr.Kind != "rebuild" || got.Stage != Build || got.BounceCount != 0 || got.Approval != nil {
+			t.Fatalf("rebuild: %+v", tr)
+		}
+		if got.PR != 12 || got.Branch != "loop/7-t" || got.Risk != RiskHold || got.HoldReason != "land: on the hold list" {
+			t.Fatalf("rebuild lost the PR or the hold: %+v", got)
+		}
+		if tr.Data["notes"] != "rebase and fix the typo" || tr.Data["approval_voided"] != true {
+			t.Fatalf("data %+v", tr.Data)
+		}
+	})
+	t.Run("rebuild needs notes", func(t *testing.T) {
+		_, err := ApplyRebuild(item(Held), " ")
+		wantCode(t, err, CodeMissingField)
+	})
+	t.Run("rebuild outside held", func(t *testing.T) {
+		for _, s := range []Stage{Land, Review, Build, NeedsYou, QA, Done, Closed} {
+			_, err := ApplyRebuild(item(s), "rebuild")
+			wantCode(t, err, CodeWrongStage)
+		}
+	})
 }
 
 func TestApplyPatch(t *testing.T) {

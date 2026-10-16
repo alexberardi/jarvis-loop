@@ -76,6 +76,8 @@ type RunInfo struct {
 	// Context are the files the runner wrote for the agent (paths relative to the working
 	// directory: .loop/context/..., .loop/review/...), with what each holds.
 	Context []TriageFile
+	// HeldNotes is the file saying why a held item came back to build ("" when it did not).
+	HeldNotes string
 	// ContextErrs say what the runner could not fetch (the agent is told; the run goes on).
 	ContextErrs []string
 	// CILog is the failing CI log the runner fetched (triage of a red main's P1; build after land
@@ -231,6 +233,9 @@ func Brief(stage string, it Item, r RunInfo) string {
 			fmt.Fprintf(&b, "- Sent back %d time(s) (by review, or by the runner's verify); PR #%d is open on this branch. Fix every point in `.loop/review/` on the same branch; the runner updates that PR.\n", it.BounceCount, it.PR)
 		case it.BounceCount > 0:
 			fmt.Fprintf(&b, "- Sent back %d time(s) by the runner's verify (nothing was pushed). Fix what `.loop/review/verify.md` shows on the same branch.\n", it.BounceCount)
+		}
+		if r.HeldNotes != "" {
+			fmt.Fprintf(&b, "- Sent back from held; PR #%d is open on this branch. Do what `%s` asks (the user's note, or a conflict with `%s`) on the same branch; the runner updates that PR, and the user approves the new head.\n", it.PR, r.HeldNotes, r.Base)
 		}
 		if len(r.Verify) > 0 {
 			b.WriteString("- After you return `ready_for_pr`, the runner runs this repo's verify steps itself (outside your sandbox), before it pushes:")

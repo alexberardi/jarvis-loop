@@ -696,6 +696,26 @@ func ApplyHold(it Item, words string) (Transition, error) {
 	return Transition{Item: it, From: Held, To: Held, Kind: "held", Data: map[string]any{"words": words}}, nil
 }
 
+// ApplyRebuild sends a held item back to build with notes for the builder: the user's reply in
+// the held thread that is not an approval, or the runner finding the held PR conflicting. The PR,
+// branch and hold stay; an approval is voided (the build makes a new head). It is not a bounce.
+func ApplyRebuild(it Item, notes string) (Transition, error) {
+	if it.Stage != Held {
+		return Transition{}, errf(CodeWrongStage, "item is %s, not held", it.Stage)
+	}
+	notes = strings.TrimSpace(notes)
+	if notes == "" {
+		return Transition{}, errf(CodeMissingField, "notes are required: they tell the builder what to do")
+	}
+	data := map[string]any{"notes": notes}
+	if it.Approval != nil {
+		it.Approval = nil
+		data["approval_voided"] = true
+	}
+	it.Stage = Build
+	return Transition{Item: it, From: Held, To: Build, Kind: "rebuild", Data: data}, nil
+}
+
 // DropReason is the reason a dropped item's event records.
 const DropReason = "dropped by the user"
 

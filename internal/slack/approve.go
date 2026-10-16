@@ -29,7 +29,9 @@ var (
 	approvalWords   = []string{"approve", "approved", "lgtm", "fine", "ok", "okay", "yes", "yep", "yea", "yeah", "sure"}
 	approvalPhrases = [][]string{{"ship", "it"}, {"go", "ahead"}, {"merge", "it"}, {"do", "it"}}
 	negationWords   = []string{"not", "don't", "dont", "no", "nope", "nah", "never", "wait", "hold", "holding", "stop", "cancel"}
-	questionStarts  = []string{"is", "are", "can", "could", "should", "would", "will", "does", "did", "why", "what", "how", "when", "where", "who", "which", "shall"}
+	// fillerWords alone say nothing for the builder to do ("thanks", "merge it please").
+	fillerWords    = []string{"thanks", "thank", "you", "thx", "ty", "cool", "nice", "great", "merge", "it", "please", "pls", "the", "pr", "this"}
+	questionStarts = []string{"is", "are", "can", "could", "should", "would", "will", "does", "did", "why", "what", "how", "when", "where", "who", "which", "shall"}
 )
 
 // ClassifyReply decides whether a reply in a held item's thread approves the merge. It is
@@ -60,6 +62,30 @@ func ClassifyReply(text string) bool {
 		}
 	}
 	return consent
+}
+
+// IsHeldNote decides whether a reply in a held item's thread that is not an approval is the
+// user's note for the builder ("rebuild", "rebase and fix X"), which sends the item back to
+// build. Like ClassifyReply it is strict and has no model: a question (a question mark or a
+// question opening), any negation or "wait" word, or only filler ("thanks", "merge it please") is
+// not a note, and the item stays held.
+func IsHeldNote(text string) bool {
+	text = stripMentions(text)
+	if strings.Contains(text, "?") {
+		return false
+	}
+	ws := words(text)
+	if len(ws) == 0 || slices.Contains(questionStarts, ws[0]) {
+		return false
+	}
+	filler := true
+	for _, w := range ws {
+		if slices.Contains(negationWords, w) || strings.HasSuffix(w, "n't") {
+			return false
+		}
+		filler = filler && slices.Contains(fillerWords, w)
+	}
+	return !filler
 }
 
 type pendingApproval struct {

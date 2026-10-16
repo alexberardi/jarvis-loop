@@ -986,3 +986,26 @@ func TestQAAfterDeployRoutes(t *testing.T) {
 		t.Fatalf("after deployed: %v", ids)
 	}
 }
+
+// A held item goes back to build with notes: the user's (a Slack reply that is not an approval)
+// or a runner's (the held PR turned conflicting). Neither holds a lease; only held items move.
+func TestRebuildHeld(t *testing.T) {
+	for _, c := range []struct{ tok, actor, notes string }{
+		{userTok, "user:alex", "rebase and fix the typo"},
+		{runnerTok, "runner:devbox", "PR #1 conflicts with main"},
+	} {
+		e := newEnv(t)
+		id := e.toLand("hold", []string{"M a.go"})
+		e.refused(c.tok, "POST", fmt.Sprintf("/items/%d/rebuild", id), map[string]any{"notes": c.notes}, 409, "wrong_stage")
+		e.mustClaim("lander", id, "land")
+		e.advance(id, "hold", map[string]string{"reason": "on the hold list", "head_sha": shaA}, 200)
+		e.refused(c.tok, "POST", fmt.Sprintf("/items/%d/rebuild", id), map[string]any{"notes": " "}, 400, "missing_field")
+		e.do(c.tok, "POST", fmt.Sprintf("/items/%d/rebuild", id), map[string]any{"notes": c.notes}, 200, nil)
+		d := e.get(id)
+		last := d.Events[len(d.Events)-1]
+		if d.Item.Stage != "build" || d.Item.BounceCount != 0 || d.Item.PR != 1 || last.Kind != "rebuild" ||
+			last.Actor != c.actor || last.Data["notes"] != c.notes || last.From != "held" || last.To != "build" {
+			t.Fatalf("%s: %+v, last %+v", c.actor, d.Item, last)
+		}
+	}
+}
