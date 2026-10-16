@@ -349,9 +349,12 @@ func (r *Runner) verifyStep(ctx context.Context, ru *run, n int, st VerifyStep, 
 		return res, err
 	}
 	res.LogFile = EvidenceFile{Name: tag + ".log", Path: tailPath, Size: int64(len(res.Log))}
-	files, _, err := EvidenceFiles(dir)
+	files, skipped, err := EvidenceFiles(dir)
 	if err != nil {
 		res.Err = "its evidence: " + err.Error()
+	}
+	if len(skipped) > 0 {
+		r.Log.Warn("verify evidence: skipped directories and dotfiles", "item", ru.item.ID, "step", st.Name, "skipped", strings.Join(skipped, ", "))
 	}
 	for _, f := range files {
 		f.Name = tag + "-" + safeName(f.Name)

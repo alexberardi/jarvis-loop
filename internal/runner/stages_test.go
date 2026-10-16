@@ -602,6 +602,15 @@ func TestReviewRetriesARefusedResultOnce(t *testing.T) {
 	if i := strings.Index(brief, RetryHeading); i < 0 || !strings.Contains(brief[i:], `evidence entry "evidence/.claude" is a directory or a dotfile`) {
 		t.Fatalf("the retry's brief lacks the reason:\n%s", brief[strings.Index(brief, ItemHeading):])
 	}
+	// The refused attempt's files are kept next to the retry's.
+	for _, f := range []string{"stream-1.jsonl", "stderr-1.log", "brief-1.md", "stream.jsonl", "stderr.log"} {
+		if _, err := os.Stat(filepath.Join(g.lastRun(id, StageReview), f)); err != nil {
+			t.Fatalf("run dir: %v", err)
+		}
+	}
+	if b := g.read(filepath.Join(g.lastRun(id, StageReview), "brief-1.md")); strings.Contains(b, RetryHeading) {
+		t.Fatalf("brief-1.md is the retry's brief")
+	}
 }
 
 // Refused twice: the item goes to the user as a runner error (to retry or drop), not a question;

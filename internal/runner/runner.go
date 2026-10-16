@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -235,6 +236,9 @@ type run struct {
 	rejected string
 	retried  bool
 	spent    time.Duration
+	// first is the refused attempt's numbers, which the run's metrics and footer add to the
+	// retry's.
+	first streamStats
 	// done closes when the run must stop (the runner shutting down): its reports go on, but a
 	// verify step is ended.
 	done <-chan struct{}
@@ -326,6 +330,8 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 		return
 	}
 	log.Warn("result refused; running the stage once more", "why", why)
+	ru.first = out.stats
+	keepFirstAttempt(ru.dir, log)
 	brief = RetryBrief(brief, why)
 	if err := r.writeBrief(ru, brief); err != nil {
 		r.fail(cleanupCtx, ru, out, rejectedMsg(ru.stage, why, false)+"; the retry could not start: "+err.Error())
@@ -335,6 +341,16 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 	out = r.runAgent(ctx, ru, brief)
 	log.Info("agent ended (retry)", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
 	r.report(cleanupCtx, ru, out, log)
+}
+
+// keepFirstAttempt renames the refused attempt's transcript, stderr and brief in the run dir to
+// stream-1.jsonl, stderr-1.log and brief-1.md, so the retry's files do not overwrite them.
+func keepFirstAttempt(dir string, log *slog.Logger) {
+	for _, f := range [][2]string{{"stream.jsonl", "stream-1.jsonl"}, {"stderr.log", "stderr-1.log"}, {"brief.md", "brief-1.md"}} {
+		if err := os.Rename(filepath.Join(dir, f[0]), filepath.Join(dir, f[1])); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			log.Warn("keeping the first attempt's files", "file", f[0], "err", err)
+		}
+	}
 }
 
 // MinRetryTime: a refused result is retried only when at least this much of the run's time cap
@@ -948,7 +964,10 @@ func (r *Runner) metrics(ru *run, out outcome, f map[string]string) map[string]s
 	if out.stats.sessionID != "" {
 		f["session_id"] = out.stats.sessionID
 	}
-	if res := out.stats.result; res != nil {
+	if ru.first.sessionID != "" {
+		f["first_session_id"] = ru.first.sessionID
+	}
+	if res := totalResult(ru, out); res != nil {
 		u := res.Usage
 		f["num_turns"] = strconv.Itoa(res.NumTurns)
 		f["duration_ms"] = strconv.FormatInt(res.Duration, 10)
@@ -966,6 +985,27 @@ func (r *Runner) metrics(ru *run, out outcome, f map[string]string) map[string]s
 		f["result_retried"] = "true"
 	}
 	return f
+}
+
+// totalResult is the run's result numbers: the agent's, plus a refused first attempt's when the
+// stage was retried (cost, turns, duration and usage are summed). Nil when neither has one.
+func totalResult(ru *run, out outcome) *resultEvent {
+	a, b := ru.first.result, out.stats.result
+	if a == nil || b == nil {
+		if b != nil {
+			return b
+		}
+		return a
+	}
+	t := *b
+	t.NumTurns += a.NumTurns
+	t.Duration += a.Duration
+	t.CostUSD += a.CostUSD
+	t.Usage.Input += a.Usage.Input
+	t.Usage.Output += a.Usage.Output
+	t.Usage.CacheCreation += a.Usage.CacheCreation
+	t.Usage.CacheRead += a.Usage.CacheRead
+	return &t
 }
 
 func (r *Runner) saveWIP(ctx context.Context, ru *run, why string, log *slog.Logger) {
@@ -1198,7 +1238,7 @@ func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []Evidence
 // runStats are the run's numbers for a PR footer or a review comment.
 func (r *Runner) runStats(ru *run, out outcome) RunStats {
 	st := RunStats{Seconds: int(r.Clock.Now().Sub(ru.started).Seconds())}
-	if res := out.stats.result; res != nil {
+	if res := totalResult(ru, out); res != nil {
 		u := res.Usage
 		st = RunStats{Turns: res.NumTurns, CacheHit: CacheHitRatio(u.Input, u.CacheCreation, u.CacheRead), Seconds: st.Seconds,
 			CostUSD: res.CostUSD, HasResult: true}

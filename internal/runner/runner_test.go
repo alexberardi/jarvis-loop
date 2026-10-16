@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -555,9 +557,37 @@ func TestRefusedBuildResultIsRetried(t *testing.T) {
 	if d.Item.Stage != pipeline.Review || g.starts(id) != 2 || g.prs.calls() != 1 {
 		t.Fatalf("stage %s %q after %d runs; log:\n%s", d.Item.Stage, d.Item.Question, g.starts(id), g.logs.String())
 	}
-	if ev := g.advanced(id); ev.Data["result_retried"] != "true" || ev.Data["head_sha"] != g.remoteHead(fmt.Sprintf("loop/%d-lies-once", id)) {
+	ev := g.advanced(id)
+	if ev.Data["result_retried"] != "true" || ev.Data["head_sha"] != g.remoteHead(fmt.Sprintf("loop/%d-lies-once", id)) {
 		t.Fatalf("advance %+v", ev.Data)
 	}
+	// The run's numbers cover both attempts.
+	dir := g.lastRun(id, StageBuild)
+	first, retry := streamResult(t, filepath.Join(dir, "stream-1.jsonl")), streamResult(t, filepath.Join(dir, "stream.jsonl"))
+	if ev.Data["total_cost_usd"] != "0.8400" || ev.Data["duration_ms"] != "2468" ||
+		ev.Data["num_turns"] != strconv.Itoa(first.NumTurns+retry.NumTurns) || ev.Data["first_session_id"] == nil {
+		t.Fatalf("advance %+v; attempts' turns %d + %d", ev.Data, first.NumTurns, retry.NumTurns)
+	}
+}
+
+// streamResult is the result event of a run's stream file.
+func streamResult(t *testing.T, path string) resultEvent {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		var ev struct {
+			Type string `json:"type"`
+			resultEvent
+		}
+		if json.Unmarshal([]byte(line), &ev) == nil && ev.Type == "result" {
+			return ev.resultEvent
+		}
+	}
+	t.Fatalf("no result event in %s", path)
+	return resultEvent{}
 }
 
 // An open PR for the branch (a bounced item) is updated, not opened again.
