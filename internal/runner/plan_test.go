@@ -73,6 +73,11 @@ func TestValidatePlanResult(t *testing.T) {
 	os.WriteFile(filepath.Join(out, "cycle.md"), []byte("## Pieces\n\n### 1. One\n- depends on: 2\n\n### 2. Two\n- depends on: 1\n"), 0o644)
 	os.WriteFile(filepath.Join(out, "badrepo.md"), []byte("## Pieces\n\n### 1. One\n- repo: nobody/nothing\n"), 0o644)
 	os.Symlink("/etc/hostname", filepath.Join(out, "link.md"))
+	secret := t.TempDir()
+	os.WriteFile(filepath.Join(secret, "x.md"), []byte("a secret\n"), 0o600)
+	os.Symlink(secret, filepath.Join(out, "d"))
+	os.Mkdir(filepath.Join(out, "sub"), 0o755)
+	os.WriteFile(filepath.Join(out, "sub", "x.md"), []byte("# Nested\n"), 0o644)
 	slugs := []string{"alex/demo", "alex/other"}
 	long := strings.Repeat("é", pipeline.MaxReply+1)
 	for _, c := range []struct {
@@ -96,6 +101,9 @@ func TestValidatePlanResult(t *testing.T) {
 		{"escaping doc", "product", `{"reply":"ok","brief":"../brief.md"}`, "not a file in out/"},
 		{"absolute doc", "product", `{"reply":"ok","brief":"/etc/hostname"}`, "not a file in out/"},
 		{"symlink doc", "product", `{"reply":"ok","brief":"link.md"}`, "not a plain file"},
+		{"symlinked dir", "product", `{"reply":"ok","brief":"d/x.md"}`, "not a file in out/"},
+		{"symlinked dir under out/", "product", `{"reply":"ok","brief":"out/d/x.md"}`, "not a file in out/"},
+		{"nested doc", "engineering", `{"reply":"ok","blueprint":"sub/x.md"}`, "not a file in out/"},
 		{"empty doc", "product", `{"reply":"ok","brief":"empty.md"}`, "is empty"},
 		{"cycle", "engineering", `{"reply":"ok","blueprint":"cycle.md"}`, "blueprint: the pieces' dependencies make a cycle: "},
 		{"piece repo", "engineering", `{"reply":"ok","blueprint":"badrepo.md"}`, `piece 1's repo "nobody/nothing" is not a configured repo`},
@@ -106,6 +114,9 @@ func TestValidatePlanResult(t *testing.T) {
 			t.Errorf("%s: %v", c.name, err)
 		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err)):
 			t.Errorf("%s: got %v, want %q", c.name, err, c.err)
+		}
+		if c.err == "not a file in out/" && (res.Brief != "" || res.Blueprint != "") {
+			t.Errorf("%s: returned content with the error: %+v", c.name, res)
 		}
 		if c.name == "brief" && (res.Brief != "# Brief\n\nA list.\n" || !res.Ready || !slices.Equal(res.Repos, []string{"alex/demo"}) || res.Reply != "Here it is.") {
 			t.Errorf("brief result %+v", res)

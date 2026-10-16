@@ -494,12 +494,13 @@ func ValidatePlanResult(raw []byte, persona, outDir string, slugs []string) (pip
 	return res, nil
 }
 
-// loadPlanDoc reads a document the agent wrote: a plain file in out/ ("brief.md" or
-// "out/brief.md"), UTF-8, not empty, at most MaxPlanDocBytes.
+// loadPlanDoc reads a document the agent wrote: a plain file directly in out/ ("brief.md"
+// or "out/brief.md"), UTF-8, not empty, at most MaxPlanDocBytes. Names with a directory are
+// refused: only the leaf is Lstat'ed, and a symlinked directory could point at a secret.
 func loadPlanDoc(outDir, name string) (string, error) {
 	rel := filepath.ToSlash(filepath.Clean(strings.TrimSpace(name)))
 	rel = strings.TrimPrefix(rel, "out/")
-	if !filepath.IsLocal(rel) {
+	if !filepath.IsLocal(rel) || strings.Contains(rel, "/") {
 		return "", fmt.Errorf("%q is not a file in out/", name)
 	}
 	p := filepath.Join(outDir, rel)

@@ -142,7 +142,7 @@ and `plans`/`depends_on` expectations (04b), `scenarios/37-plan-stale-approve.js
   each turn (fetch + reset; the agent cannot write them: the guard's read-only rule from review,
   `deny_write` for the whole tree except `out/`). No verify steps, no harness, no GitHub.
 - The turn's prompt is the batched Slack messages, verbatim; when the engineering agent sent the
-  plan back, the product turn's prompt starts with its reason. The first turn of each persona also
+  plan back, its reason comes before the messages in the product turn's prompt. The first turn of each persona also
   gets the plan's documents and the configured repos list under `.loop/context/`.
 - **Personas** are skills, like triage/build/review: `skills/product/SKILL.md`,
   `skills/engineering/SKILL.md`. Each has a byte-identical system prompt and tool set across plans

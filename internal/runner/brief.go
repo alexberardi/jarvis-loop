@@ -124,16 +124,16 @@ func StaticBrief(stage string) string {
 			b.WriteString(`{"reply": "the Slack message: at most 3,000 characters, no logs or transcripts",
  "brief": "brief.md", "ready": false, "repos": ["owner/name"]}`)
 			b.WriteString("\n```\n\n")
-			b.WriteString("`reply` is required. `brief` names the brief you wrote this turn, a file in `out/` (leave it out when the brief did not change). `ready: true` posts the Approve button for the latest brief. `repos` sets the plan's repos (configured `owner/name` slugs from `.loop/context/repos.md`; leave it out to keep them). No other fields.\n")
+			b.WriteString("`reply` is required. `brief` names the brief you wrote this turn, a plain file directly in `out/`, such as `brief.md` (leave it out when the brief did not change). `ready: true` posts the Approve button for the latest brief. `repos` sets the plan's repos (configured `owner/name` slugs from `.loop/context/repos.md`; leave it out to keep them). No other fields.\n")
 		} else {
 			b.WriteString(`{"reply": "the Slack message: at most 3,000 characters, no logs or transcripts",
  "blueprint": "blueprint.md", "ready": false}`)
 			b.WriteString("\n```\n\n```json\n")
 			b.WriteString(`{"reply": "the Slack message: why the brief has to change", "back_to_brief": "what is wrong with the brief, and what a workable one would change"}`)
 			b.WriteString("\n```\n\n")
-			b.WriteString("`reply` is required. `blueprint` names the blueprint you wrote this turn, a file in `out/` (leave it out when it did not change). `ready: true` posts the Approve button for the latest blueprint. `back_to_brief` sends the plan back to the product agent (never with `ready` or a blueprint). No other fields.\n")
+			b.WriteString("`reply` is required. `blueprint` names the blueprint you wrote this turn, a plain file directly in `out/`, such as `blueprint.md` (leave it out when it did not change). `ready: true` posts the Approve button for the latest blueprint. `back_to_brief` sends the plan back to the product agent (never with `ready` or a blueprint). No other fields.\n")
 		}
-		b.WriteString("\nThe runner checks the result before loopd sees it: a missing reply, a reply over 3,000 characters, a document that is not a plain file in `out/`, an unknown repo, or a blueprint whose pieces do not parse or whose dependencies loop fails the turn with that reason, and the user is asked to reply to try again (your session is kept).\n")
+		b.WriteString("\nThe runner checks the result before loopd sees it: a missing reply, a reply over 3,000 characters, a document that is not a plain file directly in `out/` (no subdirectories, no symlinks), an unknown repo, or a blueprint whose pieces do not parse or whose dependencies loop fails the turn with that reason, and the user is asked to reply to try again (your session is kept).\n")
 	case StageTriage:
 		b.WriteString("Write `.loop/result.json` as your last step, exactly one of:\n\n```json\n")
 		b.WriteString(`{"outcome": "reproduced", "repo": "owner/name (only when the item has no repo)",

@@ -64,6 +64,6 @@ Every turn, write `out/result.json` as your last step:
  "brief": "brief.md", "ready": false, "repos": ["owner/name"]}
 ```
 
-`reply` is required. `brief` names the brief you wrote this turn, a file in `out/` (leave it out when the brief did not change). `ready: true` posts the Approve button for the latest brief. `repos` sets the plan's repos (configured `owner/name` slugs from `.loop/context/repos.md`; leave it out to keep them). No other fields.
+`reply` is required. `brief` names the brief you wrote this turn, a plain file directly in `out/`, such as `brief.md` (leave it out when the brief did not change). `ready: true` posts the Approve button for the latest brief. `repos` sets the plan's repos (configured `owner/name` slugs from `.loop/context/repos.md`; leave it out to keep them). No other fields.
 
-The runner checks the result before loopd sees it: a missing reply, a reply over 3,000 characters, a document that is not a plain file in `out/`, an unknown repo, or a blueprint whose pieces do not parse or whose dependencies loop fails the turn with that reason, and the user is asked to reply to try again (your session is kept).
+The runner checks the result before loopd sees it: a missing reply, a reply over 3,000 characters, a document that is not a plain file directly in `out/` (no subdirectories, no symlinks), an unknown repo, or a blueprint whose pieces do not parse or whose dependencies loop fails the turn with that reason, and the user is asked to reply to try again (your session is kept).
