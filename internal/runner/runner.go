@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/guard"
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
 // Runner claims triage, build and review items (config stages) and runs one agent per item; it
@@ -143,6 +144,10 @@ func (r *Runner) ClaimAndRun(ctx context.Context) (bool, error) {
 		r.land(ctx, cl, agent) // a script, not an agent
 		return true, nil
 	}
+	if cl.Kind == pipeline.WorkPlan {
+		r.planTurn(ctx, cl, agent)
+		return true, nil
+	}
 	r.work(ctx, cl, agent)
 	return true, nil
 }
@@ -183,6 +188,13 @@ type run struct {
 	sandbox   string
 	settings  string
 	started   time.Time
+
+	// A plan turn's (plan.go): the plan and the turn (stage is the turn's persona), the session
+	// it resumes ("" for a new one) and its time cap (plan_turn_minutes).
+	plan   *pipeline.Plan
+	turn   *pipeline.PlanTurn
+	resume string
+	maxRun time.Duration
 
 	reported int // refusals already sent
 	refusals int
@@ -226,15 +238,9 @@ func (r *Runner) newRun(cl *Claim, agent string) (*run, error) {
 	// Inside the worktree (ignored by git), so the agent needs no extra directory: an --add-dir
 	// would differ per item.
 	ru.scratch = filepath.Join(ru.wt, ".loop", "scratch")
-	ru.dir = filepath.Join(r.Cfg.WorkRoot, "runs", fmt.Sprintf("%d-%s-%s", it.ID, stage, ru.started.Format("20060102T150405Z")))
 	// Two runs of a stage within a second (a routed item triaged again, a build after a failed
 	// verify) keep separate logs.
-	for n := 2; ; n++ {
-		if _, err := os.Lstat(ru.dir); os.IsNotExist(err) {
-			break
-		}
-		ru.dir = filepath.Join(r.Cfg.WorkRoot, "runs", fmt.Sprintf("%d-%s-%s-%d", it.ID, stage, ru.started.Format("20060102T150405Z"), n))
-	}
+	ru.dir = uniqueRunDir(filepath.Join(r.Cfg.WorkRoot, "runs", fmt.Sprintf("%d-%s-%s", it.ID, stage, ru.started.Format("20060102T150405Z"))))
 	// One settings file per repo and stage, the same bytes for every item (prompt caching).
 	ru.settings = filepath.Join(r.Cfg.WorkRoot, "settings", stage+".json")
 	if ru.repoKey != "" {
@@ -594,10 +600,11 @@ func (r *Runner) handle(ru *run, st *streamStats, line []byte) (string, string) 
 	return "", ""
 }
 
-// agentCommand is the claude command for a run: the same argv for every item of a stage; the
-// worktree as cwd; the per-run guard config in the environment.
+// agentCommand is the claude command for a run: the same argv for every item of a stage (a plan
+// turn adds the session it resumes); the worktree as cwd; the per-run guard config in the
+// environment.
 func (r *Runner) agentCommand(ru *run) *exec.Cmd {
-	cmd := exec.Command(r.Cfg.Claude, ClaudeArgs(AgentArgs{Mode: r.Cfg.Mode, Settings: ru.settings, Model: r.Cfg.Model})...)
+	cmd := exec.Command(r.Cfg.Claude, ClaudeArgs(AgentArgs{Mode: r.Cfg.Mode, Settings: ru.settings, Model: r.Cfg.Model, Resume: ru.resume})...)
 	cmd.Dir = ru.wt
 	cmd.Env = append(r.agentEnv(),
 		guard.ConfigEnv+"="+filepath.Join(ru.dir, "guard.json"),
@@ -668,6 +675,9 @@ func (r *Runner) runAgent(ctx context.Context, ru *run, brief string) outcome {
 	maxRun := 45 * time.Minute
 	if ctl, err := r.Client.Control(ctx); err == nil && ctl.MaxRunMinutes > 0 {
 		maxRun = time.Duration(ctl.MaxRunMinutes) * time.Minute
+	}
+	if ru.maxRun > 0 && ru.maxRun < maxRun {
+		maxRun = ru.maxRun // a plan turn's own cap
 	}
 	// Stop a little before loopd's own cap, so the run is saved and reported by the runner.
 	capAt := maxRun - 30*time.Second
@@ -777,8 +787,10 @@ func (r *Runner) flushRefusals(ctx context.Context, ru *run) {
 			continue
 		}
 		ru.refusals++
-		if ru.refusals > 25 {
-			continue // the rest are in the run's log; 25 events are enough to see a pattern
+		if ru.refusals > 25 || ru.plan != nil {
+			// The rest are in the run's log; 25 events are enough to see a pattern. A plan turn's
+			// stay there too: loopd's events API is per item.
+			continue
 		}
 		err := r.Client.Event(ctx, ru.item.ID, "guard_refused", map[string]any{
 			"rule": ref.Rule, "tool": ref.Tool, "reason": clip(ref.Reason, 300), "target": clip(ref.Target, 300), "at": ref.At})

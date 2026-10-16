@@ -12,9 +12,10 @@ import (
 )
 
 // Plans in the harness (docs/phases/07-planning.md, "Harness"): driven through loopd's user and
-// runner API. The runner side of a turn is a fake here (the hand runner claims the turn and
-// reports a scripted result); the real runner's turns come with a later piece. #plan in Slack is
-// played by plan_post and plan_reply (planSlack).
+// runner API. plan_turn is a fake runner's turn (the hand runner claims it and reports a scripted
+// result); a scenario whose stages include plan has the real runner take turns ("runner" with the
+// plan's alias) with the fake claude's plan plays. #plan in Slack is played by plan_post and
+// plan_reply (planSlack).
 
 // PlanMatch checks a plan.
 type PlanMatch struct {

@@ -689,6 +689,9 @@ func (p *player) remoteProblems(rm RemoteMatch) []string {
 // prefixProblems checks that the runner's runs of a stage share their prompt prefix: each run's
 // brief starts with the stage's static brief (byte for byte) and every run has the same argv.
 func (p *player) prefixProblems(stage string) []string {
+	if slices.Contains(runner.Personas, stage) {
+		return p.personaPrefixProblems(stage)
+	}
 	runs, _ := filepath.Glob(filepath.Join(p.s.Dir, "work", "runs", "*-"+stage+"-*"))
 	if len(runs) < 2 {
 		return []string{fmt.Sprintf("%d %s run(s), want at least 2 to compare prefixes", len(runs), stage)}
@@ -720,13 +723,65 @@ func (p *player) prefixProblems(stage string) []string {
 	return out
 }
 
-// runFileProblems checks one file of one of an item's agent runs.
-func (p *player) runFileProblems(m RunMatch) []string {
-	r, err := p.ref(m.Item)
-	if err != nil {
-		return []string{err.Error()}
+// personaPrefixProblems checks a plan persona's turns share their prefix: a new session's prompt
+// starts with the persona's static brief, a resumed one's is the turn alone, and the argv is the
+// same but for --resume <session>.
+func (p *player) personaPrefixProblems(persona string) []string {
+	runs, _ := filepath.Glob(filepath.Join(p.s.Dir, "work", "runs", "P*-"+persona+"-*"))
+	if len(runs) < 2 {
+		return []string{fmt.Sprintf("%d %s turn(s), want at least 2 to compare prefixes", len(runs), persona)}
 	}
-	runs, _ := filepath.Glob(filepath.Join(p.s.Dir, "work", "runs", fmt.Sprintf("%d-%s-*", r.id, m.Stage)))
+	var out []string
+	static := runner.StaticBrief(persona) + runner.TurnHeading
+	var argv0 []string
+	for i, r := range runs {
+		brief, err := os.ReadFile(filepath.Join(r, "brief.md"))
+		if err != nil {
+			out = append(out, err.Error())
+			continue
+		}
+		var argv []string
+		if b, err := os.ReadFile(filepath.Join(r, "argv.json")); err != nil || json.Unmarshal(b, &argv) != nil {
+			out = append(out, fmt.Sprintf("%s: no argv.json", filepath.Base(r)))
+			continue
+		}
+		resumed := slices.Index(argv, "--resume")
+		switch {
+		case resumed < 0 && !strings.HasPrefix(string(brief), static):
+			out = append(out, fmt.Sprintf("%s: a new session's prompt does not start with the %s brief", filepath.Base(r), persona))
+		case resumed >= 0 && !strings.HasPrefix(string(brief), strings.TrimPrefix(runner.TurnHeading, "\n")):
+			out = append(out, fmt.Sprintf("%s: a resumed turn's prompt is not the turn alone", filepath.Base(r)))
+		}
+		if resumed >= 0 {
+			argv = slices.Delete(argv, resumed, min(resumed+2, len(argv)))
+		}
+		if i == 0 {
+			argv0 = argv
+		} else if !slices.Equal(argv, argv0) {
+			out = append(out, fmt.Sprintf("%s: argv %q differs from %q (besides --resume)", filepath.Base(r), argv, argv0))
+		}
+	}
+	return out
+}
+
+// runFileProblems checks one file of one of an item's agent runs, or of a plan's turns.
+func (p *player) runFileProblems(m RunMatch) []string {
+	who, pattern := m.Item, ""
+	if m.Plan != "" {
+		id, err := p.planRef(m.Plan)
+		if err != nil {
+			return []string{err.Error()}
+		}
+		who, pattern = "plan "+m.Plan, fmt.Sprintf("P%d-%s-*", id, m.Stage)
+	} else {
+		r, err := p.ref(m.Item)
+		if err != nil {
+			return []string{err.Error()}
+		}
+		pattern = fmt.Sprintf("%d-%s-*", r.id, m.Stage)
+	}
+	m.Item = who
+	runs, _ := filepath.Glob(filepath.Join(p.s.Dir, "work", "runs", pattern))
 	sort.Strings(runs)
 	n := m.Run
 	if n == 0 {

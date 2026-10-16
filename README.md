@@ -41,6 +41,9 @@ With `"land"` in `stages` (phase 6, [docs/phases/06-land.md](docs/phases/06-land
 approved items itself, with no agent: the gates from GitHub and git, `gh pr merge --squash
 --match-head-commit`, then main's CI on the merge (`land_ci_wait`, `land_main_wait`, default
 `"30m"`). Why: [docs/decisions/2026-10-15-land.md](docs/decisions/2026-10-15-land.md).
+With `"plan"` in `stages` (phase 7, [docs/phases/07-planning.md](docs/phases/07-planning.md)) it
+also takes plans' turns: the product and engineering personas, one short agent per turn in
+`<work_root>/plan-<id>/`, resuming the persona's session (`plan_turn_minutes`, default 15).
 
 Harness (phase 4b, [docs/phases/04b-loop-harness.md](docs/phases/04b-loop-harness.md)):
 `scripts/loop-sandbox run` plays `scenarios/*.json` against the real loopd wiring, runner, bot and
