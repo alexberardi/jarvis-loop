@@ -121,6 +121,15 @@ type Stack struct {
 	runsMu   sync.Mutex
 	inflight int
 	runsDone chan struct{} // closed and replaced whenever a run ends
+	// agentRuns and landRuns are the claims working in the runner's agent slots and in its land
+	// lane, which Poll keeps to as Run does.
+	agentRuns, landRuns int
+}
+
+// pollRun is one Poll's run: the lane counter it holds once its claim is known.
+type pollRun struct {
+	ended bool
+	lane  *int
 }
 
 func randToken(prefix string) string {
@@ -425,33 +434,60 @@ func (s *Stack) Close() {
 // Claimed is what one poll of the runner claimed: an item, or a plan's turn (zero: nothing).
 type Claimed struct {
 	Item, Plan int64
+	Stage      string // the item's stage when claimed ("" for a plan turn)
 }
 
 // Poll has the runner claim once, as its poll loop would, and work the item (or plan turn) in the
-// background. It returns once the claim is decided: what it claimed, or nothing.
+// background. It returns once the claim is decided: what it claimed, or nothing. It keeps to the
+// runner's lanes as Run does: with every agent slot working it claims only land, with the land
+// lane working only agent stages, and with both, nothing; with room in both, it claims once in
+// every stage (Run's lanes would each claim; the scenario sees the one loopd hands out first).
 func (s *Stack) Poll(timeout time.Duration) (Claimed, error) {
 	before, err := s.lastEventID()
 	if err != nil {
 		return Claimed{}, err
 	}
+	agentLane, landLane := s.Runner.Lanes()
+	stages := s.Runner.Cfg.Stages
+	run := &pollRun{}
 	s.runsMu.Lock()
+	switch agentFull, landFull := s.agentRuns >= s.Runner.Cfg.Slots, s.landRuns >= 1; {
+	case agentFull && landFull:
+		stages = nil
+	case agentFull:
+		stages = landLane
+	case landFull:
+		stages = agentLane
+	}
 	s.inflight++
 	s.runsMu.Unlock()
 	ended := make(chan struct{})
 	go func() {
 		defer close(ended)
-		defer s.runEnded()
+		defer s.runEnded(run)
 		// As Run does each poll: close the PRs of dropped items, then claim.
 		if err := s.Runner.CloseDropped(s.ctx); err != nil {
 			s.log.Warn("close dropped PRs", "err", err)
 		}
-		if _, err := s.Runner.ClaimAndRun(s.ctx); err != nil {
+		if stages == nil {
+			return
+		}
+		if _, err := s.Runner.ClaimAndRunIn(s.ctx, stages); err != nil {
 			s.log.Warn("claim", "err", err)
 		}
 	}()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if c, ok := s.claimedSince(before); ok {
+			s.runsMu.Lock()
+			if !run.ended {
+				run.lane = &s.agentRuns
+				if c.Stage == runner.StageLand {
+					run.lane = &s.landRuns
+				}
+				*run.lane++
+			}
+			s.runsMu.Unlock()
 			return c, nil
 		}
 		select {
@@ -466,9 +502,13 @@ func (s *Stack) Poll(timeout time.Duration) (Claimed, error) {
 	return Claimed{}, errors.New("the runner neither claimed nor gave up")
 }
 
-func (s *Stack) runEnded() {
+func (s *Stack) runEnded(run *pollRun) {
 	s.runsMu.Lock()
 	defer s.runsMu.Unlock()
+	run.ended = true
+	if run.lane != nil {
+		*run.lane--
+	}
 	s.inflight--
 	close(s.runsDone)
 	s.runsDone = make(chan struct{})
@@ -554,7 +594,7 @@ func (s *Stack) claimedSince(id int64) (Claimed, bool) {
 		}
 		switch e.Kind {
 		case "claimed":
-			return Claimed{Item: e.ItemID}, true
+			return Claimed{Item: e.ItemID, Stage: e.To}, true
 		case "plan_turn_claimed":
 			return Claimed{Plan: e.PlanID}, true
 		}

@@ -25,6 +25,9 @@ agent writes is read.
   `review`; the dev box's config adds `land`). It holds the GitHub login (gh) already; loopd still
   holds none.
 - loopd's limit for land stays 1 at a time.
+- Land does not take one of the runner's agent `slots`: it has its own lane, one item at a time,
+  next to them, and a paused runner still lands
+  ([docs/decisions/2026-10-16-land-lane.md](../decisions/2026-10-16-land-lane.md)).
 - A land claim runs `Land(ctx, item)` in-process: no worktree for an agent, no settings, no guard.
   It uses the runner's bare mirror for git and `gh` for GitHub, outside any sandbox.
 

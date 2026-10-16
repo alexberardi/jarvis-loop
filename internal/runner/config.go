@@ -25,8 +25,8 @@ type Config struct {
 	Token        string   `json:"token"`
 	Name         string   `json:"name"`
 	Capabilities []string `json:"capabilities"`
-	// Slots is how many items this runner works at once; loopd's active-agents number still caps
-	// the total.
+	// Slots is how many agent runs this runner works at once; loopd's active-agents number still
+	// caps the total. Land, with no agent, has its own lane next to them, one item at a time.
 	Slots int `json:"slots"`
 	// Stages are the stages this runner claims: triage, build and review (the default, all
 	// three), or a subset; land, and plan (plan turns, docs/phases/07-planning.md), only when named.
