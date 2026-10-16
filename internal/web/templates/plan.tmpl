@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>P{{.Plan.ID}} {{.Plan.Title}} · Jarvis Loop</title>
+{{template "style"}}
+{{template "docstyle"}}
+</head>
+<body>
+<main>
+<p class="sub"><a href="/board">← board</a></p>
+<h1>P{{.Plan.ID}} {{.Plan.Title}}</h1>
+{{- with .Plan}}
+<dl>
+<dt>Stage</dt><dd>{{.Stage}}{{with turnLabel $.Turn}} · {{.}}{{end}}</dd>
+{{- if $.RepoNames}}
+<dt>Repos</dt><dd>{{range $i, $r := $.RepoNames}}{{if $i}}, {{end}}{{$r}}{{end}}</dd>
+{{- end}}
+<dt>Priority</dt><dd>{{.Priority}}</dd>
+<dt>Age</dt><dd>{{age $.Age}}</dd>
+<dt>Last activity</dt><dd>{{age $.Idle}} ago</dd>
+{{- if $.SlackURL}}
+<dt>Slack</dt><dd><a href="{{$.SlackURL}}">thread</a></dd>
+{{- end}}
+</dl>
+{{- end}}
+{{- range .Docs}}
+<h2>{{.Name}}</h2>
+{{template "versions" .}}
+<div class="doc">
+{{.HTML}}</div>
+{{- else}}
+<h2>Brief</h2>
+<p class="muted">Not written yet.</p>
+{{- end}}
+<h2>Items · {{len .Items}}</h2>
+{{- if .Items}}
+<table class="rows">
+<tr><th>Piece</th><th>Item</th><th>Stage</th><th>Depends on</th></tr>
+{{- range .Items}}
+<tr><td>{{.Piece}}</td><td><a href="/board/items/{{.ID}}">#{{.ID}} {{.Title}}</a></td><td>{{.Stage}}</td><td>{{range $i, $d := .DependsOn}}{{if $i}}, {{end}}<a href="/board/items/{{$d}}">#{{$d}}</a>{{end}}</td></tr>
+{{- end}}
+</table>
+{{- else}}
+<p class="muted">None yet: items are filed when the blueprint is approved.</p>
+{{- end}}
+<h2>Turns · {{len .Turns}}</h2>
+{{- if .Turns}}
+<table class="rows">
+{{- range .Turns}}
+<tr><td class="when">{{stamp .CreatedAt}}</td><td>{{if .Persona}}{{.Persona}}{{else}}—{{end}}</td><td>{{.Status}}{{if .Ready}} · ready{{end}}</td><td>
+{{- if .BackToBrief}}<p class="reason">Back to the brief: {{.BackToBrief}}</p>{{end}}
+{{- range .Messages}}<pre class="text">{{.}}</pre>{{end}}
+{{- if .Reply}}<p class="muted">Reply</p><pre class="text">{{.Reply}}</pre>{{end}}
+{{- if .Error}}<p class="reason">{{.Error}}</p>{{end}}</td></tr>
+{{- end}}
+</table>
+{{- else}}
+<p class="muted">None.</p>
+{{- end}}
+</main>
+</body>
+</html>

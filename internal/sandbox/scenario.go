@@ -132,8 +132,8 @@ type Expect struct {
 	SamePrefix []string `json:"same_prefix,omitempty"`
 	// RunFiles check files in an item's agent run dirs (the brief, the verify output).
 	RunFiles []RunMatch `json:"run_files,omitempty"`
-	// Board: alias -> the item's card on the web board, read from the board listener with a
-	// board token through the ?t= cookie flow.
+	// Board: alias -> the item's (or plan's) card on the web board, read from the board
+	// listener with a board token through the ?t= cookie flow.
 	Board map[string]BoardMatch `json:"board,omitempty"`
 	// Plans: alias -> the plan as loopd has it; DependsOn: item alias -> the aliases of the items
 	// it depends on, exactly.
@@ -141,10 +141,12 @@ type Expect struct {
 	DependsOn map[string][]string  `json:"depends_on,omitempty"`
 }
 
-// BoardMatch is an item's card on the board: its column, and a regexp on the card's HTML.
+// BoardMatch is an item's or a plan's card on the board: its column, a regexp on the card's
+// HTML, and one on its page (/board/items/{id} or /board/plans/{id}).
 type BoardMatch struct {
 	Column string `json:"column"`
 	Card   string `json:"card,omitempty"`
+	Page   string `json:"page,omitempty"`
 }
 
 // RunMatch checks a file in one of an item's run dirs (work/runs/<id>-<stage>-<time>[-n]/), or

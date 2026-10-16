@@ -1,0 +1,21 @@
+{{define "docstyle"}}<style>
+main { max-width: 960px; margin: 0 auto; }
+h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 20px 0 6px; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; overflow-wrap: anywhere; }
+.versions { font-size: 13px; color: var(--muted); margin: 0 0 6px; }
+.doc { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 4px 16px; overflow-wrap: anywhere; }
+.doc h1, .doc h2, .doc h3, .doc h4, .doc h5, .doc h6 { text-transform: none; letter-spacing: normal; color: var(--fg); margin: 16px 0 6px; }
+.doc h1 { font-size: 20px; } .doc h2 { font-size: 17px; } .doc h3 { font-size: 15px; } .doc h4, .doc h5, .doc h6 { font-size: 14px; }
+.doc pre { white-space: pre-wrap; background: var(--lane); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+.doc code { font: 13px/1.45 ui-monospace, monospace; }
+.doc blockquote { margin: 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
+.doc table, table.rows { border-collapse: collapse; font-size: 13px; margin: 8px 0; }
+.doc th, .doc td, table.rows td, table.rows th { padding: 4px 8px; border: 1px solid var(--line); vertical-align: top; text-align: left; }
+.doc hr { border: 0; border-top: 1px solid var(--line); }
+table.rows { width: 100%; background: var(--card); }
+td.when { white-space: nowrap; color: var(--muted); }
+pre.text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font: 13px/1.45 ui-monospace, monospace; }
+</style>{{end}}
+{{define "versions"}}<p class="versions">v{{.Doc.Version}} · {{stamp .Doc.CreatedAt}}{{if eq .Approved .Doc.Version}} · approved{{else if .Approved}} · approved: <a href="/board/plans/{{.Doc.PlanID}}/{{.Kind}}/{{.Approved}}">v{{.Approved}}</a>{{end}}{{if gt (len .Versions) 1}} · versions:{{range .Versions}} {{if eq . $.Doc.Version}}v{{.}}{{else}}<a href="/board/plans/{{$.Doc.PlanID}}/{{$.Kind}}/{{.}}">v{{.}}</a>{{end}}{{end}}{{end}}</p>{{end}}

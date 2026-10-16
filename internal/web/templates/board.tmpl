@@ -21,13 +21,25 @@
 </head>
 <body>
 <h1>Jarvis Loop</h1>
-<p class="sub">{{.Total}} items · {{stamp .Now}} · refreshes every 30 s · {{if .ShowClosed}}<a href="/board">hide closed</a>{{else}}<a href="/board?closed=1">show closed</a>{{end}}</p>
+<p class="sub">{{.Total}} items ·{{if .PlanCount}} {{.PlanCount}} open plans ·{{end}} {{stamp .Now}} · refreshes every 30 s · {{if .ShowClosed}}<a href="/board">hide closed</a>{{else}}<a href="/board?closed=1">show closed</a>{{end}}</p>
 <div class="lanes">
 {{- range .Columns}}
 <section class="lane">
-<h2>{{.Name}} · {{len .Cards}}</h2>
+<h2>{{.Name}} · {{.Count}}</h2>
 {{- if .Note}}
 <p class="note">{{.Note}}</p>
+{{- end}}
+{{- range .Plans}}
+<article class="card">
+<a class="title" href="/board/plans/{{.ID}}">P{{.ID}} {{.Title}}</a>
+<div class="meta">
+{{- range .RepoNames}}<span>{{.}}</span>{{end}}
+<span>{{.Priority}}</span>
+<span class="label">{{.Stage}}</span>
+{{- with turnLabel .Turn}}<span>{{.}}</span>{{end}}
+<span>active {{age .Idle}} ago</span>
+</div>
+</article>
 {{- end}}
 {{- range .Cards}}
 <article class="card">
@@ -40,6 +52,7 @@
 {{- if .ClaimedBy}}<span>{{.ClaimedBy}}</span>{{end}}
 {{- if .PRURL}}<a href="{{.PRURL}}">PR #{{.PR}}</a>{{end}}
 {{- if .SlackURL}}<a href="{{.SlackURL}}">thread</a>{{end}}
+{{- if .PlanID}}<a class="label" href="/board/plans/{{.PlanID}}">plan P{{.PlanID}}</a>{{end}}
 {{- if .WaitingOn}}<span class="label">waiting on {{range $i, $d := .WaitingOn}}{{if $i}}, {{end}}#{{$d}}{{end}}</span>{{end}}
 </div>
 {{- if .Reason}}

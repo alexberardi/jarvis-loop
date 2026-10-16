@@ -45,8 +45,9 @@ type boardPage struct {
 	cfg    BoardConfig
 }
 
-// NewBoard returns the handler for GET /board, GET /board/items/{id} and
-// GET /board/items/{id}/evidence/{n}, and nothing else.
+// NewBoard returns the handler for GET /board, GET /board/items/{id},
+// GET /board/items/{id}/evidence/{n}, GET /board/plans/{id} and GET /board/plans/{id}/{kind}/{v},
+// and nothing else.
 func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardConfig) http.Handler {
 	if cfg.Clock == nil {
 		cfg.Clock = clock.Real{}
@@ -56,6 +57,8 @@ func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardCo
 	mux.Handle("GET /board", p.auth(p.board))
 	mux.Handle("GET /board/items/{id}", p.auth(p.item))
 	mux.Handle("GET /board/items/{id}/evidence/{n}", p.auth(p.evidence))
+	mux.Handle("GET /board/plans/{id}", p.auth(p.plan))
+	mux.Handle("GET /board/plans/{id}/{kind}/{v}", p.auth(p.planDoc))
 	return mux
 }
 
@@ -139,7 +142,12 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, err)
 		return
 	}
-	v := boardView(items, p.cfg.Clock.Now(), r.URL.Query().Get("closed") == "1", p.cfg.SlackWorkspace)
+	plans, err := p.st.ListPlans(r.Context(), true)
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
+	v := boardView(items, plans, p.cfg.Clock.Now(), r.URL.Query().Get("closed") == "1", p.cfg.SlackWorkspace)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := boardTmpl.Execute(w, v); err != nil {
 		p.log.Error("render board", "err", err)
@@ -165,6 +173,58 @@ func (p *boardPage) item(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := itemTmpl.Execute(w, itemView(d, ch, ts, p.cfg.Clock.Now(), p.cfg.SlackWorkspace)); err != nil {
 		p.log.Error("render item", "err", err)
+	}
+}
+
+func (p *boardPage) plan(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	d, err := p.st.GetPlan(r.Context(), id)
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
+	// GetPlan lists the versions without their markdown: fetch the latest of each kind.
+	latest := map[string]pipeline.PlanDoc{}
+	for _, kind := range docKinds {
+		if !slices.ContainsFunc(d.Docs, func(x pipeline.PlanDoc) bool { return x.Kind == kind }) {
+			continue
+		}
+		if latest[kind], err = p.st.GetPlanDoc(r.Context(), id, kind, 0); err != nil {
+			p.fail(w, err)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := planTmpl.Execute(w, planView(d, latest, p.cfg.Clock.Now(), p.cfg.SlackWorkspace)); err != nil {
+		p.log.Error("render plan", "err", err)
+	}
+}
+
+func (p *boardPage) planDoc(w http.ResponseWriter, r *http.Request) {
+	id, err1 := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	v, err2 := strconv.Atoi(r.PathValue("v"))
+	kind := r.PathValue("kind")
+	if err1 != nil || err2 != nil || id <= 0 || v <= 0 || !slices.Contains(docKinds, kind) {
+		http.NotFound(w, r)
+		return
+	}
+	d, err := p.st.GetPlan(r.Context(), id)
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
+	doc, err := p.st.GetPlanDoc(r.Context(), id, kind, v)
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := docTmpl.Execute(w, docView(d, doc)); err != nil {
+		p.log.Error("render plan doc", "err", err)
 	}
 }
 
@@ -210,26 +270,39 @@ type card struct {
 	Reason string
 }
 
+// planCard is an open plan in the Planning column.
+type planCard struct {
+	store.PlanRow
+	RepoNames []string
+	// Idle is the seconds since the plan's last activity.
+	Idle int64
+}
+
 type column struct {
 	Name  string
 	Note  string
 	Cards []card
+	Plans []planCard
 }
+
+// Count is the column's cards, plans included.
+func (c column) Count() int { return len(c.Cards) + len(c.Plans) }
 
 type boardData struct {
 	Columns    []column
 	ShowClosed bool
 	Now        time.Time
 	Total      int
+	PlanCount  int
 }
 
-// lanes maps the board's columns to display stages (pipeline.Display). Planning and QA have no
-// stage yet.
+// lanes maps the board's columns to display stages (pipeline.Display). Planning holds the open
+// plans instead (planning is not an item stage); QA has no stage yet.
 var lanes = []struct {
 	name, note string
 	displays   []string
 }{
-	{"Planning", "No planning stages yet.", nil},
+	{"Planning", "No open plans.", nil},
 	{"Triage", "", []string{"intake", "triage"}},
 	{"Build", "", []string{"ready", "build"}},
 	{"Review", "", []string{"review (queued)", "review", "land (queued)", "land"}},
@@ -239,10 +312,18 @@ var lanes = []struct {
 	{"Done", "", []string{"done", "closed"}},
 }
 
-func boardView(items []store.BoardItem, now time.Time, showClosed bool, slackBase string) boardData {
-	v := boardData{ShowClosed: showClosed, Now: now}
+func boardView(items []store.BoardItem, plans []store.PlanRow, now time.Time, showClosed bool, slackBase string) boardData {
+	v := boardData{ShowClosed: showClosed, Now: now, PlanCount: len(plans)}
 	for _, l := range lanes {
 		col := column{Name: l.name, Note: l.note, Cards: []card{}}
+		if l.name == "Planning" {
+			for _, pl := range plans {
+				col.Plans = append(col.Plans, planCard{PlanRow: pl, RepoNames: repoNames(pl.Repos), Idle: int64(now.Sub(pl.UpdatedAt) / time.Second)})
+			}
+			if len(col.Plans) > 0 {
+				col.Note = ""
+			}
+		}
 		for _, it := range items {
 			if !slices.Contains(l.displays, it.Display) {
 				continue
@@ -278,6 +359,14 @@ func repoName(slug string) string {
 		return name
 	}
 	return slug
+}
+
+func repoNames(slugs []string) []string {
+	var out []string
+	for _, s := range slugs {
+		out = append(out, repoName(s))
+	}
+	return out
 }
 
 func prURL(repo string, pr int) string {
@@ -363,9 +452,11 @@ func stamp(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
 //go:embed templates/*.tmpl
 var templateFS embed.FS
 
-var funcs = template.FuncMap{"age": age, "size": size, "stamp": stamp}
+var funcs = template.FuncMap{"age": age, "size": size, "stamp": stamp, "turnLabel": turnLabel}
 
 var (
 	boardTmpl = template.Must(template.New("board.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/board.tmpl", "templates/style.tmpl"))
 	itemTmpl  = template.Must(template.New("item.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/item.tmpl", "templates/style.tmpl"))
+	planTmpl  = template.Must(template.New("plan.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plan.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
+	docTmpl   = template.Must(template.New("plandoc.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plandoc.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
 )

@@ -142,7 +142,7 @@ func TestBoardSecureCookieOverTLS(t *testing.T) {
 	}
 }
 
-// The board's handler serves its three GET routes and nothing else: no API, no status page, no
+// The board's handler serves its GET routes and nothing else: no API, no status page, no
 // state change.
 func TestBoardRoutesOnly(t *testing.T) {
 	srv, st := boardSetup(t)
@@ -155,7 +155,7 @@ func TestBoardRoutesOnly(t *testing.T) {
 			t.Errorf("GET %s: %d, want 404", path, resp.StatusCode)
 		}
 	}
-	for _, path := range []string{"/board", "/board/items/1", "/board/items/1/evidence/1", "/items", "/claim", "/ui/control"} {
+	for _, path := range []string{"/board", "/board/items/1", "/board/items/1/evidence/1", "/board/plans/1", "/board/plans/1/brief/1", "/items", "/claim", "/ui/control"} {
 		for _, method := range []string{"POST", "PUT", "PATCH", "DELETE"} {
 			req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader("{}"))
 			req.AddCookie(cookie)
@@ -227,7 +227,7 @@ func goldenItems() []store.BoardItem {
 			SlackChannel: "C0LOOP", SlackTS: "1760000000.000100", UpdatedAt: now},
 		{BoardRow: row(4, "Retry the TTS call", "P2", "build", "ready", "alexberardi/jarvis-server", 0, "", 26*time.Hour), UpdatedAt: now},
 		{BoardRow: row(12, "Show the plan link", "P2", "triage", "intake", "alexberardi/jarvis-loop", 0, "", time.Hour),
-			WaitingOn: []int64{5, 8}, UpdatedAt: now},
+			WaitingOn: []int64{5, 8}, PlanID: 2, UpdatedAt: now},
 		{BoardRow: row(5, "Board page", "P2", "review", "review", "alexberardi/jarvis-loop", 14, "devbox/reviewer-1", 2*day), UpdatedAt: now},
 		{BoardRow: row(6, "Bump sqlite", "P3", "land", "land (queued)", "alexberardi/jarvis-server", 31, "", 4*day), UpdatedAt: now},
 		{BoardRow: row(7, "Which emulator?", "P1", "needs_you", "needs-you", "alexberardi/jarvis-server", 0, "", 1*day),
@@ -237,6 +237,18 @@ func goldenItems() []store.BoardItem {
 		{BoardRow: row(9, "Fix the digest time", "P2", "done", "done", "alexberardi/jarvis-loop", 9, "", 10*day), UpdatedAt: now.Add(-13 * day)},
 		{BoardRow: row(10, "Old done item", "P2", "done", "done", "alexberardi/jarvis-loop", 3, "", 30*day), UpdatedAt: now.Add(-15 * day)},
 		{BoardRow: row(11, "Not worth it", "P3", "closed", "closed", "", 0, "", 8*day), UpdatedAt: now.Add(-2 * day)},
+	}
+}
+
+// goldenPlans are the open plans: one waiting on the user, one on the agent.
+func goldenPlans() []store.PlanRow {
+	return []store.PlanRow{
+		{ID: 3, Title: "Pantry <list>", Stage: pipeline.PlanBrief, Priority: "P2", Repos: []string{"alexberardi/jarvis-server"},
+			Turn: "you", CreatedAt: now.Add(-3 * time.Hour), UpdatedAt: now.Add(-20 * time.Minute)},
+		{ID: 2, Title: "Plan pages", Stage: pipeline.PlanSplit, Priority: "P3", Repos: []string{"alexberardi/jarvis-loop", "alexberardi/jarvis-server"},
+			CreatedAt: now.Add(-50 * time.Hour), UpdatedAt: now.Add(-26 * time.Hour)},
+		{ID: 1, Title: "Blueprint in progress", Stage: pipeline.PlanBlueprint, Priority: "P3", Turn: "agent",
+			CreatedAt: now.Add(-5 * 24 * time.Hour), UpdatedAt: now},
 	}
 }
 
@@ -260,7 +272,7 @@ func checkGolden(t *testing.T, name string, got []byte) {
 func TestBoardGolden(t *testing.T) {
 	for _, closed := range []bool{false, true} {
 		var b bytes.Buffer
-		v := boardView(goldenItems(), now, closed, "https://jarvis.slack.com/")
+		v := boardView(goldenItems(), goldenPlans(), now, closed, "https://jarvis.slack.com/")
 		if err := boardTmpl.Execute(&b, v); err != nil {
 			t.Fatal(err)
 		}
@@ -283,14 +295,27 @@ func TestBoardGolden(t *testing.T) {
 }
 
 func TestBoardColumns(t *testing.T) {
-	v := boardView(goldenItems(), now, false, "")
+	v := boardView(goldenItems(), goldenPlans(), now, false, "")
 	got := map[string][]int64{}
 	var names []string
+	var plans []int64
 	for _, c := range v.Columns {
 		names = append(names, c.Name)
 		for _, cd := range c.Cards {
 			got[c.Name] = append(got[c.Name], cd.ID)
 		}
+		for _, pc := range c.Plans {
+			if c.Name != "Planning" {
+				t.Errorf("plan P%d in %s", pc.ID, c.Name)
+			}
+			plans = append(plans, pc.ID)
+		}
+		if c.Name == "Planning" && (c.Note != "" || c.Count() != 3) {
+			t.Errorf("Planning: note %q, count %d", c.Note, c.Count())
+		}
+	}
+	if !slicesEqual(plans, []int64{3, 2, 1}) || v.PlanCount != 3 {
+		t.Errorf("plans %v (count %d), want [3 2 1]", plans, v.PlanCount)
 	}
 	if strings.Join(names, ",") != "Planning,Triage,Build,Review,Needs you,Approval,QA,Done" {
 		t.Errorf("columns %v", names)
@@ -302,7 +327,11 @@ func TestBoardColumns(t *testing.T) {
 		}
 	}
 	if len(got["Planning"]) != 0 || len(got["QA"]) != 0 {
-		t.Errorf("planning/QA not empty: %v", got)
+		t.Errorf("planning/QA hold items: %v", got)
+	}
+	// No open plans: the Planning column says so.
+	if c := boardView(goldenItems(), nil, now, false, "").Columns[0]; c.Name != "Planning" || c.Note != "No open plans." || c.Count() != 0 {
+		t.Errorf("empty Planning: %+v", c)
 	}
 	// No workspace configured: no Slack links.
 	for _, c := range v.Columns {
@@ -331,7 +360,7 @@ func TestItemGolden(t *testing.T) {
 	d := store.Detail{
 		Item: pipeline.Item{ID: 8, Title: "Token rotation", Ask: "Rotate the tokens <weekly>.\nKeep the old one a day.",
 			Repo: "alexberardi/jarvis-loop", Priority: "P2", Stage: pipeline.Held, PR: 12, Risk: "hold",
-			HoldReason: "triage: risk hold", Summary: "Adds a rotate command.", CreatedAt: at, UpdatedAt: now},
+			HoldReason: "triage: risk hold", Summary: "Adds a rotate command.", PlanID: 2, PlanPiece: 3, CreatedAt: at, UpdatedAt: now},
 		Display: "held",
 		Events: []store.Event{
 			{ID: 1, ItemID: 8, At: at, Actor: "user:alex", Kind: "created", To: "triage", Data: map[string]any{"title": "Token rotation", "priority": "P2"}},

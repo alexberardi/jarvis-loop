@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>P2 Pantry list · Jarvis Loop</title>
+<style>
+:root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --card: #fff; --lane: #f5f5f4; --accent: #2563eb; --warn: #b45309; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --card: #292524; --lane: #231f1d; --accent: #60a5fa; --warn: #fbbf24; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+a { color: var(--accent); }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+.muted { color: var(--muted); }
+.reason { color: var(--warn); }
+</style>
+<style>
+main { max-width: 960px; margin: 0 auto; }
+h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 20px 0 6px; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; overflow-wrap: anywhere; }
+.versions { font-size: 13px; color: var(--muted); margin: 0 0 6px; }
+.doc { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 4px 16px; overflow-wrap: anywhere; }
+.doc h1, .doc h2, .doc h3, .doc h4, .doc h5, .doc h6 { text-transform: none; letter-spacing: normal; color: var(--fg); margin: 16px 0 6px; }
+.doc h1 { font-size: 20px; } .doc h2 { font-size: 17px; } .doc h3 { font-size: 15px; } .doc h4, .doc h5, .doc h6 { font-size: 14px; }
+.doc pre { white-space: pre-wrap; background: var(--lane); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+.doc code { font: 13px/1.45 ui-monospace, monospace; }
+.doc blockquote { margin: 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
+.doc table, table.rows { border-collapse: collapse; font-size: 13px; margin: 8px 0; }
+.doc th, .doc td, table.rows td, table.rows th { padding: 4px 8px; border: 1px solid var(--line); vertical-align: top; text-align: left; }
+.doc hr { border: 0; border-top: 1px solid var(--line); }
+table.rows { width: 100%; background: var(--card); }
+td.when { white-space: nowrap; color: var(--muted); }
+pre.text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font: 13px/1.45 ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<main>
+<p class="sub"><a href="/board">← board</a></p>
+<h1>P2 Pantry list</h1>
+<dl>
+<dt>Stage</dt><dd>split</dd>
+<dt>Repos</dt><dd>jarvis-server</dd>
+<dt>Priority</dt><dd>P2</dd>
+<dt>Age</dt><dd>2d</dd>
+<dt>Last activity</dt><dd>1h ago</dd>
+<dt>Slack</dt><dd><a href="https://jarvis.slack.com/archives/C0PLAN/p1760000002000300">thread</a></dd>
+</dl>
+<h2>Brief</h2>
+<p class="versions">v2 · 2026-10-13 12:00 UTC · approved · versions: v2 <a href="/board/plans/2/brief/1">v1</a></p>
+<div class="doc">
+<h1>Pantry list</h1>
+<p>A list of <strong>what is in the pantry</strong>, for &lt;the kitchen&gt;.</p>
+<h2>Users</h2>
+<ul>
+<li>the cook
+<ul>
+<li>and helpers</li>
+</ul></li>
+<li><a href="https://example.com/spec" rel="noopener noreferrer">the spec</a></li>
+<li>bad</li>
+</ul>
+<table>
+<thead>
+<tr><th>Need</th><th>Why</th></tr>
+</thead>
+<tbody>
+<tr><td>list</td><td><code>shopping</code></td></tr>
+</tbody>
+</table>
+<pre><code>&lt;script&gt;alert(1)&lt;/script&gt;
+</code></pre>
+</div>
+<h2>Blueprint</h2>
+<p class="versions">v1 · 2026-10-13 13:00 UTC · approved</p>
+<div class="doc">
+<h1>Blueprint</h1>
+<h3>1. Pantry table</h3>
+<ul>
+<li>depends on: none</li>
+</ul>
+</div>
+<h2>Items · 2</h2>
+<table class="rows">
+<tr><th>Piece</th><th>Item</th><th>Stage</th><th>Depends on</th></tr>
+<tr><td>1</td><td><a href="/board/items/12">#12 Pantry table</a></td><td>build</td><td></td></tr>
+<tr><td>2</td><td><a href="/board/items/13">#13 Pantry API</a></td><td>triage</td><td><a href="/board/items/12">#12</a></td></tr>
+</table>
+<h2>Turns · 3</h2>
+<table class="rows">
+<tr><td class="when">2026-10-13 10:00 UTC</td><td>product</td><td>done · ready</td><td><pre class="text">a pantry list</pre><pre class="text">for &lt;the kitchen&gt;</pre><p class="muted">Reply</p><pre class="text">Here&#39;s a brief.</pre></td></tr>
+<tr><td class="when">2026-10-13 11:00 UTC</td><td>engineering</td><td>failed</td><td><p class="reason">the blueprint has a cycle</p></td></tr>
+<tr><td class="when">2026-10-13 12:00 UTC</td><td>product</td><td>done · ready</td><td><p class="reason">Back to the brief: say who uses it</p><p class="muted">Reply</p><pre class="text">Updated.</pre></td></tr>
+</table>
+</main>
+</body>
+</html>
