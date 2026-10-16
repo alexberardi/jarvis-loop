@@ -81,15 +81,17 @@ const (
 
 // Plan is one idea on its way to items.
 type Plan struct {
-	ID                 int64     `json:"id"`
-	Title              string    `json:"title"`
-	Stage              PlanStage `json:"stage"`
-	Priority           string    `json:"priority"`
-	Repos              []string  `json:"repos"`
-	SlackChannel       string    `json:"slack_channel,omitempty"`
-	SlackTS            string    `json:"slack_ts,omitempty"`
-	ProductSession     string    `json:"product_session,omitempty"`
-	EngineeringSession string    `json:"engineering_session,omitempty"`
+	ID           int64     `json:"id"`
+	Title        string    `json:"title"`
+	Stage        PlanStage `json:"stage"`
+	Priority     string    `json:"priority"`
+	Repos        []string  `json:"repos"`
+	SlackChannel string    `json:"slack_channel,omitempty"`
+	SlackTS      string    `json:"slack_ts,omitempty"`
+	// SlackHeader is the bot's message heading the thread (stage, Drop button).
+	SlackHeader        string `json:"slack_header,omitempty"`
+	ProductSession     string `json:"product_session,omitempty"`
+	EngineeringSession string `json:"engineering_session,omitempty"`
 	// BriefApproved and BlueprintApproved are the approved versions (0: none yet).
 	BriefApproved     int       `json:"brief_approved,omitempty"`
 	BlueprintApproved int       `json:"blueprint_approved,omitempty"`
@@ -120,6 +122,8 @@ type PlanTurn struct {
 	Persona string `json:"persona,omitempty"`
 	// Messages are the user's messages batched into the turn, verbatim.
 	Messages []string `json:"messages"`
+	// SlackTS are the Slack ts of the messages that came from the plan's thread (#plan).
+	SlackTS []string `json:"slack_ts,omitempty"`
 	// BackToBrief is why engineering sent the plan back: the product turn's prompt starts with it.
 	BackToBrief string     `json:"back_to_brief,omitempty"`
 	Status      TurnStatus `json:"status"`

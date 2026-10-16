@@ -18,7 +18,7 @@ import (
 
 // ---- rows ----
 
-const planCols = `id, title, stage, priority, repos, slack_channel, slack_ts, product_session, engineering_session,
+const planCols = `id, title, stage, priority, repos, slack_channel, slack_ts, slack_header, product_session, engineering_session,
 	brief_approved, blueprint_approved, created_at, updated_at`
 
 func scanPlan(row scanner) (pipeline.Plan, error) {
@@ -27,7 +27,7 @@ func scanPlan(row scanner) (pipeline.Plan, error) {
 		stage, repos     string
 		created, updated int64
 	)
-	err := row.Scan(&p.ID, &p.Title, &stage, &p.Priority, &repos, &p.SlackChannel, &p.SlackTS, &p.ProductSession,
+	err := row.Scan(&p.ID, &p.Title, &stage, &p.Priority, &repos, &p.SlackChannel, &p.SlackTS, &p.SlackHeader, &p.ProductSession,
 		&p.EngineeringSession, &p.BriefApproved, &p.BlueprintApproved, &created, &updated)
 	p.Stage, p.Repos = pipeline.PlanStage(stage), splitList(repos)
 	p.CreatedAt, p.UpdatedAt = fromNanos(created), fromNanos(updated)
@@ -45,22 +45,22 @@ func loadPlan(q interface {
 }
 
 func savePlan(tx *sql.Tx, p pipeline.Plan) error {
-	_, err := tx.Exec(`UPDATE plans SET title=?, stage=?, priority=?, repos=?, slack_channel=?, slack_ts=?, product_session=?,
-		engineering_session=?, brief_approved=?, blueprint_approved=?, updated_at=? WHERE id=?`,
-		p.Title, string(p.Stage), p.Priority, strings.Join(p.Repos, ","), p.SlackChannel, p.SlackTS, p.ProductSession,
+	_, err := tx.Exec(`UPDATE plans SET title=?, stage=?, priority=?, repos=?, slack_channel=?, slack_ts=?, slack_header=?,
+		product_session=?, engineering_session=?, brief_approved=?, blueprint_approved=?, updated_at=? WHERE id=?`,
+		p.Title, string(p.Stage), p.Priority, strings.Join(p.Repos, ","), p.SlackChannel, p.SlackTS, p.SlackHeader, p.ProductSession,
 		p.EngineeringSession, p.BriefApproved, p.BlueprintApproved, p.UpdatedAt.UnixNano(), p.ID)
 	return err
 }
 
-const turnCols = `id, plan_id, persona, messages, back_to_brief, status, runner, agent, reply, ready, error, created_at, updated_at`
+const turnCols = `id, plan_id, persona, messages, slack_ts, back_to_brief, status, runner, agent, reply, ready, error, created_at, updated_at`
 
 func scanTurn(row scanner) (pipeline.PlanTurn, error) {
 	var (
-		t                pipeline.PlanTurn
-		msgs, status     string
-		created, updated int64
+		t                 pipeline.PlanTurn
+		msgs, tss, status string
+		created, updated  int64
 	)
-	if err := row.Scan(&t.ID, &t.PlanID, &t.Persona, &msgs, &t.BackToBrief, &status, &t.Runner, &t.Agent, &t.Reply, &t.Ready,
+	if err := row.Scan(&t.ID, &t.PlanID, &t.Persona, &msgs, &tss, &t.BackToBrief, &status, &t.Runner, &t.Agent, &t.Reply, &t.Ready,
 		&t.Error, &created, &updated); err != nil {
 		return t, err
 	}
@@ -72,7 +72,7 @@ func scanTurn(row scanner) (pipeline.PlanTurn, error) {
 	if t.Messages == nil {
 		t.Messages = []string{}
 	}
-	return t, nil
+	return t, json.Unmarshal([]byte(tss), &t.SlackTS)
 }
 
 func loadTurn(q interface {
@@ -102,9 +102,13 @@ func saveTurn(tx *sql.Tx, t pipeline.PlanTurn) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(`UPDATE plan_turns SET persona=?, messages=?, back_to_brief=?, status=?, runner=?, agent=?, reply=?, ready=?,
-		error=?, updated_at=? WHERE id=?`,
-		t.Persona, string(msgs), t.BackToBrief, string(t.Status), t.Runner, t.Agent, t.Reply, t.Ready, t.Error, t.UpdatedAt.UnixNano(), t.ID)
+	tss, err := json.Marshal(nonNil(t.SlackTS))
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(`UPDATE plan_turns SET persona=?, messages=?, slack_ts=?, back_to_brief=?, status=?, runner=?, agent=?, reply=?,
+		ready=?, error=?, updated_at=? WHERE id=?`,
+		t.Persona, string(msgs), string(tss), t.BackToBrief, string(t.Status), t.Runner, t.Agent, t.Reply, t.Ready, t.Error, t.UpdatedAt.UnixNano(), t.ID)
 	return err
 }
 
@@ -222,16 +226,16 @@ func (s *Store) CreatePlan(ctx context.Context, actor string, n NewPlan) (pipeli
 			map[string]any{"title": p.Title, "priority": p.Priority, "repos": p.Repos}); err != nil {
 			return err
 		}
-		_, err = s.queueTurn(tx, actor, p.ID, text, "")
+		_, err = s.queueTurn(tx, actor, p.ID, text, p.SlackTS, "")
 		return err
 	})
 	return p, err
 }
 
-// queueTurn adds a message (and a back-to-brief reason) to the plan's queued turn, creating one
-// when there is none. Either may be empty: approving the brief queues engineering's first turn
-// with no message.
-func (s *Store) queueTurn(tx *sql.Tx, actor string, planID int64, text, backToBrief string) (pipeline.PlanTurn, error) {
+// queueTurn adds a message (with its Slack ts, if it came from the plan's thread) and a
+// back-to-brief reason to the plan's queued turn, creating one when there is none. Any may be
+// empty: approving the brief queues engineering's first turn with no message.
+func (s *Store) queueTurn(tx *sql.Tx, actor string, planID int64, text, ts, backToBrief string) (pipeline.PlanTurn, error) {
 	now := s.clock.Now()
 	q, err := openTurn(tx, planID, pipeline.TurnQueued)
 	if err != nil {
@@ -243,6 +247,9 @@ func (s *Store) queueTurn(tx *sql.Tx, actor string, planID int64, text, backToBr
 	}
 	if text != "" {
 		t.Messages = append(t.Messages, text)
+		if ts != "" {
+			t.SlackTS = append(t.SlackTS, ts)
+		}
 	}
 	if backToBrief != "" {
 		t.BackToBrief = backToBrief
@@ -254,8 +261,9 @@ func (s *Store) queueTurn(tx *sql.Tx, actor string, planID int64, text, backToBr
 		}
 	} else {
 		msgs, _ := json.Marshal(t.Messages)
-		res, err := tx.Exec(`INSERT INTO plan_turns (plan_id, messages, back_to_brief, status, created_at, updated_at) VALUES (?,?,?,?,?,?)`,
-			planID, string(msgs), t.BackToBrief, string(t.Status), now.UnixNano(), now.UnixNano())
+		tss, _ := json.Marshal(nonNil(t.SlackTS))
+		res, err := tx.Exec(`INSERT INTO plan_turns (plan_id, messages, slack_ts, back_to_brief, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)`,
+			planID, string(msgs), string(tss), t.BackToBrief, string(t.Status), now.UnixNano(), now.UnixNano())
 		if err != nil {
 			return t, err
 		}
@@ -267,9 +275,14 @@ func (s *Store) queueTurn(tx *sql.Tx, actor string, planID int64, text, backToBr
 		map[string]any{"turn": t.ID, "messages": len(t.Messages), "joined": q != nil})
 }
 
-// PlanMessage is the user talking in a plan's thread: the message joins the plan's queued turn
+// PlanMessage is the user talking to a plan (the API): the message joins the plan's queued turn
 // (one is created when none waits). A turn running meanwhile is not disturbed.
 func (s *Store) PlanMessage(ctx context.Context, actor string, id int64, text string) (pipeline.PlanTurn, error) {
+	return s.PlanSlackMessage(ctx, actor, id, text, "")
+}
+
+// PlanSlackMessage is PlanMessage for a reply in the plan's Slack thread: the turn keeps its ts.
+func (s *Store) PlanSlackMessage(ctx context.Context, actor string, id int64, text, ts string) (pipeline.PlanTurn, error) {
 	var out pipeline.PlanTurn
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		p, err := loadPlan(tx, id)
@@ -283,7 +296,7 @@ func (s *Store) PlanMessage(ctx context.Context, actor string, id int64, text st
 		if text == "" {
 			return errf(pipeline.CodeMissingField, "text is required")
 		}
-		out, err = s.queueTurn(tx, actor, id, text, "")
+		out, err = s.queueTurn(tx, actor, id, text, strings.TrimSpace(ts), "")
 		return err
 	})
 	if err != nil {
@@ -368,7 +381,7 @@ func (s *Store) ApprovePlan(ctx context.Context, actor string, id int64, kind, s
 			return err
 		}
 		if kind == pipeline.DocBrief {
-			_, err := s.queueTurn(tx, "loopd", id, "", "")
+			_, err := s.queueTurn(tx, "loopd", id, "", "", "")
 			return err
 		}
 		ids := make([]int64, len(out.Items))
@@ -575,7 +588,7 @@ func (s *Store) PlanTurnResult(ctx context.Context, runnerName string, planID, t
 		if err := s.planEvent(tx, planID, actor, "back_to_brief", p.Stage, o.Plan.Stage, map[string]any{"reason": why}); err != nil {
 			return err
 		}
-		_, err = s.queueTurn(tx, "loopd", planID, "", why)
+		_, err = s.queueTurn(tx, "loopd", planID, "", "", why)
 		return err
 	})
 	if err != nil {
@@ -658,6 +671,7 @@ func (s *Store) requeueTurn(tx *sql.Tx, t pipeline.PlanTurn) error {
 	}
 	if q != nil {
 		q.Messages = append(append([]string{}, t.Messages...), q.Messages...)
+		q.SlackTS = append(append([]string{}, t.SlackTS...), q.SlackTS...)
 		if q.BackToBrief == "" {
 			q.BackToBrief = t.BackToBrief
 		}
@@ -808,6 +822,43 @@ func (s *Store) planItemSettled(tx *sql.Tx, it pipeline.Item) error {
 		return err
 	}
 	return s.planEvent(tx, p.ID, "loopd", "plan_done", from, p.Stage, map[string]any{"item": it.ID})
+}
+
+// ---- Slack ----
+
+// PlanByThread finds the plan whose Slack thread is (channel, ts); 0 when there is none.
+func (s *Store) PlanByThread(ctx context.Context, channel, ts string) (int64, error) {
+	if ts == "" {
+		return 0, nil
+	}
+	var id int64
+	err := s.r.QueryRowContext(ctx, `SELECT id FROM plans WHERE slack_channel = ? AND slack_ts = ?`, channel, ts).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return id, err
+}
+
+// SetPlanSlack records a plan's Slack thread and the bot's header message in it. Slack state, not
+// the plan's: it writes no event.
+func (s *Store) SetPlanSlack(ctx context.Context, id int64, channel, ts, header string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.Exec(`UPDATE plans SET slack_channel = ?, slack_ts = ?, slack_header = ? WHERE id = ?`, channel, ts, header, id)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return errf(CodeNotFound, "no plan P%d", id)
+		}
+		return nil
+	})
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // ---- reads ----
