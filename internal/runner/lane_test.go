@@ -56,11 +56,15 @@ func (g *rig) toLand(title string) (int64, *fakeLand) {
 }
 
 // waitMerged polls (real time) until land asked GitHub for a merge.
-func (g *rig) waitMerged(gh *fakeLand) {
+// waitMerged waits until GitHub saw the merge and the runner reported it to loopd: the report
+// comes after the merge call, so checking loopd right after GitHub races on a slow machine.
+func (g *rig) waitMerged(gh *fakeLand, id int64) {
 	g.t.Helper()
 	for i := 0; i < 600; i++ {
 		if _, m := gh.seen(); m > 0 {
-			return
+			if evs := g.events(id, "advanced"); len(evs) > 0 && evs[len(evs)-1].Outcome == "merged" {
+				return
+			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -100,7 +104,7 @@ func TestLandRunsWhileAnAgentHoldsTheSlot(t *testing.T) {
 	stop := g.runInBackground()
 	g.clk.BlockUntil(2) // the build's heartbeat and time cap: the agent runs in the only slot
 	waitFile(t, filepath.Join(g.r.Cfg.WorkRoot, fmt.Sprintf("%d-build", building), "wip.txt"))
-	g.waitMerged(gh)
+	g.waitMerged(gh, landing)
 
 	if d := g.item(building); d.Item.Stage != pipeline.Build || d.Lease == nil {
 		t.Fatalf("the build should still hold its lease: %s %+v", d.Item.Stage, d.Lease)
@@ -120,7 +124,7 @@ func TestLandOnlyRunnerClaimsOnlyLand(t *testing.T) {
 	g.stages(StageLand)
 
 	stop := g.runInBackground()
-	g.waitMerged(gh)
+	g.waitMerged(gh, landing)
 	g.clk.BlockUntil(1) // the land lane's poll timer, and nothing else
 	// The one claim is triage's, by hand.
 	if len(g.events(building, "claimed")) != 1 {
