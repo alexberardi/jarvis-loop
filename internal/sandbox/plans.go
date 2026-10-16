@@ -4,14 +4,17 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
+	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/store"
 )
 
 // Plans in the harness (docs/phases/07-planning.md, "Harness"): driven through loopd's user and
 // runner API. The runner side of a turn is a fake here (the hand runner claims the turn and
-// reports a scripted result); the real runner's turns and #plan in Slack come with later pieces.
+// reports a scripted result); the real runner's turns come with a later piece. #plan in Slack is
+// played by plan_post and plan_reply (planSlack).
 
 // PlanMatch checks a plan.
 type PlanMatch struct {
@@ -249,4 +252,48 @@ func ids(xs []int64) string {
 		parts = append(parts, fmt.Sprintf("#%d", x))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// planSlack is the user (or someone else) talking in #plan: plan_post is a top-level message,
+// plan_reply a reply in the plan's thread.
+func (p *player) planSlack(st Step) error {
+	user, err := userID(st.As)
+	if err != nil {
+		return err
+	}
+	if st.Do == "plan_post" {
+		if _, dup := p.plans[st.Plan]; st.Plan != "" && dup {
+			return fmt.Errorf("plan %q started twice", st.Plan)
+		}
+		ts, err := p.s.Slack.Reply(user, slack.ChannelPlan, "", st.Text)
+		if err != nil || st.Plan == "" {
+			return err
+		}
+		return eventually(10*time.Second, func() error {
+			id, err := p.s.Store.PlanByThread(p.ctx, slack.ChannelPlan, ts)
+			if err != nil {
+				return err
+			}
+			if id == 0 {
+				return fmt.Errorf("the message in #plan started no plan")
+			}
+			p.plans[st.Plan] = id
+			return nil
+		})
+	}
+	id, err := p.planRef(st.Plan)
+	if err != nil {
+		return err
+	}
+	var thread string
+	if err := eventually(10*time.Second, func() error {
+		if thread = p.s.PlanThread(id); thread == "" {
+			return fmt.Errorf("plan %s has no thread in #plan yet", st.Plan)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	_, err = p.s.Slack.Reply(user, slack.ChannelPlan, thread, st.Text)
+	return err
 }

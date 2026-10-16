@@ -1,0 +1,29 @@
+{
+  "name": "plan-not-the-approver",
+  "about": "Planning scenario 6 (docs/phases/07-planning.md): someone other than the approver posts an idea in #plan and replies in a plan's thread. Nothing starts, the bot says nothing (no reply, no ephemeral; loopd logs it), and their reply does not reach the agent. The approver's own message in #plan does start a plan, so the silence is the rule and not a deaf bot.",
+  "steps": [
+    {"do": "plan_post", "as": "other", "text": "Let's plan a pantry list in demo"},
+    {"do": "plan_post", "as": "approver", "plan": "p", "text": "A pantry list in demo\nSo I know what to buy."},
+    {"do": "wait", "plans": {"p": {"stage": "brief", "turn": "agent"}},
+     "messages": [{"plan": "p", "from": "bot", "text": "^\\*P1 A pantry list\\*", "buttons": ["Drop"]}]},
+    {"do": "plan_reply", "plan": "p", "as": "other", "text": "and the garage"},
+    {"do": "plan_turn", "plan": "p", "text": "Who is it for?"},
+    {"do": "expect",
+     "messages": [{"plan": "p", "from": "bot", "text": "^Who is it for\\?$"}],
+     "events": [{"plan": "p", "kind": "plan_turn_queued", "count": 1}]}
+  ],
+  "expect": {
+    "plans": {"p": {"stage": "brief", "turn": "you", "turns": 1}},
+    "events": [{"kind": "plan_created", "actor": "approver", "count": 1}],
+    "no_events": [{"actor": "other"}],
+    "messages": [
+      {"channel": "plan", "from": "other", "text": "^Let's plan a pantry list in demo$", "reactions": []},
+      {"plan": "p", "from": "approver", "text": "^A pantry list in demo", "reactions": ["white_check_mark"]},
+      {"plan": "p", "from": "other", "text": "^and the garage$", "reactions": []}
+    ],
+    "no_messages": [
+      {"kind": "ephemeral"},
+      {"channel": "plan", "from": "bot", "text": "Let's plan|garage"}
+    ]
+  }
+}

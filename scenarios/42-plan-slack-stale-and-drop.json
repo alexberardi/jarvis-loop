@@ -1,0 +1,43 @@
+{
+  "name": "plan-slack-stale-and-drop",
+  "about": "Planning scenario 4 in #plan, and dropping plans from Slack. The approver presses Approve brief v1 after the agent wrote v2: the echo waits the 2 minutes, then says it was not applied (\"the brief changed; approve v2 instead\") and the plan stays at brief. Someone else's Drop press is refused; the approver's Drop (after Slack's confirmation) drops the plan, the header loses its Drop button and the turn queued meanwhile fails (\"Refused drop from someone else\" and \"Dropped by you\" in the thread). A second plan, started with /loop plan, gets a thread the bot opens in #plan, and /loop drop P2 drops it; /loop plans then lists nothing.",
+  "steps": [
+    {"do": "plan_post", "as": "approver", "plan": "p", "text": "A pantry list"},
+    {"do": "plan_turn", "plan": "p", "text": "First brief.", "brief": "# Pantry\n\nv1", "ready": true},
+    {"do": "wait", "messages": [{"plan": "p", "from": "bot", "text": "^First brief\\.", "buttons": ["Approve brief v1"]}]},
+    {"do": "plan_reply", "plan": "p", "as": "approver", "text": "add the freezer"},
+    {"do": "plan_turn", "plan": "p", "text": "Second brief.", "brief": "# Pantry\n\nv2", "ready": true},
+    {"do": "wait", "messages": [{"plan": "p", "from": "bot", "text": "^Second brief\\.", "buttons": ["Approve brief v2"]}]},
+    {"do": "press", "plan": "p", "as": "approver", "button": "plan_approve", "text": "^First brief\\."},
+    {"do": "wait", "messages": [{"plan": "p", "from": "bot", "text": "^Approved by you: brief v1 .*Applying in 2 minutes\\.$"}]},
+    {"do": "clock", "advance": "2m"},
+    {"do": "wait", "plans": {"p": {"stage": "brief", "turn": "you"}},
+     "events": [{"plan": "p", "kind": "refused", "actor": "approver", "data": {"action": "^approve brief$", "code": "^sha_mismatch$"}, "count": 1}],
+     "messages": [{"plan": "p", "from": "bot", "text": "^Not applied: the brief changed; approve v2 instead \\(that was v1\\)$"},
+                  {"plan": "p", "from": "bot", "text": "^Refused approve brief from you: the brief changed; approve v2 instead"}]},
+    {"do": "plan_reply", "plan": "p", "as": "approver", "text": "one more thing"},
+    {"do": "press", "plan": "p", "as": "other", "button": "plan_drop"},
+    {"do": "wait", "plans": {"p": {"stage": "brief"}},
+     "messages": [{"channel": "plan", "kind": "ephemeral", "to": "other", "text": "^Sorry, only the approver can do that\\.$"}],
+     "events": [{"plan": "p", "kind": "refused", "actor": "other", "data": {"action": "^drop$"}, "count": 1}]},
+    {"do": "press", "plan": "p", "as": "approver", "button": "plan_drop"},
+    {"do": "wait", "plans": {"p": {"stage": "dropped", "turn": "none", "last_turn": "failed", "last_error": "^the plan was dropped$"}},
+     "messages": [{"plan": "p", "from": "bot", "text": "^Dropped by you: 'Drop button'\\.$"}]},
+    {"do": "expect", "no_messages": [{"plan": "p", "from": "bot", "buttons": ["Drop"]}]},
+    {"do": "command", "as": "approver", "text": "plan a garden plan in demo, low priority", "answer": "^Started P2 \\(P4\\): a garden plan\\. Its thread is in <#C0C8Y132YRM>\\.$"},
+    {"do": "command", "as": "approver", "text": "plans", "answer": "^\\*Open plans\\*\\n• P2 P4 a garden plan — brief, the agent's turn$"},
+    {"do": "command", "as": "approver", "text": "drop P2 later", "answer": "^P2 dropped\\.$"},
+    {"do": "command", "as": "approver", "text": "plans", "answer": "^No open plans\\."}
+  ],
+  "expect": {
+    "plans": {"p": {"stage": "dropped", "docs": {"brief": 2}}},
+    "events": [
+      {"plan": "p", "kind": "plan_dropped", "actor": "approver", "count": 1},
+      {"kind": "plan_dropped", "actor": "approver", "data": {"words": "^later$"}, "count": 1}
+    ],
+    "no_events": [{"kind": "plan_approved"}],
+    "messages": [
+      {"channel": "plan", "from": "bot", "text": "^\\*P2 a garden plan\\*\\nPlan · Stage \\*dropped\\* · Priority \\*P4\\* · Repos sandbox/demo"}
+    ]
+  }
+}

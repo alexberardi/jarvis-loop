@@ -110,12 +110,16 @@ func TestFailingScenariosFail(t *testing.T) {
 		{"unknown item", []Step{{Do: "triage", Item: "zz"}}, nil, []string{`no item "zz"`}},
 		{"a press on a button that is not there", []Step{add, {Do: "press", Item: "a", Button: "approve", Expect: Expect{Within: "300ms"}}}, nil,
 			[]string{"no message with approve to press"}},
-		{"a message outside the two channels", []Step{add}, func(t *testing.T, s *Stack) {
+		{"a message outside the three channels", []Step{add}, func(t *testing.T, s *Stack) {
 			api := slack.NewAPI(s.Slack.BaseURL(), s.Secrets[3], slack.Channels{"C0GENERAL"})
 			if _, err := api.PostMessage(context.Background(), slack.Message{Channel: "C0GENERAL", Text: "hello"}); err != nil {
 				t.Fatal(err)
 			}
-		}, []string{"must not: chat.postMessage to #C0GENERAL (not an allowed channel), outside #loop and #loop-digest"}},
+		}, []string{"must not: chat.postMessage to #C0GENERAL (not an allowed channel), outside #loop, #loop-digest and #plan"}},
+		{"a reaction outside the three channels", []Step{add}, func(t *testing.T, s *Stack) {
+			api := slack.NewAPI(s.Slack.BaseURL(), s.Secrets[3], slack.Channels{"C0GENERAL"})
+			api.ReactionsAdd(context.Background(), "C0GENERAL", "1.1", slack.ReactionDone)
+		}, []string{"must not: reactions.add to #C0GENERAL (not an allowed channel), outside #loop, #loop-digest and #plan"}},
 		{"a token in a message", []Step{add}, func(t *testing.T, s *Stack) {
 			api := slack.NewAPI(s.Slack.BaseURL(), s.Secrets[3], slack.Channels{slack.ChannelLoop})
 			api.PostMessage(context.Background(), slack.Message{Channel: slack.ChannelLoop, Text: "debug: " + s.Secrets[1]})

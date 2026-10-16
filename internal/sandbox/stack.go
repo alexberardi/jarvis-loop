@@ -568,6 +568,15 @@ func (s *Stack) AgentState(id int64) []string {
 	return strings.Fields(string(b))
 }
 
+// PlanThread is a plan's thread ts in #plan ("" before it has one).
+func (s *Stack) PlanThread(id int64) string {
+	d, err := s.Store.GetPlan(context.Background(), id)
+	if err != nil || d.Plan.SlackChannel != slack.ChannelPlan {
+		return ""
+	}
+	return d.Plan.SlackTS
+}
+
 // Thread is an item's Slack thread ts ("" before its parent is posted).
 func (s *Stack) Thread(id int64) string {
 	_, ts, _ := s.Store.SlackThread(context.Background(), id)
