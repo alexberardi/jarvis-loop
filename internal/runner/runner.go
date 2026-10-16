@@ -87,7 +87,9 @@ func (r *Runner) Paused() string {
 	return s
 }
 
-// Run works items until ctx ends, in up to Cfg.Slots parallel slots.
+// Run works items until ctx ends: agent work in up to Cfg.Slots parallel slots, and land, which
+// runs no agent, in a lane of its own next to them, one item at a time (loopd's land limit), so an
+// approved item never waits for a slot (docs/decisions/2026-10-16-land-lane.md).
 func (r *Runner) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	if r.Close != nil {
@@ -97,12 +99,13 @@ func (r *Runner) Run(ctx context.Context) error {
 			r.closeDroppedLoop(ctx)
 		}()
 	}
-	for i := 0; i < r.Cfg.Slots; i++ {
+	agent, land := r.Lanes()
+	lane := func(stages []string) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for ctx.Err() == nil {
-				claimed, err := r.ClaimAndRun(ctx)
+				claimed, err := r.ClaimAndRunIn(ctx, stages)
 				if err != nil {
 					r.Log.Warn("claim", "err", err)
 				}
@@ -118,9 +121,28 @@ func (r *Runner) Run(ctx context.Context) error {
 			}
 		}()
 	}
+	for i := 0; agent != nil && i < r.Cfg.Slots; i++ {
+		lane(agent)
+	}
+	if land != nil {
+		lane(land)
+	}
 	wg.Wait()
 	r.bg.Wait()
 	return nil
+}
+
+// Lanes splits the stages this runner claims into the agent lane's (nil when there are none: an
+// empty stages list means any stage to loopd) and the land lane's (nil without land).
+func (r *Runner) Lanes() (agent, land []string) {
+	for _, st := range r.Cfg.Stages {
+		if st == StageLand {
+			land = []string{StageLand}
+		} else {
+			agent = append(agent, st)
+		}
+	}
+	return agent, land
 }
 
 func randHex(n int) string {
@@ -132,11 +154,20 @@ func randHex(n int) string {
 // ClaimAndRun claims one item in the stages this runner runs and works it to the end. It reports
 // whether it claimed one.
 func (r *Runner) ClaimAndRun(ctx context.Context) (bool, error) {
+	return r.ClaimAndRunIn(ctx, r.Cfg.Stages)
+}
+
+// ClaimAndRunIn is ClaimAndRun in some of the stages (a lane's). A paused runner claims only land,
+// which runs no agent.
+func (r *Runner) ClaimAndRunIn(ctx context.Context, stages []string) (bool, error) {
 	if why := r.Paused(); why != "" {
-		return false, nil
+		if !slices.Contains(stages, StageLand) {
+			return false, nil
+		}
+		stages = []string{StageLand}
 	}
 	agent := r.Cfg.Name + "-" + randHex(4)
-	cl, err := r.Client.Claim(ctx, agent, r.Cfg.Capabilities, r.Cfg.Stages)
+	cl, err := r.Client.Claim(ctx, agent, r.Cfg.Capabilities, stages)
 	if err != nil || cl == nil {
 		return false, err
 	}
