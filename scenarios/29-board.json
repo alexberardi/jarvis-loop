@@ -27,6 +27,8 @@
     {"do": "runner_idle"},
     {"do": "expect", "stage": {"b": "needs_you"}, "board": {"b": {"column": "Needs you", "card": "class=\"reason\">[^<]+<"}}},
     {"do": "reply", "item": "a", "as": "approver", "text": "approve"},
+    {"do": "expect", "stage": {"a": "held"},
+     "messages": [{"thread": "a", "from": "bot", "text": "^Approved by you: 'approve' for `[0-9a-f]{7}`\\. Merging in 2 minutes\\."}]},
     {"do": "clock", "advance": "2m"},
     {"do": "expect", "stage": {"a": "land"}},
     {"do": "runner", "claims": "a"},
