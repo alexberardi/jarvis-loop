@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>P{{.Plan.ID}} {{.Name}} v{{.Doc.Version}} · Jarvis Loop</title>
+{{template "style"}}
+{{template "docstyle"}}
+</head>
+<body>
+<main>
+<p class="sub"><a href="/board/plans/{{.Plan.ID}}">← P{{.Plan.ID}} {{.Plan.Title}}</a></p>
+<h1>{{.Name}} v{{.Doc.Version}}{{if ne .Doc.Version .Latest}} <span class="muted">(the latest is <a href="/board/plans/{{.Plan.ID}}/{{.Kind}}/{{.Latest}}">v{{.Latest}}</a>)</span>{{end}}</h1>
+{{template "versions" .}}
+<div class="doc">
+{{.HTML}}</div>
+</main>
+</body>
+</html>

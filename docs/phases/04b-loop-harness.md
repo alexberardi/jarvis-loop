@@ -132,7 +132,7 @@ negative ones are checked once the loop has gone quiet:
 | `remote`: {`branches`: {alias: head-subject regexp}, `files`: {alias: [paths]}, `only`, `main`: alias} | the remote's branches; `main` is where it started or where a merge or `push` put it, and (`main`) is that item's squash commit |
 | `agent_runs`: {stage: n} | the runner started n agent runs for that stage (land starts none) |
 | `absent`: [paths under the stack dir] | they do not exist |
-| `board`: {alias: {`column`, `card` regexp}} | the item's card is in that column of the web board (read from the stack's board listener with a board token, through the `?t=` cookie flow), its HTML matching `card` |
+| `board`: {alias: {`column`, `card` regexp, `page` regexp}} | the item's (or plan's) card is in that column of the web board (read from the stack's board listener with a board token, through the `?t=` cookie flow), its HTML matching `card`, and its page (`/board/items/{id}` or `/board/plans/{id}`) matching `page` |
 | `plans`: {alias: {`stage`, `items`, `turn` (`you`\|`agent`\|`none`), `docs`: {kind: latest version}, `turns`, `last_turn` (status), `last_error` regexp}} | the plan as loopd has it |
 | `depends_on`: {alias: [aliases]} | the item depends on exactly those items |
 

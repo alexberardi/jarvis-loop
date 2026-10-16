@@ -41,6 +41,9 @@ td.data { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 {{- if $.PRURL}}
 <dt>PR</dt><dd><a href="{{$.PRURL}}">#{{.PR}}</a></dd>
 {{- end}}
+{{- if .PlanID}}
+<dt>Plan</dt><dd><a href="/board/plans/{{.PlanID}}">P{{.PlanID}}</a>{{if .PlanPiece}}, piece {{.PlanPiece}}{{end}}</dd>
+{{- end}}
 {{- if $.SlackURL}}
 <dt>Slack</dt><dd><a href="{{$.SlackURL}}">thread</a></dd>
 {{- end}}
