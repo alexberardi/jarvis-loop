@@ -1,0 +1,56 @@
+{
+  "name": "plan-in-slack",
+  "about": "Planning scenario 2 through #plan (docs/phases/07-planning.md, \"Slack\"): the approver's top-level message starts P1 (\"high priority\" and \"in demo\" read as in #loop) and the bot answers in the thread with the plan's header and a Drop button. The product turn runs (⏳ on the message, ✅ once the reply is posted) and its reply carries Approve brief v1. A reply in the thread queues the next turn, which writes brief v2. Pressing Approve brief v2 echoes with Cancel and applies after the 2-minute window, bound to v2's sha256; the engineering turn's blueprint (3 pieces, 2 and 3 depending on 1) gets Approve blueprint v1, and its approval lists the 3 filed items in the thread. Only piece 1 is claimable. /loop plans lists the plan while it is open.",
+  "steps": [
+    {"do": "plan_post", "as": "approver", "plan": "p", "text": "A pantry list in demo, high priority\nSo I know what to buy before I shop."},
+    {"do": "wait", "plans": {"p": {"stage": "brief", "turn": "agent"}},
+     "messages": [{"plan": "p", "from": "bot", "text": "^\\*P1 A pantry list\\*\\nPlan · Stage \\*brief\\* · Priority \\*P2\\* · Repos sandbox/demo · the agent's turn", "buttons": ["Drop"]}]},
+    {"do": "command", "as": "approver", "text": "plans", "answer": "P1 P2 A pantry list — brief, the agent's turn"},
+    {"do": "plan_turn", "plan": "p", "text": "Here is a first brief.", "brief": "# Pantry list\n\nWhat is in the pantry.", "ready": true},
+    {"do": "wait", "messages": [
+      {"plan": "p", "from": "approver", "text": "^A pantry list in demo", "reactions": ["white_check_mark"]},
+      {"plan": "p", "from": "bot", "text": "^Here is a first brief\\.\\n\\nReady for your approval: brief v1", "buttons": ["Approve brief v1"]}]},
+    {"do": "plan_reply", "plan": "p", "as": "approver", "text": "add the freezer too"},
+    {"do": "plan_turn", "plan": "p", "text": "Added the freezer.", "brief": "# Pantry list\n\nWhat is in the pantry and the freezer.", "ready": true},
+    {"do": "wait", "plans": {"p": {"docs": {"brief": 2}, "turn": "you"}},
+     "messages": [
+      {"plan": "p", "from": "approver", "text": "^add the freezer too$", "reactions": ["white_check_mark"]},
+      {"plan": "p", "from": "bot", "text": "^Added the freezer\\.", "buttons": ["Approve brief v2"]}]},
+    {"do": "press", "plan": "p", "as": "approver", "button": "plan_approve"},
+    {"do": "wait", "messages": [{"plan": "p", "from": "bot", "text": "^Approved by you: brief v2 .*Applying in 2 minutes\\.$", "buttons": ["Cancel"]}]},
+    {"do": "expect", "plans": {"p": {"stage": "brief"}}, "no_events": [{"plan": "p", "kind": "plan_approved"}]},
+    {"do": "clock", "advance": "2m"},
+    {"do": "wait", "plans": {"p": {"stage": "blueprint", "turn": "agent"}},
+     "events": [{"plan": "p", "kind": "plan_approved", "actor": "approver", "data": {"kind": "^brief$", "version": "^2$"}, "count": 1}],
+     "messages": [{"plan": "p", "from": "bot", "text": "^Approved by you: brief v2 \\(`[0-9a-f]{7}`\\)\\. Applied\\.$"},
+                  {"plan": "p", "from": "bot", "text": "^Brief v2 approved by you → blueprint\\. The engineering agent writes the blueprint next\\.$"}]},
+    {"do": "plan_turn", "plan": "p", "text": "Blueprint ready: three pieces.", "ready": true,
+     "blueprint": "# Blueprint\n\nApproach: a table, then two readers.\n\n## Pieces\n\n### 1. Pantry table\n- depends on: none\n\nThe table and its migration.\n\n### 2. Pantry API\n- depends on: 1\n\nList and add.\n\n### 3. Pantry page\n- depends on: 1\n\nShow the list.\n"},
+    {"do": "wait", "messages": [{"plan": "p", "from": "bot", "text": "^Blueprint ready: three pieces\\.", "buttons": ["Approve blueprint v1"]}]},
+    {"do": "press", "plan": "p", "as": "approver", "button": "plan_approve"},
+    {"do": "wait", "messages": [{"plan": "p", "from": "bot", "text": "^Approved by you: blueprint v1 .*Its pieces are filed as items then\\.$", "buttons": ["Cancel"]}]},
+    {"do": "clock", "advance": "2m"},
+    {"do": "wait", "plans": {"p": {"stage": "split", "items": 3, "turn": "none"}},
+     "messages": [{"plan": "p", "from": "bot", "text": "^\\*P1 A pantry list\\*\\nPlan · Stage \\*split\\* · Priority \\*P2\\* · Repos sandbox/demo · Items #1, #2, #3", "buttons": ["Drop"]},
+                  {"plan": "p", "from": "bot", "text": "^Filed 3 items from the blueprint .*\\n• #1 Pantry table\\n• #2 Pantry API \\(after #1\\)\\n• #3 Pantry page \\(after #1\\)$"}]},
+    {"do": "plan_items", "plan": "p", "pieces": ["p1", "p2", "p3"]},
+    {"do": "expect", "stage": {"p1": "triage", "p2": "triage", "p3": "triage"},
+     "depends_on": {"p1": [], "p2": ["p1"], "p3": ["p1"]},
+     "messages": [{"parent": "p1", "text": "Pantry table"}, {"parent": "p2", "text": "· Waiting on #1"}, {"parent": "p3", "text": "· Waiting on #1"}]},
+    {"do": "script", "item": "p1", "for": "triage", "play": "triage_question"},
+    {"do": "runner", "claims": "p1"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"p1": "needs_you", "p2": "triage", "p3": "triage"}},
+    {"do": "runner", "claims": "none"}
+  ],
+  "expect": {
+    "plans": {"p": {"stage": "split", "items": 3, "turns": 3}},
+    "events": [
+      {"plan": "p", "kind": "plan_created", "actor": "approver", "count": 1},
+      {"plan": "p", "kind": "plan_approved", "actor": "approver", "count": 2},
+      {"plan": "p", "kind": "split", "actor": "loopd", "data": {"items": "^\\[1,2,3\\]$"}, "count": 1}
+    ],
+    "no_events": [{"plan": "p", "kind": "refused"}],
+    "no_messages": [{"channel": "plan", "reactions": ["hourglass_flowing_sand"]}]
+  }
+}

@@ -619,6 +619,15 @@ func (s *Stack) AgentState(id int64) []string {
 	return strings.Fields(string(b))
 }
 
+// PlanThread is a plan's thread ts in #plan ("" before it has one).
+func (s *Stack) PlanThread(id int64) string {
+	d, err := s.Store.GetPlan(context.Background(), id)
+	if err != nil || d.Plan.SlackChannel != slack.ChannelPlan {
+		return ""
+	}
+	return d.Plan.SlackTS
+}
+
 // PlanScript sets how the fake claude plays a plan's next turns of a persona; repo is the repo the
 // product agent names (repos), if any.
 func (s *Stack) PlanScript(id int64, persona, play, repo string) error {

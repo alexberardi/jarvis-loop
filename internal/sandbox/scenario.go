@@ -90,6 +90,9 @@ type Step struct {
 	// Ready, BackToBrief (Fails: the turn must fail, a regexp on why); plan_approve approves Doc
 	// ("brief", "blueprint") at Version (0: the latest; Refused: must be refused, a regexp);
 	// plan_drop drops it; plan_items names the items its hand-off filed, in piece order (Pieces).
+	// In Slack (#plan): plan_post is a top-level message in #plan from As with Text (Plan, when
+	// set, names the plan it must start; without it nothing may start); plan_reply is As's reply
+	// in the plan's thread. press with Plan presses a button in the plan's thread.
 	Plan        string   `json:"plan,omitempty"`
 	Brief       string   `json:"brief,omitempty"`
 	Blueprint   string   `json:"blueprint,omitempty"`
@@ -178,15 +181,19 @@ type EventMatch struct {
 
 // MsgMatch selects Slack messages.
 type MsgMatch struct {
-	Thread  string   `json:"thread,omitempty"`  // a reply in this item's thread
-	Parent  string   `json:"parent,omitempty"`  // this item's first message
-	Channel string   `json:"channel,omitempty"` // loop or digest
-	From    string   `json:"from,omitempty"`    // bot, approver, other
-	Kind    string   `json:"kind,omitempty"`    // message, ephemeral, command, response
-	To      string   `json:"to,omitempty"`      // an ephemeral's reader
-	Text    string   `json:"text,omitempty"`    // regexp on the visible text
-	Buttons []string `json:"buttons,omitempty"` // labels that must be on it
-	Pinned  *bool    `json:"pinned,omitempty"`
+	Thread string `json:"thread,omitempty"` // a reply in this item's thread
+	// Plan: a message in this plan's thread in #plan (its parent or a reply).
+	Plan string `json:"plan,omitempty"`
+	// Reactions, when set, are exactly the bot's reactions on it ([] for none).
+	Reactions []string `json:"reactions,omitempty"`
+	Parent    string   `json:"parent,omitempty"`  // this item's first message
+	Channel   string   `json:"channel,omitempty"` // loop or digest
+	From      string   `json:"from,omitempty"`    // bot, approver, other
+	Kind      string   `json:"kind,omitempty"`    // message, ephemeral, command, response
+	To        string   `json:"to,omitempty"`      // an ephemeral's reader
+	Text      string   `json:"text,omitempty"`    // regexp on the visible text
+	Buttons   []string `json:"buttons,omitempty"` // labels that must be on it
+	Pinned    *bool    `json:"pinned,omitempty"`
 }
 
 // PRMatch checks the PR the runner opened for an item (found by its branch).
@@ -601,6 +608,8 @@ func (p *player) step(st Step) error {
 		return p.check(st.Expect)
 	case "plan", "plan_say", "plan_turn", "plan_approve", "plan_drop", "plan_items":
 		return p.planStep(st)
+	case "plan_post", "plan_reply":
+		return p.planSlack(st)
 	}
 	return fmt.Errorf("unknown step %q", st.Do)
 }
@@ -734,8 +743,8 @@ func hasElement(m slackfake.Message, actionID string) bool {
 	return false
 }
 
-// press finds the newest message (in the item's thread, or the control message) with the button
-// or menu and acts on it as a person would.
+// press finds the newest message (in the item's or plan's thread, or the control message) with the
+// button or menu, and whose body matches Text when that is set, and acts on it as a person would.
 func (p *player) press(st Step) error {
 	user, err := userID(st.As)
 	if err != nil {
@@ -756,6 +765,14 @@ func (p *player) press(st Step) error {
 		switch {
 		case st.Message == "control":
 			thread = ""
+		case st.Plan != "":
+			id, err := p.planRef(st.Plan)
+			if err != nil {
+				return err
+			}
+			if thread = p.s.PlanThread(id); thread == "" {
+				return fmt.Errorf("plan %s has no thread yet", st.Plan)
+			}
 		case st.Item != "":
 			r, err := p.ref(st.Item)
 			if err != nil {
@@ -763,13 +780,20 @@ func (p *player) press(st Step) error {
 			}
 			thread = p.s.Thread(r.id)
 		default:
-			return errors.New("press needs item or message: control")
+			return errors.New("press needs item, plan or message: control")
 		}
 		msgs := p.s.Slack.Messages()
 		for i := len(msgs) - 1; i >= 0; i-- {
 			m := msgs[i]
 			if m.User != slackfake.BotUser || !hasElement(m, st.Button) {
 				continue
+			}
+			if st.Text != "" {
+				if hit, err := matches(st.Text, Body(m)); err != nil {
+					return err
+				} else if !hit {
+					continue
+				}
 			}
 			if st.Message == "control" && m.TS == p.s.ControlTS() || thread != "" && (m.TS == thread || m.ThreadTS == thread) {
 				target = m

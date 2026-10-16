@@ -406,7 +406,7 @@ func (p *player) eventsNote(evs []store.Event, m EventMatch) string {
 
 func (m MsgMatch) String() string {
 	var parts []string
-	for _, kv := range [][2]string{{"thread", m.Thread}, {"parent", m.Parent}, {"channel", m.Channel}, {"from", m.From},
+	for _, kv := range [][2]string{{"thread", m.Thread}, {"parent", m.Parent}, {"plan", m.Plan}, {"channel", m.Channel}, {"from", m.From},
 		{"kind", m.Kind}, {"to", m.To}, {"text", m.Text}} {
 		if kv[1] != "" {
 			parts = append(parts, kv[0]+"="+quote(kv[1]))
@@ -417,6 +417,9 @@ func (m MsgMatch) String() string {
 	}
 	if m.Pinned != nil {
 		parts = append(parts, fmt.Sprintf("pinned=%v", *m.Pinned))
+	}
+	if m.Reactions != nil {
+		parts = append(parts, "reactions=["+strings.Join(m.Reactions, ",")+"]")
 	}
 	return "{" + strings.Join(parts, " ") + "}"
 }
@@ -429,6 +432,8 @@ func channelID(name string) string {
 		return slack.ChannelLoop
 	case "digest", "loop-digest", "#loop-digest":
 		return slack.ChannelDigest
+	case "plan", "#plan":
+		return slack.ChannelPlan
 	}
 	return name
 }
@@ -466,9 +471,21 @@ func (p *player) findMessage(msgs []slackfake.Message, m MsgMatch, from int) (in
 			return -1, nil
 		}
 	}
+	var planTS string
+	if m.Plan != "" {
+		id, err := p.planRef(m.Plan)
+		if err != nil {
+			return -1, err
+		}
+		if planTS = p.s.PlanThread(id); planTS == "" {
+			return -1, nil
+		}
+	}
 	for i := from; i < len(msgs); i++ {
 		x := msgs[i]
 		if thread != "" && x.ThreadTS != thread || parent != "" && (x.TS != parent || x.Channel != slack.ChannelLoop) ||
+			planTS != "" && (x.Channel != slack.ChannelPlan || x.TS != planTS && x.ThreadTS != planTS) ||
+			m.Reactions != nil && !slices.Equal(x.Reactions, m.Reactions) ||
 			m.Channel != "" && x.Channel != channelID(m.Channel) || m.From != "" && x.User != userOf(m.From) ||
 			m.Kind != "" && x.Kind != m.Kind || m.To != "" && x.To != userOf(m.To) || m.Pinned != nil && x.Pinned != *m.Pinned {
 			continue
@@ -505,6 +522,9 @@ func (p *player) messagesNote(msgs []slackfake.Message, m MsgMatch) string {
 	if r, err := p.ref(alias); err == nil {
 		thread = p.s.Thread(r.id)
 	}
+	if id, err := p.planRef(m.Plan); m.Plan != "" && err == nil {
+		thread = p.s.PlanThread(id)
+	}
 	var sub []slackfake.Message
 	for _, x := range msgs {
 		if thread != "" && x.TS != thread && x.ThreadTS != thread {
@@ -521,13 +541,13 @@ func (p *player) messagesNote(msgs []slackfake.Message, m MsgMatch) string {
 	return "; there:\n" + Render(sub, "")
 }
 
-// mustNot checks what must never happen, whatever the scenario: a bot message outside the two
-// channels, a token in anything sent to Slack, a broadcast or a mention of anyone but the
+// mustNot checks what must never happen, whatever the scenario: a bot message or reaction outside
+// the three channels, a token in anything sent to Slack, a broadcast or a mention of anyone but the
 // approver, an over-long message, a token in a PR, and an event from an unexpected actor (someone other than the
 // approver only ever appears on a refusal).
 func (p *player) mustNot() []string {
 	var out []string
-	allowed := []string{slack.ChannelLoop, slack.ChannelDigest}
+	allowed := []string{slack.ChannelLoop, slack.ChannelDigest, slack.ChannelPlan}
 	for _, c := range p.s.Slack.Calls() {
 		raw, _ := json.Marshal(c.Body)
 		for _, sec := range p.s.Secrets {
@@ -536,10 +556,10 @@ func (p *player) mustNot() []string {
 			}
 		}
 		switch c.Method {
-		case "chat.postMessage", "chat.update", "chat.postEphemeral", "pins.add":
+		case "chat.postMessage", "chat.update", "chat.postEphemeral", "pins.add", "reactions.add", "reactions.remove":
 			ch, _ := c.Body["channel"].(string)
 			if !slices.Contains(allowed, ch) {
-				out = append(out, fmt.Sprintf("%s to %s, outside #loop and #loop-digest", c.Method, ChannelName(ch)))
+				out = append(out, fmt.Sprintf("%s to %s, outside #loop, #loop-digest and #plan", c.Method, ChannelName(ch)))
 			}
 			if c.Auth != "Bearer "+p.s.Secrets[3] {
 				out = append(out, c.Method+" without the bot token")

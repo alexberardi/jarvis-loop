@@ -200,3 +200,34 @@ func TestCommandRecordsTheAnswer(t *testing.T) {
 		t.Fatalf("%+v", ms)
 	}
 }
+
+func TestRecordsReactions(t *testing.T) {
+	f, _, _ := start(t)
+	ctx := context.Background()
+	api := slack.NewAPI(f.BaseURL(), bot, slack.Channels{slack.ChannelPlan})
+	ts, err := f.Reply(slack.Approver, slack.ChannelPlan, "", "a plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []func() error{
+		func() error { return api.ReactionsAdd(ctx, slack.ChannelPlan, ts, slack.ReactionRunning) },
+		func() error { return api.ReactionsAdd(ctx, slack.ChannelPlan, ts, slack.ReactionRunning) }, // already there: fine
+		func() error { return api.ReactionsAdd(ctx, slack.ChannelPlan, ts, slack.ReactionDone) },
+		func() error { return api.ReactionsRemove(ctx, slack.ChannelPlan, ts, slack.ReactionRunning) },
+		func() error { return api.ReactionsRemove(ctx, slack.ChannelPlan, ts, slack.ReactionRunning) }, // gone already: fine
+	} {
+		if err := step(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	msgs := f.Messages()
+	if got := msgs[len(msgs)-1].Reactions; len(got) != 1 || got[0] != slack.ReactionDone {
+		t.Fatalf("reactions %v", got)
+	}
+	if err := api.ReactionsAdd(ctx, slack.ChannelLoop, ts, slack.ReactionDone); !errors.Is(err, slack.ErrChannelNotAllowed) {
+		t.Fatalf("reaction outside the allowed channels: %v", err)
+	}
+	if err := api.ReactionsAdd(ctx, slack.ChannelPlan, "1.2", slack.ReactionDone); err == nil {
+		t.Fatal("reaction on a message that does not exist")
+	}
+}

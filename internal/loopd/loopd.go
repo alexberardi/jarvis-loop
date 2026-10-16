@@ -65,7 +65,7 @@ func StartSlack(ctx context.Context, bg *sync.WaitGroup, st *store.Store, c Slac
 		return nil, errors.New("loopd: Slack needs BaseURL, Clock and Log")
 	}
 	slg := c.Log.With("component", "slack")
-	botAPI := slack.NewAPI(c.BaseURL, c.Tokens.Bot, slack.Channels{slack.ChannelLoop, slack.ChannelDigest})
+	botAPI := slack.NewAPI(c.BaseURL, c.Tokens.Bot, slack.Channels{slack.ChannelLoop, slack.ChannelDigest, slack.ChannelPlan})
 	appAPI := slack.NewAPI(c.BaseURL, c.Tokens.App, nil)
 	if c.Sleep != nil {
 		botAPI.Sleep, appAPI.Sleep = c.Sleep, c.Sleep

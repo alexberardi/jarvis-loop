@@ -72,7 +72,7 @@ func newBotEnv(t *testing.T) *botEnv {
 
 // newBot builds a bot over the same store and fake Slack, as a restarted loopd would.
 func (e *botEnv) newBot() *Bot {
-	api := NewAPI(e.f.baseURL(), testBotToken, Channels{ChannelLoop, ChannelDigest})
+	api := NewAPI(e.f.baseURL(), testBotToken, Channels{ChannelLoop, ChannelDigest, ChannelPlan})
 	api.Sleep = e.sl.Sleep
 	b, err := New(Config{Store: e.st, API: api, Clock: e.clk, Log: slog.New(slog.NewTextHandler(e.logs, nil)), Sleep: e.sl.Sleep})
 	if err != nil {
@@ -94,7 +94,7 @@ func (e *botEnv) calls() []call {
 			continue
 		}
 		ch, _ := c.Body["channel"].(string)
-		if ch != ChannelLoop && ch != ChannelDigest {
+		if ch != ChannelLoop && ch != ChannelDigest && ch != ChannelPlan {
 			e.t.Errorf("%s to channel %q", c.Method, ch)
 		}
 		raw, _ := json.Marshal(c.Body)

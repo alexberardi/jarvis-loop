@@ -63,8 +63,12 @@ func ClassifyReply(text string) bool {
 }
 
 type pendingApproval struct {
-	id      string
-	itemID  int64
+	id     string
+	itemID int64
+	// A plan's approval (plan.go) names the plan, the document and its version instead of an item.
+	planID  int64
+	kind    string
+	version int
 	sha     string
 	words   string
 	due     time.Time
@@ -135,6 +139,10 @@ func (b *Bot) takePending(keep func(*pendingApproval) bool) []*pendingApproval {
 func (b *Bot) applyDue(ctx context.Context) {
 	now := b.c.Clock.Now()
 	for _, p := range b.takePending(func(p *pendingApproval) bool { return !now.Before(p.due) }) {
+		if p.planID != 0 {
+			b.applyPlanApproval(ctx, p)
+			continue
+		}
 		_, ts, _ := b.c.Store.SlackThread(ctx, p.itemID)
 		_, err := b.c.Store.Approve(ctx, actorPrefix+Approver, p.itemID, p.sha, p.words)
 		var pe *pipeline.Error
@@ -156,7 +164,12 @@ func (b *Bot) applyDue(ctx context.Context) {
 
 // cancelPending drops a reply approval waiting on an item (a button decided it instead).
 func (b *Bot) cancelPending(itemID int64) {
-	b.takePending(func(p *pendingApproval) bool { return p.itemID == itemID })
+	b.takePending(func(p *pendingApproval) bool { return p.itemID == itemID && p.planID == 0 })
+}
+
+// cancelPlanPending drops an approval waiting on a plan (it was dropped).
+func (b *Bot) cancelPlanPending(planID int64) {
+	b.takePending(func(p *pendingApproval) bool { return p.planID == planID })
 }
 
 // approveButton applies the Approve merge button at once, for the head the held message showed.
@@ -187,6 +200,13 @@ func (b *Bot) cancelApproval(ctx context.Context, channel, msgTS, user, id strin
 		return
 	}
 	pa := ps[0]
+	if pa.planID != 0 {
+		b.c.Store.Record(ctx, store.Event{PlanID: pa.planID, Actor: actorPrefix + user, Kind: "approval_cancelled",
+			Data: map[string]any{"kind": pa.kind, "version": pa.version, "sha256": pa.sha}})
+		b.update(ctx, "approval echo", Message{Channel: channel, TS: msgTS,
+			Text: fmt.Sprintf("Cancelled: %s v%d was not approved.", pa.kind, pa.version)})
+		return
+	}
 	b.c.Store.Record(ctx, store.Event{ItemID: pa.itemID, Actor: actorPrefix + user, Kind: "approval_cancelled",
 		Data: map[string]any{"words": pa.words, "head_sha": pa.sha}})
 	b.update(ctx, "approval echo", Message{Channel: channel, TS: msgTS,

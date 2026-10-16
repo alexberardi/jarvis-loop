@@ -9,13 +9,15 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/slackfake"
 )
 
-// ChannelName names the two channels the bot may use; anything else shows its id.
+// ChannelName names the three channels the bot may use; anything else shows its id.
 func ChannelName(id string) string {
 	switch id {
 	case slack.ChannelLoop:
 		return "#loop"
 	case slack.ChannelDigest:
 		return "#loop-digest"
+	case slack.ChannelPlan:
+		return "#plan"
 	}
 	return "#" + id + " (not an allowed channel)"
 }
@@ -147,6 +149,9 @@ func header(m slackfake.Message) string {
 	if m.Pinned {
 		tags = append(tags, "pinned")
 	}
+	for _, r := range m.Reactions {
+		tags = append(tags, ":"+r+":")
+	}
 	h := who + ":"
 	if len(tags) > 0 {
 		h = who + " (" + strings.Join(tags, ", ") + "):"
@@ -199,6 +204,8 @@ func rank(ch string) int {
 		return 0
 	case slack.ChannelDigest:
 		return 1
+	case slack.ChannelPlan:
+		return 2
 	}
-	return 2
+	return 3
 }

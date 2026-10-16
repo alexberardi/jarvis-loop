@@ -21,7 +21,7 @@ import (
 // Config wires a Bot.
 type Config struct {
 	Store *store.Store
-	// API is the Web API client with the bot token, limited to ChannelLoop and ChannelDigest.
+	// API is the Web API client with the bot token, limited to ChannelLoop, ChannelDigest and ChannelPlan.
 	API   *API
 	Clock clock.Clock
 	Log   *slog.Logger
@@ -59,8 +59,11 @@ type Bot struct {
 	// reopening are the qa items whose Reopen the approver pressed: their next reply in the thread
 	// is the words (qa.go).
 	reopening map[int64]bool
-	digestTS  time.Time // the boundary the failures below are for
-	digestNG  int       // failed attempts to post that digest
+	// planHeaders are the plan header messages as last posted or updated (plan.go), so an event
+	// that changes nothing on it does not edit it again.
+	planHeaders map[int64]string
+	digestTS    time.Time // the boundary the failures below are for
+	digestNG    int       // failed attempts to post that digest
 }
 
 const (
@@ -101,7 +104,8 @@ func New(c Config) (*Bot, error) {
 		c.TickEvery = 5 * time.Second
 	}
 	c.LinkBase = strings.TrimRight(c.LinkBase, "/")
-	return &Bot{c: c, events: make(chan store.Event, eventsBuffer), pending: map[string]*pendingApproval{}, reopening: map[int64]bool{}}, nil
+	return &Bot{c: c, events: make(chan store.Event, eventsBuffer), pending: map[string]*pendingApproval{}, reopening: map[int64]bool{},
+		planHeaders: map[int64]string{}}, nil
 }
 
 // Attach subscribes the bot to the store's events. The subscriber only queues: Slack never slows
@@ -199,7 +203,7 @@ func (b *Bot) update(ctx context.Context, what string, m Message) error {
 
 // ephemeral tells one user something, only in a channel the bot may post in.
 func (b *Bot) ephemeral(ctx context.Context, channel, user, text string) {
-	if channel != ChannelLoop && channel != ChannelDigest {
+	if channel != ChannelLoop && channel != ChannelDigest && channel != ChannelPlan {
 		return
 	}
 	b.try(ctx, "ephemeral", func() error {
@@ -210,6 +214,10 @@ func (b *Bot) ephemeral(ctx context.Context, channel, user, text string) {
 // ---- events → threads ----
 
 func (b *Bot) handleEvent(ctx context.Context, e store.Event) {
+	if e.PlanID != 0 {
+		b.handlePlanEvent(ctx, e)
+		return
+	}
 	if e.ItemID == 0 {
 		if e.Kind == "control" {
 			if err := b.updateControl(ctx); err != nil {
@@ -800,7 +808,14 @@ func errMessage(err error) string {
 }
 
 func (b *Bot) onMessage(ctx context.Context, m slackEvent) {
-	if m.BotID != "" || m.Subtype != "" || m.User == "" || m.Channel != ChannelLoop || m.ThreadTS == "" || m.ThreadTS == m.TS {
+	if m.BotID != "" || m.Subtype != "" || m.User == "" {
+		return
+	}
+	if m.Channel == ChannelPlan {
+		b.onPlanMessage(ctx, m)
+		return
+	}
+	if m.Channel != ChannelLoop || m.ThreadTS == "" || m.ThreadTS == m.TS {
 		return
 	}
 	id, err := b.c.Store.ItemByThread(ctx, ChannelLoop, m.ThreadTS)
@@ -843,6 +858,10 @@ func (b *Bot) onMention(ctx context.Context, m slackEvent) {
 	if m.BotID != "" || m.User == "" {
 		return
 	}
+	// In #plan every message is the conversation's (onMessage), mentioning the bot or not.
+	if m.Channel == ChannelPlan {
+		return
+	}
 	// A mention inside an item's thread is a reply; onMessage handles it.
 	if m.Channel == ChannelLoop && m.ThreadTS != "" {
 		if id, _ := b.c.Store.ItemByThread(ctx, ChannelLoop, m.ThreadTS); id != 0 {
@@ -881,6 +900,10 @@ func (b *Bot) onActions(ctx context.Context, p interaction) {
 	user := p.User.ID
 	actor := actorPrefix + user
 	for _, a := range p.Actions {
+		if strings.HasPrefix(a.ActionID, "plan_") {
+			b.onPlanAction(ctx, channel, msgTS, user, a.ActionID, a.Value)
+			continue
+		}
 		itemID := actionItem(a.ActionID, a.BlockID, a.Value)
 		if itemID == 0 && a.ActionID == "cancel_approval" {
 			b.mu.Lock()

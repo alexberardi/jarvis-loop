@@ -8,11 +8,13 @@ control. Still no agents doing work (phase 4); stages are still moved with the `
 ## Facts (do not guess these)
 
 - Workspace `jarvisautomationdev`, bot user `jarvisloop` (bot id `B0CA6SRV664`), Socket Mode on.
-- Channels: `#loop` = `C0C9G6Y87HA` (item threads), `#loop-digest` = `C0C969AA2Q3`.
+- Channels: `#loop` = `C0C9G6Y87HA` (item threads), `#loop-digest` = `C0C969AA2Q3`, `#plan` =
+  `C0C8Y132YRM` (plan threads, phase 7; the bot is a member).
 - The approver, and the only user whose answers, approvals and control changes count:
   `U0C9AFPAMD4`.
 - Scopes: app_mentions:read, channels:history, channels:read, chat:write, commands, files:write,
-  users:read, pins:write. Events: `app_mention`, `message.channels`. Interactivity on. Slash
+  users:read, pins:write. The ⏳/✅ reactions on `#plan` messages (phase 7) need `reactions:write`,
+  which the app may not have yet: without it they fail and are logged, nothing else. Events: `app_mention`, `message.channels`. Interactivity on. Slash
   command `/loop`.
 - Tokens on the dev box: `~/.config/jarvis-harness/slack.env` (`SLACK_BOT_TOKEN` xoxb,
   `SLACK_APP_TOKEN` xapp). loopd reads them from its environment (`--slack-env FILE` loads that file;
