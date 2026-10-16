@@ -588,7 +588,7 @@ func TestKeepHoldingCancelsAPendingReplyApproval(t *testing.T) {
 func TestNonApprovalReplies(t *testing.T) {
 	e, id, ts := heldSetup(t)
 	e.calls()
-	for _, r := range []string{"looks fine?", "don't merge yet", "ok wait", "no", "is the test still there", "hold on"} {
+	for _, r := range []string{"looks fine?", "don't merge yet", "ok wait", "no", "is the test still there", "hold on", "looks good", "let me check"} {
 		e.reply(Approver, ts, r)
 		cs := only(t, e.calls(), "chat.postMessage")
 		if len(cs) != 1 || !strings.Contains(allText(cs[0]), "Not taken as an approval; the item stays held. Reply 'approve' or use the button, or say what to change to send it back to build.") {

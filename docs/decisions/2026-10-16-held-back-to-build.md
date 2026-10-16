@@ -20,10 +20,14 @@ covered by a test or a scenario:
   is not reused here, because it needs a land lease and the mirror lock for an item nobody claimed.
   A docs-only conflict therefore costs a build run instead of none.
 - **The note (Slack).** In a held thread, the approver's reply that `ClassifyReply` does not take
-  as an approval is a note when `IsHeldNote` says so: no question mark or question opening, no
-  negation or "wait"/"hold"/"stop" word anywhere, and not only filler ("thanks", "merge it
-  please"). Strict and model-free like the approval check: "looks fine?", "don't merge yet", "ok
-  wait" and "fix it but don't touch X" stay held, with the hint now saying a note sends it back.
+  as an approval is a note when `IsHeldNote` says so. The match is positive: after mentions and
+  a leading "please", "ok" or "actually", the reply opens with a change verb (rebuild, rebase,
+  fix, rename, change, add, remove, update, use, revert, resolve, …), or is "merge main …", or
+  "merge …" with a change verb later ("merge it after adding a test"). A question mark, a
+  question opening or a negation or "wait"/"hold"/"stop" word anywhere is never a note. Strict
+  and model-free like the approval check: "looks good", "nice work", "let me check", "later",
+  "merge it please", "looks fine?", "don't merge yet" and "fix it but don't touch X" stay held,
+  with the hint now saying a note sends it back.
   A note cancels a pending reply approval. Someone else's reply is refused as before. The thread
   line is "Sent back to build by you: '…'." (or "Back to build: …" for the runner).
 - **The builder sees it.** A build run of an item with a PR writes the `rebuild` notes since the

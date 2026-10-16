@@ -80,6 +80,12 @@ func TestIsHeldNote(t *testing.T) {
 		{"<@U0BOT> rename the flag to --dry", true},
 		{"fine-tune it first", true},
 		{"merge it after adding a test for the empty case", true},
+		{"merge main and rebuild", true},
+		{"please update the docs", true},
+		{"Use the store's clock", true},
+		{"actually, rebuild with the new name", true},
+		{"merge after removing the flag", true},
+		{"merge once dropping the old route", true},
 		// Stays held.
 		{"", false},
 		{"looks fine?", false},
@@ -97,6 +103,25 @@ func TestIsHeldNote(t *testing.T) {
 		{"Thank you!", false},
 		{"merge", false},
 		{"merge it please", false},
+		// Praise and stalling ask for no change: a note must start with a change verb.
+		{"looks good", false},
+		{"sounds good", false},
+		{"good", false},
+		{"perfect", false},
+		{"awesome", false},
+		{"nice work", false},
+		{"great job", false},
+		{"nice fix", false},
+		{":+1:", false},
+		{"go", false},
+		{"ship", false},
+		{"later", false},
+		{"tomorrow", false},
+		{"I'll look tonight", false},
+		{"let me check", false},
+		{"hmm", false},
+		{"on second thought", false},
+		{"merge it now", false},
 	}
 	for _, c := range cases {
 		if got := IsHeldNote(c.reply); got != c.note {
