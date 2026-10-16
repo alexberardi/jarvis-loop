@@ -246,6 +246,7 @@ func TestGHLand(t *testing.T) {
 "pr view") cat '`+dir+`/view.json';;
 "run list") cat '`+dir+`/runs.json';;
 "pr merge") echo '✓ Squashed and merged pull request #7';;
+"run view") cat testdata/gh/log_failed_go.txt;;
 esac
 `)
 	pr, err := gh.LandView(ctx, "o/r", 7)
@@ -255,8 +256,14 @@ esac
 	if err := gh.Merge(ctx, "o/r", 7, headA); err != nil {
 		t.Fatal(err)
 	}
-	if rs, err := gh.CommitRuns(ctx, "o/r", mergeM); err != nil || len(rs) != 2 {
+	if rs, err := gh.CommitRuns(ctx, "o/r", mergeM); err != nil || len(rs) != 2 || rs[0].ID != 200 || rs[1].ID != 201 {
 		t.Fatalf("runs %+v %v", rs, err)
+	}
+	if out, err := gh.FailedLog(ctx, "o/r", 200); err != nil || !strings.Contains(out, "--- FAIL: TestWatchMain") {
+		t.Fatalf("failed log %q %v", clip(out, 200), err)
+	}
+	if _, err := gh.FailedLog(ctx, "o/r", 0); err == nil {
+		t.Errorf("a log of run 0 was asked for")
 	}
 	for _, bad := range []string{"", "HEAD", "main", "--admin", strings.Repeat("g", 40)} {
 		if err := gh.Merge(ctx, "o/r", 7, bad); err == nil {
@@ -270,7 +277,8 @@ esac
 	want := []string{
 		"pr view 7 --repo o/r --json " + landViewFields,
 		"pr merge 7 --repo o/r --squash --delete-branch --match-head-commit " + headA,
-		"run list --repo o/r --commit " + mergeM + " --limit 50 --json name,workflowName,status,conclusion,url",
+		"run list --repo o/r --commit " + mergeM + " --limit 50 --json databaseId,name,workflowName,status,conclusion,url",
+		"run view 200 --repo o/r --log-failed",
 	}
 	got := strings.Split(strings.TrimSpace(string(b)), "\n")
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {

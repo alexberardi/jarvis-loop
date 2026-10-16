@@ -1,6 +1,6 @@
 {
   "name": "ci-red-unchanged",
-  "about": "CI fails on the PR's head and land sends the item back to build (a counted bounce). The build finds nothing to fix and reports the same head: loopd sends the item to the user (needs-you, return stage land) instead of another review, and nothing merges.",
+  "about": "CI fails on the PR's head and land sends the item back to build (a counted bounce), with the failing job's log attached as ci-failure.log, which the next build's brief points at. The build finds nothing to fix and reports the same head: loopd sends the item to the user (needs-you, return stage land) instead of another review, and nothing merges.",
   "stages": ["build", "review", "land"],
   "steps": [
     {"do": "add", "item": "a", "title": "Fix the digest wording"},
@@ -34,6 +34,10 @@
       {"thread": "a", "text": "^Back to build: CI failed on `[0-9a-f]{7}`: check"},
       {"thread": "a", "text": "needs you: CI failed on [0-9a-f]{7} and the build changed nothing: rerun CI, fix main, or drop"}
     ],
-    "prs": 1
+    "prs": 1,
+    "evidence": [{"item": "a", "name": "ci-failure.log", "label": "^CI failure on [0-9a-f]{7}: check$", "count": 1,
+      "text": "Failing tests: TestDigest\\n(?s:.*)######## check \\(run 7000\\)", "no_text": "\\x1b|ghp_"}],
+    "run_files": [{"item": "a", "stage": "build", "file": "brief.md",
+      "text": "- \\*\\*CI failed; the runner fetched its log\\*\\*: `\\.loop/triage/[0-9]+-ci-failure\\.log` \\(CI failure on [0-9a-f]{7}: check\\): .*usually a race"}]
   }
 }

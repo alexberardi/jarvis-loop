@@ -422,6 +422,11 @@ func (r *Runner) prepareBuild(ctx context.Context, ru *run, info *RunInfo) error
 	ru.repoDir = ru.wt
 	info.Resumed = ahead
 	info.Triage, info.TriageErr = r.fetchEvidence(ctx, ru, filepath.Join(".loop", "triage"))
+	for _, f := range info.Triage { // the newest CI failure log (land's, or triage's for a red main)
+		if strings.HasSuffix(f.Name, "-"+CIFailureLog) {
+			info.CILog = &TriageFile{Name: ".loop/triage/" + f.Name, Label: f.Label}
+		}
+	}
 	if ru.item.BounceCount > 0 {
 		r.reviewContext(ctx, ru, info, filepath.Join(".loop", "review", "notes.md"), filepath.Join(".loop", "review", "pr-comments.md"))
 	}

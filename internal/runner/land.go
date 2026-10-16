@@ -60,6 +60,7 @@ type LandPR struct {
 
 // WorkflowRun is one Actions run on a commit (main's CI after a merge).
 type WorkflowRun struct {
+	ID         int64  `json:"databaseId"`
 	Name       string `json:"name"`
 	Workflow   string `json:"workflowName"`
 	Status     string `json:"status"`
@@ -77,6 +78,8 @@ type LandGitHub interface {
 	Merge(ctx context.Context, slug string, pr int, head string) error
 	// CommitRuns lists the Actions runs on a commit.
 	CommitRuns(ctx context.Context, slug, sha string) ([]WorkflowRun, error)
+	// FailedLog is the log of a run's failed jobs (gh run view --log-failed).
+	FailedLog(ctx context.Context, slug string, runID int64) (string, error)
 }
 
 // LandFacts are the gates' inputs, re-derived on every pass.

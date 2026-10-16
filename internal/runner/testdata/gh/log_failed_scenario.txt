@@ -1,0 +1,8 @@
+check	loop-sandbox	2026-10-16T12:00:00.0000000Z ok   ci-red                   0.4s
+check	loop-sandbox	2026-10-16T12:00:01.0000001Z FAIL main-red                 1.2s
+check	loop-sandbox	2026-10-16T12:00:02.0000002Z      main-red: no message matching /watching main's CI/ in thread a
+check	loop-sandbox	2026-10-16T12:00:03.0000003Z # Scenario ci-red-unchanged (FAIL, 0.9s)
+check	loop-sandbox	2026-10-16T12:00:04.0000004Z - **ci-red-unchanged: stage build, want needs_you**
+lint	gofmt	2026-10-16T12:00:05.0000005Z not gofmt'd:
+lint	gofmt	2026-10-16T12:00:06.0000006Z internal/runner/cilog.go
+lint	gofmt	2026-10-16T12:00:07.0000007Z ##[error]Process completed with exit code 1.
