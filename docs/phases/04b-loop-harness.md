@@ -100,7 +100,7 @@ cannot silently check nothing. Steps (`"do"`):
 | `runner_idle` | wait until no run is working |
 | `clock` `advance` (`"2m"`, `"45m"`) | move the fake clock, in 30-second steps |
 | `reply` / `mention` `item`, `as` (`approver`\|`other`), `text` | a thread reply / mention in the item's thread |
-| `press` / `choose` `item` or `message: control`, `button` (action_id), [`value`], `as` | press a button / pick a menu option on the newest message that has it |
+| `press` / `choose` `item`, `plan` or `message: control`, `button` (action_id), [`value`], [`text` regexp], `as` | press a button / pick a menu option on the newest message that has it (in the item's or plan's thread), and whose text matches `text` when given |
 | `command` `text`, `as`, [`answer` regexp] | `/loop <text>`; the ephemeral answer must match |
 | `control` `active_agents`, `max_run_minutes`, `stopped` | `PUT /control` as the CLI |
 | `ci` [`item`, `checks`: {name: `pass`\|`fail`\|`pending`\|`cancel`\|`skip`}], [`main`: {name: `pass`\|`fail`\|`pending`}] | the CI checks on the item's PR head now (a new head has none), and how the workflow runs on main's merge commits go (phase 6) |
@@ -112,6 +112,8 @@ cannot silently check nothing. Steps (`"do"`):
 | `plan_approve` `plan`, `doc` (`brief`\|`blueprint`), [`version`, 0: latest], [`text`], [`refused` regexp] | approve that version's sha256; with `refused`, the approval must be refused with a matching error |
 | `plan_drop` `plan`, [`text`] | drop the plan |
 | `plan_items` `plan`, `pieces`: [aliases] | name the items the plan's hand-off filed, in piece order |
+| `plan_post` `as`, `text`, [`plan`] | a top-level message in `#plan`; with `plan`, it must start a plan (named by that alias) |
+| `plan_reply` `plan`, `as`, `text` | a reply in the plan's thread in `#plan` |
 | `expect` / `wait` + expectations | as below, at that point |
 
 Expectations (`expect`, in a step or at the end) are retried for `within` (default 10 s); the
@@ -121,7 +123,7 @@ negative ones are checked once the loop has gone quiet:
 | --- | --- |
 | `stage`: {alias: stage}, `question`: {alias: regexp}, `leased`: {alias: bool}, `repo`: {alias: slug} | the item is there (its repo exactly; `""` for none) |
 | `events` / `no_events`: [{`item` or `plan`, `kind`, `actor` (`approver`, `other`, `runner`, `hand`, `user`, `loopd`), `outcome`, `data`: {key: regexp}, `count`}] | such events exist (exactly `count`) / none do |
-| `messages` (in this order) / `no_messages`: [{`thread` or `parent`: alias, `channel` (`loop`\|`digest`), `from` (`bot`, `approver`, `other`), `kind` (`message`, `ephemeral`, `command`, `response`), `to`, `text` regexp, `buttons`: [labels], `pinned`}] | such messages exist, as they stand after edits / none do |
+| `messages` (in this order) / `no_messages`: [{`thread` or `parent`: alias, `plan`: alias (its thread in `#plan`, parent included), `channel` (`loop`\|`digest`\|`plan`), `from` (`bot`, `approver`, `other`), `kind` (`message`, `ephemeral`, `command`, `response`), `to`, `text` regexp, `buttons`: [labels], `pinned`, `reactions`: [names], exactly, `[]` for none}] | such messages exist, as they stand after edits / none do |
 | `control`: {`active_agents`, `stopped`} | loopd's control |
 | `prs`: n | PRs opened on the fake GitHub |
 | `pr`: {alias: {`number`, `repo`, `title` regexp, `body` regexp, `edits`, `comments`, `comment` regexp, `state`, `merge_calls`}} | the PR the runner opened for the item, at its branch's head: how often it updated it, how many comments (review verdicts) it posted, the newest |
@@ -133,8 +135,8 @@ negative ones are checked once the loop has gone quiet:
 | `plans`: {alias: {`stage`, `items`, `turn` (`you`\|`agent`\|`none`), `docs`: {kind: latest version}, `turns`, `last_turn` (status), `last_error` regexp}} | the plan as loopd has it |
 | `depends_on`: {alias: [aliases]} | the item depends on exactly those items |
 
-**Always checked, after every step (must-not):** no bot call to a channel other than `#loop` and
-`#loop-digest`; no token (Slack, loopd user, runner or hand) in any call to Slack or any message; the
+**Always checked, after every step (must-not):** no bot call (messages, pins, reactions) to a
+channel other than `#loop`, `#loop-digest` and `#plan`; no token (Slack, loopd user, runner or hand) in any call to Slack or any message; the
 bot token on every bot call and the app token on `apps.connections.open`; no `<!channel>`,
 `<!here>` or `<!everyone>`, no mention of anyone but the approver; no message over 2,000
 characters; no token in a PR's title or body; no event by an actor other than loopd, the approver, the sandbox user, the runner or the

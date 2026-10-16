@@ -15,7 +15,9 @@ loop's own harness) done; phase 5 (triage and review agents) in review.
 
 Slack: `loopd --slack-env ~/.config/jarvis-harness/slack.env` (the file must be 0600) turns on item
 threads in `#loop`, `/loop`, answers and approvals by reply or button, the active-agents control
-and the 4-hourly digest in `#loop-digest` ([docs/phases/03-slack.md](docs/phases/03-slack.md)).
+and the 4-hourly digest in `#loop-digest` ([docs/phases/03-slack.md](docs/phases/03-slack.md)),
+and plan threads in `#plan` (`/loop plans`, [docs/phases/07-planning.md](docs/phases/07-planning.md));
+the ⏳/✅ reactions there need the app's `reactions:write` scope, and are skipped (logged) without it.
 
 Repos: `loopd --repos alexberardi/jarvis-loop,alexberardi/jarvis-server` names the repos the loop
 works on: triage may give an item without a repo only one of these, and `/loop add` recognises

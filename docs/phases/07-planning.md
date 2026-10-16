@@ -175,6 +175,41 @@ and `plans`/`depends_on` expectations (04b), `scenarios/37-plan-stale-approve.js
   thread.
 - `/loop plans` lists open plans; `/loop drop P<n>` drops one.
 
+**As built (piece 4, 2026-10-16):** the bot may post in `#plan` (`slack.ChannelPlan`, added to its
+allowed channels). Only the approver counts: anyone else's message in `#plan`, top-level or in a
+plan's thread, is logged and otherwise ignored (no plan, no reply, nothing queued); their button
+presses are refused like `#loop`'s (an ephemeral and a `refused` event on the plan). A mention in
+`#plan` is the message's, never an `add`. A top-level message starts the plan (`startPlan`): priority
+and repo words read from the whole text as `/loop add` reads them, the title is the first line
+without them, the whole message is the first turn's prompt. **Migration `0009_plan_slack.sql`:**
+`plan_turns.slack_ts` (the ts of the Slack messages a turn carries, merged with its messages when a
+turn requeues) and `plans.slack_header` (the bot's header message), plus `PlanByThread`,
+`SetPlanSlack` and `PlanSlackMessage` (`PlanMessage` with the ts) in the store. The **header** is
+the bot's first reply under the user's message (or the thread's parent, which the bot posts, for a
+plan started by `/loop plan <idea>` or the API): `P3 title`, stage, priority, repos, whose turn,
+the filed items, a link to the plan page when loopd has a `--link-base`, and the **Drop** button
+(Slack's confirm dialog) while the plan is open; it is edited when it changes. Reactions: ⏳ on the
+turn's messages at `plan_turn_claimed`, ⏳ off and ✅ on at `plan_turn_done`, ⏳ off when it fails,
+expires or is stopped; a failed reaction (no `reactions:write` scope) is logged and nothing else
+(`docs/decisions/2026-10-16-plan-in-slack.md`). The agent's reply is posted escaped and clipped
+to 1,800 characters; a `ready` reply ends with "Ready for your approval: brief v2 (`sha`)", the
+document named as a link to the plan page (or its `GET /plans/P3/docs/brief?v=2` path) and an
+**Approve brief v2** / **Approve blueprint v1** button whose value carries the plan, kind, version
+and sha256 (the version this turn wrote, else the latest). A press echoes in the thread with
+Cancel and applies after the 2-minute window (`ApprovalDelay`, as a reply approval of a merge),
+bound to that sha256: a newer version leaves the echo "Not applied: the brief changed; approve
+v3 instead (that was v2)" and loopd's `refused` event says it in the thread. Also posted:
+failed turns ("That turn failed: …. Reply to try again." while the plan talks), back to brief,
+approvals, the hand-off's items ("Filed 3 items …: • #12 title (after #11)"), drops, done and
+refusals. `/loop plans` (open plans with stage and whose turn), `/loop plan <idea>`, `/loop drop
+P<n> [why]` (a bare number is still an item). The approver-gated parts (who may start or talk to a
+plan, the buttons, applying an approval) are in `internal/slack/approve_plan.go`, under the
+`slack-approver` hold rule. Harness: `plan_post`, `plan_reply`, `press` with `plan` (and `text` to
+pick an older message), messages by `plan` thread and `reactions`, channel `plan`;
+`scenarios/40-plan-not-the-approver.json` (6), `41-plan-in-slack.json` (the Slack half of 2),
+`42-plan-slack-stale-and-drop.json` (4 in Slack, Drop, `/loop plan`, `/loop drop P<n>`). Plans
+from the API now get a `#plan` thread too (37–39's transcripts show it).
+
 ## The board
 
 - The **Planning** column shows open plans (stage, last activity, whose turn it is: "you" or
