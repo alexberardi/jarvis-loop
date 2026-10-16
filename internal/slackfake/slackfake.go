@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -48,7 +49,9 @@ type Message struct {
 	Blocks   []map[string]any `json:"blocks,omitempty"`
 	Edits    int              `json:"edits,omitempty"`  // chat.update calls on it
 	Pinned   bool             `json:"pinned,omitempty"` // pins.add
-	History  []string         `json:"history,omitempty"`
+	// Reactions are the bot's reactions on it (reactions.add, reactions.remove), in order added.
+	Reactions []string `json:"reactions,omitempty"`
+	History   []string `json:"history,omitempty"`
 }
 
 // Server is the fake. Start it with New; Close it when done.
@@ -176,6 +179,23 @@ func (f *Server) api(w http.ResponseWriter, r *http.Request) {
 			if b, ok := body["blocks"]; ok {
 				m.Blocks = blocksFrom(b)
 			}
+		case "reactions.add", "reactions.remove":
+			m := f.find(str("channel"), str("timestamp"))
+			if m == nil {
+				code = "message_not_found"
+				break
+			}
+			i := slices.Index(m.Reactions, str("name"))
+			switch {
+			case method == "reactions.add" && i >= 0:
+				code = "already_reacted"
+			case method == "reactions.add":
+				m.Reactions = append(m.Reactions, str("name"))
+			case i < 0:
+				code = "no_reaction"
+			default:
+				m.Reactions = slices.Delete(m.Reactions, i, i+1)
+			}
 		case "pins.add":
 			if m := f.find(str("channel"), str("timestamp")); m != nil {
 				if m.Pinned {
@@ -282,6 +302,7 @@ func (f *Server) Messages() []Message {
 	for _, m := range f.msgs {
 		c := *m
 		c.History = append([]string(nil), m.History...)
+		c.Reactions = append([]string(nil), m.Reactions...)
 		out = append(out, c)
 	}
 	return out

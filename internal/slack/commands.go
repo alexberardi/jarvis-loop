@@ -17,14 +17,16 @@ const helpText = "*/loop commands*\n" +
 	"`/loop status` the board\n" +
 	"`/loop show <id>` one item\n" +
 	"`/loop priority <id> P1`\u2013`P5` change a priority\n" +
-	"`/loop drop <id> [why]` close an item you won't land (its PR is closed, the branch stays)\n" +
+	"`/loop drop <id> [why]` close an item you won't land (its PR is closed, the branch stays); `/loop drop P<n>` drops a plan\n" +
+	"`/loop plans` the open plans\n" +
+	"`/loop plan <idea>` start a plan (as a message in #plan does): priority and repo words as for add\n" +
 	"`/loop qa <id>` check it yourself once merged: it waits in qa after it lands\n" +
 	"`/loop verified <id>` your check passed (qa → done)\n" +
 	"`/loop reopen <id> <what is wrong>` your check failed: files a P2 item with your words (this one → done)\n" +
 	"`/loop agents <0-6>` how many agents may run at once (0 = paused)\n" +
 	"`/loop stop` / `/loop resume` stop running agents / start again\n" +
 	"`/loop usage <N>%` record what /usage shows\n" +
-	"Answer questions and approve held merges in the item's thread in #loop."
+	"Answer questions and approve held merges in the item's thread in #loop; talk to a plan in its thread in #plan."
 
 type command struct {
 	Command   string `json:"command"`
@@ -67,7 +69,7 @@ func (b *Bot) runCommand(ctx context.Context, c command) string {
 	rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(c.Text), fields[0]))
 	actor := actorPrefix + c.UserID
 	approverOnly := map[string]bool{"add": true, "priority": true, "agents": true, "stop": true, "resume": true, "usage": true, "drop": true,
-		"qa": true, "verified": true, "reopen": true}
+		"qa": true, "verified": true, "reopen": true, "plan": true}
 	if approverOnly[verb] && !IsApprover(c.UserID) {
 		var itemID int64
 		if (verb == "priority" || verb == "drop" || verb == "qa" || verb == "verified" || verb == "reopen") && len(args) > 0 {
@@ -120,9 +122,16 @@ func (b *Bot) runCommand(ctx context.Context, c command) string {
 			return Escape(errMessage(err))
 		}
 		return fmt.Sprintf("#%d is now %s.", it.ID, it.Priority)
+	case "plans":
+		return b.plansList(ctx)
+	case "plan":
+		return b.planCommand(ctx, c.UserID, rest)
 	case "drop":
 		if len(args) == 0 {
 			return helpText
+		}
+		if pid, ok := parsePlanRef(args[0]); ok {
+			return b.dropPlanCommand(ctx, actor, pid, strings.TrimSpace(strings.TrimPrefix(rest, args[0])))
 		}
 		id, err := strconv.ParseInt(strings.TrimPrefix(args[0], "#"), 10, 64)
 		if err != nil {

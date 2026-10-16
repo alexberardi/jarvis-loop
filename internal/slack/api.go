@@ -21,6 +21,9 @@ const (
 	ChannelLoop = "C0C9G6Y87HA"
 	// ChannelDigest holds the active-agents control message and the digest.
 	ChannelDigest = "C0C969AA2Q3"
+	// ChannelPlan holds one thread per plan (docs/phases/07-planning.md): the approver's top-level
+	// message starts one, and the conversation with the planning agents is its thread.
+	ChannelPlan = "C0C8Y132YRM"
 	// DefaultBaseURL is Slack's Web API.
 	DefaultBaseURL = "https://slack.com/api/"
 )
@@ -224,6 +227,40 @@ func (a *API) PinsAdd(ctx context.Context, channel, ts string) error {
 	_, err := a.call(ctx, "pins.add", map[string]any{"channel": channel, "timestamp": ts})
 	var ae *Error
 	if errors.As(err, &ae) && ae.Code == "already_pinned" {
+		return nil
+	}
+	return err
+}
+
+// Reactions the bot puts on a plan's messages: ⏳ while the turn carrying them runs, ✅ once the
+// agent's reply is posted.
+const (
+	ReactionRunning = "hourglass_flowing_sand"
+	ReactionDone    = "white_check_mark"
+)
+
+// ReactionsAdd adds the bot's reaction to a message; one that is already there is not an error.
+func (a *API) ReactionsAdd(ctx context.Context, channel, ts, name string) error {
+	if err := a.allowed(channel); err != nil {
+		return err
+	}
+	_, err := a.call(ctx, "reactions.add", map[string]any{"channel": channel, "timestamp": ts, "name": name})
+	var ae *Error
+	if errors.As(err, &ae) && ae.Code == "already_reacted" {
+		return nil
+	}
+	return err
+}
+
+// ReactionsRemove removes the bot's reaction from a message; one that is not there is not an
+// error.
+func (a *API) ReactionsRemove(ctx context.Context, channel, ts, name string) error {
+	if err := a.allowed(channel); err != nil {
+		return err
+	}
+	_, err := a.call(ctx, "reactions.remove", map[string]any{"channel": channel, "timestamp": ts, "name": name})
+	var ae *Error
+	if errors.As(err, &ae) && ae.Code == "no_reaction" {
 		return nil
 	}
 	return err
