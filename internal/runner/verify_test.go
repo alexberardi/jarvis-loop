@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -233,6 +234,55 @@ func TestVerifyRefusesAChangedTrustedFile(t *testing.T) {
 		if got := touchesDenyWrite(c.deny, c.lines); got != c.want {
 			t.Errorf("touchesDenyWrite(%v, %v) = %q, want %q", c.deny, c.lines, got, c.want)
 		}
+	}
+}
+
+// The approver's trust OK lets verify run that one commit's change to trusted files, once: another
+// commit, an OK not given yet, or one already used is refused as before.
+func TestVerifyRunsATrustedFileChangeOnTheOK(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	g.verifyRepo(VerifyStep{Name: "harness", Run: "touch ran"})
+	rc := g.r.Cfg.Repos["demo"]
+	rc.DenyWrite = []string{"scripts"}
+	g.r.Cfg.Repos["demo"] = rc
+	id := g.toBuild("Change the harness")
+	cl, err := g.r.Client.Claim(g.ctx, "a", nil, []string{StageBuild})
+	if err != nil || cl == nil || cl.Item.ID != id {
+		t.Fatalf("claim %+v %v", cl, err)
+	}
+	ru, err := g.r.newRun(cl, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(ru.wt, "ran") // the fence's /tmp is private; the step runs in the worktree
+	if err := os.MkdirAll(ru.wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	trusted, other := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	changed := []string{"M feature.txt", "R scripts/old.sh scripts/harness.sh"}
+	for name, tr := range map[string]*ItemTrust{
+		"no OK":        nil,
+		"not given":    {HeadSHA: trusted},
+		"used":         {HeadSHA: trusted, By: "user:alex", Used: true},
+		"other commit": {HeadSHA: other, By: "user:alex"},
+	} {
+		ru.item.Trust = tr
+		_, err := g.r.runVerify(g.ctx, ru, trusted, changed)
+		var refusal *trustRefusal
+		if !errors.As(err, &refusal) || refusal.head != trusted || strings.Join(refusal.paths, ",") != "scripts/harness.sh,scripts/old.sh" {
+			t.Fatalf("%s: runVerify: %v (%+v)", name, err, refusal)
+		}
+		if _, err := os.Stat(marker); err == nil || ru.trustUsed != "" {
+			t.Fatalf("%s: verify ran", name)
+		}
+	}
+	ru.item.Trust = &ItemTrust{HeadSHA: trusted, By: "user:alex"}
+	res, err := g.r.runVerify(g.ctx, ru, trusted, changed)
+	if err != nil || len(res) != 1 || !res[0].Passed() {
+		t.Fatalf("trusted runVerify: %+v %v", res, err)
+	}
+	if _, err := os.Stat(marker); err != nil || ru.trustUsed != trusted {
+		t.Fatalf("verify did not run the trusted commit (used %q)", ru.trustUsed)
 	}
 }
 

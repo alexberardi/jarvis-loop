@@ -31,6 +31,21 @@ type Item struct {
 	Source string `json:"source"`
 	// Approval is the user's approval of a held merge, for the head they saw (land reads it).
 	Approval *ItemApproval `json:"approval,omitempty"`
+	// Trust is verify's refusal of a trusted-file change and the approver's OK for that commit
+	// (pipeline.Trust): verify runs that one commit's change once.
+	Trust *ItemTrust `json:"trust,omitempty"`
+}
+
+// ItemTrust is the part of a trust OK the runner needs.
+type ItemTrust struct {
+	HeadSHA string `json:"head_sha"`
+	By      string `json:"by"`
+	Used    bool   `json:"used"`
+}
+
+// allows reports whether the approver's OK lets verify run head's change to trusted files.
+func (t *ItemTrust) allows(head string) bool {
+	return t != nil && t.By != "" && !t.Used && head != "" && t.HeadSHA == head
 }
 
 // ItemApproval is the part of an approval land needs.
@@ -239,6 +254,9 @@ func Brief(stage string, it Item, r RunInfo) string {
 		}
 		if r.HeldNotes != "" {
 			fmt.Fprintf(&b, "- Sent back from held; PR #%d is open on this branch. Do what `%s` asks (the user's note, or a conflict with `%s`) on the same branch; the runner updates that PR, and the user approves the new head.\n", it.PR, r.HeldNotes, r.Base)
+		}
+		if it.Trust != nil && it.Trust.allows(it.Trust.HeadSHA) {
+			fmt.Fprintf(&b, "- The user OK'd verify running commit `%s`, which changes files the runner trusts (deny_write). If that commit is this item's work, add no commit: return `ready_for_pr` for it as it is. Any new commit needs a new OK from the user.\n", it.Trust.HeadSHA)
 		}
 		if len(r.Verify) > 0 {
 			b.WriteString("- After you return `ready_for_pr`, the runner runs this repo's verify steps itself (outside your sandbox), before it pushes:")

@@ -217,13 +217,15 @@ func Slug(title string) string {
 
 // run is one item's run: where things are.
 type run struct {
-	item    Item
-	stage   string
-	lease   string
-	agent   string
-	repoKey string // "" for a triage run of an item with no repo: every configured repo is checked out
-	repo    RepoConfig
-	branch  string
+	item Item
+	// trustUsed is the commit verify ran on the approver's trust OK (reported with the outcome).
+	trustUsed string
+	stage     string
+	lease     string
+	agent     string
+	repoKey   string // "" for a triage run of an item with no repo: every configured repo is checked out
+	repo      RepoConfig
+	branch    string
 	// wt is the agent's working directory: the item's worktree (build), the PR's head (review),
 	// or a plain directory with the repos checked out under repos/<key>/ (triage).
 	wt string
@@ -969,6 +971,9 @@ func (r *Runner) advance(ctx context.Context, ru *run, outcome string, fields ma
 		fields = map[string]string{}
 	}
 	fields["runner_agent"] = ru.agent
+	if ru.trustUsed != "" {
+		fields[pipeline.FieldTrustUsed] = ru.trustUsed
+	}
 	if err := r.Client.Advance(ctx, ru.item.ID, outcome, fields, paths); err != nil {
 		r.Log.Error("advance", "item", ru.item.ID, "outcome", outcome, "err", err)
 		return
@@ -1150,6 +1155,11 @@ func (r *Runner) reportBuild(ctx context.Context, ru *run, out outcome, raw []by
 	vres, err := r.runVerify(ctx, ru, facts.HeadSHA, facts.ChangedPaths)
 	if errors.Is(err, errVerifyStopped) {
 		r.Log.Info("verify stopped; the build's commits stay in the mirror", "item", ru.item.ID)
+		return
+	}
+	var tr *trustRefusal
+	if errors.As(err, &tr) {
+		r.refuseTrusted(ctx, ru, out, tr)
 		return
 	}
 	if err != nil {

@@ -310,7 +310,8 @@ func StartStack(opts Options) (st *Stack, err error) {
 			LoopKey: {Remote: s.LoopRemote, Slug: LoopSlug, Base: "main", Group: "loop", Description: "the loop itself (loopd, the runner, the Slack bot)",
 				QAAfterDeploy: true},
 			MobileKey: {Remote: s.MobileRemote, Slug: MobileSlug, Base: "main", Group: "mobile", Aliases: []string{"mobile", "node app"},
-				Description: "the household's phone app (screens, chat, pairing)", Verify: MobileVerify(dir), QA: true},
+				Description: "the household's phone app (screens, chat, pairing)", Verify: MobileVerify(dir), QA: true,
+				DenyWrite: []string{MobileTrustedFile}},
 		},
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
@@ -367,6 +368,10 @@ var (
 // fail, as a scenario's "verify" step sets it. It is in the runner's work root, which the fence
 // keeps readable (the rest of the stack dir may be under a /tmp the fence makes private).
 const VerifyFailFile = "work/verify-fail"
+
+// MobileTrustedFile is the stand-in node-mobile's deny_write path: a harness file the runner
+// trusts, whose change verify runs only on the user's trust OK (scenario 56).
+const MobileTrustedFile = "tools/shoot"
 
 // MobileVerify are the stand-in node-mobile's verify steps: unit tests in the worktree; "mobile
 // shots" in a checkout of demo (as jarvis-server's mobile-shot runs against the runner's mirror at
