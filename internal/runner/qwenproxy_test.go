@@ -2,7 +2,9 @@ package runner
 
 import (
 	"bufio"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -107,5 +109,54 @@ func TestQwenProxy(t *testing.T) {
 	}
 	if s := <-got; s.path != "/v1/models" || s.key != "k3y" {
 		t.Fatalf("models upstream %+v", s)
+	}
+}
+
+// An upstream that answers before it has read the request body must not cut the stream: the
+// proxy is still forwarding the body while the reply comes back. The client sends the body in
+// parts over a raw connection, so the proxy has read only some of it when the reply's headers go
+// out.
+func TestQwenProxyRepliesWhileBodyIsSent(t *testing.T) {
+	sent := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NewResponseController(w).EnableFullDuplex() // answers without waiting for the body
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: one\n\n")
+		w.(http.Flusher).Flush()
+		<-sent
+		time.Sleep(100 * time.Millisecond)
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer up.Close()
+	q := &QwenConfig{BaseURL: up.URL + "/v1", CredentialsFile: credsFile(t, "PROD_APP_ID=loop-qwen\nPROD_APP_KEY=k3y\n", 0o600)}
+	const tok = "run-token-0123456789abcdef"
+	p, err := startQwenProxy(q, tok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(strings.TrimSuffix(p.URL(), "/v1"), "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	parts := []string{`{"model":"background",`, `"stream":true,`, `"a":1,`, `"b":2,`, `"c":3}`}
+	fmt.Fprintf(conn, "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer %s\r\nContent-Length: %d\r\n\r\n",
+		tok, len(strings.Join(parts, "")))
+	go func() {
+		for _, s := range parts {
+			io.WriteString(conn, s)
+			time.Sleep(100 * time.Millisecond)
+		}
+		close(sent)
+	}()
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(all), "data: one") || !strings.Contains(string(all), "[DONE]") {
+		t.Fatalf("reply %q", all)
 	}
 }
