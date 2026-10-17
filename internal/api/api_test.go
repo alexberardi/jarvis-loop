@@ -285,6 +285,19 @@ func TestBadRequests(t *testing.T) {
 	e.refused(userTok, "PUT", "/control", map[string]any{"active_agents": 7}, 400, "invalid_field")
 }
 
+// A bare repo name is stored as its configured slug; a repo loopd is not configured with is
+// refused (400), so loop add shows why (#127).
+func TestAddItemRepo(t *testing.T) {
+	e := newEnv(t)
+	e.store.SetRepos([]string{"alexberardi/jarvis-server"})
+	var it struct{ Repo string }
+	e.do(userTok, "POST", "/items", map[string]any{"title": "x", "repo": "jarvis-server"}, 201, &it)
+	if it.Repo != "alexberardi/jarvis-server" {
+		t.Fatalf("repo: %q", it.Repo)
+	}
+	e.refused(userTok, "POST", "/items", map[string]any{"title": "y", "repo": "nope"}, 400, "invalid_field")
+}
+
 // depends_on: unknown ids and cycles are refused (400); the item shows what it waits on.
 func TestAddItemDependsOn(t *testing.T) {
 	e := newEnv(t)
