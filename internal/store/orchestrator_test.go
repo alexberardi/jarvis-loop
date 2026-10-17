@@ -377,3 +377,74 @@ func TestWithViaMarksEvents(t *testing.T) {
 		t.Fatalf("via leaked into the next transaction: %+v", e)
 	}
 }
+
+func TestOrchestratorBoard(t *testing.T) {
+	s, clk := open(t)
+	ctx := context.Background()
+	empty, err := s.OrchestratorBoard(ctx, 10)
+	if err != nil || len(empty.Actions)+len(empty.Escalations)+len(empty.Tickets)+len(empty.Notes) != 0 {
+		t.Fatalf("before it acted: %+v %v", empty, err)
+	}
+	a := add(t, s, "asks", "P3")
+	b := add(t, s, "moves on", "P1")
+	if _, err := s.OrchPriority(ctx, orch, a.ID, "P2", "blocks three items"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.OrchEscalate(ctx, orch, a.ID, "product call", "do A", "not mine"); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(time.Hour)
+	if _, err := s.OrchEscalate(ctx, orch, b.ID, "which repo?", "jarvis-loop", "two fit"); err != nil {
+		t.Fatal(err)
+	}
+	// b moves on: its escalation is no longer open.
+	stuck(t, s, b.ID, pipeline.Question)
+	clk.Advance(time.Hour)
+	if _, err := s.OrchEscalate(ctx, orch, 0, "the git lock again", "file a ticket", "pattern"); err != nil {
+		t.Fatal(err)
+	}
+	filed, _, err := s.OrchAdd(ctx, orch, NewItem{Title: "Clear stale git locks", Ask: "x", Repo: "o/r"}, "index.lock", "three runs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.OrchNote(ctx, orch, "watching **#35**", "pattern"); err != nil {
+		t.Fatal(err)
+	}
+	// The user's own action is not its; done for the user through it, it is.
+	if _, err := s.OrchPriority(ctx, "alex", b.ID, "P2", "mine"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.OrchPriority(WithVia(ctx, orch), "slack:U0APPROVER", b.ID, "P4", "the user asked"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Refused(ctx, orch, a.ID, "approve", errf("forbidden", "approvals stay on the button")); err == nil {
+		t.Fatal("Refused returned nil")
+	}
+	got, err := s.OrchestratorBoard(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, e := range got.Actions {
+		kinds = append(kinds, fmt.Sprintf("%d:%s", e.ItemID, e.Kind))
+	}
+	want := fmt.Sprintf("[%d:refused %d:patched %d:orchestrator.added 0:orchestrator.escalated %d:orchestrator.escalated %d:orchestrator.escalated %d:patched]",
+		a.ID, b.ID, filed.ID, b.ID, a.ID, a.ID)
+	if fmt.Sprint(kinds) != want {
+		t.Errorf("actions %v, want %s", kinds, want)
+	}
+	if len(got.Escalations) != 2 || got.Escalations[0].ItemID != 0 || got.Escalations[1].ItemID != a.ID {
+		t.Errorf("open escalations %+v", got.Escalations)
+	}
+	if len(got.Tickets) != 1 || got.Tickets[0] != filed.ID {
+		t.Errorf("tickets %v", got.Tickets)
+	}
+	if len(got.Notes) != 1 || got.Notes[0].Data["text"] != "watching **#35**" {
+		t.Errorf("notes %+v", got.Notes)
+	}
+	// An escalation not about an item stays open for a day.
+	clk.Advance(25 * time.Hour)
+	if got, err = s.OrchestratorBoard(ctx, 1); err != nil || len(got.Escalations) != 1 || got.Escalations[0].ItemID != a.ID || len(got.Actions) != 1 {
+		t.Errorf("a day later, limit 1: %+v %v", got, err)
+	}
+}

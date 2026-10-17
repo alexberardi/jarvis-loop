@@ -110,7 +110,7 @@ type Step struct {
 	Pieces      []string `json:"pieces,omitempty"`
 
 	// orchestrator: the orchestrator's token calls loopd: Action is "METHOD /path" ({item} is the
-	// item's id), Body its JSON ("{head}" in a value is the item's head sha). With As, it acts on a
+	// item's id), Body its JSON ("{head}" in a value is the item's head sha, "{id}" its id). With As, it acts on a
 	// message As just wrote (Text), recorded as loopd's Slack layer will record it (piece 2 of
 	// docs/phases/08-orchestrator.md); with Message "last", on the previous one. Refused: it must
 	// be refused, a regexp on the error.
@@ -151,6 +151,9 @@ type Expect struct {
 	// Board: alias -> the item's (or plan's) card on the web board, read from the board
 	// listener with a board token through the ?t= cookie flow.
 	Board map[string]BoardMatch `json:"board,omitempty"`
+	// BoardOrchestrator: a regexp the board's Orchestrator panel must match ("" when the board
+	// has none: "^$").
+	BoardOrchestrator string `json:"board_orchestrator,omitempty"`
 	// Plans: alias -> the plan as loopd has it; DependsOn: item alias -> the aliases of the items
 	// it depends on, exactly.
 	Plans     map[string]PlanMatch `json:"plans,omitempty"`
@@ -684,8 +687,11 @@ func (p *player) orchestrate(st Step) error {
 			return err
 		}
 		for k, v := range body {
-			if v == "{head}" {
+			switch v {
+			case "{head}":
 				body[k] = d.Item.HeadSHA
+			case "{id}":
+				body[k] = r.id
 			}
 		}
 	}
