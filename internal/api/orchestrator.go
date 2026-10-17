@@ -1,7 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -43,6 +46,23 @@ var onBehalfRoutes = map[string]bool{
 	"PUT /control":              true,
 }
 
+// controlForUser refuses an on-behalf PUT /control that sets more than stopped and active_agents
+// ("pause the loop"): the hold rules, limits and run time are the user's own (the spec's "Never").
+// It reads the body and puts it back for the handler.
+func (s *server) controlForUser(r *http.Request, p Principal) error {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxJSONBody+1))
+	if err != nil {
+		return err
+	}
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	var c store.ControlPatch
+	if json.Unmarshal(raw, &c) != nil || (c.HoldRules == nil && c.Limits == nil && c.MaxRunMinutes == nil) {
+		return nil // a bad body is decode's to refuse
+	}
+	return s.st.Refused(r.Context(), p.Actor(), 0, "control", &pipeline.Error{Code: CodeNotOnBehalf,
+		Message: "for the user, the orchestrator may only pause the loop (stopped, active_agents): the hold rules, limits and run time are the user's own"})
+}
+
 // slackActor is how the approver's own Slack actions appear in events (internal/slack's
 // actorPrefix): an action for them reads the same, plus data.via.
 func slackActor(user string) string { return "slack:" + user }
@@ -80,6 +100,11 @@ func (s *server) actForUser(ctx context.Context, r *http.Request, p Principal, p
 	if !onBehalfRoutes[pattern] {
 		return p, ctx, s.refusedRoute(r, p, pattern, &pipeline.Error{Code: CodeNotOnBehalf,
 			Message: "approvals and trusted-file OKs are the user's own, on their buttons: post the approval message instead"})
+	}
+	if pattern == "PUT /control" {
+		if err := s.controlForUser(r, p); err != nil {
+			return p, ctx, err
+		}
 	}
 	channel, ts, ok := strings.Cut(ref, "/")
 	if !ok || channel == "" || ts == "" {

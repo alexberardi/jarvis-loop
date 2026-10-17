@@ -180,8 +180,15 @@ func (s *Store) OrchRetry(ctx context.Context, actor string, id int64, reason st
 	})
 	if escalate != nil {
 		// Recorded apart from the refused retry (whose transaction rolled back), and not rate
-		// limited: loopd escalates this one itself.
+		// limited: loopd escalates this one itself, once per item and head (a repeated retry
+		// must not ping the user again).
 		if e := s.tx(ctx, func(tx *sql.Tx) error {
+			var n int
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM events WHERE item_id = ? AND kind = ? AND actor = 'loopd'
+				AND json_extract(data, '$.auto') AND json_extract(data, '$.head_sha') = ?`,
+				id, KindOrchEscalated, escalate["head_sha"]).Scan(&n); err != nil || n > 0 {
+				return err
+			}
 			return s.event(tx, Event{ItemID: id, Actor: "loopd", Kind: KindOrchEscalated, Data: escalate})
 		}); e != nil {
 			return it, e

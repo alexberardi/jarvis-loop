@@ -221,6 +221,53 @@ func TestActForUser(t *testing.T) {
 	if ae := e.doAs(orchTok, "C0LOOP/100.1", "POST", drop(a), map[string]any{}, 409); ae.Code != "message_used" {
 		t.Fatalf("reused: %+v", ae)
 	}
+
+	// For the user, PUT /control only pauses the loop: the hold rules, limits and run time stay theirs.
+	if err := e.store.RecordSlackMessage(ctx, "C0LOOP", "100.3", slack.Approver, "what's up with #3?"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := e.store.Control(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []map[string]any{
+		{"hold_rules": []any{}, "max_run_minutes": 600},
+		{"stopped": true, "hold_rules": []any{}},
+		{"limits": map[string]int{"bounces": 9}},
+		{"max_run_minutes": 600},
+	} {
+		if ae := e.doAs(orchTok, "C0LOOP/100.3", "PUT", "/control", body, 403); ae.Code != "not_on_behalf" {
+			t.Fatalf("control %v for the user: %+v", body, ae)
+		}
+	}
+	after, err := e.store.Control(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.HoldRules) == 0 || len(after.HoldRules) != len(before.HoldRules) || after.MaxRunMinutes != before.MaxRunMinutes || after.Stopped {
+		t.Fatalf("control changed: %+v -> %+v", before, after)
+	}
+	evs, err := e.store.EventsBetween(ctx, time.Time{}, e.clock.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := evs[len(evs)-1]
+	if last.Kind != "refused" || last.Actor != orchActor || last.ItemID != 0 || last.Data["code"] != "not_on_behalf" || last.Data["action"] != "control" {
+		t.Fatalf("refused control: %+v", last)
+	}
+	e.doAs(orchTok, "C0LOOP/100.3", "PUT", "/control", map[string]any{"stopped": true}, 200)
+	evs, err = e.store.EventsBetween(ctx, time.Time{}, e.clock.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	last = evs[len(evs)-1]
+	if last.Kind != "control" || last.Actor != "slack:"+slack.Approver || last.Data["via"] != orchActor {
+		t.Fatalf("pause for the user: %+v", last)
+	}
+	if c, _ := e.store.Control(ctx); !c.Stopped || len(c.HoldRules) != len(before.HoldRules) {
+		t.Fatalf("after pause: %+v", c)
+	}
+
 	e.clock.Advance(11 * time.Minute)
 	if ae := e.doAs(orchTok, "C0LOOP/100.1", "PUT", "/control", map[string]any{"stopped": true}, 403); ae.Code != "not_approver" {
 		t.Fatalf("old message: %+v", ae)

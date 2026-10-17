@@ -131,6 +131,20 @@ func TestOrchRetryBackoffAndEscalation(t *testing.T) {
 	if e := newest(t, s, it.ID); e.Kind != KindOrchEscalated || e.Actor != "loopd" || e.Data["failure"] != float64(3) {
 		t.Fatalf("third failure must escalate: %+v", e)
 	}
+	// Retried again, it is still refused, but loopd escalates once per head.
+	if _, err := s.OrchRetry(ctx, orch, it.ID, "git lock"); code(err) != pipeline.CodeLimit {
+		t.Fatalf("third failure again: %v", err)
+	}
+	d, _ := s.GetItem(ctx, it.ID)
+	n := 0
+	for _, e := range d.Events {
+		if e.Kind == KindOrchEscalated && e.Actor == "loopd" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d loopd escalations, want 1", n)
+	}
 	if d, _ := s.GetItem(ctx, it.ID); d.Item.Stage != pipeline.NeedsYou {
 		t.Fatalf("stage %s", d.Item.Stage)
 	}
@@ -158,6 +172,7 @@ func TestOrchPriority(t *testing.T) {
 func TestOrchLink(t *testing.T) {
 	s, _ := open(t)
 	ctx := context.Background()
+	done := toDone(t, s, runner)
 	a, b, c := add(t, s, "a", ""), add(t, s, "b", ""), add(t, s, "c", "")
 	if _, err := s.Drop(ctx, user, c.ID, "no"); err != nil {
 		t.Fatal(err)
@@ -165,7 +180,7 @@ func TestOrchLink(t *testing.T) {
 	for _, x := range []struct {
 		id, after int64
 		code      string
-	}{{a.ID, c.ID, pipeline.CodeInvalidField}, {a.ID, 99, pipeline.CodeInvalidField}, {a.ID, a.ID, pipeline.CodeInvalidField}, {c.ID, a.ID, pipeline.CodeWrongStage}} {
+	}{{a.ID, c.ID, pipeline.CodeInvalidField}, {a.ID, done.ID, pipeline.CodeInvalidField}, {a.ID, 99, pipeline.CodeInvalidField}, {a.ID, a.ID, pipeline.CodeInvalidField}, {c.ID, a.ID, pipeline.CodeWrongStage}} {
 		if _, err := s.OrchLink(ctx, orch, x.id, x.after, "r"); code(err) != x.code {
 			t.Fatalf("link #%d after #%d: %v, want %s", x.id, x.after, err, x.code)
 		}
@@ -234,7 +249,20 @@ func TestOrchEscalateRate(t *testing.T) {
 	if e := newest(t, s, it.ID); e.Kind != KindOrchEscalated || e.Data["recommendation"] != "do A" || e.Data["reason"] != "not mine" {
 		t.Fatalf("event %+v", e)
 	}
-	clk.Advance(9 * time.Minute)
+	// An escalation about an item held for approval is not rate limited, and neither counts nor
+	// resets the window.
+	held := add(t, s, "held", "")
+	if _, err := s.w.Exec(`UPDATE items SET stage = ? WHERE id = ?`, string(pipeline.Held), held.ID); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(5 * time.Minute)
+	if _, err := s.OrchEscalate(ctx, orch, held.ID, "merge #2?", "approve", "held on auth"); err != nil {
+		t.Fatalf("approval escalation inside the window: %v", err)
+	}
+	if e := newest(t, s, held.ID); e.Kind != KindOrchEscalated || e.Data["approval"] != true {
+		t.Fatalf("approval event %+v", e)
+	}
+	clk.Advance(4 * time.Minute)
 	if _, err := s.OrchEscalate(ctx, orch, 0, "another", "do B", "r"); code(err) != pipeline.CodeTooSoon {
 		t.Fatalf("second within 10 min: %v", err)
 	}

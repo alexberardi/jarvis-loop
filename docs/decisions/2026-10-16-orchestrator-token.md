@@ -37,8 +37,10 @@ to know the limits, never be trusted with them.
   - it was not used before for the same action on the same target (`slack_message_uses`; 409
     `message_used`). One message may act on several items ("drop #61 and #63"), once each.
   - the route is on an **allowlist** (`onBehalfRoutes`): answer, hold, rebuild, drop, qa,
-    verified, reopen, `PATCH /items`, `POST /items`, `PUT /control`, plan create, message and
-    drop. Merge approvals, plan approvals and trusted-file OKs (#70's route, when it lands) are not
+    verified, reopen, `PATCH /items`, `POST /items`, `PUT /control` (only `stopped` and
+    `active_agents`, "pause the loop": a body that sets `hold_rules`, `limits` or
+    `max_run_minutes` is refused, 403 `not_on_behalf`, with a refused event, and the message is
+    not spent), plan create, message and drop. Merge approvals, plan approvals and trusted-file OKs (#70's route, when it lands) are not
     on it, so they are refused (403 `not_on_behalf`) even with the approver's message; so is any
     route added later until someone puts it there.
 
