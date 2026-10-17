@@ -281,6 +281,18 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if f.oc {
 		progress("opencode " + f.session)
+		// The real OpenCode writes a .gitignore into its config dir at start (and installs its
+		// provider package there) and exits with "FileSystem.writeFile" when it can't.
+		if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+			err := os.MkdirAll(filepath.Join(d, "opencode"), 0o700)
+			if err == nil {
+				err = os.WriteFile(filepath.Join(d, "opencode", ".gitignore"), []byte("node_modules\n"), 0o600)
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: Unexpected error\n\nUnknown: FileSystem.writeFile (%s)\n", filepath.Join(d, "opencode", ".gitignore"))
+				return 1
+			}
+		}
 		// OpenCode's session store, which the runner looks for before it resumes.
 		if d := os.Getenv("XDG_DATA_HOME"); d != "" {
 			os.MkdirAll(filepath.Join(d, "opencode"), 0o700)
