@@ -113,9 +113,11 @@ const (
 	waitStopped
 )
 
-// keepAlive waits for done while heartbeating the lease, up to limit (0: no limit). It returns
-// waitStopped when loopd says stop, the lease is gone, or the run is cancelled (ru.done).
-func (r *Runner) keepAlive(ctx context.Context, ru *run, note string, done <-chan struct{}, limit time.Duration) waitResult {
+// keepAlive waits for done while heartbeating the lease (with the verify step it waits on), up to
+// limit (0: no limit). It returns waitStopped when loopd says stop, the lease is gone, or the run
+// is cancelled (ru.done).
+func (r *Runner) keepAlive(ctx context.Context, ru *run, note, step string, done <-chan struct{}, limit time.Duration) waitResult {
+	stepStarted := r.Clock.Now()
 	hb := r.Clock.NewTimer(r.heartbeatEvery())
 	defer func() { hb.Stop() }()
 	var limitC <-chan time.Time
@@ -133,7 +135,7 @@ func (r *Runner) keepAlive(ctx context.Context, ru *run, note string, done <-cha
 		case <-ru.done:
 			return waitStopped
 		case <-hb.C():
-			stop, err := r.Client.Heartbeat(ctx, ru.lease, note)
+			stop, err := r.Client.Heartbeat(ctx, ru.lease, note, r.stepActivity("verify", step, ru.started, stepStarted))
 			var ae *APIError
 			if err == nil && stop || errors.As(err, &ae) && ae.Status >= 400 && ae.Status < 500 {
 				return waitStopped
@@ -162,7 +164,7 @@ func (r *Runner) acquireVerifyLock(ctx context.Context, ru *run) (func(), error)
 		f, lerr = lockFile(r.Cfg.VerifyLock)
 		close(got)
 	}()
-	switch r.keepAlive(ctx, ru, "waiting for the verify lock", got, VerifyLockWait) {
+	switch r.keepAlive(ctx, ru, "waiting for the verify lock", "waiting for the verify lock", got, VerifyLockWait) {
 	case waitDone:
 	case waitTimeout:
 		go func() { <-got; closeLock(f) }()
@@ -318,7 +320,7 @@ func (r *Runner) verifyStep(ctx context.Context, ru *run, n int, st VerifyStep, 
 		state, _ = cmd.Process.Wait()
 		close(exited)
 	}()
-	w := r.keepAlive(ctx, ru, "verify: "+st.Name, exited, limit)
+	w := r.keepAlive(ctx, ru, "verify: "+st.Name, st.Name, exited, limit)
 	if w != waitDone {
 		_ = signalGroup(pid, syscall.SIGTERM)
 		grace := r.Clock.NewTimer(r.killGrace())
