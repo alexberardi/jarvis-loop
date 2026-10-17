@@ -1,0 +1,54 @@
+{
+  "name": "orchestrator-retries-then-escalates",
+  "about": "Orchestrate turns (docs/phases/08-orchestrator.md, piece 3) through the real runner with the fake claude. A build fails on the runner: loopd queues a turn (run_failed), which the runner takes and whose agent asks to retry it. loopd refuses the retry inside the 2-minute backoff (429 too_soon) and the refusal is carried into the next turn; when the backoff ends loopd starts that turn itself (due), its retry goes through, and the session is resumed. The second failure waits 10 minutes the same way; the third is refused (409 limit) and loopd escalates it to the user.",
+  "stages": ["build", "orchestrate"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the timer rounding", "priority": "P2"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "exit3"},
+    {"do": "script", "for": "orchestrate", "play": "react"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}},
+
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "events": [{"kind": "orchestrate_claimed", "actor": "runner", "data": {"resume": "^$"}, "count": 1},
+                {"item": "a", "kind": "refused", "actor": "orchestrator"},
+                {"kind": "orchestrate_done", "actor": "runner", "data": {"actions": "^2$", "refused": "^1$", "session": "^fake-session-orchestrator-1$"}, "count": 1},
+                {"kind": "orchestrator.note", "actor": "orchestrator", "count": 1}],
+     "no_events": [{"item": "a", "kind": "retried"}]},
+    {"do": "runner", "claims": "none"},
+
+    {"do": "clock", "advance": "2m"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [{"item": "a", "kind": "retried", "actor": "orchestrator", "count": 1},
+                {"kind": "orchestrate_claimed", "data": {"resume": "^fake-session-orchestrator-1$"}, "count": 1},
+                {"kind": "orchestrate_done", "data": {"refused": "^0$"}, "count": 1}]},
+
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "clock", "advance": "10m"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"}, "events": [{"item": "a", "kind": "retried", "count": 2}]},
+
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "needs_you"},
+    "events": [{"item": "a", "kind": "retried", "count": 2},
+               {"item": "a", "kind": "orchestrator.escalated", "actor": "loopd", "data": {"failure": "^3$"}, "count": 1},
+               {"kind": "orchestrate_claimed", "count": 5},
+               {"kind": "orchestrate_claimed", "data": {"resume": "^$"}, "count": 1}],
+    "agent_runs": {"build": 3, "orchestrate": 5}
+  }
+}

@@ -8,7 +8,8 @@ product calls and QA, never to explain to an agent how to get unstuck, and never
 chat with Claude.
 
 Status: **designed** (2026-10-16; the user's answers are in "Decisions" at the end). Built: piece 1 (the
-orchestrator token and its actions, [decision](../decisions/2026-10-16-orchestrator-token.md)).
+orchestrator token and its actions, [decision](../decisions/2026-10-16-orchestrator-token.md)), piece
+3 (the runner's orchestrate turns, [decision](../decisions/2026-10-17-orchestrate-turns.md)).
 
 ## Why (2026-10-16, one day of real use)
 
