@@ -3,10 +3,13 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -145,7 +148,9 @@ func (r *Runner) openCodeCommand(ru *run) (cmd *exec.Cmd, stop func(), err error
 	fc, err := r.fenceWith(ru.wt, script, env, fenceOpts{
 		// Its sessions, and the mirror's objects and refs (a commit in the worktree writes them);
 		// the mirror's config, hooks and info stay read-only, as the runner's own git reads them.
-		Writable: []string{home, ru.mirror},
+		// Its worktrees dir is a mount point of its own, so the worktree's admin dir (and the
+		// plumbing the fence keeps read-only in it) cannot be renamed away and remade.
+		Writable: []string{home, ru.mirror, filepath.Join(ru.mirror, "worktrees")},
 		ReadOnly: mirrorReadOnly(ru.mirror),
 		// The binary's own dir, which may sit under the /tmp the fence makes private.
 		Visible: []string{filepath.Dir(bin)},
@@ -156,6 +161,40 @@ func (r *Runner) openCodeCommand(ru *run) (cmd *exec.Cmd, stop func(), err error
 	return fc, stop, nil
 }
 
+// gitPlumbing is what the runner's own (unfenced) git reads to find a worktree's repository and
+// its config, file by file ("" for a missing file): the files the fence keeps read-only, and
+// those it cannot, as they need not exist (the mirror's commondir).
+func gitPlumbing(wt, mirror string) map[string]string {
+	paths := []string{filepath.Join(mirror, "commondir"), filepath.Join(mirror, "config"), filepath.Join(mirror, "config.worktree")}
+	paths = append(paths, worktreePlumbing(wt, gitAdminDir(wt))...)
+	out := map[string]string{}
+	for _, p := range paths {
+		b, _ := os.ReadFile(p)
+		out[p] = string(b)
+	}
+	return out
+}
+
+// restorePlumbing puts back what a run changed in the git plumbing (removing what it added) and
+// names the files; nil when nothing changed. The runner's git must not read a single one of
+// them as the run left it.
+func restorePlumbing(before map[string]string) (changed []string, err error) {
+	for p, was := range before {
+		b, rerr := os.ReadFile(p)
+		if rerr == nil && string(b) == was || errors.Is(rerr, fs.ErrNotExist) && was == "" {
+			continue
+		}
+		changed = append(changed, p)
+		if was == "" {
+			err = errors.Join(err, os.RemoveAll(p))
+		} else {
+			err = errors.Join(err, os.WriteFile(p, []byte(was), 0o644))
+		}
+	}
+	slices.Sort(changed)
+	return changed, err
+}
+
 // mirrorReadOnly are the paths of a bare mirror that run code in the runner's own git calls; they
 // are created when missing, so a writable mirror cannot grow them.
 func mirrorReadOnly(mirror string) []string {
@@ -163,6 +202,11 @@ func mirrorReadOnly(mirror string) []string {
 		return nil
 	}
 	out := []string{filepath.Join(mirror, "config")}
+	cw := filepath.Join(mirror, "config.worktree")
+	if f, err := os.OpenFile(cw, os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		f.Close()
+		out = append(out, cw)
+	}
 	for _, d := range []string{"hooks", "info"} {
 		p := filepath.Join(mirror, d)
 		os.MkdirAll(p, 0o755)

@@ -34,23 +34,28 @@ import (
 
 // Scenarios.
 const (
-	Good       = "good"        // commit on the item branch, evidence, a ready_for_pr result (the runner pushes)
-	Escape     = "escape"      // try to write outside the worktree and push main first (refused), then good
-	Lying      = "lying"       // good, but the result's head_sha is not HEAD
-	Malformed  = "malformed"   // commit, then a result that is not JSON
-	NoResult   = "noresult"    // commit, exit 0, no result
-	Question   = "question"    // a question result
-	CommitAsk  = "commit_ask"  // commit, then a question (the commit stays in the runner's mirror)
-	Dirty      = "dirty"       // good, but a change left uncommitted
-	Hang       = "hang"        // write a file, then wait forever
-	IgnoreTerm = "ignore_term" // like hang, but ignore SIGTERM
-	Exit3      = "exit3"       // print something and exit 3
-	UsageLimit = "usage_limit" // the plan's session limit
-	NoArm      = "noarm"       // run tools without the hooks (settings not applied)
-	WrongMode  = "wrong_mode"  // start in default mode whatever was asked
-	SymlinkEv  = "symlink_evidence"
-	LyingOnce  = "lying_once" // lying, then good on the runner's one retry
-	LowCache   = "low_cache"  // good, but with a cold prompt cache (10% read over 6 turns)
+	Good   = "good"   // commit on the item branch, evidence, a ready_for_pr result (the runner pushes)
+	Escape = "escape" // try to write outside the worktree and push main first (refused), then good
+	// Repoint the worktree's git (its .git file, the admin dir's commondir and config.worktree,
+	// renaming the admin dir and the mirror's worktrees dir away), then good.
+	GitTamper = "git_tamper"
+	// Give the mirror a commondir (a file the fence cannot keep read-only), then good.
+	GitTamperMirror = "git_tamper_mirror"
+	Lying           = "lying"       // good, but the result's head_sha is not HEAD
+	Malformed       = "malformed"   // commit, then a result that is not JSON
+	NoResult        = "noresult"    // commit, exit 0, no result
+	Question        = "question"    // a question result
+	CommitAsk       = "commit_ask"  // commit, then a question (the commit stays in the runner's mirror)
+	Dirty           = "dirty"       // good, but a change left uncommitted
+	Hang            = "hang"        // write a file, then wait forever
+	IgnoreTerm      = "ignore_term" // like hang, but ignore SIGTERM
+	Exit3           = "exit3"       // print something and exit 3
+	UsageLimit      = "usage_limit" // the plan's session limit
+	NoArm           = "noarm"       // run tools without the hooks (settings not applied)
+	WrongMode       = "wrong_mode"  // start in default mode whatever was asked
+	SymlinkEv       = "symlink_evidence"
+	LyingOnce       = "lying_once" // lying, then good on the runner's one retry
+	LowCache        = "low_cache"  // good, but with a cold prompt cache (10% read over 6 turns)
 	// SuggestVerify is good, but the agent also leaves a verify script of its own in .loop/ and
 	// asks for it in the PR body; the runner must never run it (it would touch
 	// <scripts dir>/../agent-verify-ran).
@@ -275,6 +280,22 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f.say("hello from manual mode")
 		f.result("nothing done")
 		return 0
+	case GitTamper, GitTamperMirror:
+		admin := strings.TrimPrefix(strings.TrimSpace(readFile(filepath.Join(f.cwd, ".git"))), "gitdir: ")
+		mirror := filepath.Dir(filepath.Dir(admin))
+		evil := filepath.Join(f.cwd, ".loop", "scratch", "evil.git")
+		f.bash("git init -q --bare " + shellQuote(evil) + " && git --git-dir=" + shellQuote(evil) + " config core.fsmonitor 'touch " +
+			filepath.Join(f.cwd, ".loop", "scratch", "pwned") + "'")
+		if scenario == GitTamperMirror {
+			f.write(filepath.Join(mirror, "commondir"), evil+"\n")
+			break
+		}
+		f.write(".git", "gitdir: "+evil+"\n")
+		f.write(filepath.Join(admin, "commondir"), evil+"\n")
+		f.write(filepath.Join(admin, "config.worktree"), "[core]\n\tfsmonitor = touch pwned\n")
+		f.bash("mv .git .git.moved")
+		f.bash("mv " + shellQuote(admin) + " " + shellQuote(admin+".moved"))
+		f.bash("mv " + shellQuote(filepath.Dir(admin)) + " " + shellQuote(filepath.Dir(admin)+".moved"))
 	case Escape:
 		outside := filepath.Join(filepath.Dir(f.cwd), "escaped.txt")
 		f.write(outside, "I got out\n")
@@ -751,4 +772,9 @@ func chat(config string) error {
 		return fmt.Errorf("the model answered %d: %s", resp.StatusCode, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func readFile(p string) string {
+	b, _ := os.ReadFile(p)
+	return string(b)
 }

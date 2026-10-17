@@ -648,6 +648,7 @@ const (
 	endModeMismatch = "mode_mismatch"
 	endNotArmed     = "guard_not_armed"
 	endStartFailed  = "start_failed"
+	endGitTampered  = "git_tampered"
 )
 
 type outcome struct {
@@ -789,8 +790,8 @@ func (r *Runner) maxRun(ctx context.Context, ru *run) time.Duration {
 }
 
 // runAgent runs claude for one item, in its own process group, with heartbeats and the time cap.
-func (r *Runner) runAgent(ctx context.Context, ru *run, brief string) outcome {
-	out := outcome{reason: endExited, exitCode: -1}
+func (r *Runner) runAgent(ctx context.Context, ru *run, brief string) (out outcome) {
+	out = outcome{reason: endExited, exitCode: -1}
 	stdin, err := os.Open(filepath.Join(ru.dir, "brief.md"))
 	if err != nil {
 		return outcome{reason: endStartFailed, detail: err.Error()}
@@ -809,6 +810,20 @@ func (r *Runner) runAgent(ctx context.Context, ru *run, brief string) outcome {
 			return outcome{reason: endStartFailed, detail: "the qwen builder could not start: " + err.Error()}
 		}
 		defer stop()
+		// No guard runs inside OpenCode: before the runner's git reads the worktree again, its
+		// plumbing must be as it was (the fence keeps most of it read-only; this is the rest).
+		plumbing := gitPlumbing(ru.wt, ru.mirror)
+		defer func() {
+			changed, err := restorePlumbing(plumbing)
+			if len(changed) == 0 && err == nil {
+				return
+			}
+			out.reason, out.detail = endGitTampered, fmt.Sprintf("the qwen build changed the worktree's git plumbing (%s); the runner put it back and runs no git on this work", strings.Join(changed, ", "))
+			if err != nil {
+				out.detail = fmt.Sprintf("the qwen build changed the worktree's git plumbing (%s) and the runner could not put it all back (%v); stop the runner and check %s", strings.Join(changed, ", "), err, ru.mirror)
+				r.paused.Store(out.detail)
+			}
+		}()
 		cmd = oc
 		handle = func(line []byte) (string, string) { r.handleOpenCode(&out.stats, line); return "", "" }
 	}
@@ -1113,7 +1128,7 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 		r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{"error": "boundary check failed: " + out.detail +
 			". Auto mode may be unavailable; the runner stopped claiming until it is restarted (use mode \"strict\" to run without it)."}), nil)
 		return
-	case endNotArmed, endStartFailed:
+	case endNotArmed, endStartFailed, endGitTampered:
 		r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{"error": "boundary check failed (" + out.reason + "): " + out.detail}), nil)
 		return
 	}

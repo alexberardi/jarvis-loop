@@ -91,6 +91,21 @@ func gitAdminDir(dir string) string {
 	return filepath.Clean(p)
 }
 
+// worktreePlumbing are the files of a linked worktree that tell git where its repository and
+// config are: its .git file, and its admin dir's commondir, gitdir and config.worktree (created
+// empty when missing, so it cannot be grown). Fenced code may commit (index, HEAD, logs and refs
+// stay writable) but not repoint the runner's own unfenced git at a repository it made.
+func worktreePlumbing(dir, admin string) []string {
+	if admin == "" {
+		return nil
+	}
+	cw := filepath.Join(admin, "config.worktree")
+	if f, err := os.OpenFile(cw, os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		f.Close()
+	}
+	return []string{filepath.Join(dir, ".git"), filepath.Join(admin, "commondir"), filepath.Join(admin, "gitdir"), cw}
+}
+
 // envHome is HOME as the command will see it.
 func envHome(env []string) string {
 	for i := len(env) - 1; i >= 0; i-- {
@@ -192,14 +207,17 @@ func (r *Runner) fencedWith(dir, script string, env []string, o fenceOpts) (*exe
 			args = append(args, "--ro-bind", "/dev/null", p)
 		}
 	}
-	writable := append([]string{dir, gitAdminDir(dir), cacheRoot}, o.Writable...)
-	writable = append(writable, r.Cfg.VerifyWritable...)
+	// The worktree's admin dir last, so it is a mount point of its own (it cannot be renamed
+	// away) whatever holds it.
+	admin := gitAdminDir(dir)
+	writable := append([]string{dir, cacheRoot}, o.Writable...)
+	writable = append(append(writable, r.Cfg.VerifyWritable...), admin)
 	for _, p := range uniq(writable) {
 		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
 			args = append(args, "--bind", p, p)
 		}
 	}
-	for _, p := range uniq(o.ReadOnly) {
+	for _, p := range uniq(append(worktreePlumbing(dir, admin), o.ReadOnly...)) {
 		if _, err := os.Stat(p); err == nil {
 			args = append(args, "--ro-bind", p, p)
 		}
