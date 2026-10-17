@@ -76,6 +76,10 @@ func startQwenProxy(q *QwenConfig, token string) (*qwenProxy, error) {
 			return
 		}
 		p.requests.Add(1)
+		// The request body may still be on its way to the upstream when the reply starts streaming
+		// back; without full duplex, sending the reply's headers closes the unread body and cuts the
+		// stream.
+		http.NewResponseController(w).EnableFullDuplex()
 		rp.ServeHTTP(w, r)
 	})}
 	go p.srv.Serve(ln)
