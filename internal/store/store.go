@@ -200,7 +200,7 @@ func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
 func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
 	s.wmu.Lock()
 	s.pending = nil
-	s.via = viaFrom(ctx)
+	s.via = ViaFrom(ctx)
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		s.wmu.Unlock()

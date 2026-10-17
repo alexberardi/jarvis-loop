@@ -39,8 +39,10 @@ to know the limits, never be trusted with them.
   - the route is on an **allowlist** (`onBehalfRoutes`): answer, hold, rebuild, drop, qa,
     verified, reopen, `PATCH /items`, `POST /items`, `PUT /control` (only `stopped` and
     `active_agents`, "pause the loop": a body that sets `hold_rules`, `limits` or
-    `max_run_minutes` is refused, 403 `not_on_behalf`, with a refused event, and the message is
-    not spent), plan create, message and drop. Merge approvals, plan approvals and trusted-file OKs (#70's route, when it lands) are not
+    `max_run_minutes` is refused, 403 `not_on_behalf`, with a refused event. The handler
+    checks the patch it decodes and would apply, not a second parse of the body, so a body the
+    decoder reads leniently (a trailing `}`) cannot slip past; the refusal comes after the
+    message is checked, so the message is spent), plan create, message and drop. Merge approvals, plan approvals and trusted-file OKs (#70's route, when it lands) are not
     on it, so they are refused (403 `not_on_behalf`) even with the approver's message; so is any
     route added later until someone puts it there.
 

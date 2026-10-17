@@ -767,6 +767,10 @@ func (s *server) putControl(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &p) {
 		return
 	}
+	if err := s.controlForUser(r.Context(), p); err != nil {
+		s.fail(w, err)
+		return
+	}
 	c, err := s.st.SetControl(r.Context(), PrincipalFrom(r.Context()).Actor(), p)
 	if err != nil {
 		s.fail(w, err)

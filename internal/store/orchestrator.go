@@ -43,7 +43,8 @@ func WithVia(ctx context.Context, via string) context.Context {
 	return context.WithValue(ctx, viaKey{}, via)
 }
 
-func viaFrom(ctx context.Context) string {
+// ViaFrom is who ctx's writes are done through (WithVia), or "".
+func ViaFrom(ctx context.Context) string {
 	v, _ := ctx.Value(viaKey{}).(string)
 	return v
 }

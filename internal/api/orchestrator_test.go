@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,7 +19,13 @@ import (
 func (e *env) doAs(tok, onBehalf, method, path string, body any, wantStatus int) apiErr {
 	e.t.Helper()
 	b, _ := json.Marshal(body)
-	req, _ := http.NewRequest(method, e.srv.URL+path, bytes.NewReader(b))
+	return e.doRawAs(tok, onBehalf, method, path, string(b), wantStatus)
+}
+
+// doRawAs is doAs with the body sent as is.
+func (e *env) doRawAs(tok, onBehalf, method, path, body string, wantStatus int) apiErr {
+	e.t.Helper()
+	req, _ := http.NewRequest(method, e.srv.URL+path, strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(OnBehalfHeader, onBehalf)
@@ -223,21 +231,26 @@ func TestActForUser(t *testing.T) {
 	}
 
 	// For the user, PUT /control only pauses the loop: the hold rules, limits and run time stay theirs.
-	if err := e.store.RecordSlackMessage(ctx, "C0LOOP", "100.3", slack.Approver, "what's up with #3?"); err != nil {
-		t.Fatal(err)
-	}
+	// The check is on the patch the handler decodes, so a body the decoder reads leniently (a
+	// trailing } or ]) is refused too. A refused call spends its message, so each gets its own.
 	before, err := e.store.Control(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, body := range []map[string]any{
-		{"hold_rules": []any{}, "max_run_minutes": 600},
-		{"stopped": true, "hold_rules": []any{}},
-		{"limits": map[string]int{"bounces": 9}},
-		{"max_run_minutes": 600},
+	for i, body := range []string{
+		`{"hold_rules": [], "max_run_minutes": 600}`,
+		`{"stopped": true, "hold_rules": []}`,
+		`{"limits": {"bounces": 9}}`,
+		`{"max_run_minutes": 600}`,
+		`{"hold_rules":[]}}`,
+		`{"hold_rules":[],"max_run_minutes":600}]`,
 	} {
-		if ae := e.doAs(orchTok, "C0LOOP/100.3", "PUT", "/control", body, 403); ae.Code != "not_on_behalf" {
-			t.Fatalf("control %v for the user: %+v", body, ae)
+		ts := "100.3" + strconv.Itoa(i)
+		if err := e.store.RecordSlackMessage(ctx, "C0LOOP", ts, slack.Approver, "what's up with #3?"); err != nil {
+			t.Fatal(err)
+		}
+		if ae := e.doRawAs(orchTok, "C0LOOP/"+ts, "PUT", "/control", body, 403); ae.Code != "not_on_behalf" {
+			t.Fatalf("control %s for the user: %+v", body, ae)
 		}
 	}
 	after, err := e.store.Control(ctx)
@@ -246,6 +259,9 @@ func TestActForUser(t *testing.T) {
 	}
 	if len(after.HoldRules) == 0 || len(after.HoldRules) != len(before.HoldRules) || after.MaxRunMinutes != before.MaxRunMinutes || after.Stopped {
 		t.Fatalf("control changed: %+v -> %+v", before, after)
+	}
+	if err := e.store.RecordSlackMessage(ctx, "C0LOOP", "100.3", slack.Approver, "pause the loop"); err != nil {
+		t.Fatal(err)
 	}
 	evs, err := e.store.EventsBetween(ctx, time.Time{}, e.clock.Now().Add(time.Hour))
 	if err != nil {
