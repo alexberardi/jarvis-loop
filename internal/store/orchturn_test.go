@@ -203,8 +203,12 @@ func TestOrchSweepSkipsWhenNothingChanged(t *testing.T) {
 		t.Fatalf("sweep: %+v", q)
 	}
 	cl := claimKinds(t, s, "o", pipeline.WorkOrchestrate)
-	// The turn's own note does not count as a change.
+	// The turn's own note and actions do not count as a change: the priority's event kind is not
+	// orchestrat*, so only its actor leaves it out.
 	if _, err := s.OrchNote(ctx, orch, "watching #1", "first look"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.OrchPriority(ctx, orch, it.ID, "P1", "urgent"); err != nil {
 		t.Fatal(err)
 	}
 	finish(t, s, cl, "s")
