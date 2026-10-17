@@ -20,6 +20,21 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .reason { color: var(--warn); }
 </style>
 <style>
+.working { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 8px; margin-bottom: 16px; }
+.working > h2, .working > .note { grid-column: 1 / -1; }
+.working > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 0 0; }
+.working > .note { color: var(--muted); font-size: 13px; margin: 0; }
+.work { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; min-width: 0; }
+.work .meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.work .label { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.work .title { font-weight: 600; text-decoration: none; color: var(--fg); display: block; overflow-wrap: anywhere; }
+.work ul, .work ol { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; overflow-wrap: anywhere; }
+.work .todos .completed { color: var(--muted); text-decoration: line-through; }
+.work .todos .in_progress { font-weight: 600; }
+.work .calls li { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12px; }
+.work .said { margin: 6px 0 0; font-size: 13px; font-style: italic; overflow-wrap: anywhere; }
+</style>
+<style>
 .lanes { display: flex; gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 8px; align-items: flex-start; }
 .lane { flex: 0 0 min(85vw, 300px); scroll-snap-align: start; background: var(--lane); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
 .lane h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 4px 8px; }
@@ -33,7 +48,14 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 </head>
 <body>
 <h1>Jarvis Loop</h1>
-<p class="sub">10 items · 3 open plans · 2026-10-15 12:00 UTC · refreshes every 30 s · <a href="/board?closed=1">show closed</a></p>
+<p class="sub">10 items · 3 open plans · 2026-10-15 12:00 UTC · refreshes every 30 s (working now: every 5 s) · <a href="/board?closed=1">show closed</a></p>
+<section class="working" id="working" data-live="/board/working">
+<h2>Working now · 0</h2>
+<p class="note">Nothing running.</p>
+
+</section>
+<script src="/board/live.js" defer></script>
+
 <div class="lanes">
 <section class="lane">
 <h2>Planning · 3</h2>

@@ -6,6 +6,7 @@
 <meta name="color-scheme" content="light dark">
 <title>#{{.Item.ID}} {{.Item.Title}} · Jarvis Loop</title>
 {{template "style"}}
+{{template "working-style"}}
 <style>
 main { max-width: 960px; margin: 0 auto; }
 h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 20px 0 6px; }
@@ -51,6 +52,9 @@ td.data { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 <dt>{{if eq $.Display "held"}}Held{{else}}Question{{end}}</dt><dd class="reason">{{$.Reason}}</dd>
 {{- end}}
 </dl>
+{{- with $.Working}}
+{{- template "working-section" .}}
+{{- end}}
 {{- if .Ask}}
 <h2>Ask</h2>
 <pre>{{.Ask}}</pre>
