@@ -46,6 +46,11 @@ Everything is re-derived from GitHub and git, never from an agent's words.
    (the runner computes them, as at `pr_opened`). Sent with every land outcome; loopd recomputes risk.
    *As built:* with every outcome but `failed`; a head missing from the mirror is fetched from
    `refs/pull/<n>/head`.
+   *As built (2026-10-17, item #91): then, before CI, a PR GitHub calls `CONFLICTING` (or whose
+   `mergeStateStatus` is `DIRTY`) takes gate 7's conflict path at once: GitHub runs no
+   `pull_request` CI on a conflicting PR, so waiting for checks only timed out after 30 min. The
+   conflict therefore also comes before evidence and hold; the conflict path never merges
+   (`docs/decisions/2026-10-17-conflict-before-ci.md`).*
 4. **CI:** every check on the head (`gh pr checks <n> --json name,state,bucket` or the status
    rollup; *as built:* the rollup, in the same `gh pr view` as the head, bucketed as gh does;
    the failing checks go in `back_to_build`'s `reason`, which loopd requires). All `pass` → go on. Any `fail`/`cancel` → `back_to_build` with the failing check names
