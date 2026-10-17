@@ -66,7 +66,7 @@ func TestFenceHidesSecrets(t *testing.T) {
 echo "ssh dir: [$(ls -A ~/.ssh 2>/dev/null)]"
 echo "installed: [$(cat ~/.config/jarvis-harness/installed.env)]"
 echo "app key: [$INSTALLED_APP_KEY]"
-echo "env: GH=[$GH_TOKEN]GITHUB=[$GITHUB_TOKEN] KEY=[$MY_API_KEY] AWS=[$AWS_SECRET] SOCK=[$SSH_AUTH_SOCK] ASKPASS=[$GIT_ASKPASS] PLAIN=[$PLAIN_VAR] PROMPT=[$GIT_TERMINAL_PROMPT]"
+echo "env: GH=[$GH_TOKEN] GITHUB=[$GITHUB_TOKEN] KEY=[$MY_API_KEY] AWS=[$AWS_SECRET] SOCK=[$SSH_AUTH_SOCK] ASKPASS=[$GIT_ASKPASS] PLAIN=[$PLAIN_VAR] PROMPT=[$GIT_TERMINAL_PROMPT]"
 echo "credential helper: [$(git config --get credential.helper)]"
 exec 3<>/dev/tcp/127.0.0.1/` + port + ` && printf 'GET / HTTP/1.0\r\nHost: x\r\n\r\n' >&3 && echo "loopback: $(cat <&3 | tail -1)"`
 	g.verifyRepo(VerifyStep{Name: "probe", Run: probe})
@@ -88,7 +88,9 @@ exec 3<>/dev/tcp/127.0.0.1/` + port + ` && printf 'GET / HTTP/1.0\r\nHost: x\r\n
 	if err := os.WriteFile(filepath.Join(wt, ".loop", "scratch", "probe.sh"), []byte(probe), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	probe = "sh .loop/scratch/probe.sh"
+	// bash, as the fence itself runs commands: /dev/tcp is a bash feature, and sh is dash on
+	// Debian and Ubuntu (CI).
+	probe = "bash .loop/scratch/probe.sh"
 	_, alone, err := call(t, harness.OpRun, probe)
 	if err != nil {
 		t.Fatal(err)
