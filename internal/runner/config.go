@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -124,7 +125,47 @@ type RepoConfig struct {
 	// binaries do, so the user is asked to check only when a runner built from a commit that
 	// contains the merge is running (docs/decisions/2026-10-16-qa-after-deploy.md).
 	QAAfterDeploy bool `json:"qa_after_deploy,omitempty"`
+	// AgentSandbox, when set, is the repo's harness sandbox the runner brings up for build and
+	// review agents, outside their sandbox (agentsandbox.go,
+	// docs/decisions/2026-10-16-agent-sandbox.md).
+	AgentSandbox *AgentSandbox `json:"agent_sandbox,omitempty"`
 }
+
+// AgentSandbox is how the runner runs a repo's harness sandbox for its agents. The commands are
+// bash command lines run under the fence in the checkout, with LOOP_ITEM, LOOP_SANDBOX,
+// LOOP_WORKTREE, LOOP_REPO, LOOP_BASE, LOOP_MIRROR and LOOP_STAGE in their environment;
+// {sandbox} in them (and in EnvFile) is the item's sandbox name.
+type AgentSandbox struct {
+	// Up starts the sandbox before the agent; whatever it leaves running stays up until Down.
+	Up string `json:"up"`
+	// Down stops it after the agent (and on any failure).
+	Down string `json:"down,omitempty"`
+	// EnvFile is the worktree-relative file Up writes for the agent: local URLs and
+	// sandbox-local credentials only.
+	EnvFile string `json:"env_file"`
+	// Requests are commands the agent may ask the runner to run by name while it works (e.g.
+	// "mobile-shot": the emulator needs /dev/kvm, which the agent's sandbox does not have).
+	Requests map[string]string `json:"requests,omitempty"`
+	// SecretEnvFiles are env files whose secret values (*_KEY, *_TOKEN, *_SECRET, *PASSWORD*)
+	// must never reach the agent: the runner refuses an EnvFile that contains one and redacts
+	// them from request logs. Default: every *.env in the harness's config dir.
+	SecretEnvFiles []string `json:"secret_env_files,omitempty"`
+	// UpTimeoutText is a Go duration (default 10m).
+	UpTimeoutText string `json:"up_timeout,omitempty"`
+
+	upTimeout time.Duration
+}
+
+// UpTimeout is how long Up may take.
+func (a AgentSandbox) UpTimeout() time.Duration {
+	if a.upTimeout > 0 {
+		return a.upTimeout
+	}
+	return DefaultUpTimeout
+}
+
+// DefaultUpTimeout is an agent sandbox's Up time limit when its config gives none.
+const DefaultUpTimeout = 10 * time.Minute
 
 // Groups are the kinds of repo a config may name.
 var Groups = []string{"server", "loop", "mobile", "docs", "installer", "package"}
@@ -380,7 +421,45 @@ func (c *Config) normalize() error {
 				}
 			}
 		}
+		if a := r.AgentSandbox; a != nil {
+			if err := a.check(); err != nil {
+				return fmt.Errorf("config: repo %s: agent_sandbox: %w", name, err)
+			}
+		}
 		c.Repos[name] = r
+	}
+	return nil
+}
+
+var requestName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
+
+func (a *AgentSandbox) check() error {
+	switch {
+	case strings.TrimSpace(a.Up) == "":
+		return fmt.Errorf("up is required")
+	case strings.TrimSpace(a.EnvFile) == "":
+		return fmt.Errorf("env_file is required")
+	}
+	if f := filepath.Clean(strings.ReplaceAll(a.EnvFile, "{sandbox}", "x")); filepath.IsAbs(f) || f == "." || f == ".." || strings.HasPrefix(f, "../") {
+		return fmt.Errorf("env_file %q must be a path inside the worktree", a.EnvFile)
+	}
+	for n, c := range a.Requests {
+		if !requestName.MatchString(n) {
+			return fmt.Errorf("request name %q: lowercase letters, digits and - only", n)
+		}
+		if strings.TrimSpace(c) == "" {
+			return fmt.Errorf("request %q needs a command", n)
+		}
+	}
+	for i, p := range a.SecretEnvFiles {
+		a.SecretEnvFiles[i] = Expand(p)
+	}
+	if a.UpTimeoutText != "" {
+		d, err := time.ParseDuration(a.UpTimeoutText)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("up_timeout must be a positive duration like \"10m\", not %q", a.UpTimeoutText)
+		}
+		a.upTimeout = d
 	}
 	return nil
 }

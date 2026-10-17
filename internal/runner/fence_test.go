@@ -14,6 +14,9 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
+// prodKey is the fake home's prod app key (fakeHome).
+const prodKey = "prod-SECRET-0123456789abcdef"
+
 // fakeHome makes a home with the secrets the fence must hide, and points the rig's commands at it.
 func (g *rig) fakeHome() string {
 	g.t.Helper()
@@ -24,8 +27,10 @@ func (g *rig) fakeHome() string {
 		".config/jarvis-loop/tokens":           "loopd-token\trunner\tdevbox\n",
 		".config/jarvis-harness/slack.env":     "SLACK_BOT_TOKEN=xoxb-SECRET\n",
 		".config/jarvis-harness/installed.env": "INSTALLED_APP_ID=app\n",
-		".git-credentials":                     "https://u:SECRET@github.com\n",
-		".local/share/jarvis-loop/loop.db":     "db\n",
+		// The LLM app's prod credentials: an agent sandbox's up uses them; agents never see them.
+		".config/jarvis-harness/prod-background.env": "PROD_APP_ID=prod-app\nPROD_APP_KEY=" + prodKey + "\n",
+		".git-credentials":                           "https://u:SECRET@github.com\n",
+		".local/share/jarvis-loop/loop.db":           "db\n",
 	} {
 		f := filepath.Join(home, p)
 		os.MkdirAll(filepath.Dir(f), 0o700)

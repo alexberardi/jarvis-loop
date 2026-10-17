@@ -1,0 +1,112 @@
+{
+  "name": "agent-sandbox",
+  "about": "#66: the demo repo opts in to agent_sandbox. Before the build agent starts, the runner brings the item's harness sandbox up itself, under the fence (its up reads the stand-in prod env, starts a server in the background and exits; the runner holds the sandbox for the run), and the brief names the env file and the mobile-shot request. The agent fetches the sandbox's URL from the env file and asks the runner for a mobile-shot, whose PNG lands in its evidence; the prod key reaches nothing the agent sees. The sandbox goes down after the agent, and comes up again for the review agent.",
+  "agent_sandbox": true,
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Show the pairing code larger"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "use_sandbox"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "review"
+      },
+      "evidence": [
+        {
+          "item": "a",
+          "name": "sandbox-reply.txt",
+          "label": "^the sandbox's reply$",
+          "text": "^HELLO from sandbox loop-1\\n$"
+        },
+        {
+          "item": "a",
+          "name": "shot-1-home.png",
+          "label": "^mobile-shot, home$",
+          "text": "^PNG$"
+        },
+        {
+          "item": "a",
+          "name": "shot-1-done.json",
+          "text": "\"exit_code\": 0,[\\s\\S]*shot home at [0-9a-f]{40} in loop-1[\\s\\S]*\"evidence/shot-1-home\\.png\"",
+          "no_text": "sandbox-prod-key-must-not-leak"
+        }
+      ],
+      "pr": {
+        "a": {
+          "number": 101,
+          "repo": "sandbox/demo",
+          "body": "The agent sandbox said: HELLO from sandbox loop-1\\nThe mobile-shot request: exit 0, evidence/shot-1-home\\.png\\."
+        }
+      },
+      "run_files": [
+        {
+          "item": "a",
+          "stage": "build",
+          "run": 1,
+          "file": "agent-sandbox.log",
+          "text": "up: the harness's prod env is readable\\n\\[up; env file \\.sandbox/loop-1/sandbox\\.env; loopback ports \\[\\d+\\]\\]\\n\\$ echo \"down ran for \\$LOOP_SANDBOX\"\\ndown ran for loop-1\\n\\[down\\]\\n$"
+        },
+        {
+          "item": "a",
+          "stage": "build",
+          "run": 1,
+          "file": "brief.md",
+          "text": "- \\*\\*Agent sandbox `loop-1`\\*\\*: the runner brought this repo's harness sandbox up for you[\\s\\S]*`\\.sandbox/loop-1/sandbox\\.env` holds its local URLs[\\s\\S]*This repo has: mobile-shot\\.\\n$"
+        }
+      ]
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "land"
+    },
+    "run_files": [
+      {
+        "item": "a",
+        "stage": "review",
+        "run": 1,
+        "file": "agent-sandbox.log",
+        "text": "down ran for loop-1\\n\\[down\\]\\n$"
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "text": "^Claimed for build\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "sandbox/demo#101> opened, head `[0-9a-f]{7}` → review\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "^Review approved → land"
+      }
+    ]
+  }
+}

@@ -84,8 +84,11 @@ a forbidden message), with a readable failure. The fake Slack's injection and re
 
 ## Scenario format (as built)
 
-A scenario file is `{"name", "about", ["stages"], "steps": [...], "expect": {...}}`; `stages` are
-the stages the runner claims (default triage, build and review, as a real runner). Items are named by an
+A scenario file is `{"name", "about", ["stages"], ["agent_sandbox"], "steps": [...], "expect": {...}}`; `stages` are
+the stages the runner claims (default triage, build and review, as a real runner); `agent_sandbox: true`
+gives the demo repo an agent sandbox (`sandbox.DemoAgentSandbox`: a loopback server, an env file, a
+`mobile-shot` request; docs/decisions/2026-10-16-agent-sandbox.md), and the build play `use_sandbox`
+uses it. Items are named by an
 alias (`"a"`) given when added; ids are the stack's own. An item the loop filed itself (a red
 main's P1) is named by its id: `"#2"`. Unknown fields are refused, so a typo
 cannot silently check nothing. Steps (`"do"`):

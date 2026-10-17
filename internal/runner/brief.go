@@ -78,6 +78,9 @@ type RunInfo struct {
 	Context []TriageFile
 	// HeldNotes is the file saying why a held item came back to build ("" when it did not).
 	HeldNotes string
+	// AgentSandbox is the repo's agent sandbox the runner brings up for this run (build and
+	// review), nil when it has none.
+	AgentSandbox *AgentSandboxInfo
 	// ContextErrs say what the runner could not fetch (the agent is told; the run goes on).
 	ContextErrs []string
 	// CILog is the failing CI log the runner fetched (triage of a red main's P1; build after land
@@ -298,7 +301,26 @@ func Brief(stage string, it Item, r RunInfo) string {
 		}
 	}
 	fmt.Fprintf(&b, "- Scratch dir (temp files, GOTMPDIR): `%s`\n- Sandbox name for the harness: `%s`\n", r.Scratch, r.Sandbox)
+	if r.AgentSandbox != nil && stage != StageTriage {
+		writeAgentSandbox(&b, r.AgentSandbox, r.Sandbox)
+	}
 	return b.String()
+}
+
+// AgentSandboxInfo is what the brief says about the run's agent sandbox.
+type AgentSandboxInfo struct {
+	EnvFile  string   // worktree-relative
+	Requests []string // the request names, sorted
+}
+
+// writeAgentSandbox is the brief's section on the agent sandbox: what the agent can now run.
+func writeAgentSandbox(b *strings.Builder, a *AgentSandboxInfo, sandbox string) {
+	fmt.Fprintf(b, "- **Agent sandbox `%s`**: the runner brought this repo's harness sandbox up for you, outside your sandbox (with the harness's own credentials, which you never see), and takes it down when you finish. Use it; do not start or stop a sandbox of that name yourself (yours would die with your command). `%s` holds its local URLs and sandbox-local credentials (`source` it); the prod keys are not in it. Your sandbox allows loopback to the ports it names. Each of your commands has a network namespace of its own, so a plain request to `127.0.0.1` may not connect: then go through your sandbox's proxy (`curl --noproxy '' -x \"$HTTP_PROXY\" \"$URL\"`); clients that never proxy loopback (Go's `net/http`) cannot reach it, so say so under `not_verified` rather than work around it.\n",
+		sandbox, a.EnvFile)
+	if len(a.Requests) > 0 {
+		fmt.Fprintf(b, "- **Runner requests** (what needs the machine's devices, such as the emulator's /dev/kvm): commit first (the runner runs it on your HEAD, as `LOOP_HEAD`), write `%s/<id>.json` with `{\"run\": \"<name>\", \"args\": {\"screens\": \"home\"}}` (`<id>`: lowercase letters, digits, `-`, `_`; each arg reaches the command as `LOOP_REQ_<NAME>`), then poll for `%s/<id>.done.json`: `exit_code`, `error`, the log's tail and the `files` it copied into `.loop/evidence/` (name them in your result's evidence). It may wait minutes for the emulator; at most %d per run. This repo has: %s.\n",
+			RequestsDir, RequestsDir, MaxAgentRequests, strings.Join(a.Requests, ", "))
+	}
 }
 
 // RetryHeading opens the section RetryBrief adds.

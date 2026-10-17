@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -81,6 +82,8 @@ type Options struct {
 	// Stages are the stages the runner claims (default: triage, build and review, as a real
 	// runner).
 	Stages []string
+	// AgentSandbox gives the demo repo an agent sandbox (DemoAgentSandbox).
+	AgentSandbox bool
 }
 
 // Stack is one sandboxed loop: loopd (store, API on a loopback port, Slack layer), a runner, a
@@ -313,6 +316,13 @@ func StartStack(opts Options) (st *Stack, err error) {
 				Description: "the household's phone app (screens, chat, pairing)", Verify: MobileVerify(dir), QA: true},
 		},
 	}
+	if opts.AgentSandbox {
+		demo := cfg.Repos[RepoKey]
+		if demo.AgentSandbox, err = DemoAgentSandbox(dir); err != nil {
+			return nil, err
+		}
+		cfg.Repos[RepoKey] = demo
+	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	cfgPath := filepath.Join(dir, "runner.json")
 	if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
@@ -388,6 +398,47 @@ if [ -e ` + shellQuote(fail) + ` ]; then echo "FAIL: the home screen is blank (h
 echo "shots: 1 screen, light"`},
 		{Name: "web screenshots", Run: "echo should not run; exit 1", WhenChanged: []string{"web/**"}},
 	}
+}
+
+// HarnessProdEnv is the stand-in for the harness's prod env file (under the stack dir, in the
+// runner's work root, which the fence keeps readable): its key is what no agent may see.
+const (
+	HarnessProdEnv = "work/harness-prod.env"
+	HarnessProdKey = "sandbox-prod-key-must-not-leak"
+)
+
+// DemoAgentSandbox is the demo repo's agent sandbox in scenarios with agent_sandbox: up reads the
+// stand-in prod env (as jarvis-server's sandbox reads the harness's), starts a server on a free
+// loopback port in the background and exits, writing an env file with its URL and a
+// sandbox-local token; down says so; the mobile-shot request writes a PNG.
+func DemoAgentSandbox(dir string) (*runner.AgentSandbox, error) {
+	prod := filepath.Join(dir, HarnessProdEnv)
+	if err := os.MkdirAll(filepath.Dir(prod), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(prod, []byte("PROD_APP_ID=sandbox-prod\nPROD_APP_KEY="+HarnessProdKey+"\n"), 0o600); err != nil {
+		return nil, err
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	port := strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
+	l.Close()
+	return &runner.AgentSandbox{
+		Up: `set -e
+d=.sandbox/{sandbox}; mkdir -p "$d/www"; printf '*\n' > "$d/.gitignore"
+grep -q '^PROD_APP_KEY=' ` + shellQuote(prod) + ` && echo "up: the harness's prod env is readable"
+echo "HELLO from sandbox $LOOP_SANDBOX" > "$d/www/hello.txt"
+python3 -m http.server ` + port + ` --bind 127.0.0.1 --directory "$d/www" >/dev/null 2>&1 &
+for i in $(seq 100); do (exec 3<>/dev/tcp/127.0.0.1/` + port + `) 2>/dev/null && break; sleep 0.05; done
+printf 'export SBX_URL=http://127.0.0.1:` + port + `\nexport SBX_TOKEN=sandbox-local-token\n' > "$d/sandbox.env"`,
+		Down:    `echo "down ran for $LOOP_SANDBOX"`,
+		EnvFile: ".sandbox/{sandbox}/sandbox.env",
+		Requests: map[string]string{"mobile-shot": `printf 'PNG' > "$LOOP_EVIDENCE_DIR/home.png"
+echo "shot $LOOP_REQ_SCREENS at $LOOP_HEAD in $LOOP_SANDBOX"`},
+		SecretEnvFiles: []string{prod},
+	}, nil
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

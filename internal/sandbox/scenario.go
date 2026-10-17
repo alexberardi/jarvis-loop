@@ -30,8 +30,11 @@ type Scenario struct {
 	// Stages are the stages the sandbox's runner claims (default: triage, build and review). A
 	// scenario that does triage or review by hand while the runner builds names ["build"].
 	Stages []string `json:"stages,omitempty"`
-	Steps  []Step   `json:"steps"`
-	Final  *Expect  `json:"expect,omitempty"`
+	// AgentSandbox gives the demo repo an agent sandbox (DemoAgentSandbox): the runner brings it
+	// up around each build and review agent.
+	AgentSandbox bool    `json:"agent_sandbox,omitempty"`
+	Steps        []Step  `json:"steps"`
+	Final        *Expect `json:"expect,omitempty"`
 }
 
 // Step is one thing that happens. Do says what; the other fields are its arguments. An "expect"

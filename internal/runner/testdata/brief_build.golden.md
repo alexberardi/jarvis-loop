@@ -38,6 +38,9 @@ unsure, stop and ask (outcome `question`) instead of guessing.
    the scenario results (`.sandbox/<sandbox>/runs/latest/results.md`) plus the `transcript.md` of
    each scenario your change touches (copy them into `.loop/evidence/`), and before/after
    transcripts when it changes what the bot says. New behaviour gets a new scenario in `scenarios/`.
+   **When the brief lists an agent sandbox** (under "This run"), the runner has already brought the
+   item's harness sandbox up for you, outside your sandbox: use it (its env file, its URLs, its
+   requests) instead of starting your own, which would die with your command.
 4. Commit everything with clear messages on the item's branch. **Do not push**: you hold no
    GitHub credentials, and the runner pushes the branch (only it, never forced) after you finish.
 5. **Do not open a PR** either: the runner opens it (or updates the open one) from your

@@ -60,6 +60,27 @@ func TestBuildBriefResumeAndTriage(t *testing.T) {
 	}
 }
 
+// With an agent sandbox, build and review briefs say what the agent can run; without requests,
+// the requests line is left out.
+func TestAgentSandboxBrief(t *testing.T) {
+	info := RunInfo{Slug: "a/b", Base: "main", Branch: "loop/12-x", Worktree: "/w", Scratch: "/s", Sandbox: "loop-12",
+		AgentSandbox: &AgentSandboxInfo{EnvFile: ".sandbox/loop-12/sandbox.env", Requests: []string{"mobile-shot", "say"}}}
+	for _, stage := range []string{StageBuild, StageReview} {
+		b := Brief(stage, Item{ID: 12, Title: "Fix the timer"}, info)
+		for _, want := range []string{"**Agent sandbox `loop-12`**", "`.sandbox/loop-12/sandbox.env` holds its local URLs",
+			"the prod keys are not in it", `curl --noproxy '' -x "$HTTP_PROXY" "$URL"`, "write `.loop/requests/<id>.json`",
+			"`.loop/requests/<id>.done.json`", "at most 10 per run", "This repo has: mobile-shot, say."} {
+			if !strings.Contains(b, want) {
+				t.Errorf("%s brief lacks %q", stage, want)
+			}
+		}
+	}
+	info.AgentSandbox.Requests = nil
+	if b := BuildBrief(Item{ID: 12}, info); strings.Contains(b, "Runner requests") || !strings.Contains(b, "Agent sandbox") {
+		t.Error("requests line without requests")
+	}
+}
+
 func TestRetryBrief(t *testing.T) {
 	b := BuildBrief(Item{ID: 12, Title: "Fix the timer"}, RunInfo{Slug: "a/b", Base: "main", Branch: "loop/12-x", Worktree: "/w", Scratch: "/s", Sandbox: "loop-12"})
 	r := RetryBrief(b, "evidence: evidence key.txt is not a regular file")

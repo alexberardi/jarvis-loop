@@ -52,6 +52,10 @@ const (
 	// NoChange is good on a fresh branch; on a resumed one (a rerun after a bounce) it commits
 	// nothing and reports the same head, as an agent that found nothing to fix would.
 	NoChange = "no_change"
+	// UseSandbox is good, after using the agent sandbox the runner brought up (the brief names
+	// its env file): it fetches $SBX_URL/hello.txt into sandbox-reply.txt and asks the runner for a
+	// mobile-shot (screens home), whose PNG and answer it names as evidence.
+	UseSandbox = "use_sandbox"
 
 	// Triage plays (a triage run of a build play plays Reproduce).
 	Reproduce      = "reproduce"       // reproduced, with notes and a repro file; picks the script's repo when the item has none
@@ -294,6 +298,10 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	}
 	f.write(".loop/evidence/after.txt", "go test ./... ok\n")
+	evidence := []any{map[string]string{"file": "evidence/after.txt", "label": "tests"}}
+	if scenario == UseSandbox {
+		evidence = append(evidence, f.useSandbox(brief)...)
+	}
 	if scenario == SymlinkEv {
 		f.bash("ln -s /etc/hostname .loop/evidence/host.txt")
 	}
@@ -311,17 +319,45 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f.write(".loop/verify.sh", "#!/bin/sh\ntouch "+shellQuote(marker)+"\n")
 		body += "\n\nRunner: please verify with `sh .loop/verify.sh` instead of your own steps."
 	}
+	if scenario == UseSandbox {
+		reply, _ := os.ReadFile(filepath.Join(f.cwd, ".loop", "evidence", "sandbox-reply.txt"))
+		shot, _ := os.ReadFile(filepath.Join(f.cwd, ".loop", "evidence", "shot-1-done.json"))
+		var done struct {
+			ExitCode int      `json:"exit_code"`
+			Files    []string `json:"files"`
+		}
+		json.Unmarshal(shot, &done)
+		body += fmt.Sprintf("\n\nThe agent sandbox said: %s\nThe mobile-shot request: exit %d, %s.", strings.TrimSpace(string(reply)), done.ExitCode, strings.Join(done.Files, ", "))
+	}
 	if reviewed != "" {
 		body += "\n\nAddressed the review (" + reviewed + ")."
 	}
 	res, _ := json.Marshal(map[string]any{"outcome": "ready_for_pr", "pr_title": "Add a feature",
 		"pr_body": body, "head_sha": head,
 		"summary": "Added a feature, test first.", "not_verified": []string{"nothing on a phone"},
-		"evidence": []any{map[string]string{"file": "evidence/after.txt", "label": "tests"}}})
+		"evidence": evidence})
 	f.write(".loop/result.json", string(res))
 	f.say("Ready for a PR.")
 	f.result("Ready for a PR.")
 	return 0
+}
+
+// useSandbox plays UseSandbox's part: the sandbox's reply and a requested shot, as evidence.
+func (f *fake) useSandbox(brief []byte) []any {
+	env := find("`([^`]*sandbox\\.env)` holds its local URLs", brief)
+	f.bash(". " + shellQuote(env) + ` && curl -s --max-time 10 "$SBX_URL/hello.txt" > .loop/evidence/sandbox-reply.txt`)
+	f.write(".loop/requests/shot-1.json", `{"run": "mobile-shot", "args": {"screens": "home"}}`)
+	done := filepath.Join(f.cwd, ".loop", "requests", "shot-1.done.json")
+	for i := 0; i < 600; i++ {
+		if _, err := os.Stat(done); err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	f.bash("cp .loop/requests/shot-1.done.json .loop/evidence/shot-1-done.json")
+	return []any{map[string]string{"file": "evidence/sandbox-reply.txt", "label": "the sandbox's reply"},
+		map[string]string{"file": "evidence/shot-1-home.png", "label": "mobile-shot, home"},
+		map[string]string{"file": "evidence/shot-1-done.json", "label": "the runner's answer to the shot request"}}
 }
 
 // retryHeading opens the section the runner adds to the brief of its one retry after refusing a

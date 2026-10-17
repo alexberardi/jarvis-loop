@@ -236,7 +236,9 @@ type run struct {
 	mirror    string
 	sandbox   string
 	settings  string
-	started   time.Time
+	// agentSandbox is the attempt's agent sandbox while it is up (agentsandbox.go).
+	agentSandbox *agentSandbox
+	started      time.Time
 
 	// A plan turn's (plan.go): the plan and the turn (stage is the turn's persona), the session
 	// it resumes ("" for a new one) and its time cap (plan_turn_minutes).
@@ -306,6 +308,10 @@ func (r *Runner) newRun(cl *Claim, agent string) (*run, error) {
 		ru.settings = filepath.Join(r.Cfg.WorkRoot, "settings", Slug(ru.repoKey)+"-"+stage+".json")
 	}
 	ru.sandbox = fmt.Sprintf("loop-%d", it.ID)
+	if ru.repo.AgentSandbox != nil && (stage == StageBuild || stage == StageReview) {
+		// Loopback to the item's sandbox's ports: settings of the item's own.
+		ru.settings = strings.TrimSuffix(ru.settings, ".json") + "-" + ru.sandbox + ".json"
+	}
 	return ru, nil
 }
 
@@ -331,7 +337,15 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 		return
 	}
 	log.Info("agent starting", "worktree", ru.wt, "branch", ru.branch, "mode", r.Cfg.Mode)
-	out := r.runAgent(ctx, ru, brief)
+	out, err := r.agentAttempt(ctx, ru, brief)
+	if errors.Is(err, errVerifyStopped) {
+		log.Warn("stopped while the agent sandbox came up")
+		return
+	} else if err != nil {
+		log.Error("agent sandbox", "err", err)
+		r.advance(cleanupCtx, ru, "failed", map[string]string{"error": "the runner could not start the agent sandbox: " + clip(err.Error(), 1500)}, nil)
+		return
+	}
 	log.Info("agent ended", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
 	// Reporting and saving work must finish even when the runner is shutting down.
 	r.report(cleanupCtx, ru, out, log)
@@ -355,9 +369,33 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 		return
 	}
 	os.Remove(filepath.Join(ru.wt, ".loop", "result.json"))
-	out = r.runAgent(ctx, ru, brief)
+	out2, err := r.agentAttempt(ctx, ru, brief)
+	if err != nil {
+		r.fail(cleanupCtx, ru, out, rejectedMsg(ru.stage, why, false)+"; the retry could not start the agent sandbox: "+clip(err.Error(), 800))
+		return
+	}
+	out = out2
 	log.Info("agent ended (retry)", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
 	r.report(cleanupCtx, ru, out, log)
+}
+
+// agentAttempt runs the agent once, with the repo's agent sandbox up around it when it has one
+// (agentsandbox.go): down again before the result is checked and verify runs.
+func (r *Runner) agentAttempt(ctx context.Context, ru *run, brief string) (outcome, error) {
+	if !usesAgentSandbox(ru) {
+		return r.runAgent(ctx, ru, brief), nil
+	}
+	sb, err := r.startAgentSandbox(ctx, ru)
+	if err != nil {
+		return outcome{}, err
+	}
+	ru.agentSandbox = sb
+	stopRequests := r.serveRequests(ctx, ru, sb)
+	out := r.runAgent(ctx, ru, brief)
+	stopRequests()
+	r.stopAgentSandbox(context.WithoutCancel(ctx), ru, sb)
+	ru.agentSandbox = nil
+	return out, nil
 }
 
 // keepFirstAttempt renames the refused attempt's transcript, stderr and brief in the run dir to
@@ -446,6 +484,13 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if usesAgentSandbox(ru) {
+		info.AgentSandbox = &AgentSandboxInfo{EnvFile: sandboxSub(ru.repo.AgentSandbox.EnvFile, ru)}
+		for n := range ru.repo.AgentSandbox.Requests {
+			info.AgentSandbox.Requests = append(info.AgentSandbox.Requests, n)
+		}
+		slices.Sort(info.AgentSandbox.Requests)
+	}
 	for _, d := range []string{filepath.Join(ru.wt, ".loop", "evidence"), ru.scratch} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return "", err
@@ -488,18 +533,7 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 	if err := os.WriteFile(filepath.Join(ru.dir, "guard.json"), b, 0o600); err != nil {
 		return "", err
 	}
-	// The same bytes for every item of the repo and stage (see
-	// docs/decisions/2026-10-15-prompt-caching.md); written atomically, as parallel slots share
-	// the file.
-	settings, err := GenerateSettings(SettingsInput{
-		Mode: r.Cfg.Mode, Guard: r.Cfg.Guard, Home: home, Protected: r.Cfg.Protected(), Secrets: r.Cfg.Secrets(),
-		LoopdAddrs: r.Cfg.LoopdAddrs(), AllowedDomains: r.Cfg.AllowedDomains, ExcludedCommands: ru.repo.ExcludedCommands,
-		ReadOnly: ru.stage != StageBuild,
-	})
-	if err != nil {
-		return "", err
-	}
-	if err := writeAtomic(ru.settings, settings); err != nil {
+	if err := r.writeSettings(ru, nil); err != nil {
 		return "", err
 	}
 	if _, err := os.Stat(r.Cfg.Guard); err != nil {
@@ -512,6 +546,22 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 		return "", err
 	}
 	return brief, nil
+}
+
+// writeSettings writes the run's Claude Code settings: the same bytes for every item of the repo
+// and stage (see docs/decisions/2026-10-15-prompt-caching.md), written atomically, as parallel
+// slots share the file. An agent sandbox's run adds loopback to its ports (loopback), in a file
+// of its own.
+func (r *Runner) writeSettings(ru *run, loopback []string) error {
+	settings, err := GenerateSettings(SettingsInput{
+		Mode: r.Cfg.Mode, Guard: r.Cfg.Guard, Home: Home(), Protected: r.Cfg.Protected(), Secrets: r.Cfg.Secrets(),
+		LoopdAddrs: r.Cfg.LoopdAddrs(), AllowedDomains: append(append([]string{}, r.Cfg.AllowedDomains...), loopback...),
+		ExcludedCommands: ru.repo.ExcludedCommands, ReadOnly: ru.stage != StageBuild,
+	})
+	if err != nil {
+		return err
+	}
+	return writeAtomic(ru.settings, settings)
 }
 
 // prepareBuild makes the item's worktree on its branch (continuing an earlier run's commits),
@@ -595,9 +645,14 @@ func writeAtomic(path string, b []byte) error {
 // shell runs a prepare, setup or cleanup command under the fence (fence.go): it runs files from
 // a tree the agent may have changed.
 func (r *Runner) shell(ctx context.Context, dir, command string, limit time.Duration) (string, error) {
+	return r.shellEnv(ctx, dir, command, r.agentEnv(), limit)
+}
+
+// shellEnv is shell with env (before the fence cleans it) and extra writable paths.
+func (r *Runner) shellEnv(ctx context.Context, dir, command string, env []string, limit time.Duration, extraWritable ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
-	fc, err := r.fence(dir, command, r.agentEnv(), nil)
+	fc, err := r.fence(dir, command, env, extraWritable)
 	if err != nil {
 		return "", err
 	}
@@ -1328,6 +1383,10 @@ func readResult(p string) ([]byte, error) {
 // worktree and the scratch dir. The run dir stays as the run's log. It never touches anything
 // else.
 func (r *Runner) cleanup(ctx context.Context, ru *run, log *slog.Logger) {
+	r.stopAgentSandbox(ctx, ru, ru.agentSandbox)
+	if strings.HasSuffix(ru.settings, "-"+ru.sandbox+".json") {
+		os.Remove(ru.settings) // the item's own (agent sandbox), not the repo's shared file
+	}
 	if _, err := os.Stat(ru.repoDir); ru.repoDir != "" && err == nil && len(ru.repo.Cleanup) > 0 {
 		restored := true
 		if len(ru.repo.CleanupRestore) > 0 {

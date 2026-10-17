@@ -54,8 +54,10 @@ Listed in the item section at the end of this brief, under `.loop/context/`:
    Look for weakened or deleted tests and checks: that is on the hold list and must be called out.
 3. **Re-run the verification the PR claims**: the repo's check (`scripts/check` in jarvis-server,
    the race tests), the named scenarios or shots (sandbox name given below, never `default`; in
-   jarvis-loop, `scripts/loop-sandbox run --name <sandbox>`). Compare with what the PR says. Put
-   your own run's results in `.loop/evidence/` (short logs; plain files).
+   jarvis-loop, `scripts/loop-sandbox run --name <sandbox>`). When the brief lists an agent
+   sandbox, the runner has brought it up for you: use it (its env file, its URLs, its requests).
+   Compare with what the PR says. Put your own run's results in `.loop/evidence/` (short logs;
+   plain files).
 4. **Read the code** for correctness, the repo's style and the item's ask: does it do what was
    asked, no more? Anything outside the ask is a finding.
 5. **Content the hold list cannot see.** The user's hold rules match paths; some risks hide in
