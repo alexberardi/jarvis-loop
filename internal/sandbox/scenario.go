@@ -566,20 +566,25 @@ func (p *player) step(st Step) error {
 		return nil
 	case "verify":
 		// How the stand-in node-mobile's "mobile shots" verify step goes from now on.
-		f := filepath.Join(s.Dir, VerifyFailFile)
+		f, m := filepath.Join(s.Dir, VerifyFailFile), filepath.Join(s.Dir, VerifyMaskedMarker)
+		for _, p := range []string{f, m} {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
 		switch st.Outcome {
-		case "fail":
+		case "fail", "masked":
+			if st.Outcome == "masked" {
+				f = m
+			}
 			if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
 				return err
 			}
-			return os.WriteFile(f, []byte("fail\n"), 0o644)
+			return os.WriteFile(f, []byte(st.Outcome+"\n"), 0o644)
 		case "pass":
-			if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
-				return err
-			}
 			return nil
 		}
-		return fmt.Errorf("verify outcome %q: use pass or fail", st.Outcome)
+		return fmt.Errorf("verify outcome %q: use pass, fail or masked", st.Outcome)
 	case "github":
 		if st.RefuseMerges != nil {
 			s.GitHub.RefuseMerges(*st.RefuseMerges)

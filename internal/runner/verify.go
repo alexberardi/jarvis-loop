@@ -50,6 +50,9 @@ type VerifyResult struct {
 	Log      string
 	LogFile  EvidenceFile
 	Evidence []EvidenceFile
+	// Masked is the verify_mask path a failed step could not read ("" for none): the fence hid it,
+	// so the failure is the runner's config, not the change.
+	Masked string
 }
 
 // Passed reports whether the step passed (a skipped step passes).
@@ -377,6 +380,9 @@ func (r *Runner) verifyStep(ctx context.Context, ru *run, n int, st VerifyStep, 
 	}
 	b, _ := os.ReadFile(logPath)
 	res.Log = logTail(string(b))
+	if !res.Passed() {
+		res.Masked = maskedRead(string(b), r.Cfg.VerifyMask)
+	}
 	tailPath := filepath.Join(dir, tag+".log")
 	if err := os.WriteFile(tailPath, []byte(res.Log), 0o600); err != nil {
 		return res, err
@@ -395,6 +401,34 @@ func (r *Runner) verifyStep(ctx context.Context, ru *run, n int, st VerifyStep, 
 	}
 	r.Log.Info("verify ended", "item", ru.item.ID, "step", st.Name, "status", res.Status())
 	return res, nil
+}
+
+// maskedRead is the first mask path the log says could not be read: a file the fence binds
+// /dev/null over gives "Permission denied", a path under a dir it puts a tmpfs on "No such file or
+// directory" too. "" when the log names none.
+func maskedRead(log string, mask []string) string {
+	for _, line := range strings.Split(log, "\n") {
+		low := strings.ToLower(line)
+		denied := strings.Contains(low, "permission denied")
+		missing := strings.Contains(low, "no such file or directory")
+		if !denied && !missing {
+			continue
+		}
+		for _, p := range mask {
+			for rest := line; ; {
+				i := strings.Index(rest, p)
+				if i < 0 {
+					break
+				}
+				rest = rest[i+len(p):]
+				switch {
+				case strings.HasPrefix(rest, ":") && denied, strings.HasPrefix(rest, "/"):
+					return p
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // logTail is the end of a step's output: at most verifyLogLines lines and verifyLogBytes bytes.
@@ -430,6 +464,13 @@ func (r *Runner) uploadVerify(ctx context.Context, ru *run, rs []VerifyResult) e
 // notes, never to Slack.
 func VerifyFailedReason(v VerifyResult) string {
 	return fmt.Sprintf("Runner verify %q %s; nothing was pushed", v.Name, v.Status())
+}
+
+// VerifyMaskedReason is the error for a step that failed on a masked path: only the path, never
+// what the step printed.
+func VerifyMaskedReason(v VerifyResult) string {
+	return fmt.Sprintf("the runner's verify %q could not read %s: verify_mask hides it from fenced steps, "+
+		"so this is the runner's config, not the change; nothing was pushed", v.Name, v.Masked)
 }
 
 // VerifyLogTail is the end of a failed step's output for the next build run.
