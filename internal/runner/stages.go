@@ -22,18 +22,19 @@ const MergedPRsForTriage = 30
 const MaxDiffBytes = 4 << 20
 
 // writeContext writes a context file (relative to the working directory) and lists it for the
-// brief.
-func writeContext(ru *run, info *RunInfo, rel, label, content string) {
+// brief. It reports whether the file was written.
+func writeContext(ru *run, info *RunInfo, rel, label, content string) bool {
 	p := filepath.Join(ru.wt, rel)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		info.ContextErrs = append(info.ContextErrs, rel+": "+err.Error())
-		return
+		return false
 	}
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 		info.ContextErrs = append(info.ContextErrs, rel+": "+err.Error())
-		return
+		return false
 	}
 	info.Context = append(info.Context, TriageFile{Name: rel, Label: label})
+	return true
 }
 
 // mainRedLog gives triage of a red main's P1 the failing CI log, as .loop/context/ci-failure.log:
@@ -365,8 +366,9 @@ func (r *Runner) planContext(ctx context.Context, ru *run, info *RunInfo) {
 			info.ContextErrs = append(info.ContextErrs, fmt.Sprintf("plan P%d's approved %s (v%d): its text does not match the approved sha256", it.PlanID, x.what, x.v))
 		default:
 			rel := ".loop/context/" + x.kind + ".md"
-			writeContext(ru, info, rel, fmt.Sprintf("plan P%d's approved %s, v%d (sha256 %s)", it.PlanID, x.what, d.Version, short7(d.SHA256)), d.Markdown)
-			info.PlanDocs = append(info.PlanDocs, rel)
+			if writeContext(ru, info, rel, fmt.Sprintf("plan P%d's approved %s, v%d, sha256 %s", it.PlanID, x.what, d.Version, short7(d.SHA256)), d.Markdown) {
+				info.PlanDocs = append(info.PlanDocs, rel)
+			}
 		}
 	}
 }

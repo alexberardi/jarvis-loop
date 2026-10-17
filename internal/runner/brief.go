@@ -286,11 +286,11 @@ func Brief(stage string, it Item, r RunInfo) string {
 		fmt.Fprintf(&b, "- **The user already answered questions on this item**: `%s`. Read it first. An answer overrides the ask where they conflict (for example, a step it says to skip or list under not verified), and the newest answer wins. Do not ask a question that file already answers; act on the answer.\n", r.Answers)
 	}
 	if r.PlanID > 0 && len(r.PlanDocs) > 0 {
-		fmt.Fprintf(&b, "- **This item is piece %d of plan P%d.** Your piece is in the ask; the plan's whole approved documents are", r.PlanPiece, r.PlanID)
-		for _, f := range r.PlanDocs {
-			fmt.Fprintf(&b, " `%s`;", f)
+		docs := make([]string, len(r.PlanDocs))
+		for i, f := range r.PlanDocs {
+			docs[i] = "`" + f + "`"
 		}
-		b.WriteString(" for the sections your piece points at (a table, the rules, the names). Read them there; do not ask the user for what they contain.\n")
+		fmt.Fprintf(&b, "- **This item is piece %d of plan P%d.** Your piece is in the ask; the plan's whole approved documents are in %s, for the sections your piece points at (a table, the rules, the names). Read them there; do not ask the user for what they contain.\n", r.PlanPiece, r.PlanID, strings.Join(docs, " and "))
 	}
 	if len(r.Context) > 0 {
 		b.WriteString("- Context from the runner (read these):")

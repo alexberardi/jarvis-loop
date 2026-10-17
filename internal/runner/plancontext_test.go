@@ -85,15 +85,20 @@ func TestPlanItemsGetTheApprovedBlueprint(t *testing.T) {
 		}
 		item := b[strings.Index(b, ItemHeading):]
 		for _, want := range []string{
-			"**This item is piece " + itoa(int64(piece)) + " of plan P1.** Your piece is in the ask; the plan's whole approved documents are `.loop/context/blueprint.md`; `.loop/context/brief.md`; for the sections your piece points at",
+			"**This item is piece " + itoa(int64(piece)) + " of plan P1.** Your piece is in the ask; the plan's whole approved documents are in `.loop/context/blueprint.md` and `.loop/context/brief.md`, for the sections your piece points at",
 			"do not ask the user for what they contain.",
-			"`.loop/context/blueprint.md` (plan P1's approved blueprint, v1 (sha256 " + bp.SHA256[:7] + "))",
+			"`.loop/context/blueprint.md` (plan P1's approved blueprint, v1, sha256 " + bp.SHA256[:7] + ")",
 		} {
 			if !strings.Contains(item, want) {
 				t.Fatalf("%s: the brief lacks %q:\n%s", stage, want, item)
 			}
 		}
-		if s := gitT(t, ru.wt, "status", "--porcelain"); stage != StageTriage && s != "" {
+		// Triage works in a plain directory, not a checkout (git status there would read whatever
+		// repo the test's temp dir happens to sit in).
+		if stage == StageTriage {
+			return
+		}
+		if s := gitT(t, ru.wt, "status", "--porcelain"); s != "" {
 			t.Fatalf("%s: the context shows in git status:\n%s", stage, s)
 		}
 	}

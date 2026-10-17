@@ -24,8 +24,8 @@
     {"do": "runner", "claims": "plain"},
     {"do": "wait", "stage": {"plain": "build"}, "within": "30s"},
     {"do": "expect", "run_files": [
-      {"item": "p1", "stage": "triage", "file": "brief.md", "text": "\\*\\*This item is piece 1 of plan P1\\.\\*\\* Your piece is in the ask; the plan's whole approved documents are `\\.loop/context/blueprint\\.md`; `\\.loop/context/brief\\.md`; for the sections your piece points at \\(a table, the rules, the names\\)\\. Read them there; do not ask the user for what they contain\\."},
-      {"item": "p1", "stage": "triage", "file": "brief.md", "text": "`\\.loop/context/blueprint\\.md` \\(plan P1's approved blueprint, v1 \\(sha256 [0-9a-f]{7}\\)\\); `\\.loop/context/brief\\.md` \\(plan P1's approved product brief, v1 \\(sha256 [0-9a-f]{7}\\)\\)"},
+      {"item": "p1", "stage": "triage", "file": "brief.md", "text": "\\*\\*This item is piece 1 of plan P1\\.\\*\\* Your piece is in the ask; the plan's whole approved documents are in `\\.loop/context/blueprint\\.md` and `\\.loop/context/brief\\.md`, for the sections your piece points at \\(a table, the rules, the names\\)\\. Read them there; do not ask the user for what they contain\\."},
+      {"item": "p1", "stage": "triage", "file": "brief.md", "text": "`\\.loop/context/blueprint\\.md` \\(plan P1's approved blueprint, v1, sha256 [0-9a-f]{7}\\); `\\.loop/context/brief\\.md` \\(plan P1's approved product brief, v1, sha256 [0-9a-f]{7}\\)"},
       {"item": "p1", "stage": "triage", "file": "stream.jsonl", "text": "(?s)cat \\.loop/context/blueprint\\.md.*table: pantry_items"},
       {"item": "p1", "stage": "build", "file": "brief.md", "text": "\\*\\*This item is piece 1 of plan P1\\.\\*\\*.*do not ask the user for what they contain\\."},
       {"item": "p1", "stage": "build", "file": "stream.jsonl", "text": "(?s)## Shared names.*route: /pantry"},
