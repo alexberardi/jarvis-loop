@@ -1,0 +1,52 @@
+{
+  "name": "orchestrator-lock-error",
+  "about": "Recorded 2026-10-16: runs failing on a stale git index.lock (docs/phases/08-orchestrator.md, piece 4). The orchestrator (the fake claude's persona play, the skill as rules) retries a runner error rather than answering it, and notes its failure signature. When the same signature fails a second item it files one P1 ticket against jarvis-loop with the items and the log lines; when the items fail that way again after their retries, the same signature records the new evidence on that ticket instead of filing another (loopd's dedup).",
+  "stages": ["build", "orchestrate"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the timer rounding", "priority": "P2"},
+    {"do": "add", "item": "b", "title": "Add the weather card", "priority": "P2"},
+    {"do": "triage", "item": "a"},
+    {"do": "triage", "item": "b"},
+    {"do": "script", "item": "a", "play": "lock_error"},
+    {"do": "script", "item": "b", "play": "lock_error"},
+    {"do": "script", "for": "orchestrate", "play": "persona"},
+
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you", "b": "build"},
+     "events": [{"item": "a", "kind": "refused", "actor": "orchestrator", "data": {"action": "^retry$", "code": "^too_soon$"}, "count": 1},
+                {"kind": "orchestrator.note", "actor": "orchestrator", "data": {"text": "failure signature `fatal: unable to create '.*': file exists\\.` on #1"}, "count": 1}],
+     "no_events": [{"kind": "orchestrator.added"}, {"item": "a", "kind": "answered"}]},
+
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you", "b": "needs_you", "#3": "triage"},
+     "repo": {"#3": "alexberardi/jarvis-loop"},
+     "events": [{"item": "#3", "kind": "orchestrator.added", "actor": "orchestrator", "data": {"signature": "^fatal: unable to create '.*': file exists\\.$"}, "count": 1},
+                {"item": "#3", "kind": "created", "data": {"priority": "^P1$"}}]},
+
+    {"do": "clock", "advance": "2m"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build", "b": "build"},
+     "events": [{"item": "a", "kind": "retried", "actor": "orchestrator", "count": 1},
+                {"item": "b", "kind": "retried", "actor": "orchestrator", "count": 1}]},
+
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "needs_you", "b": "build", "#3": "triage"},
+    "events": [
+      {"kind": "orchestrator.added", "count": 1},
+      {"item": "#3", "kind": "orchestrator.seen_again", "actor": "orchestrator", "data": {"signature": "^fatal: unable to create '.*': file exists\\.$"}, "count": 1},
+      {"item": "a", "kind": "answered", "count": 0}
+    ]
+  }
+}

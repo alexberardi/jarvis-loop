@@ -14,8 +14,8 @@ import (
 
 	"github.com/alexberardi/jarvis-loop/internal/fakeclaude"
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
-	"github.com/alexberardi/jarvis-loop/skills"
 	"github.com/alexberardi/jarvis-loop/internal/store"
+	"github.com/alexberardi/jarvis-loop/skills"
 )
 
 func TestValidateOrchResult(t *testing.T) {

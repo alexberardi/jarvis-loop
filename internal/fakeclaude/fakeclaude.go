@@ -54,14 +54,19 @@ const (
 	IgnoreTerm      = "ignore_term" // like hang, but ignore SIGTERM
 	// TodosHang is hang after a to-do list (TodoWrite) and a described Bash call whose command
 	// holds SECRET_CMD_MARKER (which must never reach the board).
-	TodosHang  = "todos_hang"
-	Exit3      = "exit3"       // print something and exit 3
-	UsageLimit = "usage_limit" // the plan's session limit
-	NoArm      = "noarm"       // run tools without the hooks (settings not applied)
-	WrongMode  = "wrong_mode"  // start in default mode whatever was asked
-	SymlinkEv  = "symlink_evidence"
-	LyingOnce  = "lying_once" // lying, then good on the runner's one retry
-	LowCache   = "low_cache"  // good, but with a cold prompt cache (10% read over 6 turns)
+	TodosHang = "todos_hang"
+	Exit3     = "exit3" // print something and exit 3
+	// LockError prints git's stale index.lock error (with the worktree's path) and exits 3, as
+	// the runs of 2026-10-16 did.
+	LockError = "lock_error"
+	// HarnessQuestion asks to skip what it can't run in its sandbox (the emulator).
+	HarnessQuestion = "harness_question"
+	UsageLimit      = "usage_limit" // the plan's session limit
+	NoArm           = "noarm"       // run tools without the hooks (settings not applied)
+	WrongMode       = "wrong_mode"  // start in default mode whatever was asked
+	SymlinkEv       = "symlink_evidence"
+	LyingOnce       = "lying_once" // lying, then good on the runner's one retry
+	LowCache        = "low_cache"  // good, but with a cold prompt cache (10% read over 6 turns)
 	// SuggestVerify is good, but the agent also leaves a verify script of its own in .loop/ and
 	// asks for it in the PR body; the runner must never run it (it would touch
 	// <scripts dir>/../agent-verify-ran).
@@ -122,6 +127,9 @@ const (
 	OrchAgentsUp    = "agents_up"
 	OrchInvalid     = "invalid"      // an action it does not have (approve), every time
 	OrchInvalidOnce = "invalid_once" // invalid, then react on the runner's one retry
+	// OrchPersona plays the orchestrator's skill as rules on the snapshot (persona.go): retries
+	// and failure signatures, the answer kinds, escalations with a recommendation, P1 tickets.
+	OrchPersona = "persona"
 )
 
 var stagePlays = map[string][]string{
@@ -130,7 +138,7 @@ var stagePlays = map[string][]string{
 	// Plan personas.
 	"product":     {PlanBrief, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
 	"engineering": {PlanBlueprint, BackToBrief, PlanCycle, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
-	"orchestrate": {OrchReact, OrchNote, OrchAgentsUp, OrchInvalid, OrchInvalidOnce, Hang, UsageLimit, Exit3},
+	"orchestrate": {OrchReact, OrchNote, OrchAgentsUp, OrchInvalid, OrchInvalidOnce, OrchPersona, Hang, UsageLimit, Exit3},
 }
 
 type fake struct {
@@ -320,6 +328,13 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case Exit3:
 		f.say("I could not build it: the tests do not compile.")
 		return 3
+	case LockError:
+		f.say("fatal: Unable to create '" + filepath.Join(f.cwd, ".git", "index.lock") + "': File exists.")
+		return 3
+	case HarnessQuestion:
+		f.write(".loop/result.json", `{"outcome":"question","question":"I can't run the emulator in my sandbox: may I open the PR without the screenshots?"}`)
+		f.result("Asked a question.")
+		return 0
 	case UsageLimit:
 		f.emit(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "rejected", "resetsAt": 1792000000}})
 		f.emit(map[string]any{"type": "assistant", "error": "rate_limit", "message": map[string]any{"content": []any{
@@ -899,6 +914,8 @@ func (f *fake) orchestrate(play, turn string, brief []byte, progress func(string
 		}
 	case OrchNote:
 		actions = append(actions, map[string]any{"action": "note", "text": "turn " + turn + ": looked at the board", "reason": "a sweep"})
+	case OrchPersona:
+		actions = personaActions(turn, []byte(readFile(filepath.Join(f.cwd, ".loop", "context", "snapshot.json"))))
 	default: // OrchReact
 		stage := map[int64]string{}
 		for _, it := range snap.Items {

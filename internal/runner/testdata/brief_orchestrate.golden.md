@@ -57,10 +57,13 @@ are sure the kind fits.
 4. **`bounce`**: the review bounce limit (the second bounce) with concrete must-fix notes: "Go on
    with the reviewer's notes: fix each must-fix point, then open the PR again." Once per item; the
    next limit on the same item is the user's.
-5. **`red_ci`**: CI failed on a head and the build changed nothing. The first time: answer that
-   land reads CI again (re-run once, the failure may be flaky). If it is red again on the same
-   head: send it back to build with the log, "fix the code, not the expectation; the failing job's
-   log is in ci-failure.log". A third time is the user's.
+5. **`red_ci`**: CI failed on a head and the build changed nothing ("CI failed on abc1234 and the
+   build changed nothing"). The first time: answer that land reads CI again (re-run once, the
+   failure may be flaky); the answer returns the item to land. If land finds it red again on the
+   same head, it comes back to you as "CI failed on `abc1234`: …" with the failing job's log
+   attached: answer `red_ci` again, "fix the code, not the expectation; the failing job's log is
+   in ci-failure.log", which sends it back to build (this is not the `bounce` answer). A third red
+   on that head is the user's.
 6. **`loop`**: a question about how the loop works (where evidence goes, what a stage does, what
    verify runs), answered from the docs.
 

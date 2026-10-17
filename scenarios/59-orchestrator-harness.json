@@ -1,0 +1,31 @@
+{
+  "name": "orchestrator-harness",
+  "about": "Recorded 2026-10-16: an agent that can't run the emulator in its sandbox asks whether to go on (docs/phases/08-orchestrator.md, piece 4). The orchestrator (the persona play) gives the standing answer, kind harness: go on and list it under not verified, the runner's verify runs it. The build goes on with that answer (its brief points at .loop/context/answers.md) and opens its PR.",
+  "stages": ["build", "orchestrate"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the weather card layout", "priority": "P2"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "harness_question"},
+    {"do": "script", "for": "orchestrate", "play": "persona"},
+
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}, "question": {"a": "^I can't run the emulator in my sandbox"}},
+    {"do": "script", "item": "a", "play": "good"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [{"item": "a", "kind": "answered", "actor": "orchestrator",
+                 "data": {"answer_kind": "^harness$", "answer": "^Go on without it: list the run under not verified in the PR; the runner's verify runs it\\.$",
+                          "reason": "standing answer"}, "count": 1}]},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review"},
+    "events": [{"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "count": 1}],
+    "no_events": [{"item": "a", "kind": "orchestrator.escalated"}],
+    "run_files": [{"item": "a", "stage": "build", "run": 2, "file": "brief.md", "text": "The user already answered questions on this item\\*\\*: `\\.loop/context/answers\\.md`"}],
+    "agent_runs": {"build": 2, "orchestrate": 1}
+  }
+}

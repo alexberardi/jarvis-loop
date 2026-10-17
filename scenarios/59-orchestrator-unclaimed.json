@@ -1,0 +1,38 @@
+{
+  "name": "orchestrator-unclaimed",
+  "about": "Recorded 2026-10-16: items ready but never claimed, because no runner had the capability they need (a loop config mistake; docs/phases/08-orchestrator.md, piece 4). After the item waits in build past its idle limit, loopd starts a turn, and the orchestrator (the persona play) files one P1 ticket against jarvis-loop naming the item, what it needs and the runners' capabilities, and notes it. A second item stuck the same way adds its evidence to that ticket instead of a second one.",
+  "stages": ["build", "orchestrate"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Screenshot the weather card", "priority": "P1"},
+    {"do": "add", "item": "b", "title": "Record the timer animation", "priority": "P1"},
+    {"do": "triage", "item": "a", "resources": "emulator"},
+    {"do": "script", "for": "orchestrate", "play": "persona"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "build"}},
+
+    {"do": "clock", "advance": "2h"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build", "#3": "triage"}, "repo": {"#3": "alexberardi/jarvis-loop"},
+     "events": [{"kind": "orchestrate_claimed", "count": 1},
+                {"item": "#3", "kind": "created", "actor": "orchestrator",
+                 "data": {"priority": "^P1$", "title": "^Ready items are not claimed: no runner offers emulator$"}, "count": 1},
+                {"item": "#3", "kind": "orchestrator.added", "data": {"signature": "^no runner offers emulator$"}, "count": 1},
+                {"kind": "orchestrator.note", "actor": "orchestrator", "data": {"text": "#1 unclaimed for want of emulator; P1 ticket filed"}, "count": 1}]},
+
+    {"do": "triage", "item": "b", "resources": "emulator"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "2h"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "build", "b": "build"},
+    "events": [
+      {"kind": "orchestrator.added", "count": 1},
+      {"item": "#3", "kind": "orchestrator.seen_again", "actor": "orchestrator", "data": {"signature": "^no runner offers emulator$"}}
+    ],
+    "no_events": [{"item": "a", "kind": "claimed", "actor": "runner"}, {"item": "b", "kind": "claimed", "actor": "runner"}],
+    "agent_runs": {"build": 0, "orchestrate": 2}
+  }
+}
