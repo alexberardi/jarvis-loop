@@ -134,6 +134,15 @@ func (r *Runner) openCodeCommand(ru *run) (cmd *exec.Cmd, stop func(), err error
 	if err := os.WriteFile(cfgFile, b, 0o600); err != nil {
 		return fail(err)
 	}
+	// A copy in the run dir, the record of what this run was given (the one in the home is
+	// rewritten by the next run).
+	rec := filepath.Join(ru.dir, "opencode", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(rec), 0o700); err != nil {
+		return fail(err)
+	}
+	if err := os.WriteFile(rec, b, 0o600); err != nil {
+		return fail(err)
+	}
 	for _, d := range []string{"data", "state", "cache"} {
 		if err := os.MkdirAll(filepath.Join(home, d), 0o700); err != nil {
 			return fail(err)
