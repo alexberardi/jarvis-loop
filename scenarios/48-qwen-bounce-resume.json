@@ -1,0 +1,204 @@
+{
+  "name": "qwen-bounce-resume",
+  "about": "The qwen builder (docs/decisions/2026-10-16-qwen-builder.md): an item whose plan piece names builder qwen builds with OpenCode (the fake claude called as `opencode run`), not claude: its config points at the runner's own proxy on loopback, which adds the app headers the fake jarvisd slot wants (the agent's side holds no key). loopd keeps the run's OpenCode session; review bounces once (the first strike) and the next build resumes that session with -s, still qwen; review approves; land merges. The card still shows builder: qwen.",
+  "steps": [
+    {
+      "do": "plan",
+      "plan": "p",
+      "title": "Pantry list",
+      "priority": "P2",
+      "text": "a pantry list"
+    },
+    {
+      "do": "plan_turn",
+      "plan": "p",
+      "text": "Brief ready.",
+      "brief": "# Pantry list\n\nA list of what is in the pantry.",
+      "ready": true
+    },
+    {
+      "do": "plan_approve",
+      "plan": "p",
+      "doc": "brief"
+    },
+    {
+      "do": "plan_turn",
+      "plan": "p",
+      "text": "Blueprint ready.",
+      "ready": true,
+      "blueprint": "# Blueprint\n\nApproach: one table.\n\n## Pieces\n\n### 1. Pantry table\n- repo: sandbox/demo\n- size: S\n- builder: qwen\n\nThe table and its migration.\n"
+    },
+    {
+      "do": "plan_approve",
+      "plan": "p",
+      "doc": "blueprint",
+      "text": "go"
+    },
+    {
+      "do": "plan_items",
+      "plan": "p",
+      "pieces": [
+        "a"
+      ]
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "for": "review",
+      "play": "bounce"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "review"
+      },
+      "events": [
+        {
+          "item": "a",
+          "kind": "advanced",
+          "outcome": "pr_opened",
+          "actor": "runner",
+          "data": {
+            "builder": "^qwen$",
+            "session_id": "^ses_fake_",
+            "qwen_requests": "^1$"
+          },
+          "count": 1
+        }
+      ],
+      "run_files": [
+        {
+          "item": "a",
+          "stage": "build",
+          "run": 1,
+          "file": "argv.json",
+          "text": "^\\[\"run\",",
+          "no_text": "\"-s\"|--resume|PROD_APP|sandbox-key"
+        },
+        {
+          "item": "a",
+          "stage": "build",
+          "run": 1,
+          "file": "opencode/opencode/opencode.json",
+          "text": "\"webfetch\": *\"deny\"",
+          "no_text": "sandbox-key|sandbox-app"
+        }
+      ]
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "build"
+      },
+      "events": [
+        {
+          "item": "a",
+          "kind": "advanced",
+          "outcome": "bounce",
+          "data": {
+            "bounce_count": "^1$"
+          },
+          "count": 1
+        }
+      ]
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "for": "review",
+      "play": "approve"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "review"
+      },
+      "run_files": [
+        {
+          "item": "a",
+          "stage": "build",
+          "run": 2,
+          "file": "argv.json",
+          "text": "\"-s\",\"ses_fake_"
+        }
+      ]
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "land"
+      }
+    },
+    {
+      "do": "land",
+      "item": "a",
+      "outcome": "merged"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "done"
+    },
+    "prs": 1,
+    "events": [
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "pr_opened",
+        "actor": "runner",
+        "data": {
+          "builder": "^qwen$",
+          "session_id": "^ses_fake_"
+        },
+        "count": 2
+      },
+      {
+        "item": "a",
+        "kind": "builder_fallback",
+        "count": 0
+      }
+    ],
+    "board": {
+      "a": {
+        "column": "Done",
+        "card": "<span class=\"label\">builder: qwen</span>"
+      }
+    },
+    "agent_runs": {
+      "build": 2,
+      "review": 2
+    }
+  }
+}

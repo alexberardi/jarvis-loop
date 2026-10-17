@@ -245,6 +245,12 @@ type run struct {
 	resume string
 	maxRun time.Duration
 
+	// builder is who runs the agent: pipeline.BuilderQwen (OpenCode, a build run of a qwen item)
+	// or pipeline.BuilderClaude (every other run); pickBuilder sets it. qwenRequests are the
+	// requests a qwen run's proxy forwarded.
+	builder      string
+	qwenRequests int64
+
 	reported int // refusals already sent
 	refusals int
 	// rejected is why the runner refused the agent's result, before publishing anything; work
@@ -323,6 +329,7 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 	cleanupCtx := context.WithoutCancel(ctx)
 	ru.done = ctx.Done()
 	defer r.cleanup(cleanupCtx, ru, log)
+	r.pickBuilder(ctx, ru)
 
 	brief, err := r.prepare(ctx, ru)
 	if err != nil {
@@ -330,7 +337,7 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 		r.advance(ctx, ru, "failed", map[string]string{"error": "the runner could not prepare the run: " + clip(err.Error(), 1500)}, nil)
 		return
 	}
-	log.Info("agent starting", "worktree", ru.wt, "branch", ru.branch, "mode", r.Cfg.Mode)
+	log.Info("agent starting", "worktree", ru.wt, "branch", ru.branch, "mode", r.Cfg.Mode, "builder", ru.builder, "resume", ru.resume)
 	out := r.runAgent(ctx, ru, brief)
 	log.Info("agent ended", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
 	// Reporting and saving work must finish even when the runner is shutting down.
@@ -348,6 +355,9 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 	}
 	log.Warn("result refused; running the stage once more", "why", why)
 	ru.first = out.stats
+	if ru.builder == pipeline.BuilderQwen && out.stats.sessionID != "" {
+		ru.resume = out.stats.sessionID // the retry continues the qwen session
+	}
 	keepFirstAttempt(ru.dir, log)
 	brief = RetryBrief(brief, why)
 	if err := r.writeBrief(ru, brief); err != nil {
@@ -639,6 +649,7 @@ const (
 	endModeMismatch = "mode_mismatch"
 	endNotArmed     = "guard_not_armed"
 	endStartFailed  = "start_failed"
+	endGitTampered  = "git_tampered"
 )
 
 type outcome struct {
@@ -656,6 +667,8 @@ type streamStats struct {
 	limit       *LimitHit
 	result      *resultEvent
 	act         liveActivity
+	// A qwen run's tokens (OpenCode's step_finish events); claude's are in result.
+	qwenInput, qwenOutput int64
 }
 
 type resultEvent struct {
@@ -783,8 +796,8 @@ func (r *Runner) maxRun(ctx context.Context, ru *run) time.Duration {
 }
 
 // runAgent runs claude for one item, in its own process group, with heartbeats and the time cap.
-func (r *Runner) runAgent(ctx context.Context, ru *run, brief string) outcome {
-	out := outcome{reason: endExited, exitCode: -1}
+func (r *Runner) runAgent(ctx context.Context, ru *run, brief string) (out outcome) {
+	out = outcome{reason: endExited, exitCode: -1}
 	stdin, err := os.Open(filepath.Join(ru.dir, "brief.md"))
 	if err != nil {
 		return outcome{reason: endStartFailed, detail: err.Error()}
@@ -795,11 +808,35 @@ func (r *Runner) runAgent(ctx context.Context, ru *run, brief string) outcome {
 		return outcome{reason: endStartFailed, detail: err.Error()}
 	}
 	defer stderr.Close()
+	cmd := r.agentCommand(ru)
+	handle := func(line []byte) (string, string) { return r.handle(ru, &out.stats, line) }
+	if ru.builder == pipeline.BuilderQwen {
+		oc, stop, err := r.openCodeCommand(ru)
+		if err != nil {
+			return outcome{reason: endStartFailed, detail: "the qwen builder could not start: " + err.Error()}
+		}
+		defer stop()
+		// No guard runs inside OpenCode: before the runner's git reads the worktree again, its
+		// plumbing must be as it was (the fence keeps most of it read-only; this is the rest).
+		plumbing := gitPlumbing(ru.wt, ru.mirror)
+		defer func() {
+			changed, err := restorePlumbing(plumbing)
+			if len(changed) == 0 && err == nil {
+				return
+			}
+			out.reason, out.detail = endGitTampered, fmt.Sprintf("the qwen build changed the worktree's git plumbing (%s); the runner put it back and runs no git on this work", strings.Join(changed, ", "))
+			if err != nil {
+				out.detail = fmt.Sprintf("the qwen build changed the worktree's git plumbing (%s) and the runner could not put it all back (%v); stop the runner and check %s", strings.Join(changed, ", "), err, ru.mirror)
+				r.paused.Store(out.detail)
+			}
+		}()
+		cmd = oc
+		handle = func(line []byte) (string, string) { r.handleOpenCode(&out.stats, line); return "", "" }
+	}
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return outcome{reason: endStartFailed, detail: err.Error()}
 	}
-	cmd := r.agentCommand(ru)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, pw, stderr
 	ownGroup(cmd)
 	if err := cmd.Start(); err != nil {
@@ -878,7 +915,7 @@ func (r *Runner) runAgent(ctx context.Context, ru *run, brief string) outcome {
 				lines = nil
 				continue
 			}
-			if why, detail := r.handle(ru, &out.stats, line); why != "" {
+			if why, detail := handle(line); why != "" {
 				terminate(why, detail)
 			}
 		case ps := <-exited:
@@ -895,7 +932,7 @@ func (r *Runner) runAgent(ctx context.Context, ru *run, brief string) outcome {
 					if !ok {
 						break drainLoop
 					}
-					if why, detail := r.handle(ru, &out.stats, line); why != "" && out.reason == endExited {
+					if why, detail := handle(line); why != "" && out.reason == endExited {
 						out.reason, out.detail = why, detail
 					}
 				case <-drain.C:
@@ -986,6 +1023,15 @@ func (out outcome) lastOutput() string {
 func (r *Runner) metrics(ru *run, out outcome, f map[string]string) map[string]string {
 	f["run_seconds"] = strconv.Itoa(int(r.Clock.Now().Sub(ru.started).Seconds()))
 	f["exit_code"] = strconv.Itoa(out.exitCode)
+	if ru.builder != "" && ru.stage == StageBuild {
+		// Who built, for the digest's comparison (docs/decisions/2026-10-16-qwen-builder.md).
+		f["builder"] = ru.builder
+	}
+	if ru.builder == pipeline.BuilderQwen {
+		f["qwen_requests"] = strconv.FormatInt(ru.qwenRequests, 10)
+		f["qwen_tokens_input"] = strconv.FormatInt(out.stats.qwenInput+ru.first.qwenInput, 10)
+		f["qwen_tokens_output"] = strconv.FormatInt(out.stats.qwenOutput+ru.first.qwenOutput, 10)
+	}
 	if out.stats.initMode != "" {
 		f["permission_mode"] = out.stats.initMode
 	}
@@ -1089,7 +1135,7 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 		r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{"error": "boundary check failed: " + out.detail +
 			". Auto mode may be unavailable; the runner stopped claiming until it is restarted (use mode \"strict\" to run without it)."}), nil)
 		return
-	case endNotArmed, endStartFailed:
+	case endNotArmed, endStartFailed, endGitTampered:
 		r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{"error": "boundary check failed (" + out.reason + "): " + out.detail}), nil)
 		return
 	}

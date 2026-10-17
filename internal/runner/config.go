@@ -74,6 +74,9 @@ type Config struct {
 	// ~/.android. The rest of HOME is read-only to them.
 	VerifyWritable []string `json:"verify_writable,omitempty"`
 	Bwrap          string   `json:"bwrap,omitempty"`
+	// Qwen is the Qwen builder for items whose builder is qwen (qwen.go); nil: they build with
+	// claude.
+	Qwen *QwenConfig `json:"qwen,omitempty"`
 
 	path             string
 	ciWait, mainWait time.Duration
@@ -273,6 +276,11 @@ func (c *Config) normalize() error {
 	if c.Bwrap == "" {
 		c.Bwrap = DefaultBwrap
 	}
+	if c.Qwen != nil {
+		if err := c.Qwen.normalize(); err != nil {
+			return err
+		}
+	}
 	if c.VerifyMask == nil {
 		c.VerifyMask = DefaultVerifyMask(Home())
 	}
@@ -437,7 +445,11 @@ func (c *Config) Secrets() []string {
 
 func (c *Config) ownSecrets() []string {
 	var out []string
-	for _, p := range []string{c.path, c.LoopdTokens, c.LoopdData} {
+	creds := ""
+	if c.Qwen != nil {
+		creds = c.Qwen.CredentialsFile
+	}
+	for _, p := range []string{c.path, c.LoopdTokens, c.LoopdData, creds} {
 		if p != "" {
 			out = append(out, p)
 		}

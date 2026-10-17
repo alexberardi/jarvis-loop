@@ -23,4 +23,6 @@ the third after one mechanical round. The plans are kept as `skills/engineering/
 - **Stored, not acted on**: `items.builder` (migration 0011; `''` for items not from a plan) is set
   when the hand-off files the item and never changes. Nothing routes on it yet: it shows on
   `/loop show` (`· builder qwen`) and on the board card (`builder: qwen`). Routing `qwen` pieces to
-  the Qwen builder is a later item (#32).
+  the Qwen builder is a later item (#32); since
+  [2026-10-16-qwen-builder.md](2026-10-16-qwen-builder.md) it routes, and a qwen item's second
+  strike turns it to claude.
