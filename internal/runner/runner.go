@@ -59,10 +59,7 @@ type Runner struct {
 	fenceErr  error
 
 	hbMu sync.Mutex
-	hb   *harnessBroker // the harness broker, started by the first harness session (harness.go)
-	// harnessTCP: the broker listens on loopback TCP instead (tests only, where a sandbox refuses
-	// Unix sockets; there is no caller check then).
-	harnessTCP bool
+	hb   *harnessBroker // the harness broker's sessions (harness.go)
 
 	paused   atomic.Value // string: why the runner stopped claiming
 	mirrorMu sync.Map     // mirror path -> *sync.Mutex
@@ -507,7 +504,7 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 		ReadOnly: ru.stage != StageBuild,
 	}
 	if ru.hasHarness() {
-		in.HarnessSocket = r.Cfg.HarnessSocket()
+		in.Harness = true
 	}
 	settings, err := GenerateSettings(in)
 	if err != nil {

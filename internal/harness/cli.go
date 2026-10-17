@@ -5,7 +5,9 @@ package harness
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 )
 
 // Main is the loop-harness command (cmd/loop-harness; the runner's tests run it too).
@@ -47,7 +49,16 @@ func Main(args []string) int {
 		fmt.Fprintln(os.Stderr, "loop-harness:", err)
 		return ExitBroker
 	}
-	code, err := Call(f, req, os.Stdout)
+	// A signal (the agent's command timed out or was interrupted) withdraws the request, which
+	// ends the command at the runner.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	cancel := make(chan struct{})
+	go func() {
+		<-sig
+		close(cancel)
+	}()
+	code, err := Call(f, req, os.Stdout, cancel)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "loop-harness:", err)
 	}

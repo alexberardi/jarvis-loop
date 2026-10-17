@@ -17,12 +17,12 @@ func TestFind(t *testing.T) {
 		t.Fatalf("no file: %v", err)
 	}
 	os.MkdirAll(filepath.Join(wt, ".loop"), 0o755)
-	os.WriteFile(filepath.Join(wt, FileRel), []byte(`{"socket":"/w/harness.sock"}`), 0o600)
+	os.WriteFile(filepath.Join(wt, FileRel), []byte(`{"spool":"/w/.loop/harness"}`), 0o600)
 	if _, err := Find(deep); err == nil || !strings.Contains(err.Error(), "not a harness session file") {
 		t.Fatalf("no token: %v", err)
 	}
-	os.WriteFile(filepath.Join(wt, FileRel), []byte(`{"socket":"/w/harness.sock","token":"abc"}`), 0o600)
-	if f, err := Find(deep); err != nil || f.Socket != "/w/harness.sock" || f.Token != "abc" {
+	os.WriteFile(filepath.Join(wt, FileRel), []byte(`{"spool":"/w/.loop/harness","token":"abc"}`), 0o600)
+	if f, err := Find(deep); err != nil || f.Spool != "/w/.loop/harness" || f.Token != "abc" {
 		t.Fatalf("%+v %v", f, err)
 	}
 }

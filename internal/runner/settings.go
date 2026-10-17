@@ -35,9 +35,9 @@ type SettingsInput struct {
 	ExcludedCommands []string
 	// ReadOnly is a triage or review run: no commits (loop-guard checks every spelling too).
 	ReadOnly bool
-	// HarnessSocket is the runner's harness broker socket, for the build and review runs of a repo
-	// with a harness ("" otherwise): the one Unix socket the sandbox lets the agent connect to.
-	HarnessSocket string
+	// Harness: a build or review run of a repo with a harness, whose agent uses loop-harness
+	// (harness.go). Its spool is in the worktree, so the sandbox needs nothing more.
+	Harness bool
 }
 
 // DefaultDomains are the hosts sandboxed commands may reach: GitHub (Go modules, reading), the Go module
@@ -137,7 +137,7 @@ func AllowRules(in SettingsInput) []string {
 		// The working directory (the worktree, relative so it is the same rule for every item).
 		"Edit(./**)",
 	}
-	if in.HarnessSocket != "" {
+	if in.Harness {
 		rules = append(rules, "Bash(loop-harness *)")
 	}
 	return rules
@@ -180,11 +180,6 @@ func GenerateSettings(in SettingsInput) ([]byte, error) {
 			"deniedDomains":   denied,
 			"strictAllowlist": true,
 		},
-	}
-	if in.HarnessSocket != "" {
-		// loop-harness talks to the runner's broker (harness.go); every other Unix socket stays
-		// closed (never allowAllUnixSockets).
-		sandbox["network"].(map[string]any)["allowUnixSockets"] = []string{in.HarnessSocket}
 	}
 	if len(in.ExcludedCommands) > 0 {
 		sandbox["excludedCommands"] = in.ExcludedCommands

@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,8 +32,11 @@ func (g *rig) harnessRepo(timeout string) (lock string) {
 	if err := g.r.ProbeFence(); err != nil {
 		g.t.Fatalf("bubblewrap cannot run here (the runner needs it): %v", err)
 	}
-	self, _ := os.Executable()
-	bin := filepath.Join(g.t.TempDir(), "loop-harness")
+	// The fence sees only what it binds, and its /tmp is private: the test binary (in the host's
+	// /tmp, under go test) and the fake loop-harness go in the bound dir.
+	self := filepath.Join(dir, "runner.test")
+	copyFile(g.t, testBinary(g.t), self)
+	bin := filepath.Join(dir, "loop-harness")
 	os.WriteFile(bin, []byte("#!/bin/sh\nLOOP_TEST_AS=harness exec "+shellQuote(self)+" \"$@\"\n"), 0o755)
 	g.r.Cfg.LoopHarness = bin
 	rc := g.r.Cfg.Repos["demo"]
@@ -49,28 +52,56 @@ for i in $(seq 100); do flock -n "$HARNESS_TEST_DIR/alive.lock" true || break; s
 		rc.Harness.timeout = d
 	}
 	g.r.Cfg.Repos["demo"] = rc
-	// Claude Code's own sandbox (an agent building this) refuses Unix sockets: the broker then
-	// listens on loopback TCP, without the caller check.
-	if ln, err := net.Listen("unix", filepath.Join(dir, "probe.sock")); err != nil {
-		g.t.Logf("no Unix sockets here (%v): the broker uses loopback TCP", err)
-		g.r.harnessTCP = true
-	} else {
-		ln.Close()
-	}
 	g.t.Cleanup(g.r.CloseHarness)
 	return filepath.Join(dir, "alive.lock")
 }
 
+func testBinary(t *testing.T) string {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return self
+}
+
+func copyFile(t *testing.T, from, to string) {
+	t.Helper()
+	in, err := os.Open(from)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	out, err := os.OpenFile(to, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		t.Fatal(err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runGuard writes the guard config a build run of item 5 in wt gets, in a dir of its own.
+func (g *rig) runGuard(wt string) (dir string) {
+	dir = g.t.TempDir()
+	gc, _ := json.Marshal(guard.Config{Item: 5, Worktree: wt, Scratch: filepath.Join(wt, ".loop", "scratch"), Branch: "loop/5-e2e",
+		Remote: "origin", Home: Home(), Protected: g.r.Cfg.Protected(), Secrets: g.r.Cfg.Secrets(), Words: []string{g.r.Cfg.UserEmulator},
+		LoopdAddrs: g.r.Cfg.LoopdAddrs(), Report: filepath.Join(dir, "refusals.jsonl"), Armed: filepath.Join(dir, "armed")})
+	os.WriteFile(filepath.Join(dir, "guard.json"), gc, 0o600)
+	return dir
+}
+
 // harnessSession opens a session for a build run of item 5 of the demo repo in a fresh worktree,
-// as the runner does before the agent starts, and makes it the test's working directory (the
-// broker serves only callers inside the session's worktree).
+// as the runner does before the agent starts, and makes it the test's working directory.
 func (g *rig) harnessSession() (*harnessSession, string) {
 	g.t.Helper()
 	wt := filepath.Join(g.r.Cfg.WorkRoot, "5-build")
 	os.MkdirAll(filepath.Join(wt, ".loop", "scratch"), 0o755)
 	os.MkdirAll(filepath.Join(wt, ".loop", "evidence"), 0o755)
 	ru := &run{item: Item{ID: 5}, stage: StageBuild, repoKey: "demo", repo: g.r.Cfg.Repos["demo"], wt: wt,
-		scratch: filepath.Join(wt, ".loop", "scratch"), sandbox: "loop-5"}
+		scratch: filepath.Join(wt, ".loop", "scratch"), sandbox: "loop-5", dir: g.runGuard(wt)}
 	s, err := g.r.startHarness(ru)
 	if err != nil || s == nil {
 		g.t.Fatalf("session %v %v", s, err)
@@ -88,22 +119,22 @@ func call(t *testing.T, op, cmd string) (int, string, error) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	code, err := harness.Call(f, harness.Request{Op: op, Cmd: cmd}, &out)
+	code, err := harness.Call(f, harness.Request{Op: op, Cmd: cmd}, &out, nil)
 	return code, out.String(), err
 }
 
-// The socket's protocol: the run's token and the caller's working directory are checked, an
-// unknown op is refused, and output and exit code make the round trip.
+// The spool's protocol: the run's token is checked, an unknown op is refused, output and exit
+// code make the round trip, and the spool goes with the session.
 func TestHarnessProtocol(t *testing.T) {
 	g := newRig(t, fakeclaude.Good)
 	g.harnessRepo("")
 	s, wt := g.harnessSession()
-	if fi, err := os.Stat(g.r.Cfg.HarnessSocket()); !g.r.harnessTCP && (err != nil || fi.Mode().Perm() != 0o600) {
-		t.Fatalf("socket %v %v", fi, err)
-	}
-	sock := s.b.addr
 	if fi, err := os.Stat(filepath.Join(wt, harness.FileRel)); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("harness.json %v %v", fi, err)
+	}
+	f, err := harness.Find(wt)
+	if err != nil || f.Spool != filepath.Join(wt, harness.SpoolRel) {
+		t.Fatalf("harness.json %+v %v", f, err)
 	}
 	code, out, err := call(t, harness.OpRun, `echo "hello from $LOOP_SANDBOX in $PWD"; echo to-stderr >&2; exit 7`)
 	if err != nil || code != 7 || !strings.Contains(out, "hello from loop-5 in "+wt) || !strings.Contains(out, "to-stderr") {
@@ -112,36 +143,89 @@ func TestHarnessProtocol(t *testing.T) {
 	if log := g.read(filepath.Join(wt, ".loop", "scratch", "harness", "1.log")); !strings.Contains(log, "hello from loop-5") || !strings.Contains(log, "[exit 7]") {
 		t.Fatalf("run log:\n%s", log)
 	}
+	// The client cleans up after itself: nothing is left in the spool.
+	for _, d := range []string{"req", "out"} {
+		if left, _ := os.ReadDir(filepath.Join(f.Spool, d)); len(left) != 0 {
+			t.Fatalf("%s/ keeps %v", d, left)
+		}
+	}
 	if _, _, err := call(t, "reboot", ""); err == nil || !strings.Contains(err.Error(), "unknown op") {
 		t.Fatalf("unknown op: %v", err)
 	}
 	if _, _, err := call(t, harness.OpRun, "  "); err == nil {
 		t.Fatal("an empty run was accepted")
 	}
-	f := harness.File{Socket: sock, Token: strings.Repeat("0", 64)}
-	if code, err := harness.Call(f, harness.Request{Op: harness.OpRun, Cmd: "true"}, &bytes.Buffer{}); err == nil || code != harness.ExitBroker ||
-		!strings.Contains(err.Error(), "no harness session") {
+	bad := harness.File{Spool: f.Spool, Token: strings.Repeat("0", 64)}
+	if code, err := harness.Call(bad, harness.Request{Op: harness.OpRun, Cmd: "true"}, &bytes.Buffer{}, nil); err == nil || code != harness.ExitBroker ||
+		!strings.Contains(err.Error(), "token") {
 		t.Fatalf("a wrong token: %d %v", code, err)
 	}
-	// The right token from outside the worktree (another item's agent reading this harness.json).
-	t.Chdir(t.TempDir())
-	if _, err := harness.Call(harness.File{Socket: sock, Token: s.token}, harness.Request{Op: harness.OpStatus}, &bytes.Buffer{}); g.r.harnessTCP {
-		t.Log("not checking the caller's working directory: no Unix sockets here")
-	} else if err == nil || !strings.Contains(err.Error(), "belongs to") {
-		t.Fatalf("a caller outside the worktree: %v", err)
+	// Junk in req/ (not a request's name, a directory, a symlink) is left alone or refused.
+	os.WriteFile(filepath.Join(f.Spool, "req", "notes.txt"), []byte("hi"), 0o600)
+	if code, out, err := call(t, harness.OpRun, "echo still-ok"); code != 0 || err != nil || !strings.Contains(out, "still-ok") {
+		t.Fatalf("after junk: %d %q %v", code, out, err)
 	}
-	// After the session ends its token is worthless and harness.json is gone.
-	t.Chdir(wt)
+	// After the session ends harness.json and the spool are gone, and a late request says so.
 	s.end(context.Background())
 	if _, err := os.Stat(filepath.Join(wt, harness.FileRel)); !os.IsNotExist(err) {
 		t.Fatalf("harness.json left behind: %v", err)
 	}
-	if _, err := harness.Call(harness.File{Socket: sock, Token: s.token}, harness.Request{Op: harness.OpStatus}, &bytes.Buffer{}); err == nil {
+	if _, err := os.Stat(f.Spool); !os.IsNotExist(err) {
+		t.Fatalf("the spool left behind: %v", err)
+	}
+	if _, err := harness.Call(f, harness.Request{Op: harness.OpStatus}, &bytes.Buffer{}, nil); err == nil {
 		t.Fatal("an ended session still answers")
 	}
 	// No up, no down at the end.
 	if _, err := os.Stat(filepath.Join(wt, ".loop", "scratch", "down.log")); !os.IsNotExist(err) {
 		t.Fatalf("down ran without an up: %v", err)
+	}
+}
+
+// The broker applies the run's guard itself: a request written without the guard hook (the
+// agent's own client) cannot run what the agent's Bash could not.
+func TestHarnessGuard(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	g.harnessRepo("")
+	s, wt := g.harnessSession()
+	f, _ := harness.Find(wt)
+	for _, cmd := range []string{"adb shell true", "git push origin HEAD", "cd sub && sudo true"} {
+		var out bytes.Buffer
+		code, err := harness.Call(f, harness.Request{Op: harness.OpRun, Cmd: cmd}, &out, nil)
+		if code != harness.ExitBroker || err == nil || !strings.Contains(err.Error(), "loop-guard refused") {
+			t.Fatalf("%q: %d %q %v", cmd, code, out.String(), err)
+		}
+	}
+	if code, out, err := call(t, harness.OpRun, "echo ok"); code != 0 || err != nil || out != "ok\n" {
+		t.Fatalf("echo ok: %d %q %v", code, out, err)
+	}
+	if rep := g.read(s.guard.Report); strings.Count(rep, `"tool":"loop-harness run"`) != 3 {
+		t.Fatalf("refusals:\n%s", rep)
+	}
+}
+
+// The client needs nothing but the worktree: in a fence of its own with no network at all (no
+// loopback, no Unix socket to the runner) and its own pid namespace, it still reaches the broker.
+// (Under an agent's Claude Code sandbox, as when one builds this repo, socket(AF_UNIX) itself is
+// refused; the test says so in its log.)
+func TestHarnessClientIsolated(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	g.harnessRepo("")
+	_, wt := g.harnessSession()
+	if err := exec.Command("python3", "-c", "import socket; socket.socket(socket.AF_UNIX)").Run(); err != nil {
+		t.Logf("socket(AF_UNIX) is refused here (%v): the spool is the only way", err)
+	}
+	bwrap := g.r.Cfg.Bwrap
+	if bwrap == "" {
+		bwrap = DefaultBwrap
+	}
+	dir := filepath.Dir(g.r.Cfg.LoopHarness)
+	cmd := exec.Command(bwrap, "--dev-bind", "/", "/", "--tmpfs", "/tmp", "--ro-bind", dir, dir, "--bind", wt, wt,
+		"--unshare-net", "--unshare-pid", "--unshare-ipc", "--proc", "/proc", "--die-with-parent", "--chdir", filepath.Join(wt, ".loop"),
+		"--", g.r.Cfg.LoopHarness, "run", "echo ok from $LOOP_SANDBOX; exit 3")
+	out, err := cmd.CombinedOutput()
+	if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 3 || string(out) != "ok from loop-5\n" {
+		t.Fatalf("isolated client: %v %q", err, out)
 	}
 }
 
@@ -227,25 +311,33 @@ func TestHarnessTimeoutAndCancel(t *testing.T) {
 				t.Fatalf("up: %d %v", code, err)
 			}
 		}
-		network, addr := "unix", s.b.addr
-		if a, ok := strings.CutPrefix(addr, "tcp:"); ok {
-			network, addr = "tcp", a
+		cancel := make(chan struct{})
+		w := &signalWriter{want: "started", seen: cancel}
+		f, _ := harness.Find(s.wt)
+		if code, err := harness.Call(f, harness.Request{Op: harness.OpRun, Cmd: "echo started; sleep 60"}, w, cancel); code != harness.ExitBroker || err == nil {
+			t.Fatalf("%s: a cancelled run: %d %v", op, code, err)
 		}
-		c, err := net.Dial(network, addr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		json.NewEncoder(c).Encode(harness.Request{Token: s.token, Op: harness.OpRun, Cmd: "echo started; sleep 60"})
-		var fr harness.Frame
-		if err := json.NewDecoder(c).Decode(&fr); err != nil || !strings.Contains(string(fr.Data), "started") {
-			t.Fatalf("first frame %+v %v", fr, err)
-		}
-		c.Close()
 		start = time.Now()
 		if code, out, err := call(t, harness.OpRun, "echo next"); code != 0 || err != nil || !strings.Contains(out, "next") || time.Since(start) > 15*time.Second {
 			t.Fatalf("%s: the run after a cancelled one: %d %q %v after %s", op, code, out, err, time.Since(start))
 		}
 	}
+}
+
+// signalWriter closes seen once want has been written to it.
+type signalWriter struct {
+	buf  bytes.Buffer
+	want string
+	seen chan struct{}
+}
+
+func (w *signalWriter) Write(p []byte) (int, error) {
+	had := strings.Contains(w.buf.String(), w.want)
+	w.buf.Write(p)
+	if !had && strings.Contains(w.buf.String(), w.want) {
+		close(w.seen)
+	}
+	return len(p), nil
 }
 
 // held reports whether a process holds the lock file.
@@ -260,8 +352,7 @@ func held(lock string) bool {
 }
 
 // A build of a repo with a harness: the agent (the fake, through the real guard and its PATH)
-// starts the harness and runs a command in it; the settings let it reach only the broker's
-// socket; when the agent ends the keeper is gone and down ran, before verify.
+// starts the harness and runs a command in it; the settings open no Unix socket; when the agent ends the keeper is gone and down ran, before verify.
 func TestHarnessBuildRun(t *testing.T) {
 	g := newRig(t, fakeclaude.Harness)
 	g.harnessRepo("")
@@ -275,14 +366,8 @@ func TestHarnessBuildRun(t *testing.T) {
 	if got := g.read(filepath.Join(run, "verify", "verify-1-after-the-harness", "output.log")); got != "clean\n" {
 		t.Fatalf("verify output %q", got)
 	}
-	var s struct {
-		Sandbox struct {
-			Network map[string]any `json:"network"`
-		} `json:"sandbox"`
-	}
-	json.Unmarshal([]byte(g.read(filepath.Join(g.r.Cfg.WorkRoot, "settings", "demo-build.json"))), &s)
-	if got := fmt.Sprint(s.Sandbox.Network["allowUnixSockets"]); got != "["+g.r.Cfg.HarnessSocket()+"]" {
-		t.Fatalf("allowUnixSockets %s", got)
+	if st := g.read(filepath.Join(g.r.Cfg.WorkRoot, "settings", "demo-build.json")); strings.Contains(st, "UnixSockets") {
+		t.Fatalf("the settings open a Unix socket:\n%s", st)
 	}
 	if b := g.read(filepath.Join(run, "brief.md")); !strings.Contains(b, "## The harness, through the runner") || !strings.Contains(b, "`loop-harness up`") {
 		t.Fatalf("brief:\n%s", b)
@@ -340,9 +425,9 @@ func TestHarnessEndsWithTheRun(t *testing.T) {
 //	LOOP_E2E_CLAUDE=1 go test ./internal/runner -run TestHarnessRealClaude -v
 //
 // One headless claude, with the settings the runner generates for a harness repo (its OS sandbox
-// on, the broker's socket in allowUnixSockets) and the real guard as its hook, is asked to run one
-// Bash command: loop-harness run 'echo ok'. It proves Claude Code's sandbox lets loop-harness reach
-// the broker and that the command ran in the runner's fence.
+// on, nothing loosened for the harness) and the real guard as its hook, is asked to run one Bash
+// command: loop-harness run 'echo ok'. It proves loop-harness reaches the broker from inside
+// Claude Code's sandbox and that the command ran in the runner's fence.
 func TestHarnessRealClaude(t *testing.T) {
 	if os.Getenv("LOOP_E2E_CLAUDE") == "" {
 		t.Skip("set LOOP_E2E_CLAUDE=1 to run a real claude (dev box only)")
@@ -353,20 +438,12 @@ func TestHarnessRealClaude(t *testing.T) {
 	}
 	g := newRig(t, fakeclaude.Good)
 	g.harnessRepo("2m")
-	if g.r.harnessTCP {
-		t.Fatal("Unix sockets are refused here: run this outside any sandbox")
-	}
-	_, wt := g.harnessSession()
-	self, _ := os.Executable()
-	dir := t.TempDir()
+	s, wt := g.harnessSession()
+	dir := filepath.Dir(s.guard.Report)
 	guardBin := filepath.Join(dir, "loop-guard")
-	os.WriteFile(guardBin, []byte("#!/bin/sh\nLOOP_TEST_AS=guard exec "+shellQuote(self)+" \"$@\"\n"), 0o755)
-	gc, _ := json.Marshal(guard.Config{Item: 5, Worktree: wt, Scratch: filepath.Join(wt, ".loop", "scratch"), Branch: "loop/5-e2e",
-		Remote: "origin", Home: Home(), Protected: g.r.Cfg.Protected(), Secrets: g.r.Cfg.Secrets(), Words: []string{g.r.Cfg.UserEmulator},
-		LoopdAddrs: g.r.Cfg.LoopdAddrs(), Report: filepath.Join(dir, "refusals.jsonl"), Armed: filepath.Join(dir, "armed")})
-	os.WriteFile(filepath.Join(dir, "guard.json"), gc, 0o600)
+	os.WriteFile(guardBin, []byte("#!/bin/sh\nLOOP_TEST_AS=guard exec "+shellQuote(testBinary(t))+" \"$@\"\n"), 0o755)
 	settings, err := GenerateSettings(SettingsInput{Mode: ModeAuto, Guard: guardBin, Home: Home(), Protected: g.r.Cfg.Protected(),
-		Secrets: g.r.Cfg.Secrets(), LoopdAddrs: g.r.Cfg.LoopdAddrs(), HarnessSocket: g.r.Cfg.HarnessSocket()})
+		Secrets: g.r.Cfg.Secrets(), LoopdAddrs: g.r.Cfg.LoopdAddrs(), Harness: true})
 	if err != nil {
 		t.Fatal(err)
 	}

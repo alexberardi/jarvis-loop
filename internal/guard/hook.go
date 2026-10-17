@@ -49,6 +49,18 @@ func LoadConfig(path string) (*Config, error) {
 	return &c, nil
 }
 
+// Record appends a refusal to the report (the runner's harness broker refuses with it too).
+func (c *Config) Record(tool string, d Decision, at time.Time) {
+	if c.Report == "" {
+		return
+	}
+	if f, err := os.OpenFile(c.Report, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600); err == nil {
+		b, _ := json.Marshal(Refusal{At: at.UTC(), Tool: tool, Rule: d.Rule, Reason: d.Reason, Target: d.Target})
+		f.Write(append(b, '\n'))
+		f.Close()
+	}
+}
+
 // Hook runs one hook invocation and returns the exit code. It fails closed: anything it cannot
 // read is a block (exit 2), because Claude Code lets a tool call through when a hook errors in
 // any other way (onFailure "block" needs Claude Code 2.1.295; see
@@ -77,13 +89,7 @@ func Hook(configPath string, stdin io.Reader, stdout, stderr io.Writer, now func
 	if !d.Deny {
 		return 0
 	}
-	if c.Report != "" {
-		if f, err := os.OpenFile(c.Report, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600); err == nil {
-			b, _ := json.Marshal(Refusal{At: now().UTC(), Tool: in.ToolName, Rule: d.Rule, Reason: d.Reason, Target: d.Target})
-			f.Write(append(b, '\n'))
-			f.Close()
-		}
-	}
+	c.Record(in.ToolName, d, now())
 	out, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]string{
 		"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": d.Reason}})
 	stdout.Write(out)

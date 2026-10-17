@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,14 +19,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alexberardi/jarvis-loop/internal/guard"
 	"github.com/alexberardi/jarvis-loop/internal/harness"
 )
 
 // The harness broker (docs/decisions/2026-10-16-harness-broker.md). Build and review agents run
-// in Claude Code's OS sandbox: no loopback, no harness credentials, no /dev/kvm, and nothing they
-// start outlives the command. So for a repo with a "harness" the runner runs harness commands for
-// them, in the same fence as its verify steps: the agent's loop-harness client sends a request
-// over the runner's Unix socket with the run's token, and the runner streams the output back.
+// in Claude Code's OS sandbox: no loopback, no Unix sockets, no harness credentials, no /dev/kvm,
+// and nothing they start outlives the command. So for a repo with a "harness" the runner runs
+// harness commands for them, in the same fence as its verify steps: the agent's loop-harness
+// client drops a request with the run's token in the session's spool (.loop/harness/ in the
+// worktree, which only that run's agent can write), and the runner writes the output back there.
+// Every run command passes the run's own guard first, as the agent's Bash commands do.
 //
 // "up" starts a keeper fence: the repo's up command, then loop-harness serve-inner, which runs
 // every later command of the session inside the keeper's namespaces (the sandbox's pidfiles and
@@ -35,19 +37,13 @@ import (
 // agent's run ends (or the lease is lost, or the runner stops) the keeper is killed, which takes
 // everything it started with it, and "down" runs in a fresh fence to remove what is left on disk.
 
-// HarnessSocket is the broker's socket: one per runner, the same path in every repo's settings.
-func (c *Config) HarnessSocket() string { return filepath.Join(c.WorkRoot, "harness.sock") }
-
 // harnessBinDir is the directory put first on a harness repo's agents' PATH: only loop-harness.
 func (c *Config) harnessBinDir() string { return filepath.Join(c.WorkRoot, "bin") }
 
 type harnessBroker struct {
 	r    *Runner
-	ln   net.Listener
-	addr string // what harness.json names: the socket path (or tcp:<addr> in tests)
 	mu   sync.Mutex
 	sess []*harnessSession
-	wg   sync.WaitGroup
 }
 
 type harnessSession struct {
@@ -58,6 +54,13 @@ type harnessSession struct {
 	logDir string
 	cfg    HarnessConfig
 	env    []string
+	guard  *guard.Config // the run's guard (its hook's config): every run command passes it first
+	// spool and logs are opened before the agent starts, so a symlink it puts in .loop later
+	// cannot send the runner's writes out of the worktree.
+	spool *os.Root
+	logs  *os.Root
+	quit  chan struct{} // closed by end: no more requests
+	reqs  sync.WaitGroup
 
 	op sync.Mutex // one request at a time (status excepted)
 
@@ -102,87 +105,35 @@ func (f *fenceProc) alive() bool {
 	}
 }
 
-// broker starts the broker on first use.
-func (r *Runner) broker() (*harnessBroker, error) {
+func (r *Runner) broker() *harnessBroker {
 	r.hbMu.Lock()
 	defer r.hbMu.Unlock()
-	if r.hb != nil {
-		return r.hb, nil
+	if r.hb == nil {
+		r.hb = &harnessBroker{r: r}
 	}
-	if r.harnessTCP { // tests in a sandbox that refuses Unix sockets
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			return nil, err
-		}
-		b := &harnessBroker{r: r, ln: ln, addr: "tcp:" + ln.Addr().String()}
-		b.wg.Add(1)
-		go b.serve()
-		r.hb = b
-		return b, nil
-	}
-	sock := r.Cfg.HarnessSocket()
-	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
-		return nil, err
-	}
-	os.Remove(sock) // a stale one from a runner that did not stop cleanly
-	old := syscall.Umask(0o177)
-	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
-	syscall.Umask(old)
-	if err != nil {
-		return nil, fmt.Errorf("the harness socket: %w", err)
-	}
-	if err := os.Chmod(sock, 0o600); err != nil {
-		ln.Close()
-		return nil, err
-	}
-	b := &harnessBroker{r: r, ln: ln, addr: sock}
-	b.wg.Add(1)
-	go b.serve()
-	r.hb = b
-	return b, nil
+	return r.hb
 }
 
-// CloseHarness ends every harness session (as at a run's end) and closes the socket: loop-runner
-// calls it when it stops.
+// CloseHarness ends every harness session (as at a run's end): loop-runner calls it when it stops.
 func (r *Runner) CloseHarness() {
 	r.hbMu.Lock()
 	b := r.hb
-	r.hb = nil
 	r.hbMu.Unlock()
 	if b == nil {
 		return
 	}
-	b.ln.Close()
 	b.mu.Lock()
 	sess := append([]*harnessSession(nil), b.sess...)
 	b.mu.Unlock()
 	for _, s := range sess {
 		s.end(context.Background())
 	}
-	b.wg.Wait()
-	os.Remove(r.Cfg.HarnessSocket())
 }
 
-func (b *harnessBroker) serve() {
-	defer b.wg.Done()
-	for {
-		c, err := b.ln.Accept()
-		if err != nil {
-			return
-		}
-		b.wg.Add(1)
-		go func() {
-			defer b.wg.Done()
-			defer c.Close()
-			b.handle(c)
-		}()
-	}
-}
-
-// startHarness opens a session for a build or review run of a repo with a harness and writes
-// .loop/harness.json; nil when the repo has none.
+// startHarness opens a session for a build or review run of a repo with a harness: a fresh
+// spool, and .loop/harness.json; nil when the repo has none.
 func (r *Runner) startHarness(ru *run) (*harnessSession, error) {
-	if ru.repo.Harness == nil || (ru.stage != StageBuild && ru.stage != StageReview) {
+	if !ru.hasHarness() {
 		return nil, nil
 	}
 	if _, err := os.Stat(r.Cfg.LoopHarness); err != nil {
@@ -191,9 +142,9 @@ func (r *Runner) startHarness(ru *run) (*harnessSession, error) {
 	if err := r.linkHarnessBin(); err != nil {
 		return nil, err
 	}
-	b, err := r.broker()
+	gc, err := guard.LoadConfig(filepath.Join(ru.dir, "guard.json"))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("the run's guard config: %w", err)
 	}
 	tok := make([]byte, 32)
 	if _, err := rand.Read(tok); err != nil {
@@ -203,21 +154,40 @@ func (r *Runner) startHarness(ru *run) (*harnessSession, error) {
 	if p, err := filepath.EvalSymlinks(wt); err == nil {
 		wt = p
 	}
-	s := &harnessSession{b: b, token: hex.EncodeToString(tok), item: ru.item.ID, wt: wt,
+	s := &harnessSession{b: r.broker(), token: hex.EncodeToString(tok), item: ru.item.ID, wt: wt,
 		logDir: filepath.Join(ru.scratch, "harness"), cfg: *ru.repo.Harness, fences: map[*fenceProc]bool{},
+		guard: gc, quit: make(chan struct{}),
 		env: append(r.agentEnv(), "LOOP_ITEM="+strconv.FormatInt(ru.item.ID, 10), "LOOP_WORKTREE="+ru.wt,
 			"LOOP_EVIDENCE_DIR="+filepath.Join(ru.wt, ".loop", "evidence"), "LOOP_SANDBOX="+ru.sandbox,
 			"LOOP_REPO="+ru.repo.Slug, "LOOP_BASE="+ru.repo.Base, "LOOP_MIRROR="+ru.mirror)}
-	if err := os.MkdirAll(s.logDir, 0o755); err != nil {
+	spool := filepath.Join(wt, harness.SpoolRel)
+	if err := os.RemoveAll(spool); err != nil {
 		return nil, err
 	}
-	f, _ := json.Marshal(harness.File{Socket: b.addr, Token: s.token})
+	for _, d := range []string{filepath.Join(spool, "req"), filepath.Join(spool, "out"), s.logDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return nil, err
+		}
+	}
+	if s.spool, err = os.OpenRoot(spool); err != nil {
+		return nil, err
+	}
+	if s.logs, err = os.OpenRoot(s.logDir); err != nil {
+		s.spool.Close()
+		return nil, err
+	}
+	f, _ := json.Marshal(harness.File{Spool: spool, Token: s.token})
 	if err := os.WriteFile(filepath.Join(ru.wt, harness.FileRel), append(f, '\n'), 0o600); err != nil {
+		s.spool.Close()
+		s.logs.Close()
 		return nil, err
 	}
+	b := s.b
 	b.mu.Lock()
 	b.sess = append(b.sess, s)
 	b.mu.Unlock()
+	s.reqs.Add(1)
+	go s.poll()
 	return s, nil
 }
 
@@ -240,7 +210,8 @@ func (r *Runner) linkHarnessBin() error {
 }
 
 // end ends the session: no more requests, every fence killed (the keeper takes what up started
-// with it), then the repo's down in a fresh fence when up ever ran, and harness.json removed.
+// with it), then the repo's down in a fresh fence when up ever ran, and the spool and
+// harness.json removed.
 func (s *harnessSession) end(ctx context.Context) {
 	b := s.b
 	b.mu.Lock()
@@ -257,6 +228,7 @@ func (s *harnessSession) end(ctx context.Context) {
 		return
 	}
 	s.ended = true
+	close(s.quit)
 	var live []*fenceProc
 	for f := range s.fences {
 		live = append(live, f)
@@ -268,101 +240,147 @@ func (s *harnessSession) end(ctx context.Context) {
 	s.mu.Lock()
 	s.fences, s.keeper = map[*fenceProc]bool{}, nil
 	s.mu.Unlock()
-	s.op.Lock() // a request in flight ends with its fence
-	defer s.op.Unlock()
+	s.reqs.Wait() // the requests in flight end with their fences
 	if s.upCount > 0 {
 		code, err := s.oneShot(ctx, s.cfg.Down, io.Discard, "down (run end)", true)
 		if err != nil || code != 0 {
 			b.r.Log.Warn("harness down at run end", "item", s.item, "exit", code, "err", err)
 		}
 	}
+	s.spool.Close()
+	s.logs.Close()
 	os.Remove(filepath.Join(s.wt, harness.FileRel))
+	os.RemoveAll(filepath.Join(s.wt, harness.SpoolRel))
 }
 
-func (b *harnessBroker) session(token string) *harnessSession {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	var found *harnessSession
-	for _, s := range b.sess {
-		if subtle.ConstantTimeCompare([]byte(s.token), []byte(token)) == 1 {
-			found = s
+// poll takes the requests the client drops in req/ until the session ends.
+func (s *harnessSession) poll() {
+	defer s.reqs.Done()
+	t := time.NewTicker(harness.Poll)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.quit:
+			return
+		case <-t.C:
+		}
+		d, err := s.spool.Open("req")
+		if err != nil {
+			continue
+		}
+		names, _ := d.Readdirnames(-1)
+		d.Close()
+		for _, name := range names {
+			id, ok := strings.CutSuffix(name, ".json")
+			if !ok || !harness.IDRe.MatchString(id) {
+				continue
+			}
+			req, err := s.take(id)
+			s.mu.Lock()
+			ended := s.ended
+			if !ended {
+				s.reqs.Add(1)
+			}
+			s.mu.Unlock()
+			if ended {
+				return
+			}
+			go func() {
+				defer s.reqs.Done()
+				s.answer(id, req, err)
+			}()
 		}
 	}
-	return found
 }
 
-func (b *harnessBroker) handle(c net.Conn) {
-	enc := json.NewEncoder(c)
-	var mu sync.Mutex
-	send := func(f harness.Frame) {
-		mu.Lock()
-		defer mu.Unlock()
-		enc.Encode(f)
-	}
-	refuse := func(msg string) { send(harness.Frame{Error: msg}) }
-	c.SetReadDeadline(time.Now().Add(10 * time.Second))
-	line, err := bufio.NewReader(io.LimitReader(c, 1<<20)).ReadBytes('\n')
-	if err != nil {
-		refuse("no request")
-		return
-	}
-	c.SetReadDeadline(time.Time{})
+// take reads and removes req/<id>.json and creates out/<id>.log, which tells the client the
+// request is in.
+func (s *harnessSession) take(id string) (harness.Request, error) {
 	var req harness.Request
-	if err := json.Unmarshal(line, &req); err != nil {
-		refuse("the request is not JSON")
-		return
+	p := "req/" + id + ".json"
+	fi, err := s.spool.Lstat(p)
+	if err != nil {
+		return req, err
 	}
-	s := b.session(req.Token)
-	if s == nil {
-		refuse("no harness session has that token (the run may have ended)")
-		return
+	defer s.spool.Remove(p)
+	if !fi.Mode().IsRegular() || fi.Size() > 1<<20 {
+		return req, errors.New("the request is not a small plain file")
 	}
-	// The token is in a file other worktrees' agents could read: the caller must also be this
-	// user's process working inside the session's worktree.
-	if !b.r.harnessTCP {
-		uc, _ := c.(*net.UnixConn)
-		if err := peerIn(uc, s.wt); err != nil {
-			refuse(err.Error())
+	b, err := s.spool.ReadFile(p)
+	if err != nil {
+		return req, err
+	}
+	if err := json.Unmarshal(b, &req); err != nil {
+		return req, errors.New("the request is not JSON")
+	}
+	return req, nil
+}
+
+// answer runs one request and writes its output to out/<id>.log and its end to out/<id>.exit.
+func (s *harnessSession) answer(id string, req harness.Request, err error) {
+	out, oerr := s.spool.OpenFile("out/"+id+".log", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if oerr != nil {
+		return // not ours, or the client's id is reused: no answer
+	}
+	defer out.Close()
+	var end harness.End
+	if err == nil {
+		end.Exit, err = s.serve(id, req, out)
+	}
+	if err != nil {
+		end = harness.End{Exit: harness.ExitBroker, Error: err.Error()}
+	}
+	b, _ := json.Marshal(end)
+	tmp := "out/." + id + ".exit"
+	if s.spool.WriteFile(tmp, b, 0o600) == nil {
+		s.spool.Rename(tmp, "out/"+id+".exit")
+	}
+}
+
+func (s *harnessSession) serve(id string, req harness.Request, out io.Writer) (int, error) {
+	if subtle.ConstantTimeCompare([]byte(s.token), []byte(req.Token)) != 1 {
+		return 0, errors.New("the request does not carry this run's token")
+	}
+	// The client withdrawing (it was killed, or the agent's command timed out) cancels the request.
+	gone := make(chan struct{})
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		t := time.NewTicker(harness.Poll * 4)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-s.quit:
+			case <-t.C:
+				if fi, err := s.spool.Stat("req/" + id + ".alive"); err == nil && time.Since(fi.ModTime()) < harness.Stale {
+					continue
+				}
+			}
+			close(gone)
 			return
 		}
-	}
-	// The client going away (the agent's command ended or timed out) cancels what it asked for.
-	gone := make(chan struct{})
-	go func() {
-		io.Copy(io.Discard, c)
-		close(gone)
 	}()
-	out := frameWriter{send}
-	var code int
 	switch req.Op {
 	case harness.OpStatus:
-		code, err = s.status(out)
+		return s.status(out)
 	case harness.OpUp:
-		code, err = s.up(out, gone)
+		return s.up(out, gone)
 	case harness.OpRun:
 		if strings.TrimSpace(req.Cmd) == "" {
-			refuse("run needs a command")
-			return
+			return 0, errors.New("run needs a command")
 		}
-		code, err = s.run(req.Cmd, out, gone)
+		// The agent's guard, here too: a client of the agent's own can skip its hook.
+		if d := s.guard.Check(guard.Input{Event: "PreToolUse", ToolName: "Bash", ToolInput: map[string]any{"command": req.Cmd}, Cwd: s.wt}); d.Deny {
+			s.guard.Record("loop-harness run", d, time.Now())
+			return 0, errors.New(d.Reason)
+		}
+		return s.run(req.Cmd, out, gone)
 	case harness.OpDown:
-		code, err = s.down(out, gone)
-	default:
-		refuse(fmt.Sprintf("unknown op %q (up, run, down, status)", req.Op))
-		return
+		return s.down(out, gone)
 	}
-	if err != nil {
-		refuse(err.Error())
-		return
-	}
-	send(harness.Frame{Exit: &code})
-}
-
-type frameWriter struct{ send func(harness.Frame) }
-
-func (w frameWriter) Write(p []byte) (int, error) {
-	w.send(harness.Frame{Data: append([]byte(nil), p...)})
-	return len(p), nil
+	return 0, fmt.Errorf("unknown op %q (up, run, down, status)", req.Op)
 }
 
 var errSessionEnded = errors.New("the harness session ended (the run is over)")
@@ -373,7 +391,7 @@ func (s *harnessSession) logFile(what string) (*os.File, error) {
 	s.n++
 	n := s.n
 	s.mu.Unlock()
-	f, err := os.OpenFile(filepath.Join(s.logDir, strconv.Itoa(n)+".log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	f, err := s.logs.OpenFile(strconv.Itoa(n)+".log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return nil, err
 	}
