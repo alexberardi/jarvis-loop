@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -264,6 +265,61 @@ func TestPlanHandoffRefusalLeavesThePlan(t *testing.T) {
 	}
 	if rows, _ := s.ListItems(ctx, "", ""); len(rows) != 0 {
 		t.Fatalf("items filed: %+v", rows)
+	}
+}
+
+// A piece's "depends on: #N" waits for an existing item: the filed item depends on it next to the
+// plan's own pieces. A missing or closed item refuses the approve and files nothing.
+func TestPlanHandoffWaitsOnExistingItems(t *testing.T) {
+	s, _ := openPlans(t)
+	ctx := context.Background()
+	open := add(t, s, "open one", "")
+	closed := add(t, s, "closed one", "")
+	if _, err := s.Drop(ctx, user, closed.ID, "no"); err != nil {
+		t.Fatal(err)
+	}
+	withDep := func(dep string) string {
+		return strings.Replace(blueprint3, "### 2. Store\n- builder: claude\n- depends on: 1\n",
+			"### 2. Store\n- builder: claude\n- depends on: "+dep+"\n", 1)
+	}
+	for _, tc := range []struct{ dep, msg string }{
+		{fmt.Sprintf("1, #%d", closed.ID), fmt.Sprintf("piece 2 waits on #%d, which is closed", closed.ID)},
+		{"1, #99", "piece 2 waits on #99, which does not exist"},
+	} {
+		p := newPlan(t, s, "Bad wait "+tc.dep, "")
+		toBlueprint(t, s, p)
+		bp := withDep(tc.dep)
+		result(t, s, claimTurn(t, s, "agent-1"), pipeline.TurnResult{Reply: "ok", Blueprint: bp, Ready: true})
+		_, err := s.ApprovePlan(ctx, user, p.ID, pipeline.DocBlueprint, pipeline.DocSHA256(bp), "")
+		if code(err) != pipeline.CodeInvalidField || !strings.Contains(err.Error(), tc.msg) {
+			t.Fatalf("approve with %q: %v", tc.dep, err)
+		}
+		d, _ := s.GetPlan(ctx, p.ID)
+		if d.Plan.Stage != pipeline.PlanBlueprint || len(d.Items) != 0 {
+			t.Fatalf("plan %+v items %v", d.Plan, d.Items)
+		}
+		if _, err := s.DropPlan(ctx, user, p.ID, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rows, _ := s.ListItems(ctx, "", ""); len(rows) != 2 {
+		t.Fatalf("items filed: %+v", rows)
+	}
+
+	p := newPlan(t, s, "Waits", "")
+	toBlueprint(t, s, p)
+	bp := withDep(fmt.Sprintf("1, #%d", open.ID))
+	result(t, s, claimTurn(t, s, "agent-1"), pipeline.TurnResult{Reply: "ok", Blueprint: bp, Ready: true})
+	a, err := s.ApprovePlan(ctx, user, p.ID, pipeline.DocBlueprint, pipeline.DocSHA256(bp), "")
+	if err != nil || len(a.Items) != 3 {
+		t.Fatalf("approve: %+v %v", a, err)
+	}
+	d, err := s.GetItem(ctx, a.Items[1].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []int64{a.Items[0].ID, open.ID}; !slices.Equal(d.Item.DependsOn, want) {
+		t.Fatalf("piece 2 depends on %v, want %v", d.Item.DependsOn, want)
 	}
 }
 

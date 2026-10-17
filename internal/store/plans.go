@@ -410,6 +410,23 @@ func (s *Store) handOff(tx *sql.Tx, actor string, p pipeline.Plan, pieces []pipe
 	if err != nil {
 		return nil, err
 	}
+	// The existing items a piece waits for, checked before anything is filed, so the refusal names
+	// the piece (insertItem would refuse them too, as "depends_on: ...").
+	for _, pc := range pieces {
+		for _, d := range pc.After {
+			var stage pipeline.Stage
+			err := tx.QueryRow(`SELECT stage FROM items WHERE id = ?`, d).Scan(&stage)
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, errf(pipeline.CodeInvalidField, "piece %d waits on #%d, which does not exist", pc.N, d)
+			}
+			if err != nil {
+				return nil, err
+			}
+			if stage == pipeline.Closed {
+				return nil, errf(pipeline.CodeInvalidField, "piece %d waits on #%d, which is closed", pc.N, d)
+			}
+		}
+	}
 	ids := map[int]int64{}
 	for len(ids) < len(pieces) {
 		next := -1
@@ -430,6 +447,7 @@ func (s *Store) handOff(tx *sql.Tx, actor string, p pipeline.Plan, pieces []pipe
 		for _, d := range pieces[next].DependsOn {
 			it.DependsOn = append(it.DependsOn, ids[d])
 		}
+		it.DependsOn = append(it.DependsOn, pieces[next].After...)
 		if err := s.insertItem(tx, actor, it); err != nil {
 			return nil, err
 		}
