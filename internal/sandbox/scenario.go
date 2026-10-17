@@ -156,6 +156,9 @@ type Expect struct {
 	// Board: alias -> the item's (or plan's) card on the web board, read from the board
 	// listener with a board token through the ?t= cookie flow.
 	Board map[string]BoardMatch `json:"board,omitempty"`
+	// BoardOrchestrator: a regexp the board's Orchestrator panel must match ("" when the board
+	// has none: "^$").
+	BoardOrchestrator string `json:"board_orchestrator,omitempty"`
 	// Plans: alias -> the plan as loopd has it; DependsOn: item alias -> the aliases of the items
 	// it depends on, exactly.
 	Plans     map[string]PlanMatch `json:"plans,omitempty"`

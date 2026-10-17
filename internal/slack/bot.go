@@ -467,6 +467,9 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	f := func(k string, max int) string { return b.field(str(e.Data, k), max, id) }
 	to := pipeline.Stage(e.To)
 
+	if to == pipeline.NeedsYou && e.From != string(pipeline.NeedsYou) && str(e.Data, pipeline.FieldTrustSHA) != "" {
+		return b.trustMessage(e, d), true
+	}
 	if to == pipeline.NeedsYou && e.From != string(pipeline.NeedsYou) {
 		q := it.Question
 		if it.Stage != pipeline.NeedsYou {
@@ -541,6 +544,8 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		}
 	case "approved":
 		text = fmt.Sprintf("Approved by %s for `%s`: '%s' → land.", by, short(str(e.Data, "head_sha")), f("words", 300))
+	case "trusted":
+		text = fmt.Sprintf("Trusted files OK'd by %s for `%s`: verify runs that commit once → build.", by, short(str(e.Data, "head_sha")))
 	case "held":
 		text = fmt.Sprintf("Kept holding (%s).", by)
 	case "rebuild":
@@ -942,6 +947,10 @@ func (b *Bot) onMessage(ctx context.Context, m slackEvent) {
 		if text == "" {
 			return
 		}
+		if waitsForTrust(d.Item) && IsTrustReply(text) {
+			b.trustReply(ctx, m, d.Item)
+			return
+		}
 		if _, err := b.c.Store.Answer(ctx, actorPrefix+m.User, id, text); err != nil {
 			b.threadReply(ctx, m.ThreadTS, "Could not record that answer: "+Escape(errMessage(err)))
 		}
@@ -1038,6 +1047,9 @@ func (b *Bot) onActions(ctx context.Context, p interaction) {
 			}
 		case "approve":
 			b.approveButton(ctx, channel, msgTS, user, itemID, a.Value)
+		case "trust":
+			_, sha, _ := strings.Cut(a.Value, ":")
+			b.trust(ctx, channel, msgTS, user, itemID, sha, "button")
 		case "drop":
 			b.cancelPending(itemID)
 			if _, err := b.c.Store.Drop(ctx, actor, itemID, "Drop button"); err != nil {
@@ -1092,7 +1104,7 @@ func actionItem(actionID, blockID, value string) int64 {
 		id, _ := strconv.ParseInt(rest, 10, 64)
 		return id
 	}
-	if actionID == "approve" || actionID == "keep_holding" || actionID == "drop" || actionID == "qa_verified" || actionID == "qa_reopen" {
+	if actionID == "approve" || actionID == "trust" || actionID == "keep_holding" || actionID == "drop" || actionID == "qa_verified" || actionID == "qa_reopen" {
 		n, _, _ := strings.Cut(value, ":")
 		id, _ := strconv.ParseInt(n, 10, 64)
 		return id

@@ -168,7 +168,14 @@ standup reports its own spend.
 4. **The orchestrator persona** (its skill: the authority table, the answer kinds, how to write a
    recommendation, process-issue patterns), with scenario tests on recorded situations from
    2026-10-16.
-5. **Board: the Orchestrator panel and "waiting on" for every card.**
+5. **Board: the Orchestrator panel and "waiting on" for every card.** As built: each dependency
+   not done is followed to its root (`pipeline.WaitChains`; past the first link, the first
+   dependency not done of each item), "waiting on #12 → #35 → needs you". The panel
+   (`Store.OrchestratorBoard`, hidden until the orchestrator acts, open while an escalation is)
+   lists its last 15 actions with reasons (its refusals and what the user did through it too),
+   open escalations (about an item: until it changes stage or is done; about none: for a day), its
+   tickets (open first) and its notebook through the board's markdown allow-list. "Last turn" is
+   its newest action or note until piece 3 records turns.
 6. **Standup and `@jarvis-loop` questions.**
 
 ## Harness

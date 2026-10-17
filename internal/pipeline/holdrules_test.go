@@ -107,6 +107,13 @@ func TestDefaultHoldRules(t *testing.T) {
 		{"M internal/modules/authz/x.go", ""},
 		{"M cmd/jarvisd/main.go", ""},
 		{"M docs/STATUS.md", ""},
+		// The harness verify runs (jarvis-server's deny_write).
+		{"M scripts/sandbox", "trusted-file"},
+		{"M scripts/screenshots", "trusted-file"},
+		{"M scripts/mobile-shot", "trusted-file"},
+		{"M tools/pipeline/run.go", "trusted-file"},
+		{"A tools/pipeline", "trusted-file"},
+		{"M scripts/check", ""},
 	}
 	for _, c := range cases {
 		paths, err := ParseChangedPaths([]string{c.line})
@@ -227,6 +234,7 @@ func TestJarvisLoopHoldRules(t *testing.T) {
 		{"M internal/guard/guard.go", "guard"},
 		{"M cmd/loop-guard/main.go", "guard"},
 		{"M internal/runner/settings.go", "guard"},
+		{"M internal/runner/verify.go", "trusted-file"},
 		{"M .github/workflows/ci.yml", "ci"},
 		{"D internal/slack/text_test.go", "deleted-test"},
 		{"R internal/x_test.go internal/x.go", "deleted-test"},
@@ -428,6 +436,9 @@ func TestAllReposHoldRules(t *testing.T) {
 func TestIsBuiltInHoldRuleSet(t *testing.T) {
 	var server, phase6 []HoldRule
 	for _, r := range DefaultHoldRules() {
+		if r.Name == "trusted-file" {
+			continue // added after phase 6b: no earlier loopd wrote them out
+		}
 		if r.Repo == ServerRepo {
 			server = append(server, r)
 		}

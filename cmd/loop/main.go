@@ -28,6 +28,7 @@ const usage = `usage: loop <command> [args]
   show <id>
   answer <id> "<text>"
   approve <id> --sha <head sha> [--words TEXT]
+  trust <id> --sha <sha>      let verify run that one commit's change to trusted files
   hold <id> [--words TEXT]
   drop <id> [--words TEXT]
   qa <id>                     check it yourself once merged (it waits in qa)
@@ -160,6 +161,7 @@ var commands = map[string]command{
 	"show":      {1, 1, nil, cmdShow},
 	"answer":    {2, 2, nil, cmdAnswer},
 	"approve":   {1, 1, []string{"sha", "words"}, cmdApprove},
+	"trust":     {1, 1, []string{"sha"}, cmdTrust},
 	"hold":      {1, 1, []string{"words"}, cmdHold},
 	"drop":      {1, 1, []string{"words"}, cmdDrop},
 	"qa":        {1, 1, nil, cmdQA},
@@ -261,6 +263,13 @@ type item struct {
 		HeadSHA string    `json:"head_sha"`
 		At      time.Time `json:"at"`
 	} `json:"approval"`
+	Trust *struct {
+		HeadSHA  string   `json:"head_sha"`
+		Paths    []string `json:"paths"`
+		Diffstat string   `json:"diffstat"`
+		By       string   `json:"by"`
+		Used     bool     `json:"used"`
+	} `json:"trust"`
 }
 
 type control struct {
@@ -458,6 +467,22 @@ func cmdShow(c *client, pos []string, _ map[string][]string) error {
 	if a := it.Approval; a != nil {
 		fmt.Fprintf(w, "approval: %s for %s: %q\n", a.By, a.HeadSHA, a.Words)
 	}
+	if t := it.Trust; t != nil {
+		switch {
+		case t.By == "":
+			fmt.Fprintf(w, "trust:    verify refused %s: it changes trusted files (%s). Look at them, then: loop trust %d --sha %s\n",
+				t.HeadSHA, strings.Join(t.Paths, ", "), it.ID, t.HeadSHA)
+		case t.Used:
+			fmt.Fprintf(w, "trust:    %s OK'd %s; a verify ran it (another commit needs another OK)\n", t.By, t.HeadSHA)
+		default:
+			fmt.Fprintf(w, "trust:    %s OK'd %s; the next verify of it runs the change\n", t.By, t.HeadSHA)
+		}
+		for _, l := range strings.Split(t.Diffstat, "\n") {
+			if l = strings.TrimSpace(l); l != "" {
+				fmt.Fprintf(w, "          %s\n", l)
+			}
+		}
+	}
 	if it.MergeSHA != "" {
 		fmt.Fprintf(w, "merged:   %s\n", it.MergeSHA)
 	}
@@ -532,6 +557,23 @@ func cmdApprove(c *client, pos []string, f map[string][]string) error {
 	}
 	var it item
 	if _, err := c.json("POST", "/items/"+id+"/approve", map[string]string{"head_sha": sha, "words": last(f, "words")}, &it); err != nil {
+		return err
+	}
+	c.moved(it)
+	return nil
+}
+
+func cmdTrust(c *client, pos []string, f map[string][]string) error {
+	id, err := itemID(pos[0])
+	if err != nil {
+		return err
+	}
+	sha := last(f, "sha")
+	if sha == "" {
+		return usageError("trust needs --sha, the commit verify refused (loop show shows it)")
+	}
+	var it item
+	if _, err := c.json("POST", "/items/"+id+"/trust", map[string]string{"head_sha": sha}, &it); err != nil {
 		return err
 	}
 	c.moved(it)

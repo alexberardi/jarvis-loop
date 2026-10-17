@@ -259,6 +259,9 @@ func (p *player) problems(e Expect, negatives bool) []string {
 	if len(e.Board) > 0 {
 		out = append(out, p.boardProblems(e.Board)...)
 	}
+	if e.BoardOrchestrator != "" {
+		out = append(out, p.orchPanelProblems(e.BoardOrchestrator)...)
+	}
 	for _, rel := range e.Absent {
 		if _, err := os.Lstat(filepath.Join(p.s.Dir, rel)); err == nil {
 			add("%s exists, want it absent", rel)

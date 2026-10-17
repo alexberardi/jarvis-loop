@@ -412,6 +412,68 @@ func (s *Store) Notebook(ctx context.Context, limit int) ([]Event, error) {
 	return scanEvents(rows)
 }
 
+// OrchBoard is what the board's Orchestrator panel shows (docs/phases/08-orchestrator.md, "Talking
+// to it").
+type OrchBoard struct {
+	// Actions is its recent events, newest first: its own (refusals too), loopd's escalations,
+	// and what the user did through it; its notes are in Notes.
+	Actions []Event
+	// Escalations is the open ones, newest first: about an item until the item changes stage (or
+	// is done or closed), about none for EscalationShown.
+	Escalations []Event
+	// Tickets is the items it filed, newest first.
+	Tickets []int64
+	// Notes is its notebook's newest, oldest first.
+	Notes []Event
+}
+
+// EscalationShown is how long an escalation about no item stays open on the board.
+const EscalationShown = 24 * time.Hour
+
+// OrchestratorBoard is the board's Orchestrator panel, at most limit of each list.
+func (s *Store) OrchestratorBoard(ctx context.Context, limit int) (OrchBoard, error) {
+	var out OrchBoard
+	// An item it files is created, then orchestrator.added (with the reason): the second says it.
+	rows, err := s.r.QueryContext(ctx, `SELECT `+eventCols+` FROM events WHERE kind != ? AND NOT (kind = 'created' AND actor LIKE ?) AND
+		(actor LIKE ? OR kind = ? OR json_extract(data, '$.via') LIKE ?) ORDER BY id DESC LIMIT ?`,
+		KindOrchNote, orchPrefix+"%", orchPrefix+"%", KindOrchEscalated, orchPrefix+"%", limit)
+	if err != nil {
+		return out, err
+	}
+	if out.Actions, err = scanEvents(rows); err != nil {
+		return out, err
+	}
+	rows, err = s.r.QueryContext(ctx, `SELECT `+eventCols+` FROM events e WHERE kind = ? AND (
+		(COALESCE(item_id, 0) = 0 AND at > ?) OR
+		(EXISTS (SELECT 1 FROM items i WHERE i.id = e.item_id AND i.stage NOT IN (?, ?)) AND
+		 NOT EXISTS (SELECT 1 FROM events l WHERE l.item_id = e.item_id AND l.id > e.id AND l.to_stage != '' AND l.to_stage != l.from_stage)))
+		ORDER BY id DESC LIMIT ?`,
+		KindOrchEscalated, s.clock.Now().Add(-EscalationShown).UnixNano(), string(pipeline.Done), string(pipeline.Closed), limit)
+	if err != nil {
+		return out, err
+	}
+	if out.Escalations, err = scanEvents(rows); err != nil {
+		return out, err
+	}
+	rows, err = s.r.QueryContext(ctx, `SELECT item_id FROM events WHERE kind = ? ORDER BY id DESC LIMIT ?`, KindOrchAdded, limit)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return out, err
+		}
+		out.Tickets = append(out.Tickets, id)
+	}
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	out.Notes, err = s.Notebook(ctx, limit)
+	return out, err
+}
+
 // ---- acting for the user ----
 
 // SlackMessage is a message loopd's Slack layer saw.

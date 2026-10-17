@@ -161,6 +161,8 @@ type Item struct {
 	MergeSHA     string    `json:"merge_sha,omitempty"`
 	Summary      string    `json:"summary,omitempty"`
 	Approval     *Approval `json:"approval,omitempty"`
+	// Trust is verify's refusal of a trusted-file change and the approver's OK for it (trust.go).
+	Trust *Trust `json:"trust,omitempty"`
 	// NeedsQA: once merged, the item waits in qa for the user's check instead of going to done.
 	NeedsQA bool `json:"needs_qa"`
 	// ReopenOf is the qa item whose Reopen filed this one.
@@ -341,6 +343,10 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 			return errf(CodeEvidenceRequired, "%s needs at least one evidence file attached under this lease", a.Outcome)
 		}
 		return nil
+	}
+
+	if err := applyTrustFields(&it, from, a.Outcome, f, data); err != nil {
+		return Transition{}, err
 	}
 
 	switch a.Outcome {

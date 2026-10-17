@@ -227,9 +227,10 @@ func goldenItems() []store.BoardItem {
 		{BoardRow: row(2, "Route to the right repo", "P1", "triage", "triage", "alexberardi/jarvis-loop", 0, "devbox/triage-1", 2*time.Hour), UpdatedAt: now},
 		{BoardRow: row(3, "Mobile settings crash", "P1", "build", "build", "alexberardi/jarvis-node-mobile", 0, "devbox/builder-2", 3*day),
 			SlackChannel: "C0LOOP", SlackTS: "1760000000.000100", UpdatedAt: now},
-		{BoardRow: row(4, "Retry the TTS call", "P2", "build", "ready", "alexberardi/jarvis-server", 0, "", 26*time.Hour), UpdatedAt: now},
+		{BoardRow: row(4, "Retry the TTS call", "P2", "build", "ready", "alexberardi/jarvis-server", 0, "", 26*time.Hour),
+			WaitingOn: []int64{12}, Waits: []pipeline.WaitChain{{Path: []int64{12, 5}, Root: "in review"}}, UpdatedAt: now},
 		{BoardRow: row(12, "Show the plan link", "P2", "triage", "intake", "alexberardi/jarvis-loop", 0, "", time.Hour),
-			WaitingOn: []int64{5, 8}, PlanID: 2, Builder: "qwen", UpdatedAt: now},
+			WaitingOn: []int64{5, 8}, Waits: []pipeline.WaitChain{{Path: []int64{5}, Root: "in review"}, {Path: []int64{8}, Root: "held for approval"}}, PlanID: 2, Builder: "qwen", UpdatedAt: now},
 		{BoardRow: row(5, "Board page", "P2", "review", "review", "alexberardi/jarvis-loop", 14, "devbox/reviewer-1", 2*day), UpdatedAt: now},
 		{BoardRow: row(6, "Bump sqlite", "P3", "land", "land (queued)", "alexberardi/jarvis-server", 31, "", 4*day), UpdatedAt: now},
 		{BoardRow: row(7, "Which emulator?", "P1", "needs_you", "needs-you", "alexberardi/jarvis-server", 0, "", 1*day),
@@ -379,4 +380,64 @@ func TestItemGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkGolden(t, "item_held.golden.html", b.Bytes())
+}
+
+// goldenOrch is the orchestrator's panel: an action of each shape, an open escalation, a ticket it
+// filed (open) and one done, and notes whose markdown must not let HTML through.
+func goldenOrch() store.OrchBoard {
+	ev := func(id, item int64, ago time.Duration, actor, kind, from, to string, data map[string]any) store.Event {
+		return store.Event{ID: id, ItemID: item, At: now.Add(-ago), Actor: actor, Kind: kind, From: from, To: to, Data: data}
+	}
+	const o = "orchestrator:loop"
+	esc := ev(7, 7, 10*time.Minute, o, store.KindOrchEscalated, "", "", map[string]any{
+		"text": "Sandbox emulator or a fake?", "recommendation": "the fake: <the emulator> is flaky", "reason": "a product call"})
+	return store.OrchBoard{
+		Actions: []store.Event{
+			ev(9, 7, 5*time.Minute, o, "refused", "", "", map[string]any{"action": "approve", "code": "forbidden", "message": "approvals stay on the button"}),
+			ev(8, 4, 6*time.Minute, "slack:U0APPROVER", "patched", "", "", map[string]any{"via": o, "reason": "the user asked"}),
+			esc,
+			ev(6, 13, time.Hour, o, store.KindOrchAdded, "", "", map[string]any{"signature": "index.lock", "reason": "three runs hit it"}),
+			ev(5, 3, 2*time.Hour, o, "retried", "needs_you", "build", map[string]any{"reason": "transient git lock"}),
+			ev(4, 0, 3*time.Hour, "loopd", store.KindOrchEscalated, "", "", map[string]any{"text": "failure 3 on the same head", "reason": "the third failure on one head is the user's"}),
+		},
+		Escalations: []store.Event{esc},
+		Tickets:     []int64{9, 13},
+		Notes: []store.Event{
+			ev(2, 0, 4*time.Hour, o, store.KindOrchNote, "", "", map[string]any{"text": "**#35** waits on the emulator <script>alert(1)</script>"}),
+			ev(3, 0, 3*time.Hour, o, store.KindOrchNote, "", "", map[string]any{"text": "- git lock: 3 runs\n- [docs](javascript:alert(1))"}),
+		},
+	}
+}
+
+func TestBoardOrchestratorGolden(t *testing.T) {
+	items := append(goldenItems(), store.BoardItem{BoardRow: store.BoardRow{ID: 13, Title: "Clear stale git locks", Priority: "P2",
+		Stage: "build", Display: "ready", CreatedAt: now.Add(-time.Hour), AgeSeconds: 3600}, UpdatedAt: now})
+	v := boardView(items, goldenPlans(), now, false, "")
+	v.Orch = orchView(goldenOrch(), items)
+	var b bytes.Buffer
+	if err := boardTmpl.Execute(&b, v); err != nil {
+		t.Fatal(err)
+	}
+	checkGolden(t, "board_orchestrator.golden.html", b.Bytes())
+	out := b.String()
+	for _, bad := range []string{"<script>alert", "javascript:", "<the emulator>"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("the panel lets %q through", bad)
+		}
+	}
+	for _, want := range []string{"<strong>#35</strong>", "approvals stay on the button", "transient git lock", "Clear stale git locks",
+		"waiting on #12 → #5 → in review", "the fake: &lt;the emulator&gt; is flaky", "via orchestrator"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the panel lacks %q", want)
+		}
+	}
+	// It never acted: no panel.
+	v.Orch = orchView(store.OrchBoard{}, items)
+	b.Reset()
+	if err := boardTmpl.Execute(&b, v); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.String(), "Orchestrator") {
+		t.Error("a panel for an orchestrator that never acted")
+	}
 }

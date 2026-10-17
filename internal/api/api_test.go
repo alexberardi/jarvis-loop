@@ -1010,3 +1010,24 @@ func TestRebuildHeld(t *testing.T) {
 		}
 	}
 }
+
+// The trust OK is the user's (a runner token is refused), for the commit verify refused, and
+// sends the item back to build on the hold list.
+func TestTrust(t *testing.T) {
+	e := newEnv(t)
+	id := e.addItem("Shoot dark mode too")
+	e.mustClaim("triager", id, "triage")
+	e.upload(runnerTok, id, "repro.log", []byte("x\n"), 201)
+	e.advance(id, "reproduced", map[string]string{"area": "harness", "size": "S", "risk": "normal", "resources": ""}, 200)
+	e.mustClaim("builder", id, "build")
+	e.refused(userTok, "POST", fmt.Sprintf("/items/%d/trust", id), map[string]any{"head_sha": shaA}, 409, "wrong_stage")
+	e.advance(id, "failed", map[string]string{"error": "the change touches tools/pipeline", "trust_sha": shaA,
+		"trusted_paths": "tools/pipeline", "trusted_diffstat": "tools/pipeline | 2 +-"}, 200)
+
+	e.refused(runnerTok, "POST", fmt.Sprintf("/items/%d/trust", id), map[string]any{"head_sha": shaA}, 403, "forbidden")
+	e.refused(userTok, "POST", fmt.Sprintf("/items/%d/trust", id), map[string]any{"head_sha": shaB}, 409, "sha_mismatch")
+	e.do(userTok, "POST", fmt.Sprintf("/items/%d/trust", id), map[string]any{"head_sha": shaA}, 200, nil)
+	if d := e.get(id); d.Item.Stage != "build" || d.Item.Risk != "hold" || !strings.Contains(d.Item.HoldReason, "trusted files changed") {
+		t.Fatalf("after trust: %+v", d.Item)
+	}
+}
