@@ -217,14 +217,20 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if f.oc {
 		f.session = "ses_fake_" + item + "_" + scenario
 	}
+	// Claude's sessions are the harness's; OpenCode keeps its own in its data dir, the one place
+	// the fence lets it write besides the worktree.
+	sessions := os.Getenv("FAKE_CLAUDE_SCRIPTS")
+	if d := os.Getenv("XDG_DATA_HOME"); f.oc && d != "" {
+		sessions = filepath.Join(d, "opencode")
+	}
 	if resume != "" {
-		if err := checkSession(os.Getenv("FAKE_CLAUDE_SCRIPTS"), resume, f.cwd); err != nil {
+		if err := checkSession(sessions, resume, f.cwd); err != nil {
 			fmt.Fprintf(stderr, "No conversation found with session ID: %s (%v)\n", resume, err)
 			return 1
 		}
 		f.session = resume
 	} else if strings.HasPrefix(item, "P") || f.oc {
-		saveSession(os.Getenv("FAKE_CLAUDE_SCRIPTS"), f.session, f.cwd)
+		saveSession(sessions, f.session, f.cwd)
 	}
 	if f.oc {
 		progress("opencode " + f.session)

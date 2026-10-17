@@ -1,0 +1,208 @@
+{
+  "name": "qwen-fallback",
+  "about": "The qwen builder's second strike (docs/decisions/2026-10-16-qwen-builder.md): a qwen item bounced at review twice goes to the user as any item does, and loopd flips its builder to claude for the rest (event builder_fallback, the card shows builder: claude). After the user's answer the build runs claude -p (no -s, no opencode), reports builder claude, and the item goes on.",
+  "steps": [
+    {
+      "do": "plan",
+      "plan": "p",
+      "title": "Pantry list",
+      "priority": "P2",
+      "text": "a pantry list"
+    },
+    {
+      "do": "plan_turn",
+      "plan": "p",
+      "text": "Brief ready.",
+      "brief": "# Pantry list\n\nA list of what is in the pantry.",
+      "ready": true
+    },
+    {
+      "do": "plan_approve",
+      "plan": "p",
+      "doc": "brief"
+    },
+    {
+      "do": "plan_turn",
+      "plan": "p",
+      "text": "Blueprint ready.",
+      "ready": true,
+      "blueprint": "# Blueprint\n\nApproach: one table.\n\n## Pieces\n\n### 1. Pantry table\n- repo: sandbox/demo\n- size: S\n- builder: qwen\n\nThe table and its migration.\n"
+    },
+    {
+      "do": "plan_approve",
+      "plan": "p",
+      "doc": "blueprint",
+      "text": "go"
+    },
+    {
+      "do": "plan_items",
+      "plan": "p",
+      "pieces": [
+        "a"
+      ]
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "for": "review",
+      "play": "bounce"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "review"
+      },
+      "run_files": [
+        {
+          "item": "a",
+          "stage": "build",
+          "run": 2,
+          "file": "argv.json",
+          "text": "\"-s\",\"ses_fake_"
+        }
+      ]
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "needs_you"
+      },
+      "events": [
+        {
+          "item": "a",
+          "kind": "builder_fallback",
+          "actor": "runner",
+          "data": {
+            "from": "^qwen$",
+            "to": "^claude$",
+            "bounce_count": "^2$"
+          },
+          "count": 1
+        }
+      ],
+      "board": {
+        "a": {
+          "column": "Needs you",
+          "card": "<span class=\"label\">builder: claude</span>"
+        }
+      }
+    },
+    {
+      "do": "reply",
+      "item": "a",
+      "text": "go on with claude"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "for": "review",
+      "play": "approve"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "review"
+      },
+      "run_files": [
+        {
+          "item": "a",
+          "stage": "build",
+          "run": 3,
+          "file": "argv.json",
+          "no_text": "^\\[\"run\",|\"-s\""
+        }
+      ],
+      "events": [
+        {
+          "item": "a",
+          "kind": "advanced",
+          "outcome": "pr_opened",
+          "actor": "runner",
+          "data": {
+            "builder": "^claude$"
+          },
+          "count": 1
+        }
+      ]
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "land"
+      }
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "land"
+    },
+    "prs": 1,
+    "events": [
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "pr_opened",
+        "actor": "runner",
+        "data": {
+          "builder": "^qwen$"
+        },
+        "count": 2
+      },
+      {
+        "item": "a",
+        "kind": "builder_fallback",
+        "count": 1
+      }
+    ],
+    "agent_runs": {
+      "build": 3,
+      "review": 3
+    }
+  }
+}
