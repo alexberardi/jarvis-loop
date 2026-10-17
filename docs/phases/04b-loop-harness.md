@@ -118,6 +118,8 @@ cannot silently check nothing. Steps (`"do"`):
 | `plan_items` `plan`, `pieces`: [aliases] | name the items the plan's hand-off filed, in piece order |
 | `plan_post` `as`, `text`, [`plan`] | a top-level message in `#plan`; with `plan`, it must start a plan (named by that alias) |
 | `plan_reply` `plan`, `as`, `text` | a reply in the plan's thread in `#plan` |
+| `orchestrator` `action` (`METHOD /path`, `{item}` the item's id), [`item`], [`body`: JSON, values `{head}`, `{id}`, `{last_channel}`, `{last_ts}`], [`as` + `text` + `where`, or `message`: `last`], [`refused` regexp] | the orchestrator's token calls loopd (phase 8); with `as`, for that person's message to the `@orchestrator` app (sent as `tell_orchestrator` does), sent with `X-Loop-On-Behalf`; `message: last` reuses the previous one |
+| `tell_orchestrator` `as`, `text`, [`where`: `dm` (default)\|`thread` + `item`\|`loop`] | a DM to the `@orchestrator` app, or a mention of it in the item's thread or at `#loop`'s top level; waits until loopd recorded it |
 | `expect` / `wait` + expectations | as below, at that point |
 
 Expectations (`expect`, in a step or at the end) are retried for `within` (default 10 s); the
@@ -127,7 +129,7 @@ negative ones are checked once the loop has gone quiet:
 | --- | --- |
 | `stage`: {alias: stage}, `question`: {alias: regexp}, `leased`: {alias: bool}, `repo`: {alias: slug} | the item is there (its repo exactly; `""` for none) |
 | `events` / `no_events`: [{`item` or `plan`, `kind`, `actor` (`approver`, `other`, `runner`, `hand`, `user`, `loopd`), `outcome`, `data`: {key: regexp}, `count`}] | such events exist (exactly `count`) / none do |
-| `messages` (in this order) / `no_messages`: [{`thread` or `parent`: alias, `plan`: alias (its thread in `#plan`, parent included), `channel` (`loop`\|`digest`\|`plan`), `from` (`bot`, `approver`, `other`), `kind` (`message`, `ephemeral`, `command`, `response`), `to`, `text` regexp, `buttons`: [labels], `pinned`, `reactions`: [names], exactly, `[]` for none}] | such messages exist, as they stand after edits / none do |
+| `messages` (in this order) / `no_messages`: [{`thread` or `parent`: alias, `plan`: alias (its thread in `#plan`, parent included), `channel` (`loop`\|`digest`\|`plan`\|`dm`: the approver's DM with `@orchestrator`, or a channel id), `from` (`bot`, `orchestrator`, `approver`, `other`), `kind` (`message`, `ephemeral`, `command`, `response`), `to`, `text` regexp, `buttons`: [labels], `pinned`, `reactions`: [names], exactly, `[]` for none}] | such messages exist, as they stand after edits / none do |
 | `control`: {`active_agents`, `stopped`} | loopd's control |
 | `prs`: n | PRs opened on the fake GitHub |
 | `pr`: {alias: {`number`, `repo`, `title` regexp, `body` regexp, `edits`, `comments`, `comment` regexp, `state`, `merge_calls`}} | the PR the runner opened for the item, at its branch's head: how often it updated it, how many comments (review verdicts) it posted, the newest |

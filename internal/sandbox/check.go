@@ -442,6 +442,8 @@ func channelID(name string) string {
 		return slack.ChannelDigest
 	case "plan", "#plan":
 		return slack.ChannelPlan
+	case "dm":
+		return slackfake.DMChannel(OrchApp, slack.Approver)
 	}
 	return name
 }
@@ -450,6 +452,8 @@ func userOf(name string) string {
 	switch name {
 	case "bot":
 		return slackfake.BotUser
+	case "orchestrator":
+		return OrchUser
 	case "approver", "you":
 		return slack.Approver
 	case "other":
@@ -566,21 +570,23 @@ func (p *player) mustNot() []string {
 		switch c.Method {
 		case "chat.postMessage", "chat.update", "chat.postEphemeral", "pins.add", "reactions.add", "reactions.remove":
 			ch, _ := c.Body["channel"].(string)
-			if !slices.Contains(allowed, ch) {
+			orch := c.Auth == "Bearer "+p.s.Secrets[7]
+			// The orchestrator's app also answers in its DMs.
+			if !slices.Contains(allowed, ch) && !(orch && slack.IsDM(ch)) {
 				out = append(out, fmt.Sprintf("%s to %s, outside #loop, #loop-digest and #plan", c.Method, ChannelName(ch)))
 			}
-			if c.Auth != "Bearer "+p.s.Secrets[3] {
-				out = append(out, c.Method+" without the bot token")
+			if c.Auth != "Bearer "+p.s.Secrets[3] && !orch {
+				out = append(out, c.Method+" without a bot token")
 			}
 		case "apps.connections.open":
-			if c.Auth != "Bearer "+p.s.Secrets[4] {
-				out = append(out, c.Method+" without the app token")
+			if c.Auth != "Bearer "+p.s.Secrets[4] && c.Auth != "Bearer "+p.s.Secrets[8] {
+				out = append(out, c.Method+" without an app token")
 			}
 		}
 	}
 	mention := regexp.MustCompile(`<@([A-Z0-9]+)>`)
 	for _, m := range p.s.Slack.Messages() {
-		if m.User != slackfake.BotUser {
+		if m.User != slackfake.BotUser && m.User != OrchUser {
 			continue
 		}
 		body := m.Text + "\n" + Body(m)

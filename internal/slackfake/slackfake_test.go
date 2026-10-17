@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -229,5 +230,92 @@ func TestRecordsReactions(t *testing.T) {
 	}
 	if err := api.ReactionsAdd(ctx, slack.ChannelPlan, "1.2", slack.ReactionDone); err == nil {
 		t.Fatal("reaction on a message that does not exist")
+	}
+}
+
+// A second app (the @orchestrator): its own socket and bot user. A mention reaches the loop bot
+// as a message and the app as an app_mention and a message, each its own event; a DM only the app;
+// a press the app that posted the message; auth.test names each token's bot user.
+func TestSecondApp(t *testing.T) {
+	f := slackfake.New()
+	t.Cleanup(f.Close)
+	f.AddApp(slackfake.App{Name: "orch", BotToken: "xoxb-orch", AppToken: "xapp-orch", BotUser: "U0ORCH"})
+	listen := func(appToken string) *client {
+		c := &client{}
+		ctx, cancel := context.WithCancel(context.Background())
+		sock := &slack.Socket{Open: slack.NewAPI(f.BaseURL(), appToken, nil).OpenConnection, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+			OnEnvelope: func(_ context.Context, e slack.Envelope) {
+				c.mu.Lock()
+				c.envs = append(c.envs, e)
+				c.mu.Unlock()
+			}}
+		done := make(chan struct{})
+		go func() { defer close(done); sock.Run(ctx) }()
+		t.Cleanup(func() { cancel(); <-done })
+		return c
+	}
+	loop, orch := listen("xapp-fake"), listen("xapp-orch")
+	if err := f.WaitConnected(5 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.WaitAppConnected("orch", 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for tok, want := range map[string]string{bot: slackfake.BotUser, "xoxb-orch": "U0ORCH"} {
+		if id, err := slack.NewAPI(f.BaseURL(), tok, nil).AuthTest(ctx); err != nil || id != want {
+			t.Fatalf("auth.test %s: %q %v", tok, id, err)
+		}
+	}
+
+	if _, err := f.MentionApp("orch", slack.Approver, loopCh, "", "what's stuck?"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DM("orch", slack.Approver, "", "drop #61"); err != nil {
+		t.Fatal(err)
+	}
+	type ev struct{ Type, Channel, Text string }
+	events := func(envs []slack.Envelope) (out []ev, ids map[string]bool) {
+		ids = map[string]bool{}
+		for _, e := range envs {
+			var p struct {
+				EventID string `json:"event_id"`
+				Event   ev     `json:"event"`
+			}
+			json.Unmarshal(e.Payload, &p)
+			ids[p.EventID] = true
+			out = append(out, p.Event)
+		}
+		return out, ids
+	}
+	got, _ := events(waitEnvs(t, loop, 1))
+	if len(got) != 1 || got[0].Type != "message" || got[0].Text != "<@U0ORCH> what's stuck?" {
+		t.Fatalf("loop bot got %+v", got)
+	}
+	got, ids := events(waitEnvs(t, orch, 3))
+	dm := slackfake.DMChannel("orch", slack.Approver)
+	if len(got) != 3 || got[0].Type != "app_mention" || got[1].Type != "message" || got[2].Channel != dm || len(ids) != 3 {
+		t.Fatalf("app got %+v (ids %v)", got, ids)
+	}
+
+	oapi := slack.NewAPI(f.BaseURL(), "xoxb-orch", slack.Channels{loopCh, slack.DMs})
+	ts, err := oapi.PostMessage(ctx, slack.Message{Channel: dm, Text: "on it", Blocks: []map[string]any{
+		{"type": "actions", "block_id": "b", "elements": []any{map[string]any{"type": "button", "action_id": "orch_accept", "value": "7", "text": map[string]any{"type": "plain_text", "text": "Accept"}}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ms := f.Messages()
+	if last := ms[len(ms)-1]; last.User != "U0ORCH" || last.Channel != dm {
+		t.Fatalf("posted as %+v", last)
+	}
+	if err := f.Press(slack.Approver, dm, ts, "orch_accept"); err != nil {
+		t.Fatal(err)
+	}
+	envs := waitEnvs(t, orch, 4)
+	if envs[3].Type != "interactive" || !strings.Contains(string(envs[3].Payload), `"blocks"`) {
+		t.Fatalf("press %+v", envs[3])
+	}
+	if n := len(loop.got()); n != 1 {
+		t.Fatalf("the loop bot got %d envelopes", n)
 	}
 }

@@ -110,12 +110,17 @@ type Step struct {
 	Pieces      []string `json:"pieces,omitempty"`
 
 	// orchestrator: the orchestrator's token calls loopd: Action is "METHOD /path" ({item} is the
-	// item's id), Body its JSON ("{head}" in a value is the item's head sha). With As, it acts on a
-	// message As just wrote (Text), recorded as loopd's Slack layer will record it (piece 2 of
-	// docs/phases/08-orchestrator.md); with Message "last", on the previous one. Refused: it must
-	// be refused, a regexp on the error.
+	// item's id), Body its JSON (a value "{head}" is the item's head sha, "{id}" its id,
+	// "{last_channel}" and "{last_ts}" those of the last message sent the @orchestrator app). With As, it acts on a
+	// message As just sent the @orchestrator app (Text, Where: see tell_orchestrator), once loopd's
+	// Slack layer has recorded it; with Message "last", on the previous one. Refused: it must be
+	// refused, a regexp on the error.
+	// tell_orchestrator: As sends the @orchestrator app Text, Where: "dm" (default, a DM),
+	// "thread" (a mention in Item's thread) or "loop" (a mention at #loop's top level); the step
+	// waits until loopd has recorded it.
 	Action string         `json:"action,omitempty"`
 	Body   map[string]any `json:"body,omitempty"`
+	Where  string         `json:"where,omitempty"`
 
 	Expect
 }
@@ -304,9 +309,8 @@ type player struct {
 	items map[string]itemRef
 	plans map[string]int64
 	ctx   context.Context
-	// the messages orchestrator steps act on: how many, and the last one ("<channel>/<ts>")
-	orchMsgs int
-	lastMsg  string
+	// the messages orchestrator steps act on: the last one ("<channel>/<ts>")
+	lastMsg string
 }
 
 func (p *player) ref(alias string) (itemRef, error) {
@@ -660,6 +664,9 @@ func (p *player) step(st Step) error {
 		return p.planSlack(st)
 	case "orchestrator":
 		return p.orchestrate(st)
+	case "tell_orchestrator":
+		_, err := p.tellOrchestrator(st)
+		return err
 	}
 	return fmt.Errorf("unknown step %q", st.Do)
 }
@@ -684,24 +691,30 @@ func (p *player) orchestrate(st Step) error {
 			return err
 		}
 		for k, v := range body {
-			if v == "{head}" {
+			switch v {
+			case "{head}":
 				body[k] = d.Item.HeadSHA
+			case "{id}":
+				body[k] = r.id
 			}
+		}
+	}
+	// The message the last step sent the @orchestrator app, for a reply in its thread.
+	channel, ts, _ := strings.Cut(p.lastMsg, "/")
+	for k, v := range body {
+		switch v {
+		case "{last_channel}":
+			body[k] = channel
+		case "{last_ts}":
+			body[k] = ts
 		}
 	}
 	var hdr map[string]string
 	if st.As != "" {
 		if st.Message != "last" {
-			user, err := userID(st.As)
-			if err != nil {
+			if _, err := p.tellOrchestrator(st); err != nil {
 				return err
 			}
-			p.orchMsgs++
-			ts := fmt.Sprintf("%d.%06d", Start.Unix(), p.orchMsgs)
-			if err := p.s.Store.RecordSlackMessage(p.ctx, slack.ChannelLoop, ts, user, st.Text); err != nil {
-				return err
-			}
-			p.lastMsg = slack.ChannelLoop + "/" + ts
 		}
 		hdr = map[string]string{api.OnBehalfHeader: p.lastMsg}
 	}
@@ -720,6 +733,54 @@ func (p *player) orchestrate(st Step) error {
 		return fmt.Errorf("orchestrator %s: refused with %q, want /%s/", st.Action, err, st.Refused)
 	}
 	return nil
+}
+
+// tellOrchestrator sends the @orchestrator app a message through the fake Slack and waits until
+// loopd's Slack layer has recorded it; p.lastMsg is then "<channel>/<ts>".
+func (p *player) tellOrchestrator(st Step) (string, error) {
+	user, err := userID(st.As)
+	if err != nil {
+		return "", err
+	}
+	var channel, ts string
+	switch st.Where {
+	case "", "dm":
+		channel = slackfake.DMChannel(OrchApp, user)
+		ts, err = p.s.Slack.DM(OrchApp, user, "", st.Text)
+	case "loop":
+		channel = slack.ChannelLoop
+		ts, err = p.s.Slack.MentionApp(OrchApp, user, channel, "", st.Text)
+	case "thread":
+		r, rerr := p.ref(st.Item)
+		if rerr != nil {
+			return "", rerr
+		}
+		thread := p.s.Thread(r.id)
+		if thread == "" {
+			return "", fmt.Errorf("%s has no thread yet", st.Item)
+		}
+		channel = slack.ChannelLoop
+		ts, err = p.s.Slack.MentionApp(OrchApp, user, channel, thread, st.Text)
+	default:
+		return "", fmt.Errorf("where %q: use dm, loop or thread", st.Where)
+	}
+	if err != nil {
+		return "", err
+	}
+	err = eventually(10*time.Second, func() error {
+		msgs, err := p.s.Store.OrchMessages(p.ctx, 0, 0)
+		if err != nil {
+			return err
+		}
+		for _, m := range msgs {
+			if m.Data["channel"] == channel && m.Data["ts"] == ts {
+				return nil
+			}
+		}
+		return errors.New("loopd has not recorded the message to the orchestrator")
+	})
+	p.lastMsg = channel + "/" + ts
+	return ts, err
 }
 
 func (p *player) add(st Step) error {
@@ -893,7 +954,7 @@ func (p *player) press(st Step) error {
 		msgs := p.s.Slack.Messages()
 		for i := len(msgs) - 1; i >= 0; i-- {
 			m := msgs[i]
-			if m.User != slackfake.BotUser || !hasElement(m, st.Button) {
+			if m.User != slackfake.BotUser && m.User != OrchUser || !hasElement(m, st.Button) {
 				continue
 			}
 			if st.Text != "" {

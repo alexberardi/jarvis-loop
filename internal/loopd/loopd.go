@@ -55,6 +55,11 @@ type Slack struct {
 	TickEvery time.Duration
 	// Sleep waits between Slack retries and reconnects (default: real sleeps).
 	Sleep func(context.Context, time.Duration) error
+	// Orchestrator, when set, are the @orchestrator app's tokens (docs/phases/08-orchestrator.md):
+	// it runs beside the bot with its own socket. nil: off, and the bot is as without it.
+	Orchestrator *slack.Tokens
+	// OrchestratorBatch is the window in which its escalations share a message (default 2 minutes).
+	OrchestratorBatch time.Duration
 }
 
 // StartSlack runs the Slack layer until ctx ends: the bot (event fan-out, timers, control
@@ -70,12 +75,35 @@ func StartSlack(ctx context.Context, bg *sync.WaitGroup, st *store.Store, c Slac
 	if c.Sleep != nil {
 		botAPI.Sleep, appAPI.Sleep = c.Sleep, c.Sleep
 	}
+	var orch *slack.Orchestrator
+	var orchSock *slack.Socket
+	if c.Orchestrator != nil {
+		olg := c.Log.With("component", "slack-orchestrator")
+		oBot := slack.NewAPI(c.BaseURL, c.Orchestrator.Bot, slack.Channels{slack.ChannelLoop, slack.ChannelDigest, slack.ChannelPlan, slack.DMs})
+		oApp := slack.NewAPI(c.BaseURL, c.Orchestrator.App, nil)
+		if c.Sleep != nil {
+			oBot.Sleep, oApp.Sleep = c.Sleep, c.Sleep
+		}
+		var err error
+		if orch, err = slack.NewOrchestrator(slack.OrchestratorConfig{Store: st, API: oBot, Clock: c.Clock, Log: olg, Sleep: c.Sleep,
+			BatchDelay: c.OrchestratorBatch, TickEvery: c.TickEvery}); err != nil {
+			return nil, err
+		}
+		orchSock = &slack.Socket{Open: oApp.OpenConnection, OnEnvelope: orch.HandleEnvelope, Log: olg, PingEvery: 30 * time.Second, Sleep: c.Sleep}
+	}
 	bot, err := slack.New(slack.Config{Store: st, API: botAPI, Clock: c.Clock, Log: slg, LinkBase: c.LinkBase,
-		Repos: c.Repos, Aliases: c.Aliases, TickEvery: c.TickEvery, Sleep: c.Sleep})
+		Repos: c.Repos, Aliases: c.Aliases, TickEvery: c.TickEvery, Sleep: c.Sleep, Orchestrator: orch})
 	if err != nil {
 		return nil, err
 	}
 	bot.Attach()
+	if orch != nil {
+		orch.Attach()
+		bg.Add(2)
+		go func() { defer bg.Done(); orch.Run(ctx) }()
+		go func() { defer bg.Done(); orchSock.Run(ctx) }()
+		slg.Info("slack orchestrator on", "channels", "#loop, #loop-digest, #plan, DMs")
+	}
 	sock := &slack.Socket{Open: appAPI.OpenConnection, OnEnvelope: bot.HandleEnvelope, OnCommand: bot.HandleCommand,
 		OnLate: bot.Late, Log: slg, PingEvery: 30 * time.Second, Sleep: c.Sleep}
 	bg.Add(2)

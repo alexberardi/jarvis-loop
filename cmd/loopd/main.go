@@ -49,6 +49,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	boardAddr := fs.String("board-addr", "", "a second listener serving only the read-only board at /board (e.g. 0.0.0.0:7790, the LAN); off when empty")
 	slackWorkspace := fs.String("slack-workspace", "", "the Slack workspace's address (https://<team>.slack.com), for the board's links to item threads; none without it")
 	slackEnv := fs.String("slack-env", "", "Slack env file, 0600, with SLACK_BOT_TOKEN and SLACK_APP_TOKEN; Slack is off without it")
+	orchEnv := fs.String("orchestrator-slack-env", "", "the @orchestrator Slack app's env file (docs/slack/orchestrator-manifest.yml), 0600, like --slack-env's; default: "+orchestratorEnvName+" next to --slack-env's file, the app off when it is absent; \"off\" turns it off")
 	slackLink := fs.String("slack-link", "", "loopd's address as the Slack reader reaches it (LAN), for links to long text; default: point at `loop show`")
 	reposFlag := fs.String("repos", "", "the repos the loop works on, as owner/name slugs, comma-separated: the only repos triage may give an item that has none, and the ones `/loop add` recognises by name")
 	reposFile := fs.String("repos-file", "", "a file of repos, one owner/name slug per line, optionally followed by ':' and comma-separated aliases (`alexberardi/jarvis-node-mobile: mobile, node app`); '#' starts a comment. Added to --repos")
@@ -101,6 +102,10 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 			return fmt.Errorf("slack: %w", err)
 		}
 	}
+	orchToks, err := orchestratorTokens(*slackEnv, *orchEnv, slackToks)
+	if err != nil {
+		return fmt.Errorf("orchestrator slack: %w", err)
+	}
 	st, err := store.Open(expand(*data), clock.Real{})
 	if err != nil {
 		return fmt.Errorf("store: %w", err)
@@ -149,7 +154,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	defer stopSlack()
 	if *slackEnv != "" {
 		if _, err := loopd.StartSlack(sctx, &bg, st, loopd.Slack{BaseURL: slack.DefaultBaseURL, Tokens: slackToks,
-			LinkBase: *slackLink, Repos: repos, Aliases: aliases, Clock: clock.Real{}, Log: log}); err != nil {
+			LinkBase: *slackLink, Repos: repos, Aliases: aliases, Clock: clock.Real{}, Log: log, Orchestrator: orchToks}); err != nil {
 			ln.Close()
 			if boardLn != nil {
 				boardLn.Close()
@@ -214,6 +219,39 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 // handler serves the API, plus the status page at / and its form at /ui/control, and the board.
 func handler(st *store.Store, toks *api.Tokens, log *slog.Logger, board web.BoardConfig) http.Handler {
 	return loopd.Handler(st, toks, log, board)
+}
+
+// orchestratorEnvName is the @orchestrator app's env file, next to the loop bot's.
+const orchestratorEnvName = "orchestrator-slack.env"
+
+// orchestratorTokens reads the @orchestrator app's tokens (--orchestrator-slack-env): by default
+// from orchestratorEnvName next to slackEnv's file, the app off (nil) when that file is absent or
+// Slack is off; an explicit file must exist. Its tokens must be another app's than the loop bot's.
+func orchestratorTokens(slackEnv, orchEnv string, loop slack.Tokens) (*slack.Tokens, error) {
+	if orchEnv == "off" {
+		return nil, nil
+	}
+	if slackEnv == "" {
+		if orchEnv != "" {
+			return nil, errors.New("--orchestrator-slack-env needs --slack-env (the loop bot)")
+		}
+		return nil, nil
+	}
+	path := expand(orchEnv)
+	if orchEnv == "" {
+		path = filepath.Join(filepath.Dir(expand(slackEnv)), orchestratorEnvName)
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+	}
+	t, err := slack.LoadEnv(path)
+	if err != nil {
+		return nil, err
+	}
+	if t.Bot == loop.Bot || t.App == loop.App {
+		return nil, fmt.Errorf("%s holds the loop bot's own token: the orchestrator is a second Slack app, with its own", path)
+	}
+	return &t, nil
 }
 
 var slugRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)

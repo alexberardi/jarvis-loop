@@ -338,9 +338,8 @@ func (s *Store) OrchEscalate(ctx context.Context, actor string, id int64, text, 
 				}
 			}
 		}
-		out = Event{ItemID: id, Actor: actor, Kind: KindOrchEscalated, Data: map[string]any{
-			"text": strings.TrimSpace(text), "recommendation": strings.TrimSpace(recommendation), "reason": r, "approval": approval}}
-		return s.event(tx, out)
+		return s.recordEvent(tx, &out, Event{ItemID: id, Actor: actor, Kind: KindOrchEscalated, Data: map[string]any{
+			"text": strings.TrimSpace(text), "recommendation": strings.TrimSpace(recommendation), "reason": r, "approval": approval}})
 	})
 	if err != nil {
 		return out, s.refuse(ctx, actor, id, "escalate", err)
@@ -393,8 +392,7 @@ func (s *Store) OrchNote(ctx context.Context, actor, text, reason string) (Event
 		if strings.TrimSpace(text) == "" {
 			return errf(pipeline.CodeMissingField, "text is required")
 		}
-		out = Event{Actor: actor, Kind: KindOrchNote, Data: map[string]any{"text": strings.TrimSpace(text), "reason": r}}
-		return s.event(tx, out)
+		return s.recordEvent(tx, &out, Event{Actor: actor, Kind: KindOrchNote, Data: map[string]any{"text": strings.TrimSpace(text), "reason": r}})
 	})
 	return out, err
 }

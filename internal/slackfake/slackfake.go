@@ -26,6 +26,27 @@ import (
 // BotUser is the user id messages posted with the bot token are recorded under.
 const BotUser = "BOT"
 
+// App is a second Slack app in the workspace (the @orchestrator, docs/phases/08-orchestrator.md):
+// calls with its bot token post as BotUser, its app token opens its own Socket Mode connection, and
+// people can mention it or DM it. Calls with any other token are the loop bot's.
+type App struct {
+	Name     string
+	BotToken string
+	AppToken string
+	BotUser  string
+}
+
+// socket is one app's Socket Mode side: its latest connection and the ones waiting to be taken.
+type socket struct {
+	live   *websocket.Conn // the latest client connection (injections go there)
+	liveCh chan struct{}   // closed when a connection is live
+	conns  chan *websocket.Conn
+}
+
+func newSocket() *socket {
+	return &socket{liveCh: make(chan struct{}), conns: make(chan *websocket.Conn, 8)}
+}
+
 // Call is one Web API call as the fake received it.
 type Call struct {
 	Seq    int            `json:"seq"`
@@ -65,13 +86,13 @@ type Server struct {
 	nextTS   int
 	fail     map[string][]string // method -> error codes to answer next, in order
 	opens    int
-	live     *websocket.Conn // the latest client connection (injections go there)
-	liveCh   chan struct{}   // closed when a connection is live
+	main     *socket // the loop bot's
+	apps     []App   // the other apps (AddApp)
+	sockets  map[string]*socket
 	waiting  map[string]chan map[string]any
 	eventSeq int
 
-	conns chan *websocket.Conn
-	acks  chan map[string]any
+	acks chan map[string]any
 }
 
 // New starts a fake Slack on a loopback port.
@@ -81,11 +102,12 @@ func New() *Server {
 
 // NewAt starts a fake Slack listening on addr (loopback).
 func NewAt(addr string) *Server {
-	f := &Server{fail: map[string][]string{}, conns: make(chan *websocket.Conn, 8), acks: make(chan map[string]any, 256),
-		waiting: map[string]chan map[string]any{}, liveCh: make(chan struct{})}
+	f := &Server{fail: map[string][]string{}, acks: make(chan map[string]any, 256),
+		waiting: map[string]chan map[string]any{}, main: newSocket(), sockets: map[string]*socket{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/{method}", f.api)
 	mux.HandleFunc("/ws", f.ws)
+	mux.HandleFunc("/ws/{app}", f.ws)
 	f.srv = httptest.NewUnstartedServer(mux)
 	if addr != "127.0.0.1:0" {
 		ln, err := net.Listen("tcp", addr)
@@ -101,8 +123,10 @@ func NewAt(addr string) *Server {
 // Close stops the server and drops the connections.
 func (f *Server) Close() {
 	f.mu.Lock()
-	if f.live != nil {
-		f.live.CloseNow()
+	for _, k := range append([]*socket{f.main}, f.socketList()...) {
+		if k.live != nil {
+			k.live.CloseNow()
+		}
 	}
 	f.mu.Unlock()
 	f.srv.CloseClientConnections()
@@ -114,6 +138,42 @@ func (f *Server) URL() string { return f.srv.URL }
 
 // BaseURL is the Web API base, for slack.NewAPI.
 func (f *Server) BaseURL() string { return f.srv.URL + "/api/" }
+
+// AddApp adds a second app to the workspace (before the client connects).
+func (f *Server) AddApp(a App) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.apps = append(f.apps, a)
+	f.sockets[a.Name] = newSocket()
+}
+
+func (f *Server) socketList() []*socket {
+	var out []*socket
+	for _, a := range f.apps {
+		out = append(out, f.sockets[a.Name])
+	}
+	return out
+}
+
+// appOf is the app an Authorization header's token belongs to, or nil for the loop bot's.
+func (f *Server) appOf(auth string) *App {
+	for i, a := range f.apps {
+		if auth == "Bearer "+a.BotToken || auth == "Bearer "+a.AppToken {
+			return &f.apps[i]
+		}
+	}
+	return nil
+}
+
+// app is the app called name, or nil.
+func (f *Server) app(name string) *App {
+	for i, a := range f.apps {
+		if a.Name == name {
+			return &f.apps[i]
+		}
+	}
+	return nil
+}
 
 func (f *Server) nextSeq() int {
 	f.seq++
@@ -159,14 +219,18 @@ func (f *Server) api(w http.ResponseWriter, r *http.Request) {
 	if method == "apps.connections.open" {
 		f.opens++
 	}
+	poster, wsPath := BotUser, "/ws"
+	if a := f.appOf(r.Header.Get("Authorization")); a != nil {
+		poster, wsPath = a.BotUser, "/ws/"+a.Name
+	}
 	str := func(k string) string { s, _ := body[k].(string); return s }
 	if code == "" {
 		switch method {
 		case "chat.postMessage":
-			f.msgs = append(f.msgs, &Message{Seq: seq, Channel: str("channel"), TS: ts, ThreadTS: str("thread_ts"), User: BotUser,
+			f.msgs = append(f.msgs, &Message{Seq: seq, Channel: str("channel"), TS: ts, ThreadTS: str("thread_ts"), User: poster,
 				Kind: "message", Text: str("text"), Blocks: blocksFrom(body["blocks"])})
 		case "chat.postEphemeral":
-			f.msgs = append(f.msgs, &Message{Seq: seq, Channel: str("channel"), TS: ts, ThreadTS: str("thread_ts"), User: BotUser,
+			f.msgs = append(f.msgs, &Message{Seq: seq, Channel: str("channel"), TS: ts, ThreadTS: str("thread_ts"), User: poster,
 				To: str("user"), Kind: "ephemeral", Text: str("text"), Blocks: blocksFrom(body["blocks"])})
 		case "chat.update":
 			m := f.find(str("channel"), str("ts"))
@@ -217,7 +281,9 @@ func (f *Server) api(w http.ResponseWriter, r *http.Request) {
 	}
 	switch method {
 	case "apps.connections.open":
-		json.NewEncoder(w).Encode(map[string]any{"ok": true, "url": "ws" + strings.TrimPrefix(f.srv.URL, "http") + "/ws"})
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "url": "ws" + strings.TrimPrefix(f.srv.URL, "http") + wsPath})
+	case "auth.test":
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "user_id": poster})
 	case "chat.postMessage":
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": ts, "channel": body["channel"]})
 	default:
@@ -232,24 +298,32 @@ func (f *Server) ws(w http.ResponseWriter, r *http.Request) {
 	}
 	c.SetReadLimit(4 << 20)
 	f.mu.Lock()
-	f.live = c
+	k := f.main
+	if name := r.PathValue("app"); name != "" {
+		if k = f.sockets[name]; k == nil {
+			f.mu.Unlock()
+			c.Close(websocket.StatusPolicyViolation, "no such app")
+			return
+		}
+	}
+	k.live = c
 	select {
-	case <-f.liveCh:
+	case <-k.liveCh:
 	default:
-		close(f.liveCh)
+		close(k.liveCh)
 	}
 	f.mu.Unlock()
 	select {
-	case f.conns <- c:
+	case k.conns <- c:
 	default:
 	}
 	for {
 		_, data, err := c.Read(context.Background())
 		if err != nil {
 			f.mu.Lock()
-			if f.live == c {
-				f.live = nil
-				f.liveCh = make(chan struct{})
+			if k.live == c {
+				k.live = nil
+				k.liveCh = make(chan struct{})
 			}
 			f.mu.Unlock()
 			return
@@ -318,7 +392,7 @@ func (f *Server) OpenCount() int {
 // NextConn waits for the client's next WebSocket connection.
 func (f *Server) NextConn(timeout time.Duration) (*websocket.Conn, error) {
 	select {
-	case c := <-f.conns:
+	case c := <-f.main.conns:
 		return c, nil
 	case <-time.After(timeout):
 		return nil, errors.New("slackfake: the client never connected")
@@ -343,8 +417,23 @@ func (f *Server) NextAck(timeout time.Duration) (map[string]any, error) {
 
 // WaitConnected waits until a client holds a live Socket Mode connection, and greets it.
 func (f *Server) WaitConnected(timeout time.Duration) error {
+	return f.waitConnected(f.main, timeout)
+}
+
+// WaitAppConnected is WaitConnected for an app added with AddApp.
+func (f *Server) WaitAppConnected(name string, timeout time.Duration) error {
 	f.mu.Lock()
-	ch := f.liveCh
+	k := f.sockets[name]
+	f.mu.Unlock()
+	if k == nil {
+		return fmt.Errorf("slackfake: no app %q", name)
+	}
+	return f.waitConnected(k, timeout)
+}
+
+func (f *Server) waitConnected(k *socket, timeout time.Duration) error {
+	f.mu.Lock()
+	ch := k.liveCh
 	f.mu.Unlock()
 	select {
 	case <-ch:
@@ -354,9 +443,13 @@ func (f *Server) WaitConnected(timeout time.Duration) error {
 	}
 }
 
-// deliver sends an envelope over the live connection and waits for its ack.
+// deliver sends an envelope over the loop bot's live connection and waits for its ack.
 func (f *Server) deliver(typ string, payload any, timeout time.Duration) (map[string]any, error) {
-	if err := f.WaitConnected(timeout); err != nil {
+	return f.deliverOn(f.main, typ, payload, timeout)
+}
+
+func (f *Server) deliverOn(k *socket, typ string, payload any, timeout time.Duration) (map[string]any, error) {
+	if err := f.waitConnected(k, timeout); err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
@@ -364,7 +457,7 @@ func (f *Server) deliver(typ string, payload any, timeout time.Duration) (map[st
 	id := fmt.Sprintf("env-%d", f.eventSeq)
 	ch := make(chan map[string]any, 1)
 	f.waiting[id] = ch
-	c := f.live
+	c := k.live
 	f.mu.Unlock()
 	if c == nil {
 		return nil, errors.New("slackfake: no Socket Mode connection")
@@ -399,18 +492,84 @@ func (f *Server) Mention(user, channel, threadTS, text string) (string, error) {
 }
 
 func (f *Server) message(user, channel, threadTS, text, typ string) (string, error) {
+	return f.post(user, channel, threadTS, text, typ, "")
+}
+
+// post records a person's message and delivers it as Slack would: to the loop bot as typ (unless
+// it is a DM), and to every other app as message.channels; to the app called mentioned also as an
+// app_mention, and only to it in its DMs.
+func (f *Server) post(user, channel, threadTS, text, typ, mentioned string) (string, error) {
 	f.mu.Lock()
 	seq := f.nextSeq()
 	ts := f.newTS()
 	f.msgs = append(f.msgs, &Message{Seq: seq, Channel: channel, TS: ts, ThreadTS: threadTS, User: user, Kind: "message", Text: text})
 	evID := fmt.Sprintf("Ev%06d", seq)
+	apps := append([]App(nil), f.apps...)
 	f.mu.Unlock()
-	ev := map[string]any{"type": typ, "channel": channel, "user": user, "text": text, "ts": ts}
-	if threadTS != "" {
-		ev["thread_ts"] = threadTS
+	event := func(typ string) map[string]any {
+		ev := map[string]any{"type": typ, "channel": channel, "user": user, "text": text, "ts": ts}
+		if threadTS != "" {
+			ev["thread_ts"] = threadTS
+		}
+		if strings.HasPrefix(channel, "D") {
+			ev["channel_type"] = "im"
+		}
+		id := evID
+		if typ == "app_mention" && mentioned != "" {
+			id += "M" // its own event, as Slack sends it: not a retry of the message
+		}
+		return map[string]any{"event_id": id, "event": ev}
 	}
-	_, err := f.deliver("events_api", map[string]any{"event_id": evID, "event": ev}, InjectTimeout)
-	return ts, err
+	dm := strings.HasPrefix(channel, "D")
+	if !dm {
+		if _, err := f.deliver("events_api", event(typ), InjectTimeout); err != nil {
+			return ts, err
+		}
+	}
+	for _, a := range apps {
+		if dm && a.Name != mentioned {
+			continue
+		}
+		f.mu.Lock()
+		k := f.sockets[a.Name]
+		f.mu.Unlock()
+		if a.Name == mentioned && !dm {
+			if _, err := f.deliverOn(k, "events_api", event("app_mention"), InjectTimeout); err != nil {
+				return ts, err
+			}
+		}
+		if _, err := f.deliverOn(k, "events_api", event("message"), InjectTimeout); err != nil {
+			return ts, err
+		}
+	}
+	return ts, nil
+}
+
+// MentionApp is a person's message mentioning the app called name (AddApp) in a channel, in a
+// thread when threadTS is set. The mention is put in front of the text.
+func (f *Server) MentionApp(name, user, channel, threadTS, text string) (string, error) {
+	f.mu.Lock()
+	a := f.app(name)
+	f.mu.Unlock()
+	if a == nil {
+		return "", fmt.Errorf("slackfake: no app %q", name)
+	}
+	return f.post(user, channel, threadTS, "<@"+a.BotUser+"> "+text, "message", name)
+}
+
+// DMChannel is the direct-message channel between user and the app called name.
+func DMChannel(name, user string) string { return "D" + strings.ToUpper(name) + user }
+
+// DM is a person's direct message to the app called name (AddApp), in a thread of the DM when
+// threadTS is set.
+func (f *Server) DM(name, user, threadTS, text string) (string, error) {
+	f.mu.Lock()
+	a := f.app(name)
+	f.mu.Unlock()
+	if a == nil {
+		return "", fmt.Errorf("slackfake: no app %q", name)
+	}
+	return f.post(user, DMChannel(name, user), threadTS, text, "message", name)
 }
 
 // ErrNoElement is returned when a press names an element the message does not have.
@@ -477,14 +636,22 @@ func (f *Server) action(user, channel, ts, actionID, value string) error {
 		act["value"] = el["value"]
 	}
 	thread := m.ThreadTS
+	blocks := blocksFrom(m.Blocks)
+	// The press goes to the app that posted the message.
+	k := f.main
+	for _, a := range f.apps {
+		if m.User == a.BotUser {
+			k = f.sockets[a.Name]
+		}
+	}
 	f.nextSeq()
 	f.mu.Unlock()
 	payload := map[string]any{
 		"type": "block_actions", "user": map[string]any{"id": user}, "channel": map[string]any{"id": channel},
 		"container": map[string]any{"type": "message", "channel_id": channel, "message_ts": ts, "thread_ts": thread},
-		"message":   map[string]any{"ts": ts, "thread_ts": thread}, "actions": []any{act},
+		"message":   map[string]any{"ts": ts, "thread_ts": thread, "blocks": blocks}, "actions": []any{act},
 	}
-	_, err := f.deliver("interactive", payload, InjectTimeout)
+	_, err := f.deliverOn(k, "interactive", payload, InjectTimeout)
 	return err
 }
 

@@ -19,6 +19,9 @@ func ChannelName(id string) string {
 	case slack.ChannelPlan:
 		return "#plan"
 	}
+	if user, ok := strings.CutPrefix(id, slackfake.DMChannel(OrchApp, "")); ok {
+		return "DM: " + DisplayName(user) + " ↔ orchestrator"
+	}
 	return "#" + id + " (not an allowed channel)"
 }
 
@@ -27,6 +30,8 @@ func DisplayName(id string) string {
 	switch id {
 	case slackfake.BotUser:
 		return "jarvis-loop"
+	case OrchUser:
+		return "orchestrator"
 	case slack.Approver:
 		return "you"
 	case Other:

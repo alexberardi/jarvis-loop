@@ -55,6 +55,9 @@ const (
 	OrchName = "loop"
 	// Other is the Slack member who is not the approver.
 	Other = "U0SANDBOXOTHER"
+	// OrchApp is the @orchestrator Slack app's name in the fake, OrchUser its bot user.
+	OrchApp  = "orchestrator"
+	OrchUser = "U0SANDBOXORCH"
 	// SlackWorkspace is loopd's --slack-workspace in the sandbox, for the board's thread links.
 	SlackWorkspace = "https://sandbox.slack.com"
 )
@@ -222,7 +225,8 @@ func StartStack(opts Options) (st *Stack, err error) {
 	s.boardTok = randToken("sbx-board-")
 	orchTok := randToken("sbx-orch-")
 	slackToks := slack.Tokens{Bot: randToken("xoxb-sandbox-"), App: randToken("xapp-sandbox-")}
-	s.Secrets = []string{userTok, runnerTok, handTok, slackToks.Bot, slackToks.App, s.boardTok, orchTok}
+	orchSlack := slack.Tokens{Bot: randToken("xoxb-sandbox-orch-"), App: randToken("xapp-sandbox-orch-")}
+	s.Secrets = []string{userTok, runnerTok, handTok, slackToks.Bot, slackToks.App, s.boardTok, orchTok, orchSlack.Bot, orchSlack.App}
 	tokPath := filepath.Join(dir, "tokens")
 	tokText := fmt.Sprintf("%s\tuser\t%s\n%s\trunner\t%s\n%s\trunner\t%s\n%s\tboard\tphone\n%s\torchestrator\t%s\n",
 		userTok, UserName, runnerTok, RunnerName, handTok, HandRunner, s.boardTok, orchTok, OrchName)
@@ -274,15 +278,19 @@ func StartStack(opts Options) (st *Stack, err error) {
 		}()
 	}
 	s.Slack = slackfake.New()
+	s.Slack.AddApp(slackfake.App{Name: OrchApp, BotToken: orchSlack.Bot, AppToken: orchSlack.App, BotUser: OrchUser})
 	tick := time.Second
 	if !opts.RealClock {
 		tick = 20 * time.Millisecond // a moved fake clock takes effect at once
 	}
 	if s.Bot, err = loopd.StartSlack(s.ctx, &s.bg, s.Store, loopd.Slack{BaseURL: s.Slack.BaseURL(), Tokens: slackToks,
-		Repos: Repos, Aliases: Aliases, Clock: clk, Log: log, TickEvery: tick}); err != nil {
+		Repos: Repos, Aliases: Aliases, Clock: clk, Log: log, TickEvery: tick, Orchestrator: &orchSlack}); err != nil {
 		return nil, err
 	}
 	if err := s.Slack.WaitConnected(10 * time.Second); err != nil {
+		return nil, err
+	}
+	if err := s.Slack.WaitAppConnected(OrchApp, 10*time.Second); err != nil {
 		return nil, err
 	}
 
