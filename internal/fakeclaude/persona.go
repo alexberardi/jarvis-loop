@@ -17,8 +17,9 @@ import (
 // not read the skill: the scenarios test how the loop carries out the actions the skill
 // prescribes (loopd's limits, refusals, dedup and events), not the model's judgment.
 
-// The loop's own repo, where process tickets go.
-const loopRepo = "alexberardi/jarvis-loop"
+// The loop's own repo, where process tickets go, by its bare name: loopd resolves it to the
+// configured slug (sandbox/jarvis-loop in the harness).
+const loopRepo = "jarvis-loop"
 
 // The persona's standing answers (the skill's "Answers you may give").
 const (

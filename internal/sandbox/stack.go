@@ -245,6 +245,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 	// loopd's --repos, and the built-in hold rules pointed at the scratch repos: jarvis-server's
 	// at demo, jarvis-loop's at the stand-in for jarvis-loop.
 	s.Store.SetRepos(Repos)
+	s.Store.SetAliases(Aliases)
 	s.Store.SetDefaultHoldRules(SandboxHoldRules())
 	s.Store.SetLoopRepo(LoopSlug)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

@@ -24,6 +24,7 @@ import (
 const usage = `usage: loop <command> [args]
 
   add "<title>" [--ask TEXT] [--repo REPO] [--priority P1-P5] [--source SRC] [--after 12,13]
+                              REPO: owner/name, the bare name or an alias; loopd stores the slug
   status [--stage STAGE] [--priority P]
   show <id>
   answer <id> "<text>"

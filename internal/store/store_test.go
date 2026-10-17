@@ -894,3 +894,46 @@ func TestQwenBuilderFallback(t *testing.T) {
 		}
 	}
 }
+
+// An item is stored with its repo's slug: a bare name or an alias (loop add --repo jarvis-server)
+// resolves to the configured repo, and a repo loopd is not configured with is refused. With no
+// repos configured, the name is kept as given.
+func TestAddItemResolvesRepo(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	if it, err := s.AddItem(ctx, user, NewItem{Title: "unconfigured", Repo: "whatever"}); err != nil || it.Repo != "whatever" {
+		t.Fatalf("no repos configured: %+v %v", it, err)
+	}
+	s.SetRepos([]string{"alexberardi/jarvis-server", "alexberardi/jarvis-node-mobile", "alexberardi/fork", "someone/fork"})
+	s.SetAliases(map[string]string{"mobile": "alexberardi/jarvis-node-mobile", "node app": "alexberardi/jarvis-node-mobile"})
+	for repo, want := range map[string]string{
+		"jarvis-server":             "alexberardi/jarvis-server",
+		" Jarvis-Server ":           "alexberardi/jarvis-server",
+		"alexberardi/jarvis-server": "alexberardi/jarvis-server",
+		"ALEXBERARDI/jarvis-server": "alexberardi/jarvis-server",
+		"mobile":                    "alexberardi/jarvis-node-mobile",
+		"Node  App":                 "alexberardi/jarvis-node-mobile",
+		"someone/fork":              "someone/fork",
+		"":                          "", // routing picks it
+	} {
+		it, err := s.AddItem(ctx, user, NewItem{Title: "t " + repo, Repo: repo})
+		if err != nil || it.Repo != want {
+			t.Errorf("%q: %q %v", repo, it.Repo, err)
+			continue
+		}
+		if d, _ := s.GetItem(ctx, it.ID); d.Item.Repo != want {
+			t.Errorf("%q: stored %q", repo, d.Item.Repo)
+		}
+	}
+	for _, repo := range []string{"nope", "evil/jarvis-server", "fork"} {
+		if _, err := s.AddItem(ctx, user, NewItem{Title: "t", Repo: repo}); code(err) != pipeline.CodeInvalidField {
+			t.Errorf("%q: %v", repo, err)
+		}
+	}
+	if it, _, err := s.OrchAdd(ctx, orch, NewItem{Title: "o", Repo: "jarvis-server"}, "one failure", "why"); err != nil || it.Repo != "alexberardi/jarvis-server" {
+		t.Errorf("orchestrator add: %+v %v", it, err)
+	}
+	if _, _, err := s.OrchAdd(ctx, orch, NewItem{Title: "o2", Repo: "nope"}, "another failure", "why"); code(err) != pipeline.CodeInvalidField {
+		t.Errorf("orchestrator add, unknown repo: %v", err)
+	}
+}

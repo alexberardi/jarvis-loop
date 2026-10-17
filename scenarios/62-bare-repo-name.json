@@ -1,0 +1,21 @@
+{
+  "name": "bare-repo-name",
+  "about": "#127: loop add --repo with a bare name (jarvis-node-mobile), an alias (mobile) or a slug stores the configured slug, so the runner finds the repo; a repo loopd is not configured with is refused at add, not left for the runner to fail on. The build runs in the mobile repo.",
+  "stages": ["build"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Show the pairing code larger", "repo_as": "jarvis-node-mobile"},
+    {"do": "add", "item": "b", "title": "Bigger timer digits", "repo_as": "Mobile"},
+    {"do": "add", "item": "c", "title": "Fix the digest wording", "repo_as": "sandbox/demo"},
+    {"do": "add", "item": "x", "title": "A repo nobody configured", "repo_as": "jarvis-nope", "refused": "HTTP 400: .*jarvis-nope.* is not one loopd is configured with"},
+    {"do": "expect", "repo": {"a": "sandbox/jarvis-node-mobile", "b": "sandbox/jarvis-node-mobile", "c": "sandbox/demo"}},
+    {"do": "triage", "item": "a"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review"},
+    "repo": {"a": "sandbox/jarvis-node-mobile"},
+    "events": [{"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "count": 1}],
+    "agent_runs": {"build": 1}
+  }
+}

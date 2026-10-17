@@ -25,7 +25,7 @@
     {"do": "runner", "claims": "orchestrator"},
     {"do": "runner_idle"},
     {"do": "expect", "stage": {"a": "needs_you", "b": "needs_you", "#3": "triage"},
-     "repo": {"#3": "alexberardi/jarvis-loop"},
+     "repo": {"#3": "sandbox/jarvis-loop"},
      "events": [{"item": "#3", "kind": "orchestrator.added", "actor": "orchestrator", "data": {"signature": "^fatal: unable to create '.*': file exists\\.$"}, "count": 1},
                 {"item": "#3", "kind": "created", "data": {"priority": "^P1$"}}]},
 

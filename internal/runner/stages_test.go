@@ -224,7 +224,7 @@ func TestTriageContextFiles(t *testing.T) {
 	defer g.r.cleanup(g.ctx, ru, g.r.Log)
 	open := g.read(filepath.Join(ru.wt, ".loop", "context", "open-items.md"))
 	if !strings.Contains(open, fmt.Sprintf("| #%d | Fix the digest wording | review (queued) | alex/demo | #7 |", built)) ||
-		!strings.Contains(open, fmt.Sprintf("| #%d | Fix the digest wording (this item) | triage | demo |", it.ID)) {
+		!strings.Contains(open, fmt.Sprintf("| #%d | Fix the digest wording (this item) | triage | alex/demo |", it.ID)) {
 		t.Fatalf("open items:\n%s", open)
 	}
 	merged := g.read(filepath.Join(ru.wt, ".loop", "context", "merged-prs-demo.md"))

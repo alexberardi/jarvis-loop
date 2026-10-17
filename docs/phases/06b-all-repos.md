@@ -80,6 +80,12 @@ from config (`mobile`, `node app` → jarvis-node-mobile; `recipes app` → jarv
 unique). Only as a leading `[x]` or `x:` or a trailing `in x`, never words in the middle of the
 sentence. Table-tested.
 
+**`loop add --repo`** (and the API's `repo`, and the orchestrator's adds) take a slug, a configured
+alias, or a repo's bare name (`jarvis-server`, when only one configured repo has it), any case;
+loopd stores the configured slug and refuses a repo it is not configured with (400). With no
+`--repos` the name is kept as given. The runner's `Config.Repo` also matches a slug's name part,
+for rows stored with a bare name before this (#127).
+
 ### Hold rules for the new repos
 
 `HoldRule.repo` accepts a trailing `*` (e.g. `alexberardi/jarvis-cmd-*`). Defaults (globs from the

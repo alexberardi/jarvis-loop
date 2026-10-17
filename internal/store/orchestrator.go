@@ -292,6 +292,9 @@ func (s *Store) OrchAdd(ctx context.Context, actor string, n NewItem, signature,
 		if n.Source == "" {
 			n.Source = "finding"
 		}
+		if n.Repo, err = s.ResolveRepo(n.Repo); err != nil {
+			return err
+		}
 		if it, err = pipeline.NewItem(n.Title, n.Ask, n.Repo, n.Priority, n.Source, s.clock.Now()); err != nil {
 			return err
 		}
