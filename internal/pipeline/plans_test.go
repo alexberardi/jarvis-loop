@@ -375,7 +375,7 @@ func TestChooseWork(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			w, ok := ChooseWork(tc.ctl, tc.items, nil, tc.live, tc.turns, tc.req)
+			w, ok := ChooseWork(tc.ctl, tc.items, nil, tc.live, tc.turns, nil, tc.req)
 			var gotItem, gotTurn int64
 			if ok && w.Item != nil {
 				gotItem = w.Item.ID

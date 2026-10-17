@@ -1,0 +1,28 @@
+{
+  "name": "orchestrator-sweep",
+  "about": "The 15-minute sweep (docs/phases/08-orchestrator.md, \"Cost\"): with an item open, the first sweep starts a turn; the next, with nothing changed but the orchestrator's own note, starts none (no agent run: the skip is loopd's, before any model call); after the user changes the control, the next sweep starts one again.",
+  "stages": ["build", "orchestrate"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Polish the status page", "priority": "P3"},
+    {"do": "script", "for": "orchestrate", "play": "note"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "15m"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "events": [{"kind": "orchestrator.note", "actor": "orchestrator", "count": 1}]},
+    {"do": "clock", "advance": "15m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "agent_runs": {"orchestrate": 1}, "events": [{"kind": "orchestrate_claimed", "count": 1}]},
+    {"do": "control", "active_agents": 3},
+    {"do": "clock", "advance": "14m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "1m"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "triage"},
+    "events": [{"kind": "orchestrate_claimed", "count": 2}, {"kind": "orchestrate_done", "count": 2}],
+    "agent_runs": {"orchestrate": 2}
+  }
+}

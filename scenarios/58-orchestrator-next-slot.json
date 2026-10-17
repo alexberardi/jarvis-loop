@@ -1,0 +1,22 @@
+{
+  "name": "orchestrator-next-slot",
+  "about": "An orchestrate turn gets the next free slot (docs/phases/08-orchestrator.md, \"What it is\"): with a P1 item ready to build and the user's message to the orchestrator queued, the runner's one slot goes to the turn first, then to the P1. The message is in the turn's prompt.",
+  "stages": ["build", "orchestrate"],
+  "steps": [
+    {"do": "add", "item": "urgent", "title": "Main is red", "priority": "P1"},
+    {"do": "triage", "item": "urgent"},
+    {"do": "script", "item": "urgent", "play": "good"},
+    {"do": "script", "for": "orchestrate", "play": "note"},
+    {"do": "orchestrator_message", "text": "what's stuck?"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"urgent": "build"},
+     "events": [{"kind": "orchestrate_done", "data": {"actions": "^1$"}, "count": 1}]},
+    {"do": "runner", "claims": "urgent"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"urgent": "review"},
+    "agent_runs": {"orchestrate": 1, "build": 1}
+  }
+}

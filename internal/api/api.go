@@ -87,6 +87,8 @@ func New(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
 	route("POST /orchestrator/agents", orch, s.orchAgents)
 	route("POST /orchestrator/notes", orch, s.orchNote)
 	route("GET /orchestrator/notes", reads, s.orchNotebook)
+	route("GET /orchestrator/snapshot", reads, s.orchSnapshot)
+	route("POST /orchestrate/turns/{turn}/result", runner, s.orchTurnResult)
 	return Logged(log, mux)
 }
 
@@ -360,15 +362,15 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		Agent        string   `json:"agent"`
 		Capabilities []string `json:"capabilities"`
 		Stages       []string `json:"stages"`
-		// Kinds: item, plan (plan turns); empty is items only.
+		// Kinds: item, plan (plan turns), orchestrate; empty is items only.
 		Kinds []string `json:"kinds"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	for _, k := range body.Kinds {
-		if k != pipeline.WorkItem && k != pipeline.WorkPlan {
-			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kinds may be item and plan, got " + strconv.Quote(k)})
+		if k != pipeline.WorkItem && k != pipeline.WorkPlan && k != pipeline.WorkOrchestrate {
+			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kinds may be item, plan and orchestrate, got " + strconv.Quote(k)})
 			return
 		}
 	}
@@ -406,6 +408,10 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 	}
 	if c.Kind == pipeline.WorkPlan {
 		writeJSON(w, http.StatusOK, map[string]any{"kind": c.Kind, "plan": c.Plan, "turn": c.Turn, "lease": c.Lease})
+		return
+	}
+	if c.Kind == pipeline.WorkOrchestrate {
+		writeJSON(w, http.StatusOK, map[string]any{"kind": c.Kind, "stage": c.Stage, "orchestrate": c.Orch, "lease": c.Lease})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

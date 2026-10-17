@@ -17,7 +17,7 @@ const StageLand = "land"
 
 // RunnerStages are every stage a runner may claim: the agent stages, land, and plan (plan turns,
 // plan.go; never a default: a runner opts in).
-var RunnerStages = []string{StageTriage, StageBuild, StageReview, StageLand, StagePlan}
+var RunnerStages = []string{StageTriage, StageBuild, StageReview, StageLand, StagePlan, StageOrchestrate}
 
 // The runner's Verification footer on every PR it opens (PRBody). Land requires the heading and
 // the body to end with the trailer: the runner appends the footer after the agent's text, so an

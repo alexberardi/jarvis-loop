@@ -200,6 +200,10 @@ func (r *Runner) ClaimAndRunIn(ctx context.Context, stages []string) (bool, erro
 		r.planTurn(ctx, cl, agent)
 		return true, nil
 	}
+	if cl.Kind == pipeline.WorkOrchestrate {
+		r.orchestrateTurn(ctx, cl, agent)
+		return true, nil
+	}
 	r.work(ctx, cl, agent)
 	return true, nil
 }
@@ -249,6 +253,8 @@ type run struct {
 	turn   *pipeline.PlanTurn
 	resume string
 	maxRun time.Duration
+	// An orchestrate turn's (orchestrate.go); stage is StageOrchestrate.
+	orch *OrchTurn
 
 	// builder is who runs the agent: pipeline.BuilderQwen (OpenCode, a build run of a qwen item)
 	// or pipeline.BuilderClaude (every other run); pickBuilder sets it. qwenRequests are the
@@ -1036,7 +1042,7 @@ func (r *Runner) flushRefusals(ctx context.Context, ru *run) {
 			continue
 		}
 		ru.refusals++
-		if ru.refusals > 25 || ru.plan != nil {
+		if ru.refusals > 25 || ru.plan != nil || ru.orch != nil {
 			// The rest are in the run's log; 25 events are enough to see a pattern. A plan turn's
 			// stay there too: loopd's events API is per item.
 			continue

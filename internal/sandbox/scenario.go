@@ -53,7 +53,9 @@ type Step struct {
 	Play  string `json:"play,omitempty"`
 	File  string `json:"file,omitempty"`
 	Picks string `json:"picks,omitempty"` // the repo a triage run picks
-	// runner: which item the claim must take ("none": nothing)
+	// runner: which item the claim must take ("none": nothing, "orchestrator": an orchestrate
+	// turn). script with For "orchestrate" sets the orchestrator's play (no item);
+	// orchestrator_message is the user's message (Text) to it, about Item when set.
 	Claims string `json:"claims,omitempty"`
 	// land
 	Outcome string `json:"outcome,omitempty"`
@@ -88,6 +90,8 @@ type Step struct {
 	ActiveAgents  *int  `json:"active_agents,omitempty"`
 	MaxRunMinutes *int  `json:"max_run_minutes,omitempty"`
 	Stopped       *bool `json:"stopped,omitempty"`
+	// OrchTurnsPerDay is the orchestrator's daily cap of turns.
+	OrchTurnsPerDay *int `json:"orchestrator_turns_per_day,omitempty"`
 
 	// plans (docs/phases/07-planning.md), driven through the API: Plan is a plan's alias. plan
 	// starts one (title, priority, text); plan_say is the user's message; plan_turn is a fake
@@ -410,6 +414,10 @@ func (p *player) step(st Step) error {
 		}
 		return s.hand.Advance(p.ctx, r.id, "reproduced", map[string]string{"area": "sandbox", "size": "S", "risk": "normal", "resources": ""}, nil)
 	case "script":
+		if st.For == "orchestrate" {
+			b, _ := json.Marshal(map[string]string{"play": st.Play})
+			return os.WriteFile(filepath.Join(s.scripts, "orchestrator-orchestrate.json"), b, 0o644)
+		}
 		if st.Plan != "" {
 			id, err := p.planRef(st.Plan)
 			if err != nil {
@@ -433,12 +441,18 @@ func (p *player) step(st Step) error {
 			got = fmt.Sprintf("#%d", c.Item)
 		case c.Plan != 0:
 			got = fmt.Sprintf("a turn of P%d", c.Plan)
+		case c.Orch != 0:
+			got = fmt.Sprintf("orchestrate turn %d", c.Orch)
 		}
 		switch st.Claims {
 		case "":
 		case "none":
 			if got != "nothing" {
 				return fmt.Errorf("the runner claimed %s, want nothing", got)
+			}
+		case "orchestrator":
+			if c.Orch == 0 {
+				return fmt.Errorf("the runner claimed %s, want an orchestrate turn", got)
 			}
 		default:
 			if id, ok := p.plans[st.Claims]; ok {
@@ -654,9 +668,23 @@ func (p *player) step(st Step) error {
 		if st.Stopped != nil {
 			patch["stopped"] = *st.Stopped
 		}
+		if st.OrchTurnsPerDay != nil {
+			patch["orchestrator_turns_per_day"] = *st.OrchTurnsPerDay
+		}
 		return s.user.do("PUT", "/control", patch, nil)
 	case "expect", "wait":
 		return p.check(st.Expect)
+	case "orchestrator_message":
+		// The user's message to the orchestrator, as loopd's Slack layer will queue it (piece 2).
+		var ids []int64
+		if st.Item != "" {
+			r, err := p.ref(st.Item)
+			if err != nil {
+				return err
+			}
+			ids = append(ids, r.id)
+		}
+		return s.Store.QueueOrchestrate(p.ctx, pipeline.TriggerMessage, st.Text, ids...)
 	case "plan", "plan_say", "plan_turn", "plan_approve", "plan_drop", "plan_items":
 		return p.planStep(st)
 	case "plan_post", "plan_reply":

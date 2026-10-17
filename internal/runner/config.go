@@ -21,10 +21,14 @@ import (
 
 // Config is the runner's config file (0600: it holds the runner's loopd token).
 type Config struct {
-	LoopdURL     string   `json:"loopd_url"`
-	Token        string   `json:"token"`
-	Name         string   `json:"name"`
-	Capabilities []string `json:"capabilities"`
+	LoopdURL string `json:"loopd_url"`
+	Token    string `json:"token"`
+	// OrchestratorToken is loopd's orchestrator token (docs/decisions/2026-10-17-orchestrate-turns.md):
+	// a runner with stage orchestrate executes the orchestrator's actions with it. Like Token, no
+	// agent ever sees it (this file is a secret to every agent and verify step).
+	OrchestratorToken string   `json:"orchestrator_token,omitempty"`
+	Name              string   `json:"name"`
+	Capabilities      []string `json:"capabilities"`
 	// Slots is how many agent runs this runner works at once; loopd's active-agents number still
 	// caps the total. Land, with no agent, has its own lane next to them, one item at a time.
 	Slots int `json:"slots"`
@@ -345,6 +349,10 @@ func (c *Config) normalize() error {
 		return fmt.Errorf("config: name is required")
 	case len(c.Token) < 16:
 		return fmt.Errorf("config: token is missing or too short")
+	case slices.Contains(c.Stages, StageOrchestrate) && len(c.OrchestratorToken) < 16:
+		return fmt.Errorf("config: stage orchestrate needs orchestrator_token (loopd's orchestrator token)")
+	case c.OrchestratorToken != "" && c.OrchestratorToken == c.Token:
+		return fmt.Errorf("config: orchestrator_token must be the orchestrator's own token, not the runner's")
 	case c.Mode != ModeAuto && c.Mode != ModeStrict:
 		return fmt.Errorf("config: mode must be %q or %q", ModeAuto, ModeStrict)
 	case len(c.Repos) == 0:
