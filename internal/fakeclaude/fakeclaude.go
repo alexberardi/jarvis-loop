@@ -348,6 +348,11 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f.write(outside, "I got out\n")
 		f.bash("git push origin main")
 	}
+	// An item filed from a plan: the brief points at the plan's approved blueprint for the
+	// sections its piece refers to; read it, as an agent would.
+	if stage != "product" && stage != "engineering" && bytes.Contains(brief, []byte("`.loop/context/blueprint.md`")) {
+		f.bash("cat .loop/context/blueprint.md")
+	}
 	switch stage {
 	case "triage":
 		return f.triage(scenario, brief, sc)
