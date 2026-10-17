@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -65,6 +66,12 @@ type Store struct {
 	reposMu sync.RWMutex
 	repos   []string
 	rules   []pipeline.HoldRule // the built-in hold rules; nil: pipeline.DefaultHoldRules
+	// loopRepo is the loop's own repo (SetLoopRepo): a merge to it starts an orchestrate turn.
+	loopRepo string
+
+	// tickMu guards tickAt, when Sweep last ran OrchTick.
+	tickMu sync.Mutex
+	tickAt time.Time
 }
 
 // SetDefaultHoldRules replaces the built-in hold rules (what control's hold_rules means while the
@@ -276,6 +283,9 @@ func (s *Store) event(tx *sql.Tx, e Event) error {
 		return err
 	}
 	if e.ID, err = res.LastInsertId(); err != nil {
+		return err
+	}
+	if err := s.orchHook(tx, e); err != nil {
 		return err
 	}
 	// Subscribers get the event as a reader would see it (data round-tripped through JSON).
@@ -729,8 +739,8 @@ func (s *Store) loadControl(q interface {
 	var c pipeline.Control
 	var stopped int
 	var limits, rules string
-	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules FROM control WHERE id = 1`).
-		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules)
+	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules, orchestrator_turns_per_day FROM control WHERE id = 1`).
+		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules, &c.OrchTurnsPerDay)
 	if err != nil {
 		return c, err
 	}
@@ -768,8 +778,8 @@ func saveControl(tx *sql.Tx, c pipeline.Control, builtInRules bool) error {
 	if c.Stopped {
 		stopped = 1
 	}
-	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=? WHERE id = 1`,
-		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules))
+	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=?, orchestrator_turns_per_day=? WHERE id = 1`,
+		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules), c.OrchTurnsPerDay)
 	return err
 }
 
@@ -811,6 +821,8 @@ type ControlPatch struct {
 	MaxRunMinutes *int                 `json:"max_run_minutes"`
 	Limits        map[string]int       `json:"limits"`
 	HoldRules     *[]pipeline.HoldRule `json:"hold_rules"`
+	// OrchTurnsPerDay is the orchestrator's daily cap of turns.
+	OrchTurnsPerDay *int `json:"orchestrator_turns_per_day"`
 }
 
 // SetControl applies a patch to the control row and records it.
@@ -834,6 +846,9 @@ func (s *Store) SetControl(ctx context.Context, actor string, p ControlPatch) (p
 		}
 		if p.MaxRunMinutes != nil {
 			c.MaxRunMinutes = *p.MaxRunMinutes
+		}
+		if p.OrchTurnsPerDay != nil {
+			c.OrchTurnsPerDay = *p.OrchTurnsPerDay
 		}
 		for k, v := range p.Limits {
 			c.Limits[k] = v
@@ -869,6 +884,8 @@ type Claim struct {
 	Lease Lease              `json:"lease"`
 	Plan  *pipeline.Plan     `json:"plan,omitempty"`
 	Turn  *pipeline.PlanTurn `json:"turn,omitempty"`
+	// Orch is an orchestrate turn's (Kind orchestrate, stage "orchestrate").
+	Orch *OrchTurn `json:"orchestrate,omitempty"`
 }
 
 func newLeaseID() (string, error) {
@@ -914,6 +931,13 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		for range turnLeases {
 			snap = append(snap, pipeline.LiveLease{Stage: pipeline.PlanTurnStage})
 		}
+		running, err := orchTurnWith(tx, OrchRunning)
+		if err != nil {
+			return err
+		}
+		if running != nil {
+			snap = append(snap, pipeline.LiveLease{Stage: pipeline.OrchestrateStage})
+		}
 		waiting, err := waitingItems(tx)
 		if err != nil {
 			return err
@@ -926,9 +950,19 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		if err != nil {
 			return err
 		}
-		w, ok := pipeline.ChooseWork(ctl, waiting, deps, snap, turns, req)
+		var orch *pipeline.OrchCandidate
+		if slices.Contains(req.Kinds, pipeline.WorkOrchestrate) {
+			if orch, err = s.orchCandidate(tx, ctl); err != nil {
+				return err
+			}
+		}
+		w, ok := pipeline.ChooseWork(ctl, waiting, deps, snap, turns, orch, req)
 		if !ok {
 			return nil
+		}
+		if w.Orch != nil {
+			out, err = s.claimOrch(tx, runnerName, req.Agent, *w.Orch)
+			return err
 		}
 		if w.Turn != nil {
 			out, err = s.claimTurn(tx, runnerName, req.Agent, *w.Turn)
@@ -992,17 +1026,30 @@ func endLease(tx *sql.Tx, id string, at time.Time, reason string) error {
 	return err
 }
 
-// Sweep ends expired and overtime leases. loopd calls it on every request and once a minute.
+// Sweep ends expired and overtime leases, and once a minute (of its clock) runs the orchestrator's
+// timed triggers (OrchTick). loopd calls it on every request and once a minute.
 func (s *Store) Sweep(ctx context.Context) error {
-	// A cheap read first, so most requests do not take the write lock.
 	now := s.clock.Now()
+	s.tickMu.Lock()
+	tick := s.tickAt.IsZero() || !now.Before(s.tickAt.Add(time.Minute))
+	if tick {
+		s.tickAt = now
+	}
+	s.tickMu.Unlock()
+	if tick {
+		if err := s.OrchTick(ctx); err != nil {
+			return err
+		}
+	}
+	// A cheap read first, so most requests do not take the write lock.
 	ctl, err := s.loadControl(s.r)
 	if err != nil {
 		return err
 	}
 	var due int
 	err = s.r.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM leases WHERE ended_at IS NULL AND (expires_at <= ?1 OR claimed_at <= ?2))
-		+ (SELECT COUNT(*) FROM plan_leases WHERE ended_at IS NULL AND (expires_at <= ?1 OR claimed_at <= ?2))`,
+		+ (SELECT COUNT(*) FROM plan_leases WHERE ended_at IS NULL AND (expires_at <= ?1 OR claimed_at <= ?2))
+		+ (SELECT COUNT(*) FROM orch_turns WHERE status = 'running' AND (expires_at <= ?1 OR claimed_at <= ?2))`,
 		now.UnixNano(), now.Add(-ctl.MaxRun()).UnixNano()).Scan(&due)
 	if err != nil || due == 0 {
 		return err
@@ -1049,7 +1096,10 @@ func (s *Store) sweep(tx *sql.Tx) error {
 			}
 		}
 	}
-	return s.sweepPlans(tx, now, ctl.MaxRun())
+	if err := s.sweepPlans(tx, now, ctl.MaxRun()); err != nil {
+		return err
+	}
+	return s.sweepOrch(tx, now, ctl.MaxRun())
 }
 
 // Heartbeat keeps a lease alive. stop is true when the runner should stop: control is stopped
@@ -1074,6 +1124,9 @@ func (s *Store) HeartbeatActivity(ctx context.Context, runnerName, leaseID, note
 		if errors.Is(err, sql.ErrNoRows) {
 			var found bool
 			if stop, found, err = s.planHeartbeat(tx, runnerName, leaseID, note, actJSON); found || err != nil {
+				return err
+			}
+			if stop, found, err = s.orchHeartbeat(tx, runnerName, leaseID, note, actJSON); found || err != nil {
 				return err
 			}
 			return errf(CodeNotFound, "no lease %s", leaseID)

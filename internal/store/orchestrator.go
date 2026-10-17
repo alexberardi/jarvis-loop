@@ -154,6 +154,7 @@ func (s *Store) OrchAnswer(ctx context.Context, actor string, id int64, kind, te
 // refused and escalated instead.
 func (s *Store) OrchRetry(ctx context.Context, actor string, id int64, reason string) (pipeline.Item, error) {
 	var escalate map[string]any
+	var due time.Time
 	it, err := s.orch(ctx, actor, id, "retry", reason, func(_ *sql.Tx, it pipeline.Item, evs []Event) (pipeline.Transition, error) {
 		if it.Stage != pipeline.NeedsYou {
 			return pipeline.Transition{}, errf(pipeline.CodeWrongStage, "item is %s, not needs_you", it.Stage)
@@ -175,10 +176,17 @@ func (s *Store) OrchRetry(ctx context.Context, actor string, id int64, reason st
 			return pipeline.Transition{}, errf(pipeline.CodeLimit, "failure %d on this head: escalated to the user, not retried", failures)
 		}
 		if now := s.clock.Now(); now.Before(notBefore) {
+			due = notBefore
 			return pipeline.Transition{}, errf(pipeline.CodeTooSoon, "failure %d: retry after %s", failures, notBefore.Format(time.RFC3339))
 		}
 		return pipeline.ApplyRetry(it, failures, reason)
 	})
+	if !due.IsZero() {
+		// The orchestrator's next turn starts when the backoff ends, not at the next sweep.
+		if e := s.OrchDue(ctx, due); e != nil {
+			return it, e
+		}
+	}
 	if escalate != nil {
 		// Recorded apart from the refused retry (whose transaction rolled back), and not rate
 		// limited: loopd escalates this one itself, once per item and head (a repeated retry
