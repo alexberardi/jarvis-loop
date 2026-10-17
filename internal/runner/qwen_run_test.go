@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -216,5 +217,57 @@ func TestQwenItemWithoutQwenConfig(t *testing.T) {
 	fb := g.events(id, "builder_fallback")
 	if len(fb) != 1 || fb[0].Data["this_run_only"] != true || !strings.Contains(fmt.Sprint(fb[0].Data["reason"]), "no qwen config") {
 		t.Fatalf("builder_fallback %+v", fb)
+	}
+}
+
+// No guard runs in OpenCode, so the fence keeps the worktree's git plumbing read-only: the agent
+// cannot repoint .git, commondir or config.worktree (or rename the admin dir away) at a repository
+// with a config of its own, and the runner's own git still commits and pushes the real work.
+func TestQwenBuildCannotRepointGit(t *testing.T) {
+	g, _ := qwenRig(t, fakeclaude.GitTamper)
+	id := g.toBuild("Add a feature")
+	g.setBuilder(id, pipeline.BuilderQwen)
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.Review {
+		t.Fatalf("stage %s (%s); log:\n%s", d.Item.Stage, d.Item.Question, g.logs.String())
+	}
+	runs, _ := filepath.Glob(filepath.Join(g.r.Cfg.WorkRoot, "runs", fmt.Sprintf("%d-build-*", id)))
+	stream := g.read(filepath.Join(runs[0], "stream.jsonl"))
+	for _, p := range []string{`"file_path":"[^"]*/\.git"`, `"file_path":"[^"]*/commondir"`, `"file_path":"[^"]*/config\.worktree"`} {
+		if !regexp.MustCompile(p).MatchString(stream) {
+			t.Errorf("the agent never tried %s", p)
+		}
+	}
+	if n := strings.Count(stream, "read-only file system"); n < 3 {
+		t.Errorf("%d writes refused, want the 3 writes and the renames:\n%s", n, stream)
+	}
+	if h := g.remoteHead(d.Item.Branch); h == "" || g.prs.bodies[7] == "" {
+		t.Fatalf("the runner pushed %q and opened %v; log:\n%s", h, g.prs.bodies, g.logs.String())
+	}
+	if len(g.events(id, "builder_fallback")) != 0 || strings.Contains(g.logs.String(), endGitTampered) {
+		t.Fatalf("log:\n%s", g.logs.String())
+	}
+}
+
+// The mirror's commondir need not exist, so the fence cannot keep it read-only: a run that writes
+// one fails as a boundary check, and the runner removes it before its own git reads the mirror.
+func TestQwenBuildMirrorCommondir(t *testing.T) {
+	g, _ := qwenRig(t, fakeclaude.GitTamperMirror)
+	id := g.toBuild("Add a feature")
+	g.setBuilder(id, pipeline.BuilderQwen)
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.NeedsYou || !strings.Contains(d.Item.Question, endGitTampered) || !strings.Contains(d.Item.Question, "commondir") {
+		t.Fatalf("stage %s, question %q", d.Item.Stage, d.Item.Question)
+	}
+	mirrors, _ := filepath.Glob(filepath.Join(g.r.Cfg.WorkRoot, "mirrors", "*.git"))
+	for _, m := range mirrors {
+		if _, err := os.Stat(filepath.Join(m, "commondir")); !os.IsNotExist(err) {
+			t.Fatalf("%s/commondir left behind: %v", m, err)
+		}
+	}
+	if h := g.remoteHead(d.Item.Branch); h != "" {
+		t.Fatalf("the runner pushed %s after the tamper", h)
 	}
 }

@@ -56,6 +56,26 @@ fallbacks. The board card shows the builder and follows the flip.
   proxy on the host's loopback; bridging it over a unix socket would also take the module proxy
   away from builds and tests). So OpenCode can reach the LAN, jarvisd included, and the internet,
   but without the app key; webfetch is denied in its config, not by the kernel.
+- **No loop-guard**: OpenCode runs no hooks, so none of the guard's rules apply inside it. What
+  stands in for each:
+  - `.git` (the runner's own git runs unfenced after the build): the fence binds the worktree's
+    `.git` file and its admin dir's `commondir`, `gitdir` and `config.worktree` read-only (created
+    empty when missing), and the mirror's `config`, `config.worktree`, `hooks/` and `info/`; the
+    admin dir and the mirror's `worktrees/` are mount points of their own, so they cannot be
+    renamed away. What it cannot bind (the mirror's `commondir`, which need not exist) the runner
+    snapshots before the run and checks after: a change is put back and the run fails as a
+    boundary check (`git_tampered`) before any git runs on it. The runner's git also runs with
+    `core.fsmonitor=false` and `core.hooksPath=/dev/null`.
+  - the repo's `deny_write`: checked on the build's changed files (`touchesDenyWrite`) before
+    verify, so only for repos with verify steps; elsewhere the review sees the diff.
+  - `.loop/brief.md`: the brief reaches OpenCode on stdin from the run dir's copy, outside the
+    fence's writable paths; editing the worktree's copy changes nothing the runner reads.
+  - push and `gh`: the fence masks `~/.ssh`, `~/.config/gh`, the git credential stores and the
+    runner's config, and the agent has no token; only the runner pushes.
+  - `.claude/` and `.mcp.json`: OpenCode does not read them (and project config is off). **Not
+    covered**: an OpenCode build could commit a `.claude/settings.json`, which a later claude run
+    on the same branch (after a fallback) would load as project settings. The review sees it in
+    the diff; nothing refuses it.
 - **One request at a time** on jarvisd's background slot is not enforced by the runner: a runner
   with `slots` > 1 could start two qwen builds. Keep qwen on a runner with one slot, or let
   jarvisd queue.
