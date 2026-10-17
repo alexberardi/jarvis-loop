@@ -1,0 +1,51 @@
+{
+  "name": "orchestrator-authority",
+  "about": "loopd holds the orchestrator to its authority (docs/phases/08-orchestrator.md, piece 1). Its own approve, drop and control change are refused, and each refusal on the item is recorded. With the approver's message it acts as the approver (via the orchestrator), except an approval, which stays on the Approve button; someone else's message, or the same message twice, is refused. It lowers active agents but never raises them.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Support Kasa plugs"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "good", "file": "internal/modules/auth/kasa.go"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "held"}},
+
+    {"do": "orchestrator", "item": "a", "action": "POST /items/{item}/approve", "body": {"head_sha": "{head}", "words": "looks fine"}, "refused": "HTTP 403.*\"code\":\"forbidden\""},
+    {"do": "orchestrator", "item": "a", "action": "POST /items/{item}/drop", "body": {"words": "stale"}, "refused": "HTTP 403.*\"code\":\"forbidden\""},
+    {"do": "orchestrator", "action": "PUT /control", "body": {"active_agents": 9}, "refused": "HTTP 403.*\"code\":\"forbidden\""},
+    {"do": "orchestrator", "item": "a", "action": "POST /items/{item}/approve", "as": "approver", "text": "approve #1", "body": {"head_sha": "{head}", "words": "approve #1"}, "refused": "HTTP 403.*\"code\":\"not_on_behalf\""},
+    {"do": "orchestrator", "item": "a", "action": "POST /items/{item}/drop", "as": "other", "text": "drop #1", "body": {"words": "drop #1"}, "refused": "HTTP 403.*\"code\":\"not_approver\""},
+    {"do": "expect", "stage": {"a": "held"}, "control": {"active_agents": 4},
+     "events": [
+       {"item": "a", "kind": "refused", "actor": "orchestrator", "data": {"action": "^approve$", "code": "^forbidden$"}, "count": 1},
+       {"item": "a", "kind": "refused", "actor": "orchestrator", "data": {"action": "^drop$", "code": "^forbidden$"}, "count": 1},
+       {"item": "a", "kind": "refused", "actor": "orchestrator", "data": {"action": "^approve$", "code": "^not_on_behalf$"}, "count": 1},
+       {"item": "a", "kind": "refused", "actor": "orchestrator", "data": {"action": "^drop$", "code": "^not_approver$"}, "count": 1}
+     ],
+     "no_events": [{"item": "a", "kind": "approved"}, {"item": "a", "kind": "dropped"}]},
+
+    {"do": "orchestrator", "item": "a", "action": "POST /items/{item}/drop", "as": "approver", "text": "drop #1, I'll redo it", "body": {"words": "drop #1, I'll redo it"}},
+    {"do": "expect", "stage": {"a": "closed"},
+     "events": [{"item": "a", "kind": "dropped", "actor": "approver", "data": {"via": "^orchestrator:loop$", "words": "^drop #1, I'll redo it$"}, "count": 1}],
+     "messages": [{"thread": "a", "from": "bot", "text": "^Dropped by you: 'drop #1, I'll redo it'"}]},
+    {"do": "orchestrator", "item": "a", "action": "POST /items/{item}/drop", "as": "approver", "message": "last", "body": {}, "refused": "HTTP 409.*\"code\":\"message_used\""},
+
+    {"do": "orchestrator", "action": "POST /orchestrator/agents", "body": {"active_agents": 2, "reason": "every run fails on the git lock"}},
+    {"do": "orchestrator", "action": "POST /orchestrator/agents", "body": {"active_agents": 3, "reason": "the lock is gone"}, "refused": "HTTP 409.*\"code\":\"limit\""},
+    {"do": "expect", "control": {"active_agents": 2}}
+  ],
+  "expect": {
+    "stage": {"a": "closed"},
+    "control": {"active_agents": 2},
+    "events": [
+      {"kind": "control", "actor": "orchestrator", "data": {"reason": "^every run fails on the git lock$"}, "count": 1}
+    ],
+    "no_events": [{"item": "a", "kind": "approved"}]
+  }
+}
