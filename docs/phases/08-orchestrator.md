@@ -62,7 +62,7 @@ reason (shown in the item's Slack thread as "Orchestrator: …" and on the board
 |---|---|
 | **answer** an item's question | only the kinds in "Answers it may give"; at most 2 per item per head sha; never the same answer twice in a row |
 | **retry** a run that failed on the runner or the environment | backoff 2, 10, 30 min; the third failure on the same head is escalated |
-| **priority** of an item | P2–P5 only; P1 stays the user's and red main's |
+| **priority** of an item | P1–P5 (the user's choice), with the reason in the event |
 | **add** an item (process tickets, follow-ups) | at most 5 a day; deduplicated against open items by a failure signature |
 | **link** a dependency (`--after`) | only to an existing open item |
 | **escalate** to the user | see below; at most one ping per 10 minutes outside approvals |
@@ -182,7 +182,7 @@ someone else's is refused; "approve #28" posts the approval button instead of ap
 
 1. **Model:** the same as the builders.
 2. **Quiet hours:** none; pings are batched.
-3. **Priorities:** it may change P2–P5 on its own.
+3. **Priorities:** it may change any priority, P1 included, on its own.
 4. **Drops:** never on its own; only when the user tells it to.
 5. **Who handles stuck items:** the orchestrator only, as its own Slack persona the user can ping
    directly to take action. Claude chats stop doing it.
