@@ -31,6 +31,8 @@ type OrchSnapItem struct {
 	HoldReason string `json:"hold_reason,omitempty"`
 	PR         int    `json:"pr,omitempty"`
 	HeadSHA    string `json:"head_sha,omitempty"`
+	// Resources are what it needs from a runner (its capabilities).
+	Resources []string `json:"resources,omitempty"`
 }
 
 // OrchSnapRunner is a runner's health.
@@ -136,7 +138,7 @@ func (s *Store) OrchSnapshot(ctx context.Context) (OrchSnapshot, error) {
 	for _, it := range open {
 		snap.Items = append(snap.Items, OrchSnapItem{ID: it.ID, Title: it.Title, Repo: it.Repo, Priority: it.Priority, Stage: string(it.Stage),
 			Leased: leased[it.ID], DependsOn: it.DependsOn, WaitingOn: waitingOn(it, deps), BounceCount: it.BounceCount,
-			AgeInStage: int64(now.Sub(it.UpdatedAt) / time.Second), Question: it.Question, HoldReason: it.HoldReason, PR: it.PR, HeadSHA: it.HeadSHA})
+			AgeInStage: int64(now.Sub(it.UpdatedAt) / time.Second), Question: it.Question, HoldReason: it.HoldReason, PR: it.PR, HeadSHA: it.HeadSHA, Resources: it.Resources})
 	}
 
 	// The runners.

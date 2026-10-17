@@ -9,7 +9,8 @@ chat with Claude.
 
 Status: **designed** (2026-10-16; the user's answers are in "Decisions" at the end). Built: piece 1 (the
 orchestrator token and its actions, [decision](../decisions/2026-10-16-orchestrator-token.md)), piece
-3 (the runner's orchestrate turns, [decision](../decisions/2026-10-17-orchestrate-turns.md)).
+3 (the runner's orchestrate turns, [decision](../decisions/2026-10-17-orchestrate-turns.md)), piece 4
+(the persona and the recorded-situation scenarios, [decision](../decisions/2026-10-17-orchestrator-persona.md)).
 
 ## Why (2026-10-16, one day of real use)
 
@@ -167,7 +168,11 @@ standup reports its own spend.
 3. **Runner: orchestrate turns**: triggers, snapshot, result contract, notebook, daily rotation.
 4. **The orchestrator persona** (its skill: the authority table, the answer kinds, how to write a
    recommendation, process-issue patterns), with scenario tests on recorded situations from
-   2026-10-16.
+   2026-10-16. As built: `skills/orchestrator/SKILL.md` is the first part of each day's first
+   prompt (`runner.OrchStatic`, the result contract after it). The scenarios
+   `59-orchestrator-{lock-error,reasked-question,harness,bounce-limit,red-ci,unclaimed}` play the
+   recorded situations against the fake claude's `persona` play, the skill as rules on the
+   snapshot: they test how loopd carries out the persona's actions, not the model's judgment.
 5. **Board: the Orchestrator panel and "waiting on" for every card.** As built: each dependency
    not done is followed to its root (`pipeline.WaitChains`; past the first link, the first
    dependency not done of each item), "waiting on #12 → #35 → needs you". The panel

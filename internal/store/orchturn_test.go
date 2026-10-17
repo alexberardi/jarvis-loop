@@ -355,3 +355,26 @@ func TestOrchLoopMergeTriggers(t *testing.T) {
 		t.Fatalf("a merge to the loop: %+v", q)
 	}
 }
+
+// The snapshot's items say what each needs from a runner, so "ready but unclaimed" can be told
+// from the runners' capabilities.
+func TestOrchSnapshotItemResources(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	it := add(t, s, "x", "P3")
+	if c := claim(t, s, "a"); c == nil || c.Item.ID != it.ID {
+		t.Fatalf("claim: %+v", c)
+	}
+	evidence(t, s, it.ID)
+	f := map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": "emulator"}
+	if _, err := s.Advance(ctx, runner, it.ID, pipeline.Reproduced, f, nil); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := s.OrchSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Items) != 1 || len(snap.Items[0].Resources) != 1 || snap.Items[0].Resources[0] != "emulator" {
+		t.Fatalf("snapshot items: %+v", snap.Items)
+	}
+}

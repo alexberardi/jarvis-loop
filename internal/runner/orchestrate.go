@@ -205,24 +205,12 @@ func (r *Runner) orchClient() *Client {
 	return &Client{Base: r.Client.Base, Token: r.Cfg.OrchestratorToken, HTTP: r.Client.HTTP}
 }
 
-// OrchStatic is the first prompt of each day's session: who it is, its authority, the result
-// contract. A stand-in until the orchestrator's skill (piece 4, skills/orchestrator/) replaces the
-// first part.
-const OrchStatic = `# The orchestrator
+// OrchStatic is the first prompt of each day's session: the orchestrator's skill (who it is, its
+// authority, the answer kinds, process issues; skills/orchestrator/) and the result contract.
+var OrchStatic = stageSkill(StageOrchestrate) + "\n\n" + orchContract
 
-You keep the loop's board moving, as a scrum master would (docs/phases/08-orchestrator.md in
-jarvis-loop). Each turn you get loopd's snapshot of the board and the triggers that started the
-turn. Unstick what you are allowed to, ask the user only for real decisions (with a
-recommendation), and write down what you are watching. You have no tools that change anything but
-` + "`out/result.json`" + `: the runner carries out the actions you list there, through loopd, which
-refuses anything past your authority (the refusal comes back to you in the next turn's snapshot,
-` + "`last_turn.actions`" + `).
-
-**Never** ask for: approving a merge, OK'ing a trusted-file change, dropping or closing an item,
-changing the runner's config, the hold rules or a gate, deploying, prod, editing code. Recommend
-them to the user in an escalation instead.
-
-## The result contract
+// orchContract is the runner's part of OrchStatic: what out/result.json holds.
+const orchContract = `## The result contract
 
 Every turn, write ` + "`out/result.json`" + ` as your last step:
 

@@ -47,6 +47,8 @@ type Step struct {
 	Via      string `json:"via,omitempty"` // "cli" (default) or "slack"
 	// After: the aliases of the items it depends on (CLI: depends_on; Slack: "after #1, #2")
 	After []string `json:"after,omitempty"`
+	// triage: what the item needs from a runner (its resources, comma-separated)
+	Resources string `json:"resources,omitempty"`
 	// script: how the fake claude plays the item's runs of a stage (default build), and the repo
 	// a triage run picks
 	For   string `json:"for,omitempty"` // the stage the script is for: triage, build (default), review
@@ -412,7 +414,7 @@ func (p *player) step(st Step) error {
 		if err := s.hand.Upload(p.ctx, r.id, f, "repro.txt", "repro"); err != nil {
 			return err
 		}
-		return s.hand.Advance(p.ctx, r.id, "reproduced", map[string]string{"area": "sandbox", "size": "S", "risk": "normal", "resources": ""}, nil)
+		return s.hand.Advance(p.ctx, r.id, "reproduced", map[string]string{"area": "sandbox", "size": "S", "risk": "normal", "resources": st.Resources}, nil)
 	case "script":
 		if st.For == "orchestrate" {
 			b, _ := json.Marshal(map[string]string{"play": st.Play})

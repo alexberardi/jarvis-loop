@@ -1,0 +1,57 @@
+{
+  "name": "orchestrator-red-ci",
+  "about": "Recorded 2026-10-16: CI red on a head the build did not change (docs/phases/08-orchestrator.md, piece 4). The orchestrator (the persona play) first answers kind red_ci that land reads CI again (a re-run may pass). It is red again on the same head, so land sends it to the user at the bounce limit with the failing job's log attached; the orchestrator's second red_ci answer sends it back to build: fix the code, not the expectation, the log is in ci-failure.log. When the build changes nothing a third time, the orchestrator escalates with a recommendation.",
+  "stages": ["build", "review", "land", "orchestrate"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording", "priority": "P2"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "no_change"},
+    {"do": "script", "for": "orchestrate", "play": "persona"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "fail", "lint": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}, "question": {"a": "^CI failed on [0-9a-f]{7} and the build changed nothing"}},
+
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"},
+     "events": [{"item": "a", "kind": "answered", "actor": "orchestrator",
+                 "data": {"answer_kind": "^red_ci$", "answer": "^Land reads CI again: re-run it once", "head_sha": "^[0-9a-f]{40}$"}, "count": 1}]},
+
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}, "question": {"a": "^CI failed on `[0-9a-f]{7}`: check"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "back_to_build", "data": {"bounce_count": "^2$"}, "count": 1}],
+     "evidence": [{"item": "a", "name": "ci-failure.log", "count": 2}]},
+
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [{"item": "a", "kind": "answered", "actor": "orchestrator",
+                 "data": {"answer_kind": "^red_ci$", "answer": "^Red again on the same head: fix the code, not the expectation; the failing job's log is in ci-failure\\.log\\.$"}, "count": 1}]},
+
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}, "question": {"a": "^CI failed on [0-9a-f]{7} and the build changed nothing"}},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "needs_you"},
+    "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
+    "events": [
+      {"item": "a", "kind": "answered", "actor": "orchestrator", "data": {"answer_kind": "^red_ci$"}, "count": 2},
+      {"item": "a", "kind": "orchestrator.escalated", "actor": "orchestrator",
+       "data": {"text": "CI is still red on the same head", "recommendation": "\\. Because "}, "count": 1}
+    ],
+    "run_files": [{"item": "a", "stage": "build", "run": 0, "file": "brief.md", "text": "ci-failure\\.log"}],
+    "agent_runs": {"build": 3, "orchestrate": 3}
+  }
+}
