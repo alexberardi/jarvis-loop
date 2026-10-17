@@ -388,11 +388,17 @@ func (c *Config) checkScript(script, cwd, target string, depth int) Decision {
 // run: its words, redirections, here-strings and the here-documents a program reads as input.
 // Substitutions are checked as scripts of their own. Text that is only data is not matched, so a
 // PR body or a note may mention a path (#95): a here-document that cat or tee writes out, and the
-// arguments of echo and printf. That holds only at the top level of a script with no pipe and no
-// substitution, where the data cannot become a command or a path in the same call. (Data written
-// to a file can be read back by a later call; the OS sandbox is what keeps those reads out.)
+// arguments of echo and printf. That holds only for a top-level script with no pipe and no
+// substitution whose every segment is a sink (isSink), so nothing else in the same call can run or
+// read what was written; a script with any other command is matched in full. Data written to a
+// file can still be read back by a later call, which the guard judges on its own: for the harness
+// config, the SSH keys and the loop's own config the OS sandbox also denies that read, but the
+// sandbox can read the user's checkouts, so for those the guard is the only check.
 func (c *Config) checkProtected(sc script, depth int, target string) Decision {
 	plain := depth == 0 && !sc.piped && len(sc.subs) == 0
+	for _, sg := range sc.segs {
+		plain = plain && isSink(sg)
+	}
 	var texts []string
 	for _, sg := range sc.segs {
 		first := ""
@@ -400,7 +406,7 @@ func (c *Config) checkProtected(sc script, depth int, target string) Decision {
 			first = sg.words[0]
 		}
 		words := sg.words
-		if plain && (first == "echo" || (first == "printf" && !slices.Contains(sg.words, "-v"))) {
+		if plain && (first == "echo" || first == "printf") {
 			words = words[:1]
 		}
 		texts = append(texts, words...)
@@ -422,6 +428,28 @@ func (c *Config) checkProtected(sc script, depth int, target string) Decision {
 		}
 	}
 	return Decision{}
+}
+
+// isSink reports whether a segment only writes data out: echo, printf without -v (which assigns a
+// variable; bash also takes it joined, as -vq), cat or tee reading a here-document, or mkdir.
+func isSink(sg segment) bool {
+	if len(sg.words) == 0 {
+		return false
+	}
+	switch sg.words[0] {
+	case "echo", "mkdir":
+		return true
+	case "printf":
+		for _, w := range sg.words[1:] {
+			if strings.HasPrefix(w, "-v") {
+				return false
+			}
+		}
+		return true
+	case "cat", "tee":
+		return len(sg.bodies) > 0
+	}
+	return false
 }
 
 var never = map[string]string{

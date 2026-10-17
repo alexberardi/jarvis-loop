@@ -263,9 +263,16 @@ func TestBashCommands(t *testing.T) {
 
 		// A path that is only text (a heredoc written to a file, a comment, echo's arguments) names
 		// nothing the command opens (#95). A heredoc an interpreter reads is a script, and data that
-		// a pipe or a substitution could turn into a command is refused as before.
+		// a pipe, a substitution or any other command in the same call could turn into a command or
+		// a path is refused as before: the exemption holds only when every segment is a sink.
 		{"cat > .loop/scratch/body.md <<'X'\nnot verified: needs " + f.checkout + "/installed.env\nX", ""},
-		{"mkdir -p .loop/scratch && cat <<'X' > .loop/scratch/body.md\nsee " + f.checkout + "\nX\ngit status", ""},
+		{"mkdir -p .loop/scratch && cat <<'X' > .loop/scratch/body.md\nsee " + f.checkout + "\nX", ""},
+		{"mkdir -p .loop/scratch && cat <<'X' > .loop/scratch/body.md\nsee " + f.checkout + "\nX\ngit status", RuleProtectedPath},
+		{"echo 'cat " + f.checkout + "/x' > s.sh; bash s.sh", RuleProtectedPath},
+		{"cat > s.sh <<'X'\ncat " + f.checkout + "/x\nX\nsh s.sh", RuleProtectedPath},
+		{"echo " + f.checkout + " > l; xargs -a l cat", RuleProtectedPath},
+		{"printf -vq '%s' " + f.checkout + "; cat \"$q\"", RuleProtectedPath},
+		{"printf -vq '%s' " + f.checkout + "; echo \"$q\" > .loop/scratch/n", RuleProtectedPath},
 		{"tee .loop/scratch/body.md <<X\nsee " + f.checkout + "\nX", ""},
 		{"ls # not " + f.checkout, ""},
 		{"echo 'see " + f.checkout + "' > .loop/scratch/note.md", ""},
