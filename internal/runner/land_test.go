@@ -60,6 +60,22 @@ func TestDecide(t *testing.T) {
 		}, ActAdvance, "back_to_review", ""},
 		// 3. changed paths
 		{"no changed paths", func(f *LandFacts) { f.Paths = nil }, ActAdvance, "failed", "error=changes no files"},
+		// 3b. conflicting: GitHub runs no pull_request CI on a conflicting PR, so this comes before CI
+		{"conflicting, no checks reported", func(f *LandFacts) { f.PR.Mergeable, f.PR.Checks = "CONFLICTING", nil }, ActConflict, "", ""},
+		{"conflicting, CI pending", func(f *LandFacts) {
+			f.PR.Mergeable = "CONFLICTING"
+			f.PR.Checks = []Check{{Name: "check", Bucket: BucketPending}}
+		}, ActConflict, "", ""},
+		{"dirty with mergeability unknown", func(f *LandFacts) {
+			f.PR.Mergeable, f.PR.MergeStateStatus, f.PR.Checks = "UNKNOWN", "DIRTY", nil
+		}, ActConflict, "", ""},
+		{"conflict beats CI red", func(f *LandFacts) {
+			f.PR.Mergeable = "CONFLICTING"
+			f.PR.Checks = []Check{{Name: "check", Bucket: BucketFail}}
+		}, ActConflict, "", ""},
+		{"conflict beats missing evidence", func(f *LandFacts) { f.PR.Mergeable, f.BuildEvidence = "CONFLICTING", 0 }, ActConflict, "", ""},
+		{"no changed paths beats a conflict", func(f *LandFacts) { f.PR.Mergeable, f.Paths = "CONFLICTING", nil }, ActAdvance, "failed", ""},
+		{"moved head beats a conflict", func(f *LandFacts) { f.PR.Mergeable, f.PR.HeadRefOid = "CONFLICTING", headB }, ActAdvance, "back_to_review", ""},
 		// 4. CI
 		{"CI failed", func(f *LandFacts) {
 			f.PR.Checks = []Check{{Name: "check", Bucket: BucketPass}, {Name: "lint", Bucket: BucketFail, URL: "https://ci/lint"}}
@@ -95,7 +111,7 @@ func TestDecide(t *testing.T) {
 		{"hold without approval", func(f *LandFacts) { f.Hold = true }, ActAdvance, "hold", "head_sha=" + headA},
 		{"hold: approval for an old head", func(f *LandFacts) { f.Hold, f.ApprovedHead = true, headB }, ActAdvance, "hold", "reason=on the hold list"},
 		{"hold approved for this head", func(f *LandFacts) { f.Hold, f.ApprovedHead = true, headA }, ActMerge, "", ""},
-		{"hold beats a conflict", func(f *LandFacts) { f.Hold, f.PR.Mergeable = true, "CONFLICTING" }, ActAdvance, "hold", ""},
+		{"a conflict beats hold", func(f *LandFacts) { f.Hold, f.PR.Mergeable = true, "CONFLICTING" }, ActConflict, "", ""},
 		{"approval without hold is harmless", func(f *LandFacts) { f.ApprovedHead = headB }, ActMerge, "", ""},
 		// 7. mergeable
 		{"conflicting", func(f *LandFacts) { f.PR.Mergeable = "CONFLICTING" }, ActConflict, "", ""},
