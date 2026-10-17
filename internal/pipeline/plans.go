@@ -401,6 +401,9 @@ type Piece struct {
 	// Builder is who should build it: BuilderQwen or BuilderClaude ("": not said).
 	Builder   string `json:"builder,omitempty"`
 	DependsOn []int  `json:"depends_on,omitempty"`
+	// After is the existing loop items ("#N" in "depends on:") the piece waits for: the hand-off
+	// adds them to the item's depends_on next to its pieces' items.
+	After []int64 `json:"after,omitempty"`
 	// Section is the piece's part of the blueprint, heading included: the item's ask ends with it.
 	Section string `json:"section"`
 }
@@ -410,6 +413,7 @@ var (
 	pieceRe   = regexp.MustCompile(`(?i)^(?:piece\s+)?(\d+)\s*[.):]?\s*(.*)$`)
 	fieldRe   = regexp.MustCompile(`(?i)^\s*(?:[-*]\s+)?\**\s*(repo|size|builder|depends on)\s*\**\s*:\s*\**\s*(.*?)\s*$`)
 	numRe     = regexp.MustCompile(`\d+`)
+	itemRefRe = regexp.MustCompile(`#\d+`)
 )
 
 // The builders a piece names (docs/decisions/2026-10-16-qwen-builder-plans.md): qwen only when
@@ -421,7 +425,8 @@ const (
 
 // ParseBlueprint finds a blueprint's pieces: under a "Pieces" heading, one sub-heading per piece,
 // "N. Title", numbered from 1 in order, with optional "repo:", "size:", "builder:" and "depends on:" lines
-// (piece numbers; "none"). Dependencies must name other pieces and must not loop.
+// (piece numbers, "#N" for an existing loop item the piece waits for; "none"). Piece dependencies
+// must name other pieces and must not loop; the store checks the items when it hands off.
 func ParseBlueprint(md string) ([]Piece, error) {
 	lines := strings.Split(strings.ReplaceAll(md, "\r\n", "\n"), "\n")
 	level := 0
@@ -494,7 +499,13 @@ func ParseBlueprint(md string) ([]Piece, error) {
 			}
 			pc.Builder = b
 		case "depends on":
-			for _, d := range numRe.FindAllString(val, -1) {
+			for _, d := range itemRefRe.FindAllString(val, -1) {
+				id, _ := strconv.ParseInt(d[1:], 10, 64)
+				if !slices.Contains(pc.After, id) {
+					pc.After = append(pc.After, id)
+				}
+			}
+			for _, d := range numRe.FindAllString(itemRefRe.ReplaceAllString(val, ""), -1) {
 				n, _ := strconv.Atoi(d)
 				if !slices.Contains(pc.DependsOn, n) {
 					pc.DependsOn = append(pc.DependsOn, n)
@@ -533,7 +544,8 @@ func ParseBlueprint(md string) ([]Piece, error) {
 // plan's priority, linked to the plan and piece, the piece's section as the ask's tail. A piece
 // without a repo takes the plan's, when it has exactly one; one without a builder gets claude.
 // Dependencies are piece numbers here
-// (Piece.DependsOn); the store maps them to the new items' ids.
+// (Piece.DependsOn); the store maps them to the new items' ids and adds the existing items
+// (Piece.After).
 func PlanItems(p Plan, pieces []Piece, configured []string, now time.Time) ([]Item, error) {
 	out := make([]Item, 0, len(pieces))
 	for _, pc := range pieces {

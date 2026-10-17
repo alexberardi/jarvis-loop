@@ -74,7 +74,8 @@ ones are allowed), all `invalid_field` (400); a cycle is refused too; repeats ar
   ("the brief changed; approve v3 instead"). Echo, Cancel and the 2-minute grace as for merges.
 - Approving the blueprint runs the **hand-off** in one transaction: one item per piece
   (`source=plan`, the plan's priority, `plan_id`, `plan_piece`, `depends_on` mapped from piece
-  indices to the new item ids, the piece's section of the blueprint as the ask's tail), plan →
+  indices to the new item ids, plus the existing items a piece names as `#N`, refused as a whole
+  when one does not exist or is closed; the piece's section of the blueprint as the ask's tail), plan →
   `split`. Items are posted to `#loop` as usual, each linking back to the plan thread and page.
 
 ### API
@@ -103,8 +104,8 @@ changed; approve v3 instead"), `ApplyPlanDrop`, `ApplyTurnResult`, `ParseBluepri
 `PlanItems`, `PlanSettled`, and `ChooseWork` in `claim.go`. **Blueprint format:** a heading
 named `Pieces`; under it one sub-heading per piece, `N. Title`, numbered from 1 in order, with
 optional `repo:`, `size:` (S/M/L), `builder:` (`qwen`/`claude`, stored on the item; `claude` when
-missing: `docs/decisions/2026-10-16-qwen-builder-plans.md`) and `depends on:` (piece numbers, or
-`none`) lines; the piece's section (its heading to the next, numbered steps since that decision)
+missing: `docs/decisions/2026-10-16-qwen-builder-plans.md`) and `depends on:` (piece numbers, `#N`
+for an existing loop item the piece waits for, or `none`) lines; the piece's section (its heading to the next, numbered steps since that decision)
 is the item's ask after "Piece N of plan P<id> (<title>).". A piece without a repo gets the plan's
 when it has exactly one. **A turn's result** is checked by
 loopd too: content the agent got wrong (no reply, a reply over 3,000 characters, a blueprint
@@ -132,7 +133,8 @@ plan, turn, lease}` (items now carry `kind: item` too). **Not in this piece:** t
 come with the `#plan` buttons (piece 4): loopd applies an approval at once, bound to the sha256;
 evidence uploads for plan turns (the evidence table is per item). Harness: the `plan*` steps
 and `plans`/`depends_on` expectations (04b), `scenarios/37-plan-stale-approve.json` (4),
-`38-plan-cycle.json` (8), `39-plan-handoff.json` (the hand-off half of 2).
+`38-plan-cycle.json` (8), `39-plan-handoff.json` (the hand-off half of 2),
+`54-plan-waits-on-item.json` (a piece waiting on an existing item).
 
 ## Runner: conversational turns
 
@@ -155,7 +157,7 @@ and `plans`/`depends_on` expectations (04b), `scenarios/37-plan-stale-approve.js
   - Engineering: starts after the brief is approved, in its own session, from the brief and the
     code. Writes `out/blueprint.md`: approach, affected modules, interfaces, test plan, harness
     verification plan (scenarios, shots), risks, and the pieces. Each piece: title, repo, size,
-    depends on (piece numbers), its blueprint section, how it's verified. Pieces are loop-sized: one
+    depends on (piece numbers, `#N` for existing items), its blueprint section, how it's verified. Pieces are loop-sized: one
     PR each, a few hours of agent work at most; the agent splits further rather than make a big one.
 - **Result** (`out/result.json`): `reply` (the Slack message, ≤ 3000 chars, no logs or
   transcripts), optional `brief` or `blueprint` (path in `out/`), optional `ready: true` (post the

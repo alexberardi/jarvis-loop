@@ -552,6 +552,7 @@ func (r *Runner) prepareBuild(ctx context.Context, ru *run, info *RunInfo) error
 	if ru.item.PR > 0 {
 		r.heldNotes(ctx, ru, info, filepath.Join(".loop", "review", "held.md"))
 	}
+	r.answersContext(ctx, ru, info, filepath.Join(".loop", "context", "answers.md"))
 	return nil
 }
 
@@ -665,6 +666,7 @@ type streamStats struct {
 	toolResults int
 	limit       *LimitHit
 	result      *resultEvent
+	act         liveActivity
 	// A qwen run's tokens (OpenCode's step_finish events); claude's are in result.
 	qwenInput, qwenOutput int64
 }
@@ -724,11 +726,15 @@ func (r *Runner) handle(ru *run, st *streamStats, line []byte) (string, string) 
 		var blocks []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
+			toolUse
 		}
 		if json.Unmarshal(ev.Message.Content, &blocks) == nil {
 			for _, b := range blocks {
 				if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
 					st.lastText = clip(strings.TrimSpace(b.Text), 1500)
+				}
+				if b.Type == "tool_use" {
+					st.act.observe(ru.wt, b.toolUse)
 				}
 			}
 		}
@@ -937,7 +943,8 @@ func (r *Runner) runAgent(ctx context.Context, ru *run, brief string) (out outco
 			return out
 		case <-hb.C():
 			r.flushRefusals(ctx, ru)
-			stop, err := r.Client.Heartbeat(ctx, ru.lease, fmt.Sprintf("agent running: %d tool calls", out.stats.toolResults))
+			stop, err := r.Client.Heartbeat(ctx, ru.lease, fmt.Sprintf("agent running: %d tool calls", out.stats.toolResults),
+				r.agentActivity(ru, &out.stats))
 			var ae *APIError
 			if err == nil && stop {
 				terminate(endStopped, "loopd asked to stop")

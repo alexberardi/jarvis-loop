@@ -387,11 +387,19 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 func (s *server) heartbeat(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Note string `json:"note"`
+		// Activity is what the run is doing (pipeline.Activity's limits); omitted keeps the last.
+		Activity *pipeline.Activity `json:"activity"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	stop, err := s.st.Heartbeat(r.Context(), PrincipalFrom(r.Context()).Name, r.PathValue("id"), body.Note)
+	if body.Activity != nil {
+		if err := body.Activity.Validate(); err != nil {
+			badRequest(w, err.Error())
+			return
+		}
+	}
+	stop, err := s.st.HeartbeatActivity(r.Context(), PrincipalFrom(r.Context()).Name, r.PathValue("id"), body.Note, body.Activity)
 	if err != nil {
 		s.fail(w, err)
 		return

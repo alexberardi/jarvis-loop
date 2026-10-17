@@ -187,6 +187,25 @@ func TestParseBlueprint(t *testing.T) {
 		t.Errorf("backticked builder: %+v %v", ps, err)
 	}
 
+	// "#N" is an existing loop item the piece waits for; a bare N is a piece.
+	after := []struct {
+		dep    string
+		pieces []int
+		items  []int64
+	}{
+		{"1, #30", []int{1}, []int64{30}},
+		{"#30", nil, []int64{30}},
+		{"#30, #30, 1, #7", []int{1}, []int64{30, 7}},
+		{"item #30", nil, []int64{30}},
+		{"none", nil, nil},
+	}
+	for _, tc := range after {
+		ps, err := ParseBlueprint("## Pieces\n### 1. A\n### 2. B\n- depends on: " + tc.dep + "\n")
+		if err != nil || !slices.Equal(ps[1].DependsOn, tc.pieces) || !slices.Equal(ps[1].After, tc.items) {
+			t.Errorf("depends on: %s -> %+v %v", tc.dep, ps, err)
+		}
+	}
+
 	bad := []struct{ name, md, msg string }{
 		{"no pieces section", "# Blueprint\n\nJust prose.\n", "no Pieces section"},
 		{"empty pieces", "## Pieces\n\nNone yet.\n", "no pieces"},

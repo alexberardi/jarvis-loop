@@ -82,6 +82,9 @@ type RunInfo struct {
 	Context []TriageFile
 	// HeldNotes is the file saying why a held item came back to build ("" when it did not).
 	HeldNotes string
+	// Answers is the file with the questions agents asked on the item and the user's answers (""
+	// when there were none).
+	Answers string
 	// ContextErrs say what the runner could not fetch (the agent is told; the run goes on).
 	ContextErrs []string
 	// CILog is the failing CI log the runner fetched (triage of a red main's P1; build after land
@@ -265,6 +268,9 @@ func Brief(stage string, it Item, r RunInfo) string {
 	if r.CILog != nil {
 		fmt.Fprintf(&b, "- **CI failed; the runner fetched its log**: `%s` (%s): the failing tests, then the lines around each failure (or each job's tail), from GitHub Actions. You cannot open the CI run yourself, and the user cannot reproduce it for you. A test that passes locally but fails in CI is usually a race or a timing assumption that a slower machine exposes: look for the race in the code (in Go, `go test -race -count=20 -run <test>`), don't ask the user.\n",
 			r.CILog.Name, strings.Join(strings.Fields(r.CILog.Label), " "))
+	}
+	if r.Answers != "" {
+		fmt.Fprintf(&b, "- **The user already answered questions on this item**: `%s`. Read it first. An answer overrides the ask where they conflict (for example, a step it says to skip or list under not verified), and the newest answer wins. Do not ask a question that file already answers; act on the answer.\n", r.Answers)
 	}
 	if len(r.Context) > 0 {
 		b.WriteString("- Context from the runner (read these):")

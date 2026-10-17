@@ -539,9 +539,11 @@ type Lease struct {
 	Note      string         `json:"note,omitempty"`
 	EndedAt   *time.Time     `json:"ended_at,omitempty"`
 	EndReason string         `json:"end_reason,omitempty"`
+	// Activity is what the run is doing, from its latest heartbeat (nil: none sent, or ended).
+	Activity *pipeline.Activity `json:"activity,omitempty"`
 }
 
-const leaseCols = `id, item_id, stage, runner, agent, resources, claimed_at, expires_at, note, ended_at, end_reason`
+const leaseCols = `id, item_id, stage, runner, agent, resources, claimed_at, expires_at, note, ended_at, end_reason, activity`
 
 func scanLease(row scanner) (Lease, error) {
 	var (
@@ -549,10 +551,12 @@ func scanLease(row scanner) (Lease, error) {
 		stage, resources string
 		claimed, expires int64
 		ended            sql.NullInt64
+		activity         string
 	)
-	if err := row.Scan(&l.ID, &l.ItemID, &stage, &l.Runner, &l.Agent, &resources, &claimed, &expires, &l.Note, &ended, &l.EndReason); err != nil {
+	if err := row.Scan(&l.ID, &l.ItemID, &stage, &l.Runner, &l.Agent, &resources, &claimed, &expires, &l.Note, &ended, &l.EndReason, &activity); err != nil {
 		return l, err
 	}
+	l.Activity = parseActivity(activity)
 	l.Stage, l.Resources = pipeline.Stage(stage), splitList(resources)
 	l.ClaimedAt, l.ExpiresAt = fromNanos(claimed), fromNanos(expires)
 	if ended.Valid {
@@ -956,7 +960,7 @@ func waitingItems(tx *sql.Tx) ([]pipeline.Item, error) {
 }
 
 func endLease(tx *sql.Tx, id string, at time.Time, reason string) error {
-	_, err := tx.Exec(`UPDATE leases SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL`, at.UnixNano(), reason, id)
+	_, err := tx.Exec(`UPDATE leases SET ended_at = ?, end_reason = ?, activity = '' WHERE id = ? AND ended_at IS NULL`, at.UnixNano(), reason, id)
 	return err
 }
 
@@ -1023,6 +1027,16 @@ func (s *Store) sweep(tx *sql.Tx) error {
 // Heartbeat keeps a lease alive. stop is true when the runner should stop: control is stopped
 // (the lease then ends and the item returns to its queue), or the lease has already ended.
 func (s *Store) Heartbeat(ctx context.Context, runnerName, leaseID, note string) (stop bool, err error) {
+	return s.HeartbeatActivity(ctx, runnerName, leaseID, note, nil)
+}
+
+// HeartbeatActivity is Heartbeat with what the run is doing, kept on the live lease (nil keeps
+// the previous one, as an empty note does). The caller has validated it.
+func (s *Store) HeartbeatActivity(ctx context.Context, runnerName, leaseID, note string, act *pipeline.Activity) (stop bool, err error) {
+	actJSON, err := encodeActivity(act)
+	if err != nil {
+		return false, err
+	}
 	err = s.tx(ctx, func(tx *sql.Tx) error {
 		if err := s.sweep(tx); err != nil {
 			return err
@@ -1031,7 +1045,7 @@ func (s *Store) Heartbeat(ctx context.Context, runnerName, leaseID, note string)
 		l, err := scanLease(tx.QueryRow(`SELECT `+leaseCols+` FROM leases WHERE id = ?`, leaseID))
 		if errors.Is(err, sql.ErrNoRows) {
 			var found bool
-			if stop, found, err = s.planHeartbeat(tx, runnerName, leaseID, note); found || err != nil {
+			if stop, found, err = s.planHeartbeat(tx, runnerName, leaseID, note, actJSON); found || err != nil {
 				return err
 			}
 			return errf(CodeNotFound, "no lease %s", leaseID)
@@ -1064,7 +1078,10 @@ func (s *Store) Heartbeat(ctx context.Context, runnerName, leaseID, note string)
 		if note == "" {
 			note = l.Note
 		}
-		_, err = tx.Exec(`UPDATE leases SET expires_at = ?, note = ? WHERE id = ?`, now.Add(LeaseTTL).UnixNano(), note, l.ID)
+		if actJSON == "" {
+			actJSON = encodedActivity(l.Activity)
+		}
+		_, err = tx.Exec(`UPDATE leases SET expires_at = ?, note = ?, activity = ? WHERE id = ?`, now.Add(LeaseTTL).UnixNano(), note, actJSON, l.ID)
 		return err
 	})
 	return stop, err

@@ -29,7 +29,7 @@ background slot (Qwen3.8-27B, 128k context, one request at a time) instead of `c
   config. The brief, `.loop/result.json`, the evidence and their validation are the build's,
   unchanged.
 - **Sessions**: loopd stores the OpenCode session id a qwen build reports (`items.build_session`,
-  migration 0012); the item's next build resumes it (`opencode run -s <id>`) when its data dir is
+  migration 0013); the item's next build resumes it (`opencode run -s <id>`) when its data dir is
   still on that runner, and starts a new one otherwise.
 
 ## The strike rule
