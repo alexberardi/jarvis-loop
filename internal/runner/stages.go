@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
 // MergedPRsForTriage is how many recently merged PRs of a repo triage sees for dedupe.
@@ -118,6 +120,7 @@ func (r *Runner) prepareTriage(ctx context.Context, ru *run, info *RunInfo) erro
 		r.mainRedLog(ctx, ru, info, sha)
 	}
 	r.answersContext(ctx, ru, info, filepath.Join(".loop", "context", "answers.md"))
+	r.planContext(ctx, ru, info)
 
 	all := make([]string, 0, len(r.Cfg.Repos))
 	for k := range r.Cfg.Repos {
@@ -299,6 +302,7 @@ func (r *Runner) prepareReview(ctx context.Context, ru *run, info *RunInfo) erro
 		r.reviewContext(ctx, ru, info, filepath.Join(".loop", "context", "previous-reviews.md"), "")
 	}
 	r.answersContext(ctx, ru, info, filepath.Join(".loop", "context", "answers.md"))
+	r.planContext(ctx, ru, info)
 	return nil
 }
 
@@ -328,6 +332,43 @@ func (r *Runner) answersContext(ctx context.Context, ru *run, info *RunInfo, rel
 	}
 	writeContext(ru, info, rel, "earlier questions on this item and the user's answers, newest last", "# Earlier questions and answers (from loopd)\n"+b.String())
 	info.Answers = rel
+}
+
+// planContext gives an item filed from a plan the plan's approved brief and blueprint, the
+// versions the user approved (not a later draft), in .loop/context/: its piece is in the ask, but
+// pieces point at other sections of the blueprint (a table, the rules, the names).
+func (r *Runner) planContext(ctx context.Context, ru *run, info *RunInfo) {
+	it := ru.item
+	if it.PlanID <= 0 {
+		return
+	}
+	p, err := r.Client.Plan(ctx, it.PlanID)
+	if err != nil {
+		info.ContextErrs = append(info.ContextErrs, fmt.Sprintf("plan P%d from loopd: %v", it.PlanID, err))
+		return
+	}
+	info.PlanID, info.PlanPiece = it.PlanID, it.PlanPiece
+	for _, x := range []struct {
+		kind, what string
+		v          int
+	}{{pipeline.DocBlueprint, "blueprint", p.BlueprintApproved}, {pipeline.DocBrief, "product brief", p.BriefApproved}} {
+		if x.v <= 0 {
+			continue
+		}
+		d, err := r.Client.PlanDocVersion(ctx, it.PlanID, x.kind, x.v)
+		switch {
+		case err != nil:
+			info.ContextErrs = append(info.ContextErrs, fmt.Sprintf("plan P%d's approved %s (v%d): %v", it.PlanID, x.what, x.v, err))
+		case d == nil:
+			info.ContextErrs = append(info.ContextErrs, fmt.Sprintf("plan P%d's approved %s (v%d): not found", it.PlanID, x.what, x.v))
+		case pipeline.DocSHA256(d.Markdown) != d.SHA256:
+			info.ContextErrs = append(info.ContextErrs, fmt.Sprintf("plan P%d's approved %s (v%d): its text does not match the approved sha256", it.PlanID, x.what, x.v))
+		default:
+			rel := ".loop/context/" + x.kind + ".md"
+			writeContext(ru, info, rel, fmt.Sprintf("plan P%d's approved %s, v%d (sha256 %s)", it.PlanID, x.what, d.Version, short7(d.SHA256)), d.Markdown)
+			info.PlanDocs = append(info.PlanDocs, rel)
+		}
+	}
 }
 
 // heldNotes writes to rel why a held item came back to build (pipeline.ApplyRebuild): the user's

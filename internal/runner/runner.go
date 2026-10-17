@@ -564,6 +564,7 @@ func (r *Runner) prepareBuild(ctx context.Context, ru *run, info *RunInfo) error
 		r.heldNotes(ctx, ru, info, filepath.Join(".loop", "review", "held.md"))
 	}
 	r.answersContext(ctx, ru, info, filepath.Join(".loop", "context", "answers.md"))
+	r.planContext(ctx, ru, info)
 	return nil
 }
 

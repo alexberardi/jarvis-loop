@@ -159,8 +159,18 @@ func (c *Client) PlanTurnResult(ctx context.Context, plan, turn int64, r pipelin
 
 // PlanDoc is a plan's latest document of a kind (brief, blueprint); nil when it has none yet.
 func (c *Client) PlanDoc(ctx context.Context, plan int64, kind string) (*pipeline.PlanDoc, error) {
+	return c.PlanDocVersion(ctx, plan, kind, 0)
+}
+
+// PlanDocVersion is version v of a plan's document of a kind (0: the latest); nil when there is
+// no such version.
+func (c *Client) PlanDocVersion(ctx context.Context, plan int64, kind string, v int) (*pipeline.PlanDoc, error) {
 	var d pipeline.PlanDoc
-	_, err := c.json(ctx, "GET", fmt.Sprintf("/plans/%d/docs/%s", plan, kind), nil, &d)
+	path := fmt.Sprintf("/plans/%d/docs/%s", plan, kind)
+	if v > 0 {
+		path += fmt.Sprintf("?v=%d", v)
+	}
+	_, err := c.json(ctx, "GET", path, nil, &d)
 	var ae *APIError
 	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
 		return nil, nil
@@ -169,6 +179,15 @@ func (c *Client) PlanDoc(ctx context.Context, plan int64, kind string) (*pipelin
 		return nil, err
 	}
 	return &d, nil
+}
+
+// Plan is a plan (its stage and approved versions).
+func (c *Client) Plan(ctx context.Context, id int64) (pipeline.Plan, error) {
+	var out struct {
+		Plan pipeline.Plan `json:"plan"`
+	}
+	_, err := c.json(ctx, "GET", fmt.Sprintf("/plans/%d", id), nil, &out)
+	return out.Plan, err
 }
 
 // Heartbeat keeps a lease alive, with what the run is doing (nil: unchanged); true means stop.
