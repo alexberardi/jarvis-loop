@@ -11,7 +11,7 @@ a turn sees, and how its result becomes those routes' calls.
   beats every item and plan turn for the next free slot, but shares the active-agents limit (a
   running turn is a live lease of stage `orchestrate`), and only one runs at a time
   (`pipeline.ChooseWork`).
-- **The queue** (`orch_turns`, migration 0015): at most one queued and one running turn. Each turn
+- **The queue** (`orch_turns`, migration 0016): at most one queued and one running turn. Each turn
   collects its triggers (`pipeline.Trigger`: reason, item, words, time; the same reason on the same
   item joins, at most 50). A trigger that arrives while a turn runs joins the next one. A turn whose
   lease expires, or that the loop's stop ends, goes back to the queue with its triggers; one past
