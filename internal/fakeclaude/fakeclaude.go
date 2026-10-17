@@ -69,6 +69,11 @@ const (
 	// NoChange is good on a fresh branch; on a resumed one (a rerun after a bounce) it commits
 	// nothing and reports the same head, as an agent that found nothing to fix would.
 	NoChange = "no_change"
+	// TrustedChange changes the script's file with a shell command (the guard refuses Write and
+	// Edit there: it is one of the repo's deny_write paths) and commits it. On a rerun whose brief
+	// says the user OK'd that commit for verify, it commits nothing; on any other rerun it commits
+	// another change to the file (a new head, which needs a new OK).
+	TrustedChange = "trusted_change"
 	// Harness is good, after using the repo's harness through the runner: loop-harness up, then a
 	// run that writes .loop/evidence/harness.txt. HarnessHang does the same, then hangs.
 	Harness     = "harness"
@@ -358,6 +363,11 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	resumed := strings.TrimSpace(git(f.cwd, "rev-list", "--count", "origin/"+base+"..HEAD")) != "0"
 	if scenario == NoChange && resumed {
 		// Nothing to fix: no commit.
+	} else if scenario == TrustedChange {
+		if !resumed || !bytes.Contains(brief, []byte(trustedBrief)) {
+			f.bash("mkdir -p \"$(dirname " + shellQuote(change) + ")\" && echo 'shoot --dark' >> " + shellQuote(change) + " && git add " + shellQuote(change) +
+				" && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'harness: shoot dark mode too'")
+		}
 	} else if ents, err := os.ReadDir(filepath.Join(f.cwd, ".loop", "review")); err == nil && len(ents) > 0 {
 		var names []string
 		for _, e := range ents {
@@ -424,6 +434,9 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // retryHeading opens the section the runner adds to the brief of its one retry after refusing a
 // result (runner.RetryHeading; not imported, as the runner's tests import this package).
 const retryHeading = "## Your previous result was refused"
+
+// trustedBrief is how the runner's brief says the user OK'd a trusted-file commit (runner brief.go).
+const trustedBrief = "The user OK'd verify running commit"
 
 func isRetry(brief []byte) bool { return bytes.Contains(brief, []byte(retryHeading)) }
 

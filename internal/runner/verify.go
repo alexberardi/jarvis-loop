@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -81,25 +82,49 @@ func firstFailed(rs []VerifyResult) *VerifyResult {
 	return nil
 }
 
-// touchesDenyWrite returns the first changed path (new or old) that is one of the repo's
-// deny_write paths, under one, or matches one as a glob.
-func touchesDenyWrite(deny, lines []string) string {
+// trustedPaths are the changed paths (new and old) that are one of the repo's deny_write paths,
+// under one, or match one as a glob, in order and once each.
+func trustedPaths(deny, lines []string) []string {
 	paths, err := pipeline.ParseChangedPaths(lines)
 	if err != nil {
-		return ""
+		return nil
 	}
+	var out []string
 	for _, p := range paths {
 		for _, name := range []string{p.Path, p.OldPath} {
-			if name == "" {
-				continue
-			}
-			for _, d := range deny {
-				d = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(d)), "/")
-				if name == d || strings.HasPrefix(name, d+"/") || pipeline.GlobMatch(d, name) {
-					return name
-				}
+			if name != "" && isDenyWrite(deny, name) && !slices.Contains(out, name) {
+				out = append(out, name)
 			}
 		}
+	}
+	return out
+}
+
+func isDenyWrite(deny []string, name string) bool {
+	for _, d := range deny {
+		d = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(d)), "/")
+		if name == d || strings.HasPrefix(name, d+"/") || pipeline.GlobMatch(d, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// trustRefusal is verify refusing a commit that changes trusted files without the approver's OK
+// for it: the user must look, and may OK that one commit (pipeline.Trust).
+type trustRefusal struct {
+	head  string
+	paths []string
+}
+
+func (e *trustRefusal) Error() string {
+	return fmt.Sprintf("the change touches %s, one of the files the runner trusts (deny_write); verify does not run the agent's version of it, so the user must look", e.paths[0])
+}
+
+// touchesDenyWrite returns the first changed path (new or old) that is a deny_write path.
+func touchesDenyWrite(deny, lines []string) string {
+	if ps := trustedPaths(deny, lines); len(ps) > 0 {
+		return ps[0]
 	}
 	return ""
 }
@@ -196,8 +221,14 @@ func (r *Runner) runVerify(ctx context.Context, ru *run, head string, changed []
 	if err := r.ProbeFence(); err != nil {
 		return nil, fmt.Errorf("verify cannot run: %w", err)
 	}
-	if p := touchesDenyWrite(ru.repo.DenyWrite, changed); p != "" {
-		return nil, fmt.Errorf("the change touches %s, one of the files the runner trusts (deny_write); verify does not run the agent's version of it, so the user must look", p)
+	if paths := trustedPaths(ru.repo.DenyWrite, changed); len(paths) > 0 {
+		if !ru.item.Trust.allows(head) {
+			return nil, &trustRefusal{head: head, paths: paths}
+		}
+		// The approver OK'd this exact commit: verify runs the agent's version once, and the
+		// report says so (loopd uses the OK up).
+		r.Log.Info("verify runs a trusted-file change on the user's OK", "item", ru.item.ID, "head", head, "by", ru.item.Trust.By)
+		ru.trustUsed = head
 	}
 	// Stay inside loopd's per-run cap: a verify that would outlive it ends as the runner's own
 	// failure, not an overtime.
@@ -403,3 +434,37 @@ func VerifyFailedReason(v VerifyResult) string {
 
 // VerifyLogTail is the end of a failed step's output for the next build run.
 func VerifyLogTail(v VerifyResult) string { return clip(tail(v.Log, 40), 3000) }
+
+// maxTrustedDiff caps the trusted files' diff the runner attaches for the user.
+const maxTrustedDiff = 1 << 20
+
+// refuseTrusted reports verify's refusal of a trusted-file change: the item goes to the user with
+// the commit, its trusted files and their diff stat, and the diff itself as evidence, so the user
+// can look and OK that one commit (the Trust button, or `loop trust`). Nothing is pushed.
+func (r *Runner) refuseTrusted(ctx context.Context, ru *run, out outcome, tr *trustRefusal) {
+	rng := "refs/remotes/origin/" + ru.repo.Base + "..." + tr.head
+	stat, err := r.Git.run(ctx, ru.wt, append([]string{"diff", "--stat=100", rng, "--"}, tr.paths...)...)
+	if err != nil {
+		stat = "(git diff --stat failed: " + clip(err.Error(), 200) + ")"
+	}
+	if diff, err := r.Git.run(ctx, ru.wt, append([]string{"diff", rng, "--"}, tr.paths...)...); err != nil {
+		r.Log.Warn("trusted files' diff", "item", ru.item.ID, "err", err)
+	} else if diff != "" {
+		f := filepath.Join(ru.dir, "trusted-files.diff")
+		if len(diff) > maxTrustedDiff {
+			diff = diff[:maxTrustedDiff] + "\n[cut at 1 MB]"
+		}
+		err := os.WriteFile(f, []byte(diff+"\n"), 0o600)
+		if err == nil {
+			err = r.Client.Upload(ctx, ru.item.ID, f, "trusted-files.diff", "the trusted files' diff verify refused at "+tr.head)
+		}
+		if err != nil {
+			r.Log.Warn("attaching the trusted files' diff", "item", ru.item.ID, "err", err)
+		}
+	}
+	msg := fmt.Sprintf("%s. Look at it (`loop show %d`, evidence trusted-files.diff); to let verify run commit %s once, use the Trust button or `loop trust %d --sha %s`",
+		tr.Error(), ru.item.ID, tr.head, ru.item.ID, tr.head)
+	r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{
+		"error": msg, pipeline.FieldTrustSHA: tr.head, pipeline.FieldTrustPaths: strings.Join(tr.paths, ","),
+		pipeline.FieldTrustDiffstat: clip(stat, 2000)}), nil)
+}

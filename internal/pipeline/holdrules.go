@@ -42,6 +42,7 @@ const (
 // install scripts, CI, and deleted tests (docs/phases/06b-all-repos.md).
 func DefaultHoldRules() []HoldRule {
 	out := append(serverRules(), loopRules()...)
+	out = append(out, trustedFileRules()...)
 	for _, repo := range []string{NodeMobileRepo, RecipesRepo} {
 		out = append(out, mobileRules(repo)...)
 	}
@@ -87,6 +88,23 @@ func loopRules() []HoldRule {
 		{Name: "ci", Glob: ".github/workflows/**", Repo: l},
 		{Name: "deleted-test", Glob: "**/*_test.go", Statuses: []string{"D", "R"}, Repo: l},
 		{Name: "scenario-removed", Glob: "scenarios/**", Statuses: []string{"D", "R"}, Repo: l},
+	}
+}
+
+// trustedFileRules hold the files the runner trusts: jarvis-server's deny_write paths (the
+// harness its verify runs; docs/decisions/2026-10-15-all-repos.md), and jarvis-loop's verify
+// gate itself. A PR changing them gets verified only on the user's trust OK (trust.go), and lands
+// only with the user's approval. They are their own list so the built-in sets an earlier loopd
+// wrote out stay recognised (IsBuiltInHoldRuleSet).
+func trustedFileRules() []HoldRule {
+	s, l := ServerRepo, LoopRepo
+	return []HoldRule{
+		{Name: "trusted-file", Glob: "scripts/sandbox", Repo: s},
+		{Name: "trusted-file", Glob: "scripts/screenshots", Repo: s},
+		{Name: "trusted-file", Glob: "scripts/mobile-shot", Repo: s},
+		{Name: "trusted-file", Glob: "tools/pipeline", Repo: s},
+		{Name: "trusted-file", Glob: "tools/pipeline/**", Repo: s},
+		{Name: "trusted-file", Glob: "internal/runner/verify.go", Repo: l},
 	}
 }
 

@@ -1,0 +1,59 @@
+{
+  "name": "trusted-files",
+  "about": "The build changes tools/shoot, a file the mobile repo's runner trusts (deny_write): verify refuses it and the item goes to needs-you with the trusted files' diff stat, the diff as evidence and a Trust button for that commit. Someone else's press and reply are refused, and so is the approver's reply naming another commit (trust 0000000). The approver's press OKs that commit: the next build adds nothing, verify runs that exact commit once, the PR opens, and land holds it for the user. A note from the held thread makes a new commit, which verify refuses again: a new head needs a new OK.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "shoot dark mode too", "text": "[mobile] shoot dark mode too"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "trusted_change", "file": "tools/shoot"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "failed", "actor": "runner",
+                 "data": {"trust_sha": "^[0-9a-f]{40}$", "trusted_paths": "^tools/shoot$", "trusted_diffstat": "tools/shoot \\| 1 \\+"}}]},
+    {"do": "press", "item": "a", "as": "other", "button": "trust"},
+    {"do": "reply", "item": "a", "as": "other", "text": "trust"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "events": [{"item": "a", "kind": "refused", "data": {"action": "^trust$", "code": "^not_approver$"}},
+                {"item": "a", "kind": "refused", "data": {"action": "^answer$", "code": "^not_approver$"}}]},
+    {"do": "reply", "item": "a", "as": "approver", "text": "trust 0000000"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "messages": [{"thread": "a", "text": "^Not trusted: that OK was for `0000000`, but verify refused `[0-9a-f]{7}`\\. Use the latest message\\.$"}],
+     "no_events": [{"item": "a", "kind": "trusted"}, {"item": "a", "kind": "answered"}]},
+    {"do": "press", "item": "a", "as": "approver", "button": "trust"},
+    {"do": "expect", "stage": {"a": "build"}, "events": [{"item": "a", "kind": "trusted", "actor": "approver"}]},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "data": {"trust_used": "^[0-9a-f]{40}$"}}]},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "held"}},
+    {"do": "reply", "item": "a", "as": "approver", "text": "rebuild it with the light mode first"},
+    {"do": "expect", "stage": {"a": "build"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "needs_you"},
+    "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "failed", "data": {"trust_sha": "^[0-9a-f]{40}$"}, "count": 2},
+      {"item": "a", "kind": "trusted", "count": 1}
+    ],
+    "no_events": [
+      {"item": "a", "kind": "advanced", "outcome": "merged"}
+    ],
+    "messages": [
+      {"thread": "a", "text": "^#\\d+ shoot dark mode too: trusted files OK'd by you for `[0-9a-f]{7}` \\(button\\)\\. Verify runs that commit once\\.$"},
+      {"thread": "a", "text": "^Refused trust from someone else"},
+      {"thread": "a", "text": "^Trusted files OK'd by you for `[0-9a-f]{7}`: verify runs that commit once → build\\.$"},
+      {"thread": "a", "text": "opened, head `[0-9a-f]{7}` → review\\.(?s:.*)trusted files changed"},
+      {"thread": "a", "text": "is held for your approval(?s:.*)Why: trusted files changed"},
+      {"thread": "a", "text": "needs you: verify did not run `[0-9a-f]{7}`, because it changes files the runner trusts \\(deny_write\\):\\n```tools/shoot \\| 2 \\+\\+(?s:.*)`loop show \\d+`, evidence trusted-files\\.diff(?s:.*)\\[Trust this commit\\]"}
+    ]
+  }
+}

@@ -120,7 +120,10 @@ runner itself runs the repo's **verify steps** outside the agent's sandbox but i
 fence (credentials masked, no tokens, no pushing; fail closed), one at a time per machine, from its
 own config only: the logs and files they write are the item's evidence and are
 listed apart in the PR's Verification footer; a failure sends the build back (counted like a
-bounce) with nothing pushed. Details: `docs/decisions/2026-10-15-all-repos.md`. While a build or review agent works,
+bounce) with nothing pushed. A change to a file the runner trusts (`deny_write`) is not verified
+until the approver OKs that exact commit (Trust button or `loop trust`); verify then runs it once
+and land holds the PR. Details: `docs/decisions/2026-10-15-all-repos.md`,
+`docs/decisions/2026-10-16-trusted-files.md`. While a build or review agent works,
 a repo with a `harness` lets it use the harness through the runner too: `loop-harness up | run | down`
 asks the runner, through a spool in the agent's own worktree (checked by the run's token and its guard), to run the command in the
 same fence, next to a keeper fence that holds the running sandbox until the agent ends. Details:

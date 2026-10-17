@@ -744,6 +744,9 @@ func TestControlChangeKeepsLiveDefaultRules(t *testing.T) {
 func TestOpenResetsACopyOfBuiltInRules(t *testing.T) {
 	var phase6 []pipeline.HoldRule
 	for _, r := range pipeline.DefaultHoldRules() {
+		if r.Name == "trusted-file" {
+			continue // added after phase 6b: no earlier loopd wrote them out
+		}
 		if r.Repo == pipeline.ServerRepo || r.Repo == pipeline.LoopRepo {
 			phase6 = append(phase6, r)
 		}
@@ -796,6 +799,35 @@ func TestCIRedSHARoundTrip(t *testing.T) {
 	got, err := loadItem(s.w, it.ID)
 	if err != nil || got.CIRedSHA != it.CIRedSHA {
 		t.Fatalf("loaded %q (%v)", got.CIRedSHA, err)
+	}
+}
+
+// Verify's refusal of a trusted-file change survives a save and a load, and the approver's OK
+// binds to the refused commit.
+func TestTrustRoundTrip(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	it, err := s.AddItem(ctx, user, NewItem{Title: "trusted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	it.Stage, it.ReturnStage, it.Question = pipeline.NeedsYou, pipeline.Build, "verify refused"
+	it.Trust = &pipeline.Trust{HeadSHA: sha, Paths: []string{"tools/pipeline"}, Diffstat: "tools/pipeline | 2 +-"}
+	if err := s.tx(ctx, func(tx *sql.Tx) error { return saveItem(tx, it) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Trust(ctx, user, it.ID, "fedcba9876543210fedcba9876543210fedcba98"); err == nil {
+		t.Fatal("an OK for another commit was accepted")
+	}
+	got, err := s.Trust(ctx, user, it.ID, sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadItem(s.w, it.ID)
+	if err != nil || loaded.Trust == nil || loaded.Trust.By != user || loaded.Trust.HeadSHA != sha ||
+		loaded.Trust.Diffstat != it.Trust.Diffstat || loaded.Stage != pipeline.Build || got.Risk != pipeline.RiskHold {
+		t.Fatalf("loaded %+v trust %+v (%v)", loaded, loaded.Trust, err)
 	}
 }
 

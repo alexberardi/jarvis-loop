@@ -310,7 +310,7 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
 	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of, ci_red_sha,
-	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session`
+	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust`
 
 type scanner interface{ Scan(...any) error }
 
@@ -319,13 +319,14 @@ func scanItem(row scanner) (pipeline.Item, error) {
 		it                  pipeline.Item
 		stage, ret          string
 		resources, approval string
+		trust               string
 		dependsOn           string
 		created, updated    int64
 	)
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
 		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf, &it.CIRedSHA,
-		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession)
+		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust)
 	if err != nil {
 		return it, err
 	}
@@ -337,6 +338,12 @@ func scanItem(row scanner) (pipeline.Item, error) {
 	if approval != "" {
 		it.Approval = &pipeline.Approval{}
 		if err := json.Unmarshal([]byte(approval), it.Approval); err != nil {
+			return it, err
+		}
+	}
+	if trust != "" {
+		it.Trust = &pipeline.Trust{}
+		if err := json.Unmarshal([]byte(trust), it.Trust); err != nil {
 			return it, err
 		}
 	}
@@ -392,12 +399,20 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 		}
 		approval = string(b)
 	}
+	trust := ""
+	if it.Trust != nil {
+		b, err := json.Marshal(it.Trust)
+		if err != nil {
+			return err
+		}
+		trust = string(b)
+	}
 	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
-		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=? WHERE id=?`,
+		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=?, trust=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
-		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, it.ID)
+		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, trust, it.ID)
 	return err
 }
 
@@ -653,6 +668,14 @@ func (s *Store) Answer(ctx context.Context, actor string, id int64, text string)
 func (s *Store) Approve(ctx context.Context, actor string, id int64, headSHA, words string) (pipeline.Item, error) {
 	return s.human(ctx, actor, id, "approve", func(it pipeline.Item) (pipeline.Transition, error) {
 		return pipeline.ApplyApprove(it, actor, headSHA, words, s.clock.Now())
+	})
+}
+
+// Trust records the approver's OK for verify to run headSHA, the commit it refused for changing
+// trusted files.
+func (s *Store) Trust(ctx context.Context, actor string, id int64, headSHA string) (pipeline.Item, error) {
+	return s.human(ctx, actor, id, "trust", func(it pipeline.Item) (pipeline.Transition, error) {
+		return pipeline.ApplyTrust(it, actor, headSHA, s.clock.Now())
 	})
 }
 

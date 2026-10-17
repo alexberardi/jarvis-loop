@@ -60,6 +60,7 @@ func New(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
 	route("GET /items/{id}/evidence/{n}", reads, s.downloadEvidence)
 	route("POST /items/{id}/answer", user, s.answer)
 	route("POST /items/{id}/approve", user, s.approve)
+	route("POST /items/{id}/trust", user, s.trust)
 	route("POST /items/{id}/hold", user, s.hold)
 	route("POST /items/{id}/rebuild", both, s.rebuild)
 	route("POST /items/{id}/drop", user, s.drop)
@@ -627,6 +628,26 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, err := s.st.Approve(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.HeadSHA, body.Words)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// trust is the approver's OK for verify to run the commit it refused for changing trusted files.
+func (s *server) trust(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		HeadSHA string `json:"head_sha"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.Trust(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.HeadSHA)
 	if err != nil {
 		s.fail(w, err)
 		return
