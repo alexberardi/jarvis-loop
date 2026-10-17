@@ -44,7 +44,8 @@ type OrchestratorMessage struct {
 
 // OrchMessage keeps a message to the orchestrator (RecordSlackMessage, so acting for the user can
 // name it) and records it as an orchestrator.message event (no item: the item it is about, if
-// any, is in data.item_id). A message seen before (Slack's retries) records nothing: fresh is false.
+// any, is in data.item_id), and starts (or joins) an orchestrate turn with the message trigger. A
+// message seen before (Slack's retries) records nothing: fresh is false.
 func (s *Store) OrchMessage(ctx context.Context, m OrchestratorMessage) (e Event, fresh bool, err error) {
 	err = s.tx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.Exec(`INSERT INTO slack_messages (channel, ts, user, text, at) VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING`,
@@ -63,7 +64,10 @@ func (s *Store) OrchMessage(ctx context.Context, m OrchestratorMessage) (e Event
 		if m.ItemID != 0 {
 			data["item_id"] = m.ItemID
 		}
-		return s.recordEvent(tx, &e, Event{Actor: "loopd", Kind: KindOrchMessage, Data: data})
+		if err := s.recordEvent(tx, &e, Event{Actor: "loopd", Kind: KindOrchMessage, Data: data}); err != nil {
+			return err
+		}
+		return s.queueOrch(tx, pipeline.Trigger{Reason: pipeline.TriggerMessage, ItemID: m.ItemID, Text: clipText(m.Text, 2000)})
 	})
 	return e, fresh, err
 }

@@ -25,11 +25,20 @@ func TestOrchMessageRecordsOnce(t *testing.T) {
 	if _, fresh, err := s.OrchMessage(ctx, m); err != nil || fresh {
 		t.Fatalf("again: %v %v", fresh, err)
 	}
+	// It starts an orchestrate turn (piece 3's message trigger), once for Slack's retries too.
+	q := queued(t, s)
+	if q == nil || len(q.Triggers) != 1 || q.Triggers[0].Reason != pipeline.TriggerMessage ||
+		q.Triggers[0].ItemID != 7 || q.Triggers[0].Text != "drop #61" {
+		t.Fatalf("queued turn: %+v", q)
+	}
 	if _, err := s.UseApproverMessage(ctx, "D1", "1.1", "U0APPROVER", "drop", "61", orch); err != nil {
 		t.Fatalf("the recorded message acts for the user: %v", err)
 	}
 	if _, _, err := s.OrchMessage(ctx, OrchestratorMessage{Channel: "D1", TS: "1.2", User: "U0OTHER", Text: "drop #61"}); err != nil {
 		t.Fatal(err)
+	}
+	if q := queued(t, s); len(q.Triggers) != 2 || q.Triggers[1].ItemID != 0 {
+		t.Fatalf("a second message joins the turn: %+v", q.Triggers)
 	}
 	all, err := s.OrchMessages(ctx, 0, 0)
 	if err != nil || len(all) != 2 {

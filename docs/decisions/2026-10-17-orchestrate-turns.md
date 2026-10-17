@@ -29,9 +29,10 @@ a turn sees, and how its result becomes those routes' calls.
     fired for);
   - a wait the orchestrator met ending (`due`): a retry refused inside its backoff (429
     `too_soon`) sets `orch_state.due_at`, and the turn starts when it ends, not at the next sweep;
-  - the user's message to it (`message`, with the words): `store.QueueOrchestrate`. **Not wired
-    yet**: loopd's Slack layer records the approver's messages in piece 2 (#72), which calls it.
-    The harness's `orchestrator_message` step stands in for it.
+  - the user's message to it (`message`, with the words): `store.QueueOrchestrate`. Piece 2
+    (#72) wires it: `store.OrchMessage`, which loopd's Slack layer calls for each message to the
+    `@orchestrator` app, queues it. The harness's `orchestrator_message` step still queues one
+    directly; `tell_orchestrator` goes through the Slack layer.
 - **The sweep**, every 15 minutes while an item is open (`pipeline.OrchSweep`, run by
   `store.OrchTick`, which `Sweep` calls at most once a minute of the store's clock, so on every
   request and loopd's minute ticker). It queues a turn only when the board changed since the last
@@ -90,7 +91,6 @@ a turn sees, and how its result becomes those routes' calls.
 
 ## Left open
 
-- The user-message trigger waits for piece 2's Slack layer (above).
 - "An escalation is due" (the spec's "Cost") is built only as the retry backoff's end (`due`).
   Re-pinging an unanswered escalation is the persona's and piece 2's to define.
 - For a runner error the snapshot has the failed run's event (its error and last output, as the

@@ -681,7 +681,7 @@ func (p *player) step(st Step) error {
 	case "expect", "wait":
 		return p.check(st.Expect)
 	case "orchestrator_message":
-		// The user's message to the orchestrator, as loopd's Slack layer will queue it (piece 2).
+		// The user's message to the orchestrator queued directly; tell_orchestrator sends it through Slack.
 		var ids []int64
 		if st.Item != "" {
 			r, err := p.ref(st.Item)

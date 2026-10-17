@@ -1,0 +1,19 @@
+{
+  "name": "orchestrator-message-turn",
+  "about": "A message to @orchestrator starts its turn (docs/phases/08-orchestrator.md, piece 2 wiring piece 3's message trigger): with nothing else to do, no turn runs; the approver's DM and someone else's DM, recorded by loopd's Slack layer, queue one turn with both messages as its triggers, and the runner claims it.",
+  "stages": ["build", "orchestrate"],
+  "steps": [
+    {"do": "script", "for": "orchestrate", "play": "note"},
+    {"do": "runner", "claims": "none"},
+    {"do": "tell_orchestrator", "as": "approver", "where": "dm", "text": "what's stuck?"},
+    {"do": "tell_orchestrator", "as": "other", "where": "dm", "text": "is #3 close?"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "events": [{"kind": "orchestrator.message", "count": 2},
+               {"kind": "orchestrate_claimed", "data": {"triggers": "^2$"}, "count": 1},
+               {"kind": "orchestrate_done", "count": 1}],
+    "agent_runs": {"orchestrate": 1}
+  }
+}

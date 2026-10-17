@@ -30,7 +30,10 @@ that records those messages and posts what the orchestrator says. Its turns are 
   a message that mentions anyone but the loop bot itself (its own id from its own `auth.test`,
   asked then) is left alone too, and any mention while that is unknown as well: never misread as
   an approval, a trust OK or an answer. Without the app, nothing changes.
-- **The hand-off to piece 3:**
+- **The hand-off to piece 3:** each new message (not Slack's retry of one) also starts or joins an
+  orchestrate turn with piece 3's `message` trigger (`store.QueueOrchestrate`'s path: its words and
+  the item whose thread it is in), in the same transaction as its `orchestrator.message` event.
+  Scenario `orchestrator-message-turn`. The turn reads where to answer from the routes below.
 
   | Route (orchestrator token) | What |
   |---|---|
