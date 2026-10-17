@@ -1,0 +1,238 @@
+package api
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/alexberardi/jarvis-loop/internal/slack"
+)
+
+// doAs is do with an X-Loop-On-Behalf header.
+func (e *env) doAs(tok, onBehalf, method, path string, body any, wantStatus int) apiErr {
+	e.t.Helper()
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequest(method, e.srv.URL+path, bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(OnBehalfHeader, onBehalf)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != wantStatus {
+		e.t.Fatalf("%s %s as %s: status %d, want %d: %s", method, path, onBehalf, resp.StatusCode, wantStatus, raw)
+	}
+	var ae apiErr
+	json.Unmarshal(raw, &ae)
+	return ae
+}
+
+func (e *env) newest(id int64) (kind, actor string, data map[string]any) {
+	e.t.Helper()
+	d := e.get(id)
+	ev := d.Events[len(d.Events)-1]
+	return ev.Kind, ev.Actor, ev.Data
+}
+
+func (e *env) failed(id int64) {
+	e.t.Helper()
+	e.mustClaim("t", id, "triage")
+	e.advance(id, "failed", map[string]string{"error": "fatal: index.lock exists"}, 200)
+}
+
+const orchActor = "orchestrator:loop"
+
+// The orchestrator never approves, drops, OKs, changes config or works a lease: every user and
+// runner write route refuses its token, and a refusal on an item is recorded on the item.
+func TestOrchestratorRefusedRoutes(t *testing.T) {
+	e := newEnv(t)
+	id := e.addItem("x")
+	for _, r := range []struct{ method, path string }{
+		{"POST", "/items"}, {"PATCH", "/items/1"}, {"POST", "/claim"}, {"POST", "/leases/x/heartbeat"},
+		{"POST", "/items/1/advance"}, {"POST", "/items/1/evidence"}, {"POST", "/items/1/events"},
+		{"POST", "/items/1/answer"}, {"POST", "/items/1/approve"}, {"POST", "/items/1/hold"},
+		{"POST", "/items/1/rebuild"}, {"POST", "/items/1/drop"}, {"POST", "/items/1/qa"},
+		{"POST", "/items/1/verified"}, {"POST", "/items/1/reopen"}, {"POST", "/plans"},
+		{"POST", "/plans/1/messages"}, {"POST", "/plans/1/approve"}, {"POST", "/plans/1/drop"},
+		{"POST", "/plans/1/turns/1/result"}, {"PUT", "/control"},
+	} {
+		e.refused(orchTok, r.method, r.path, map[string]any{}, 403, "forbidden")
+	}
+	refused := map[string]bool{}
+	for _, ev := range e.get(id).Events {
+		if ev.Kind == "refused" {
+			if ev.Actor != orchActor || ev.Data["code"] != "forbidden" {
+				t.Fatalf("refused event %+v", ev)
+			}
+			refused[ev.Data["action"].(string)] = true
+		}
+	}
+	for _, a := range []string{"approve", "drop", "patch", "answer", "hold", "advance"} {
+		if !refused[a] {
+			t.Fatalf("no refused event for %s: %v", a, refused)
+		}
+	}
+	// It reads; the others do not use its routes.
+	e.do(orchTok, "GET", "/items", nil, 200, nil)
+	e.do(orchTok, "GET", fmt.Sprintf("/items/%d", id), nil, 200, nil)
+	e.do(orchTok, "GET", "/control", nil, 200, nil)
+	for _, tok := range []string{userTok, runnerTok} {
+		e.refused(tok, "POST", "/orchestrator/items/1/retry", map[string]any{"reason": "r"}, 403, "forbidden")
+		e.refused(tok, "POST", "/orchestrator/agents", map[string]any{"active_agents": 0, "reason": "r"}, 403, "forbidden")
+	}
+}
+
+// Every action refuses a missing reason, and records the reason when it acts.
+func TestOrchestratorActionsNeedAndRecordReasons(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.addItem("a"), e.addItem("b")
+	e.failed(a)
+	e.clock.Advance(2 * time.Minute)
+	actions := []struct {
+		method, path string
+		body         map[string]any
+		status       int
+		item         int64
+		kind         string
+	}{
+		{"POST", fmt.Sprintf("/orchestrator/items/%d/retry", a), map[string]any{}, 200, a, "retried"},
+		{"POST", fmt.Sprintf("/orchestrator/items/%d/priority", b), map[string]any{"priority": "P1"}, 200, b, "patched"},
+		{"POST", fmt.Sprintf("/orchestrator/items/%d/link", b), map[string]any{"after": a}, 200, b, "linked"},
+		{"POST", "/orchestrator/escalations", map[string]any{"item_id": b, "text": "product call", "recommendation": "do A"}, 201, b, "orchestrator.escalated"},
+		{"POST", "/orchestrator/items", map[string]any{"title": "git lock", "repo": "jarvis-server", "priority": "P1", "signature": "index.lock exists"}, 201, 0, ""},
+		{"POST", "/orchestrator/agents", map[string]any{"active_agents": 1}, 200, 0, ""},
+		{"POST", "/orchestrator/notes", map[string]any{"text": "watching #1"}, 201, 0, ""},
+	}
+	for _, x := range actions {
+		e.refused(orchTok, x.method, x.path, x.body, 400, "missing_field")
+		x.body["reason"] = "because " + x.path
+		var out map[string]any
+		e.do(orchTok, x.method, x.path, x.body, x.status, &out)
+		if x.item == 0 {
+			continue
+		}
+		kind, actor, data := e.newest(x.item)
+		if kind != x.kind || actor != orchActor || data["reason"] != "because "+x.path {
+			t.Fatalf("%s: event %s by %s %v", x.path, kind, actor, data)
+		}
+	}
+	var nb struct {
+		Notes []struct {
+			Actor string         `json:"actor"`
+			Data  map[string]any `json:"data"`
+		} `json:"notes"`
+	}
+	e.do(userTok, "GET", "/orchestrator/notes", nil, 200, &nb)
+	if len(nb.Notes) != 1 || nb.Notes[0].Data["text"] != "watching #1" || nb.Notes[0].Actor != orchActor {
+		t.Fatalf("notebook %+v", nb)
+	}
+	var c struct {
+		ActiveAgents int `json:"active_agents"`
+	}
+	e.do(userTok, "GET", "/control", nil, 200, &c)
+	if c.ActiveAgents != 1 {
+		t.Fatalf("active agents %d", c.ActiveAgents)
+	}
+	e.refused(orchTok, "POST", "/orchestrator/agents", map[string]any{"active_agents": 2, "reason": "r"}, 409, "limit")
+	// The same signature again is the open item, not a new one.
+	var dup struct {
+		Duplicate bool `json:"duplicate"`
+		Item      struct{ ID int64 }
+	}
+	e.do(orchTok, "POST", "/orchestrator/items", map[string]any{"title": "git lock again", "signature": "Index.lock exists ", "reason": "r"}, 200, &dup)
+	if !dup.Duplicate || dup.Item.ID != 3 {
+		t.Fatalf("dedupe %+v", dup)
+	}
+}
+
+func TestOrchestratorAnswerAndRetryLimits(t *testing.T) {
+	e := newEnv(t)
+	id := e.addItem("x")
+	e.failed(id)
+	path := fmt.Sprintf("/orchestrator/items/%d/", id)
+	e.refused(orchTok, "POST", path+"answer", map[string]any{"kind": "loop", "text": "go on", "reason": "r"}, 409, "limit")
+	e.refused(orchTok, "POST", path+"retry", map[string]any{"reason": "git lock"}, 429, "too_soon")
+	e.clock.Advance(2 * time.Minute)
+	e.do(orchTok, "POST", path+"retry", map[string]any{"reason": "git lock"}, 200, nil)
+	e.mustClaim("t", id, "triage")
+	e.advance(id, "question", map[string]string{"question": "no emulator: skip the shots?"}, 200)
+	e.refused(orchTok, "POST", path+"answer", map[string]any{"kind": "product", "text": "ship it", "reason": "r"}, 400, "invalid_field")
+	e.do(orchTok, "POST", path+"answer", map[string]any{"kind": "harness", "text": "list it under not verified", "reason": "standing answer"}, 200, nil)
+	kind, actor, data := e.newest(id)
+	if kind != "answered" || actor != orchActor || data["answer_kind"] != "harness" {
+		t.Fatalf("answer event %s %s %v", kind, actor, data)
+	}
+}
+
+// The approver's message makes the orchestrator act as them (via the orchestrator); approvals stay
+// on their buttons; forged, someone else's, reused and old messages are refused.
+func TestActForUser(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	a, b := e.addItem("a"), e.addItem("b")
+	if err := e.store.RecordSlackMessage(ctx, "C0LOOP", "100.1", slack.Approver, "drop #1 and #2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.RecordSlackMessage(ctx, "C0LOOP", "100.2", "U0SOMEONE", "drop #1"); err != nil {
+		t.Fatal(err)
+	}
+	drop := func(id int64) string { return fmt.Sprintf("/items/%d/drop", id) }
+
+	if ae := e.doAs(orchTok, "C0LOOP/100.9", "POST", drop(a), map[string]any{}, 403); ae.Code != "not_approver" {
+		t.Fatalf("forged: %+v", ae)
+	}
+	if ae := e.doAs(orchTok, "C0LOOP/100.2", "POST", drop(a), map[string]any{}, 403); ae.Code != "not_approver" {
+		t.Fatalf("someone else's: %+v", ae)
+	}
+	if ae := e.doAs(userTok, "C0LOOP/100.1", "POST", drop(a), map[string]any{}, 403); ae.Code != "forbidden" {
+		t.Fatalf("a user token naming a message: %+v", ae)
+	}
+	if ae := e.doAs(orchTok, "100.1", "POST", drop(a), map[string]any{}, 400); ae.Code != "invalid_field" {
+		t.Fatalf("malformed: %+v", ae)
+	}
+	if ae := e.doAs(orchTok, "C0LOOP/100.1", "POST", fmt.Sprintf("/items/%d/approve", a), map[string]any{"head_sha": shaA}, 403); ae.Code != "not_on_behalf" {
+		t.Fatalf("approve for the user: %+v", ae)
+	}
+	if ae := e.doAs(orchTok, "C0LOOP/100.1", "POST", "/plans/1/approve", map[string]any{}, 403); ae.Code != "not_on_behalf" {
+		t.Fatalf("plan approve for the user: %+v", ae)
+	}
+	kind, actor, data := e.newest(a)
+	if kind != "refused" || actor != orchActor || data["code"] != "not_on_behalf" || data["action"] != "approve" {
+		t.Fatalf("refused approve: %s %s %v", kind, actor, data)
+	}
+
+	e.doAs(orchTok, "C0LOOP/100.1", "POST", drop(a), map[string]any{"words": "drop #1 and #2"}, 200)
+	e.doAs(orchTok, "C0LOOP/100.1", "POST", drop(b), map[string]any{"words": "drop #1 and #2"}, 200)
+	for _, id := range []int64{a, b} {
+		d := e.get(id)
+		ev := d.Events[len(d.Events)-1]
+		if d.Item.Stage != "closed" || ev.Kind != "dropped" || ev.Actor != "slack:"+slack.Approver || ev.Data["via"] != orchActor {
+			t.Fatalf("#%d: %s %+v", id, d.Item.Stage, ev)
+		}
+	}
+	if ae := e.doAs(orchTok, "C0LOOP/100.1", "POST", drop(a), map[string]any{}, 409); ae.Code != "message_used" {
+		t.Fatalf("reused: %+v", ae)
+	}
+	e.clock.Advance(11 * time.Minute)
+	if ae := e.doAs(orchTok, "C0LOOP/100.1", "PUT", "/control", map[string]any{"stopped": true}, 403); ae.Code != "not_approver" {
+		t.Fatalf("old message: %+v", ae)
+	}
+}
+
+func TestOrchestratorTokenKind(t *testing.T) {
+	toks, err := ParseTokens(bytes.NewReader([]byte(orchTok + "\torchestrator\tloop\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := toks.Lookup(orchTok); !ok || p.Kind != KindOrchestrator || p.Actor() != orchActor {
+		t.Fatalf("%+v %v", p, ok)
+	}
+}

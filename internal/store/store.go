@@ -58,6 +58,7 @@ type Store struct {
 	wmu     sync.Mutex
 	emitMu  sync.Mutex
 	pending []Event
+	via     string // the open transaction's WithVia: every event it writes says so
 	subsMu  sync.RWMutex
 	subs    []func(Event)
 
@@ -199,6 +200,7 @@ func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
 func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
 	s.wmu.Lock()
 	s.pending = nil
+	s.via = viaFrom(ctx)
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		s.wmu.Unlock()
@@ -252,6 +254,9 @@ type Event struct {
 func (s *Store) event(tx *sql.Tx, e Event) error {
 	if e.Data == nil {
 		e.Data = map[string]any{}
+	}
+	if s.via != "" {
+		e.Data["via"] = s.via
 	}
 	data, err := json.Marshal(e.Data)
 	if err != nil {

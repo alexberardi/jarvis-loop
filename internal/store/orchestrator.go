@@ -1,0 +1,460 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
+)
+
+// The orchestrator's actions (docs/phases/08-orchestrator.md, "What it may do"). Each is checked
+// against its limit here, in the transaction that records it, and each event carries its reason.
+// actor is the orchestrator's ("orchestrator:<name>").
+
+// Error codes of acting for the user.
+const (
+	CodeNotApprover = "not_approver"
+	CodeUsed        = "message_used"
+)
+
+// Event kinds of the orchestrator's own actions without a transition.
+const (
+	KindOrchEscalated = "orchestrator.escalated"
+	KindOrchNote      = "orchestrator.note"
+	KindOrchAdded     = "orchestrator.added"
+	KindOrchSeenAgain = "orchestrator.seen_again"
+	KindLinked        = "linked"
+)
+
+// OnBehalfWindow is how long after the approver's message the orchestrator may act on it.
+const OnBehalfWindow = 10 * time.Minute
+
+const orchPrefix = "orchestrator:"
+
+type viaKey struct{}
+
+// WithVia marks the writes made with ctx as done through someone else (an orchestrator acting for
+// the user): every event they record carries data.via.
+func WithVia(ctx context.Context, via string) context.Context {
+	return context.WithValue(ctx, viaKey{}, via)
+}
+
+func viaFrom(ctx context.Context) string {
+	v, _ := ctx.Value(viaKey{}).(string)
+	return v
+}
+
+// Refused records a refused action on an item (an API route the principal may not use), then
+// returns err.
+func (s *Store) Refused(ctx context.Context, actor string, id int64, action string, err error) error {
+	return s.refuse(ctx, actor, id, action, err)
+}
+
+func itemEvents(tx *sql.Tx, id int64) ([]Event, error) {
+	rows, err := tx.Query(`SELECT `+eventCols+` FROM events WHERE item_id = ? ORDER BY id`, id)
+	if err != nil {
+		return nil, err
+	}
+	return scanEvents(rows)
+}
+
+func str(m map[string]any, k string) string {
+	v, _ := m[k].(string)
+	return v
+}
+
+// orch applies an orchestrator action that moves or changes an item: rule sees the item and its
+// events, and its transition is saved and recorded like a human one.
+func (s *Store) orch(ctx context.Context, actor string, id int64, action, reason string,
+	rule func(tx *sql.Tx, it pipeline.Item, evs []Event) (pipeline.Transition, error)) (pipeline.Item, error) {
+	var out pipeline.Item
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		r, err := pipeline.NeedReason(reason)
+		if err != nil {
+			return err
+		}
+		it, err := loadItem(tx, id)
+		if err != nil {
+			return err
+		}
+		evs, err := itemEvents(tx, id)
+		if err != nil {
+			return err
+		}
+		tr, err := rule(tx, it, evs)
+		if err != nil {
+			return err
+		}
+		if tr.Data == nil {
+			tr.Data = map[string]any{}
+		}
+		tr.Data["reason"] = r
+		tr.Item.UpdatedAt = s.clock.Now()
+		if err := saveItem(tx, tr.Item); err != nil {
+			return err
+		}
+		out = tr.Item
+		if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
+			return err
+		}
+		return s.planItemSettled(tx, tr.Item)
+	})
+	if err != nil {
+		return out, s.refuse(ctx, actor, id, action, err)
+	}
+	return out, nil
+}
+
+// lastNeedsYou is the event that put the item in needs_you last.
+func lastNeedsYou(evs []Event) (Event, bool) {
+	for i := len(evs) - 1; i >= 0; i-- {
+		if evs[i].To == string(pipeline.NeedsYou) && evs[i].From != string(pipeline.NeedsYou) {
+			return evs[i], true
+		}
+	}
+	return Event{}, false
+}
+
+// OrchAnswer is the orchestrator answering an item's question with an answer of one of the kinds it
+// may give (pipeline.CheckOrchestratorAnswer). A question that is a run failure is not answered:
+// that is OrchRetry, with its backoff.
+func (s *Store) OrchAnswer(ctx context.Context, actor string, id int64, kind, text, reason string) (pipeline.Item, error) {
+	return s.orch(ctx, actor, id, "answer", reason, func(_ *sql.Tx, it pipeline.Item, evs []Event) (pipeline.Transition, error) {
+		if it.Stage != pipeline.NeedsYou {
+			return pipeline.Transition{}, errf(pipeline.CodeWrongStage, "item is %s, not needs_you", it.Stage)
+		}
+		if e, ok := lastNeedsYou(evs); ok && pipeline.IsRunFailure(e.Kind, pipeline.Outcome(e.Outcome)) {
+			return pipeline.Transition{}, errf(pipeline.CodeLimit, "the item is stuck on a run failure: retry it (with its backoff), do not answer it")
+		}
+		var prior []pipeline.OrchAnswer
+		for _, e := range evs {
+			if e.Kind == "answered" && strings.HasPrefix(e.Actor, orchPrefix) {
+				prior = append(prior, pipeline.OrchAnswer{Kind: str(e.Data, "answer_kind"), Text: str(e.Data, "answer"), HeadSHA: str(e.Data, "head_sha")})
+			}
+		}
+		if err := pipeline.CheckOrchestratorAnswer(kind, text, it.HeadSHA, prior); err != nil {
+			return pipeline.Transition{}, err
+		}
+		tr, err := pipeline.ApplyAnswer(it, text)
+		if err != nil {
+			return tr, err
+		}
+		tr.Data["answer_kind"], tr.Data["head_sha"] = kind, it.HeadSHA
+		return tr, nil
+	})
+}
+
+// OrchRetry sends an item stuck on a run failure (a failed run or one past the time limit) back to
+// its stage, after the backoff for its failure on this head; the third failure on a head is
+// refused and escalated instead.
+func (s *Store) OrchRetry(ctx context.Context, actor string, id int64, reason string) (pipeline.Item, error) {
+	var escalate map[string]any
+	it, err := s.orch(ctx, actor, id, "retry", reason, func(_ *sql.Tx, it pipeline.Item, evs []Event) (pipeline.Transition, error) {
+		if it.Stage != pipeline.NeedsYou {
+			return pipeline.Transition{}, errf(pipeline.CodeWrongStage, "item is %s, not needs_you", it.Stage)
+		}
+		failed, ok := lastNeedsYou(evs)
+		if !ok || !pipeline.IsRunFailure(failed.Kind, pipeline.Outcome(failed.Outcome)) {
+			return pipeline.Transition{}, errf(pipeline.CodeWrongStage, "the item is not stuck on a run failure; only those are retried")
+		}
+		failures := 1
+		for _, e := range evs {
+			if e.Kind == "retried" && str(e.Data, "head_sha") == it.HeadSHA {
+				failures++
+			}
+		}
+		notBefore, ask := pipeline.RetryWait(failures, failed.At)
+		if ask {
+			escalate = map[string]any{"text": "failure " + strconv.Itoa(failures) + " on the same head: " + it.Question,
+				"reason": "the third failure on one head is the user's", "failure": failures, "head_sha": it.HeadSHA, "auto": true}
+			return pipeline.Transition{}, errf(pipeline.CodeLimit, "failure %d on this head: escalated to the user, not retried", failures)
+		}
+		if now := s.clock.Now(); now.Before(notBefore) {
+			return pipeline.Transition{}, errf(pipeline.CodeTooSoon, "failure %d: retry after %s", failures, notBefore.Format(time.RFC3339))
+		}
+		return pipeline.ApplyRetry(it, failures, reason)
+	})
+	if escalate != nil {
+		// Recorded apart from the refused retry (whose transaction rolled back), and not rate
+		// limited: loopd escalates this one itself.
+		if e := s.tx(ctx, func(tx *sql.Tx) error {
+			return s.event(tx, Event{ItemID: id, Actor: "loopd", Kind: KindOrchEscalated, Data: escalate})
+		}); e != nil {
+			return it, e
+		}
+	}
+	return it, err
+}
+
+// OrchPriority sets an item's priority, any of P1 to P5 (the user's decision 3).
+func (s *Store) OrchPriority(ctx context.Context, actor string, id int64, priority, reason string) (pipeline.Item, error) {
+	return s.orch(ctx, actor, id, "priority", reason, func(_ *sql.Tx, it pipeline.Item, _ []Event) (pipeline.Transition, error) {
+		return pipeline.ApplyPatch(it, &priority, nil)
+	})
+}
+
+// OrchLink makes an open item wait for another open item (loop add --after, after the fact).
+func (s *Store) OrchLink(ctx context.Context, actor string, id, after int64, reason string) (pipeline.Item, error) {
+	return s.orch(ctx, actor, id, "link", reason, func(tx *sql.Tx, it pipeline.Item, _ []Event) (pipeline.Transition, error) {
+		if !isOpen(it.Stage) {
+			return pipeline.Transition{}, errf(pipeline.CodeWrongStage, "item is %s", it.Stage)
+		}
+		if after == id {
+			return pipeline.Transition{}, errf(pipeline.CodeInvalidField, "an item cannot wait for itself")
+		}
+		var stage pipeline.Stage
+		err := tx.QueryRow(`SELECT stage FROM items WHERE id = ?`, after).Scan(&stage)
+		if errors.Is(err, sql.ErrNoRows) {
+			return pipeline.Transition{}, errf(pipeline.CodeInvalidField, "after: no item #%d", after)
+		}
+		if err != nil {
+			return pipeline.Transition{}, err
+		}
+		if !isOpen(stage) {
+			return pipeline.Transition{}, errf(pipeline.CodeInvalidField, "after: #%d is %s; only an open item can be waited for", after, stage)
+		}
+		for _, d := range it.DependsOn {
+			if d == after {
+				return pipeline.Transition{}, errf(pipeline.CodeInvalidField, "#%d already waits for #%d", id, after)
+			}
+		}
+		it.DependsOn = append(append([]int64{}, it.DependsOn...), after)
+		if err := saveItem(tx, it); err != nil {
+			return pipeline.Transition{}, err
+		}
+		if err := checkDependencies(tx, it); err != nil {
+			return pipeline.Transition{}, err
+		}
+		return pipeline.Transition{Item: it, From: it.Stage, To: it.Stage, Kind: KindLinked,
+			Data: map[string]any{"after": after, "depends_on": it.DependsOn}}, nil
+	})
+}
+
+func isOpen(st pipeline.Stage) bool { return st != pipeline.Done && st != pipeline.Closed }
+
+// OrchAdd files an item (a process ticket or a follow-up) with a failure signature. An open item
+// filed with the same normalised signature is returned instead (dup), with the new reason recorded
+// on it; otherwise at most pipeline.OrchAddsPerDay a day.
+func (s *Store) OrchAdd(ctx context.Context, actor string, n NewItem, signature, reason string) (it pipeline.Item, dup bool, err error) {
+	sig := pipeline.NormaliseSignature(signature)
+	err = s.tx(ctx, func(tx *sql.Tx) error {
+		r, err := pipeline.NeedReason(reason)
+		if err != nil {
+			return err
+		}
+		if sig == "" {
+			return errf(pipeline.CodeMissingField, "signature is required: it deduplicates the orchestrator's items")
+		}
+		var existing int64
+		err = tx.QueryRow(`SELECT e.item_id FROM events e JOIN items i ON i.id = e.item_id
+			WHERE e.kind = ? AND json_extract(e.data, '$.signature') = ? AND i.stage NOT IN (?, ?) ORDER BY e.id LIMIT 1`,
+			KindOrchAdded, sig, string(pipeline.Done), string(pipeline.Closed)).Scan(&existing)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return err
+		default:
+			if it, err = loadItem(tx, existing); err != nil {
+				return err
+			}
+			dup = true
+			return s.event(tx, Event{ItemID: existing, Actor: actor, Kind: KindOrchSeenAgain,
+				Data: map[string]any{"signature": sig, "raw_signature": signature, "reason": r, "title": n.Title}})
+		}
+		var added int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = ? AND actor LIKE ? AND at > ?`,
+			KindOrchAdded, orchPrefix+"%", s.clock.Now().Add(-24*time.Hour).UnixNano()).Scan(&added); err != nil {
+			return err
+		}
+		if added >= pipeline.OrchAddsPerDay {
+			return errf(pipeline.CodeLimit, "already %d items filed in the last 24 hours; recommend the next one to the user", added)
+		}
+		if n.Source == "" {
+			n.Source = "finding"
+		}
+		if it, err = pipeline.NewItem(n.Title, n.Ask, n.Repo, n.Priority, n.Source, s.clock.Now()); err != nil {
+			return err
+		}
+		it.DependsOn = dedupeIDs(n.DependsOn)
+		if err := s.insertItem(tx, actor, &it); err != nil {
+			return err
+		}
+		if err := checkDependencies(tx, it); err != nil {
+			return err
+		}
+		return s.event(tx, Event{ItemID: it.ID, Actor: actor, Kind: KindOrchAdded,
+			Data: map[string]any{"signature": sig, "raw_signature": signature, "reason": r}})
+	})
+	if err != nil {
+		return it, false, s.refuse(ctx, actor, 0, "add", err)
+	}
+	return it, dup, nil
+}
+
+// OrchEscalate records the orchestrator asking the user (the Slack ping is the Slack layer's): text
+// is what it needs, recommendation what it recommends. At most one per pipeline.OrchEscalateEvery,
+// except about an approval (an item held for one). id may be 0 (not about one item).
+func (s *Store) OrchEscalate(ctx context.Context, actor string, id int64, text, recommendation, reason string) (Event, error) {
+	var out Event
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		r, err := pipeline.NeedReason(reason)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(text) == "" {
+			return errf(pipeline.CodeMissingField, "text is required: what the user is asked")
+		}
+		approval := false
+		if id != 0 {
+			it, err := loadItem(tx, id)
+			if err != nil {
+				return err
+			}
+			approval = it.Stage == pipeline.Held
+		}
+		now := s.clock.Now()
+		if !approval {
+			var last sql.NullInt64
+			if err := tx.QueryRow(`SELECT MAX(at) FROM events WHERE kind = ? AND COALESCE(json_extract(data, '$.approval'), 0) = 0`,
+				KindOrchEscalated).Scan(&last); err != nil {
+				return err
+			}
+			if last.Valid {
+				if next := fromNanos(last.Int64).Add(pipeline.OrchEscalateEvery); now.Before(next) {
+					return errf(pipeline.CodeTooSoon, "one escalation per %d minutes: escalate after %s, or batch it with the next",
+						int(pipeline.OrchEscalateEvery.Minutes()), next.Format(time.RFC3339))
+				}
+			}
+		}
+		out = Event{ItemID: id, Actor: actor, Kind: KindOrchEscalated, Data: map[string]any{
+			"text": strings.TrimSpace(text), "recommendation": strings.TrimSpace(recommendation), "reason": r, "approval": approval}}
+		return s.event(tx, out)
+	})
+	if err != nil {
+		return out, s.refuse(ctx, actor, id, "escalate", err)
+	}
+	return out, nil
+}
+
+// OrchAgentsDown lowers the active-agents number (never raises it, so never above the user's). The
+// event (kind control) says ping: the Slack layer tells the user every time.
+func (s *Store) OrchAgentsDown(ctx context.Context, actor string, want int, reason string) (pipeline.Control, error) {
+	var out pipeline.Control
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		r, err := pipeline.NeedReason(reason)
+		if err != nil {
+			return err
+		}
+		old, err := s.loadControl(tx)
+		if err != nil {
+			return err
+		}
+		if err := pipeline.CheckAgentsDown(old.ActiveAgents, want); err != nil {
+			return err
+		}
+		c := old
+		c.ActiveAgents = want
+		builtIn, err := builtInRules(tx)
+		if err != nil {
+			return err
+		}
+		if err := saveControl(tx, c, builtIn); err != nil {
+			return err
+		}
+		out = c
+		return s.event(tx, Event{Actor: actor, Kind: "control", Data: map[string]any{"from": old, "to": c, "reason": r, "ping": true}})
+	})
+	if err != nil {
+		return out, s.refuse(ctx, actor, 0, "agents", err)
+	}
+	return out, nil
+}
+
+// OrchNote appends to the orchestrator's notebook.
+func (s *Store) OrchNote(ctx context.Context, actor, text, reason string) (Event, error) {
+	var out Event
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		r, err := pipeline.NeedReason(reason)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(text) == "" {
+			return errf(pipeline.CodeMissingField, "text is required")
+		}
+		out = Event{Actor: actor, Kind: KindOrchNote, Data: map[string]any{"text": strings.TrimSpace(text), "reason": r}}
+		return s.event(tx, out)
+	})
+	return out, err
+}
+
+// Notebook is the orchestrator's notes, oldest first (the newest limit, or all when limit is 0).
+func (s *Store) Notebook(ctx context.Context, limit int) ([]Event, error) {
+	q := `SELECT ` + eventCols + ` FROM (SELECT * FROM events WHERE kind = ? ORDER BY id DESC`
+	args := []any{KindOrchNote}
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.r.QueryContext(ctx, q+`) ORDER BY id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	return scanEvents(rows)
+}
+
+// ---- acting for the user ----
+
+// SlackMessage is a message loopd's Slack layer saw.
+type SlackMessage struct {
+	Channel, TS, User, Text string
+	At                      time.Time
+}
+
+// RecordSlackMessage keeps a message the Slack layer saw, so an action that names it can be
+// checked. Recording one twice keeps the first.
+func (s *Store) RecordSlackMessage(ctx context.Context, channel, ts, user, text string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO slack_messages (channel, ts, user, text, at) VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING`,
+			channel, ts, user, text, s.clock.Now().UnixNano())
+		return err
+	})
+}
+
+// UseApproverMessage spends the approver's message (channel, ts) on one action on one target (an
+// item id, or "" for none): it must be a message the Slack layer saw from approver, at most
+// OnBehalfWindow old, and not used for this action on this target before. by is who acts on it.
+func (s *Store) UseApproverMessage(ctx context.Context, channel, ts, approver, action, target, by string) (SlackMessage, error) {
+	m := SlackMessage{Channel: channel, TS: ts}
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		var at int64
+		err := tx.QueryRow(`SELECT user, text, at FROM slack_messages WHERE channel = ? AND ts = ?`, channel, ts).Scan(&m.User, &m.Text, &at)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errf(CodeNotApprover, "no message %s/%s from the approver", channel, ts)
+		}
+		if err != nil {
+			return err
+		}
+		m.At = fromNanos(at)
+		if approver == "" || m.User != approver {
+			return errf(CodeNotApprover, "message %s/%s is not the approver's: only the approver's messages make it act", channel, ts)
+		}
+		now := s.clock.Now()
+		if now.Sub(m.At) > OnBehalfWindow {
+			return errf(CodeNotApprover, "message %s/%s is older than %d minutes", channel, ts, int(OnBehalfWindow.Minutes()))
+		}
+		res, err := tx.Exec(`INSERT INTO slack_message_uses (channel, ts, action, target, actor, at) VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+			channel, ts, action, target, by, now.UnixNano())
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return errf(CodeUsed, "message %s/%s was already used for %s %s", channel, ts, action, target)
+		}
+		return nil
+	})
+	return m, err
+}

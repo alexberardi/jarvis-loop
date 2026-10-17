@@ -41,21 +41,23 @@ func New(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
 	s := &server{st: st, tokens: tokens, log: log}
 	mux := http.NewServeMux()
 	both := []string{KindUser, KindRunner}
+	reads := []string{KindUser, KindRunner, KindOrchestrator}
 	runner := []string{KindRunner}
 	user := []string{KindUser}
+	orch := []string{KindOrchestrator}
 	route := func(pattern string, kinds []string, h http.HandlerFunc) {
-		mux.Handle(pattern, s.auth(kinds, h))
+		mux.Handle(pattern, s.auth(pattern, kinds, h))
 	}
 	route("POST /items", both, s.addItem)
-	route("GET /items", both, s.listItems)
-	route("GET /items/{id}", both, s.getItem)
+	route("GET /items", reads, s.listItems)
+	route("GET /items/{id}", reads, s.getItem)
 	route("PATCH /items/{id}", both, s.patchItem)
 	route("POST /claim", runner, s.claim)
 	route("POST /leases/{id}/heartbeat", runner, s.heartbeat)
 	route("POST /items/{id}/advance", runner, s.advance)
 	route("POST /items/{id}/evidence", runner, s.uploadEvidence)
 	route("POST /items/{id}/events", runner, s.runnerEvent)
-	route("GET /items/{id}/evidence/{n}", both, s.downloadEvidence)
+	route("GET /items/{id}/evidence/{n}", reads, s.downloadEvidence)
 	route("POST /items/{id}/answer", user, s.answer)
 	route("POST /items/{id}/approve", user, s.approve)
 	route("POST /items/{id}/hold", user, s.hold)
@@ -65,15 +67,25 @@ func New(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
 	route("POST /items/{id}/verified", user, s.verified)
 	route("POST /items/{id}/reopen", user, s.reopen)
 	route("POST /plans", user, s.createPlan)
-	route("GET /plans", both, s.listPlans)
-	route("GET /plans/{id}", both, s.getPlan)
-	route("GET /plans/{id}/docs/{kind}", both, s.getPlanDoc)
+	route("GET /plans", reads, s.listPlans)
+	route("GET /plans/{id}", reads, s.getPlan)
+	route("GET /plans/{id}/docs/{kind}", reads, s.getPlanDoc)
 	route("POST /plans/{id}/messages", user, s.planMessage)
 	route("POST /plans/{id}/approve", user, s.approvePlan)
 	route("POST /plans/{id}/drop", user, s.dropPlan)
 	route("POST /plans/{id}/turns/{turn}/result", runner, s.planTurnResult)
-	route("GET /control", both, s.getControl)
+	route("GET /control", reads, s.getControl)
 	route("PUT /control", user, s.putControl)
+	// The orchestrator's own actions (orchestrator.go).
+	route("POST /orchestrator/items", orch, s.orchAdd)
+	route("POST /orchestrator/items/{id}/answer", orch, s.orchAnswer)
+	route("POST /orchestrator/items/{id}/retry", orch, s.orchRetry)
+	route("POST /orchestrator/items/{id}/priority", orch, s.orchPriority)
+	route("POST /orchestrator/items/{id}/link", orch, s.orchLink)
+	route("POST /orchestrator/escalations", orch, s.orchEscalate)
+	route("POST /orchestrator/agents", orch, s.orchAgents)
+	route("POST /orchestrator/notes", orch, s.orchNote)
+	route("GET /orchestrator/notes", reads, s.orchNotebook)
 	return Logged(log, mux)
 }
 
@@ -118,7 +130,7 @@ func BearerToken(r *http.Request) string {
 	return ""
 }
 
-func (s *server) auth(kinds []string, next http.HandlerFunc) http.Handler {
+func (s *server) auth(pattern string, kinds []string, next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := s.tokens.Lookup(BearerToken(r))
 		if !ok {
@@ -127,8 +139,9 @@ func (s *server) auth(kinds []string, next http.HandlerFunc) http.Handler {
 			return
 		}
 		SetActor(w, p)
-		if !slices.Contains(kinds, p.Kind) {
-			writeErr(w, http.StatusForbidden, "forbidden", "a "+p.Kind+" token cannot do this")
+		onBehalf := r.Header.Get(OnBehalfHeader)
+		if onBehalf == "" && !slices.Contains(kinds, p.Kind) {
+			s.fail(w, s.refusedRoute(r, p, pattern, &pipeline.Error{Code: CodeForbidden, Message: article(p.Kind) + " " + p.Kind + " token cannot do this"}))
 			return
 		}
 		// Expiry is evaluated on every request, so a read never shows a dead lease as live.
@@ -136,7 +149,16 @@ func (s *server) auth(kinds []string, next http.HandlerFunc) http.Handler {
 			s.fail(w, err)
 			return
 		}
-		next(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, p)))
+		ctx := r.Context()
+		if onBehalf != "" {
+			np, nctx, err := s.actForUser(ctx, r, p, pattern, onBehalf)
+			if err != nil {
+				s.fail(w, err)
+				return
+			}
+			p, ctx = np, nctx
+		}
+		next(w, r.WithContext(context.WithValue(ctx, ctxKey{}, p)))
 	})
 }
 
@@ -157,6 +179,12 @@ var statusByCode = map[string]int{
 	store.CodeTooLarge:            http.StatusRequestEntityTooLarge,
 	store.CodeNotYourMerge:        http.StatusForbidden,
 	store.CodeAlreadyRecorded:     http.StatusConflict,
+	store.CodeNotApprover:         http.StatusForbidden,
+	store.CodeUsed:                http.StatusConflict,
+	pipeline.CodeLimit:            http.StatusConflict,
+	pipeline.CodeTooSoon:          http.StatusTooManyRequests,
+	CodeForbidden:                 http.StatusForbidden,
+	CodeNotOnBehalf:               http.StatusForbidden,
 	pipeline.CodeWrongStage:       http.StatusConflict,
 	pipeline.CodeSHAMismatch:      http.StatusConflict,
 	pipeline.CodeSameAgent:        http.StatusConflict,

@@ -335,6 +335,8 @@ func actor(a string) string {
 		return "runner:" + HandRunner
 	case "user":
 		return "user:" + UserName
+	case "orchestrator":
+		return "orchestrator:" + OrchName
 	}
 	return a
 }
@@ -614,7 +616,7 @@ func (p *player) mustNot() []string {
 		}
 	}
 	evs, _ := p.s.Events()
-	known := []string{"loopd", actor("approver"), actor("runner"), actor("hand"), actor("user")}
+	known := []string{"loopd", actor("approver"), actor("runner"), actor("hand"), actor("user"), actor("orchestrator")}
 	for _, e := range evs {
 		if slices.Contains(known, e.Actor) {
 			continue

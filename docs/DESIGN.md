@@ -71,7 +71,7 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | leases | which runner and agent hold which item at which stage, with an expiry kept alive by heartbeats. An expired lease returns the item to its queue |
 | control | the active-agents number (0–6), stop, the per-run time cap |
 
-**API** (JSON over HTTP, a bearer token per runner and one for the user; a `board` token reads the web board only and is refused by every API route)
+**API** (JSON over HTTP, a bearer token per runner and one for the user; a `board` token reads the web board only and is refused by every API route; an `orchestrator` token reads and acts only through `/orchestrator/…` within its limits, [decision](decisions/2026-10-16-orchestrator-token.md))
 
 | Call | Does |
 | --- | --- |
