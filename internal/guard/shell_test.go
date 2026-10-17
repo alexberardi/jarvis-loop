@@ -40,3 +40,24 @@ func TestParse(t *testing.T) {
 		}
 	}
 }
+
+func TestParseScriptKeepsRedirectionsAndHeredocs(t *testing.T) {
+	sc, err := parseScript("cat <<'A' > out.md; python3 <<B\nbody a\nA\nbody b\nB\ngrep x < in.txt <<< 'here' || true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []segment{
+		{words: []string{"cat"}, targets: []string{"out.md"}, bodies: []heredocBody{{text: "body a\n", quoted: true}}},
+		{words: []string{"python3"}, bodies: []heredocBody{{text: "body b\n"}}},
+		{words: []string{"grep", "x"}, targets: []string{"in.txt", "here"}},
+		{words: []string{"true"}},
+	}
+	if !reflect.DeepEqual(sc.segs, want) || sc.piped {
+		t.Fatalf("segs = %#v, piped = %v", sc.segs, sc.piped)
+	}
+	for _, s := range []string{"a | b", "a |& b"} {
+		if sc, _ := parseScript(s); !sc.piped {
+			t.Errorf("%q: not piped", s)
+		}
+	}
+}

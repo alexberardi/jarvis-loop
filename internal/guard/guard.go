@@ -303,13 +303,6 @@ func (c *Config) checkShell(cmd, cwd string) Decision {
 	if len(target) > 300 {
 		target = target[:300] + "…"
 	}
-	for _, p := range c.Protected {
-		for _, f := range c.pathForms(filepath.Clean(p)) {
-			if mentions(cmd, f) {
-				return deny(RuleProtectedPath, target, "the command names "+f+", which is the user's (checkouts, credentials and loopd are off limits)")
-			}
-		}
-	}
 	for _, w := range c.Words {
 		if w != "" && strings.Contains(cmd, w) {
 			return deny(RuleProtectedWord, target, w+" is the user's own; use the sandbox name you were given")
@@ -327,17 +320,22 @@ func (c *Config) checkScript(script, cwd, target string, depth int) Decision {
 	if depth > 4 {
 		return deny(RuleUnparseable, target, "too many nested shells")
 	}
-	segs, subs, err := parseRaw(script)
+	sc, err := parseScript(script)
 	if err != nil {
 		return deny(RuleUnparseable, target, "the command could not be parsed ("+err.Error()+")")
 	}
+	if d := c.checkProtected(sc, depth, target); d.Deny {
+		return d
+	}
+	subs := sc.subs
 	for _, sub := range subs {
 		if d := c.checkScript(sub, cwd, target, depth+1); d.Deny {
 			return d
 		}
 	}
 	movedDir := false
-	for _, raw := range segs {
+	for _, sg := range sc.segs {
+		raw := sg.words
 		// kill -0 is judged on the raw words (which word came from which substitution), and only
 		// when nothing wraps it: a wrapper would run /bin/kill, not the shell's builtin.
 		if len(raw) > 0 && raw[0] == "kill" {
@@ -381,6 +379,46 @@ func (c *Config) checkScript(script, cwd, target string, depth int) Decision {
 		}
 		if d := c.checkArgv(name, argv, cwd, target, movedDir); d.Deny {
 			return d
+		}
+	}
+	return Decision{}
+}
+
+// checkProtected refuses a script that names a protected path in anything the shell could open or
+// run: its words, redirections, here-strings and the here-documents a program reads as input.
+// Substitutions are checked as scripts of their own. Text that is only data is not matched, so a
+// PR body or a note may mention a path (#95): a here-document that cat or tee writes out, and the
+// arguments of echo and printf. That holds only at the top level of a script with no pipe and no
+// substitution, where the data cannot become a command or a path in the same call. (Data written
+// to a file can be read back by a later call; the OS sandbox is what keeps those reads out.)
+func (c *Config) checkProtected(sc script, depth int, target string) Decision {
+	plain := depth == 0 && !sc.piped && len(sc.subs) == 0
+	var texts []string
+	for _, sg := range sc.segs {
+		first := ""
+		if len(sg.words) > 0 {
+			first = sg.words[0]
+		}
+		words := sg.words
+		if plain && (first == "echo" || (first == "printf" && !slices.Contains(sg.words, "-v"))) {
+			words = words[:1]
+		}
+		texts = append(texts, words...)
+		texts = append(texts, sg.targets...)
+		for _, b := range sg.bodies {
+			data := b.quoted || !strings.ContainsAny(b.text, "$`")
+			if !(plain && data && (first == "cat" || first == "tee")) {
+				texts = append(texts, b.text)
+			}
+		}
+	}
+	for _, p := range c.Protected {
+		for _, f := range c.pathForms(filepath.Clean(p)) {
+			for _, t := range texts {
+				if mentions(unmark(t), f) {
+					return deny(RuleProtectedPath, target, "the command names "+f+", which is the user's (checkouts, credentials and loopd are off limits)")
+				}
+			}
 		}
 	}
 	return Decision{}

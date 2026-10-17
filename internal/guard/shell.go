@@ -40,16 +40,59 @@ func marked(w string) (int, bool) {
 // parseRaw is parse, but each command substitution in a word is a marker "\x00<n>\x00" naming
 // subs[n], so a caller can tell which word came from which substitution.
 func parseRaw(s string) (segs [][]string, subs []string, err error) {
+	sc, err := parseScript(s)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, sg := range sc.segs {
+		if len(sg.words) > 0 {
+			segs = append(segs, sg.words)
+		}
+	}
+	return segs, sc.subs, nil
+}
+
+// script is a parsed shell script: its simple commands, its command substitutions, and whether
+// any command's output goes into a pipe.
+type script struct {
+	segs  []segment
+	subs  []string
+	piped bool
+}
+
+// segment is one simple command: its words (with substitution markers), the text its
+// redirections name (files, here-strings) and the bodies of its here-documents.
+type segment struct {
+	words   []string
+	targets []string
+	bodies  []heredocBody
+}
+
+type heredocBody struct {
+	text   string
+	quoted bool // the delimiter was quoted, so the shell expands nothing in the body
+}
+
+// parseScript is parseRaw with each command's redirections and here-documents kept.
+func parseScript(s string) (script, error) {
+	var sc script
 	if strings.IndexByte(s, 0) >= 0 {
-		return nil, nil, errors.New("a NUL byte")
+		return sc, errors.New("a NUL byte")
 	}
 	var (
+		subs    []string
 		words   []string
+		targets []string
 		cur     strings.Builder
 		inWord  bool
-		skipTgt bool     // the next word is a redirection target
-		heredoc []string // pending here-document delimiters (body starts after the newline)
+		skipTgt bool // the next word is a redirection target
+		hasDoc  bool // the command being read has a here-document (so it is kept even without words)
+		// pending here-documents (the body starts after the newline): the delimiter, and the
+		// command whose input it is (an index into sc.segs)
+		heredoc []string
 		hdStrip []bool
+		hdQuote []bool
+		hdSeg   []int
 	)
 	endWord := func() {
 		if !inWord {
@@ -57,6 +100,7 @@ func parseRaw(s string) (segs [][]string, subs []string, err error) {
 		}
 		if skipTgt {
 			skipTgt = false
+			targets = append(targets, cur.String())
 		} else {
 			words = append(words, cur.String())
 		}
@@ -65,10 +109,10 @@ func parseRaw(s string) (segs [][]string, subs []string, err error) {
 	}
 	endSeg := func() {
 		endWord()
-		if len(words) > 0 {
-			segs = append(segs, words)
+		if len(words) > 0 || len(targets) > 0 || hasDoc {
+			sc.segs = append(sc.segs, segment{words: words, targets: targets})
 		}
-		words = nil
+		words, targets, hasDoc = nil, nil, false
 	}
 	// closing finds the end of a $( ... ) starting after the "(" at i, honouring nesting and quotes.
 	closing := func(i int) (int, error) {
@@ -142,7 +186,7 @@ func parseRaw(s string) (segs [][]string, subs []string, err error) {
 		case ch == '\'':
 			end := strings.IndexByte(s[i+1:], '\'')
 			if end < 0 {
-				return nil, nil, errors.New("unterminated single quote")
+				return sc, errors.New("unterminated single quote")
 			}
 			cur.WriteString(s[i+1 : i+1+end])
 			inWord = true
@@ -164,7 +208,7 @@ func parseRaw(s string) (segs [][]string, subs []string, err error) {
 				if c == '$' || c == '`' {
 					end, ok, err := substitution(i)
 					if err != nil {
-						return nil, nil, err
+						return sc, err
 					}
 					if ok {
 						i = end
@@ -174,7 +218,7 @@ func parseRaw(s string) (segs [][]string, subs []string, err error) {
 				cur.WriteByte(c)
 			}
 			if !closed {
-				return nil, nil, errors.New("unterminated double quote")
+				return sc, errors.New("unterminated double quote")
 			}
 		case ch == '\\':
 			if i+1 < len(s) {
@@ -187,7 +231,7 @@ func parseRaw(s string) (segs [][]string, subs []string, err error) {
 		case ch == '$' || ch == '`':
 			end, ok, err := substitution(i)
 			if err != nil {
-				return nil, nil, err
+				return sc, err
 			}
 			if ok {
 				i = end
@@ -202,8 +246,9 @@ func parseRaw(s string) (segs [][]string, subs []string, err error) {
 			i--
 		case ch == '\n':
 			endSeg()
-			// Skip the bodies of here-documents opened on the line just ended.
+			// Take the bodies of here-documents opened on the line just ended: they are not words.
 			for k, delim := range heredoc {
+				var text strings.Builder
 				for {
 					j := strings.IndexByte(s[i+1:], '\n')
 					line := s[i+1:]
@@ -221,17 +266,26 @@ func parseRaw(s string) (segs [][]string, subs []string, err error) {
 					if line == delim {
 						break
 					}
+					text.WriteString(line + "\n")
 				}
+				sg := &sc.segs[hdSeg[k]]
+				sg.bodies = append(sg.bodies, heredocBody{text: text.String(), quoted: hdQuote[k]})
 			}
-			heredoc, hdStrip = nil, nil
+			heredoc, hdStrip, hdQuote, hdSeg = nil, nil, nil, nil
+		case ch == '|' && i+1 < len(s) && s[i+1] == '|':
+			endSeg()
+			i++
 		case ch == ';' || ch == '&' || ch == '|' || ch == '(' || ch == ')':
+			if ch == '|' {
+				sc.piped = true
+			}
 			endSeg()
 		case ch == '<' || ch == '>':
 			// Process substitution: check the inner command.
 			if i+1 < len(s) && s[i+1] == '(' {
 				end, err := closing(i + 2)
 				if err != nil {
-					return nil, nil, err
+					return sc, err
 				}
 				subs = append(subs, s[i+2:end])
 				i = end
@@ -259,10 +313,13 @@ func parseRaw(s string) (segs [][]string, subs []string, err error) {
 				}
 				delim := strings.NewReplacer("'", "", "\"", "", "\\", "").Replace(s[i:j])
 				if delim == "" {
-					return nil, nil, errors.New("here-document without a delimiter")
+					return sc, errors.New("here-document without a delimiter")
 				}
 				heredoc = append(heredoc, delim)
 				hdStrip = append(hdStrip, strip)
+				hdQuote = append(hdQuote, delim != s[i:j])
+				hdSeg = append(hdSeg, len(sc.segs)) // the command being read is stored next
+				hasDoc = true
 				i = j - 1
 				continue
 			}
@@ -278,8 +335,9 @@ func parseRaw(s string) (segs [][]string, subs []string, err error) {
 		}
 	}
 	if len(heredoc) > 0 {
-		return nil, nil, errors.New("unterminated here-document")
+		return sc, errors.New("unterminated here-document")
 	}
 	endSeg()
-	return segs, subs, nil
+	sc.subs = subs
+	return sc, nil
 }
