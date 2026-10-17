@@ -54,14 +54,19 @@ const (
 	IgnoreTerm      = "ignore_term" // like hang, but ignore SIGTERM
 	// TodosHang is hang after a to-do list (TodoWrite) and a described Bash call whose command
 	// holds SECRET_CMD_MARKER (which must never reach the board).
-	TodosHang  = "todos_hang"
-	Exit3      = "exit3"       // print something and exit 3
-	UsageLimit = "usage_limit" // the plan's session limit
-	NoArm      = "noarm"       // run tools without the hooks (settings not applied)
-	WrongMode  = "wrong_mode"  // start in default mode whatever was asked
-	SymlinkEv  = "symlink_evidence"
-	LyingOnce  = "lying_once" // lying, then good on the runner's one retry
-	LowCache   = "low_cache"  // good, but with a cold prompt cache (10% read over 6 turns)
+	TodosHang = "todos_hang"
+	Exit3     = "exit3" // print something and exit 3
+	// LockError prints git's stale index.lock error (with the worktree's path) and exits 3, as
+	// the runs of 2026-10-16 did.
+	LockError = "lock_error"
+	// HarnessQuestion asks to skip what it can't run in its sandbox (the emulator).
+	HarnessQuestion = "harness_question"
+	UsageLimit      = "usage_limit" // the plan's session limit
+	NoArm           = "noarm"       // run tools without the hooks (settings not applied)
+	WrongMode       = "wrong_mode"  // start in default mode whatever was asked
+	SymlinkEv       = "symlink_evidence"
+	LyingOnce       = "lying_once" // lying, then good on the runner's one retry
+	LowCache        = "low_cache"  // good, but with a cold prompt cache (10% read over 6 turns)
 	// SuggestVerify is good, but the agent also leaves a verify script of its own in .loop/ and
 	// asks for it in the PR body; the runner must never run it (it would touch
 	// <scripts dir>/../agent-verify-ran).
@@ -111,6 +116,20 @@ const (
 	// PlanWait waits until the harness releases it (the file <dir>/P<id>.release), reporting
 	// "waiting", then plays the persona's usual.
 	PlanWait = "wait"
+
+	// Orchestrate turns (a prompt with "- Orchestrate: turn <n>"; the script is
+	// <dir>/orchestrator-orchestrate.json, the state <dir>/orchestrator.state). Every play writes
+	// out/result.json.
+	OrchReact = "react" // retry the needs_you items the turn's run_failed or due triggers point at, and a note
+	OrchNote  = "note"  // a note only
+	// OrchAgentsUp asks to raise the active agents (loopd refuses it) and notes the last turn's
+	// refusals it was told about.
+	OrchAgentsUp    = "agents_up"
+	OrchInvalid     = "invalid"      // an action it does not have (approve), every time
+	OrchInvalidOnce = "invalid_once" // invalid, then react on the runner's one retry
+	// OrchPersona plays the orchestrator's skill as rules on the snapshot (persona.go): retries
+	// and failure signatures, the answer kinds, escalations with a recommendation, P1 tickets.
+	OrchPersona = "persona"
 )
 
 var stagePlays = map[string][]string{
@@ -119,6 +138,7 @@ var stagePlays = map[string][]string{
 	// Plan personas.
 	"product":     {PlanBrief, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
 	"engineering": {PlanBlueprint, BackToBrief, PlanCycle, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
+	"orchestrate": {OrchReact, OrchNote, OrchAgentsUp, OrchInvalid, OrchInvalidOnce, OrchPersona, Hang, UsageLimit, Exit3},
 }
 
 type fake struct {
@@ -173,6 +193,10 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if persona := find(`(?m)^- Persona: (\w+)$`, brief); persona != "" {
 		// A plan turn: the plan stands in for the item, the persona for the stage.
 		item, stage = "P"+find(`(?m)^- Plan: P(\d+):`, brief), persona
+	}
+	orchTurn := find(`(?m)^- Orchestrate: turn (\d+)`, brief)
+	if orchTurn != "" {
+		item, stage = "orchestrator", "orchestrate"
 	}
 	if stage == "" {
 		stage = "build"
@@ -234,6 +258,9 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if strings.HasPrefix(item, "P") {
 		f.session = "fake-session-" + item + "-" + stage
 	}
+	if orchTurn != "" {
+		f.session = "fake-session-orchestrator-" + orchTurn // a new one each day: named after its first turn
+	}
 	if f.oc {
 		f.session = "ses_fake_" + item + "_" + scenario
 	}
@@ -249,7 +276,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 1
 		}
 		f.session = resume
-	} else if strings.HasPrefix(item, "P") || f.oc {
+	} else if strings.HasPrefix(item, "P") || orchTurn != "" || f.oc {
 		saveSession(sessions, f.session, f.cwd)
 	}
 	if f.oc {
@@ -301,6 +328,13 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case Exit3:
 		f.say("I could not build it: the tests do not compile.")
 		return 3
+	case LockError:
+		f.say("fatal: Unable to create '" + filepath.Join(f.cwd, ".git", "index.lock") + "': File exists.")
+		return 3
+	case HarnessQuestion:
+		f.write(".loop/result.json", `{"outcome":"question","question":"I can't run the emulator in my sandbox: may I open the PR without the screenshots?"}`)
+		f.result("Asked a question.")
+		return 0
 	case UsageLimit:
 		f.emit(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "rejected", "resetsAt": 1792000000}})
 		f.emit(map[string]any{"type": "assistant", "error": "rate_limit", "message": map[string]any{"content": []any{
@@ -348,6 +382,11 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f.write(outside, "I got out\n")
 		f.bash("git push origin main")
 	}
+	// An item filed from a plan: the brief points at the plan's approved blueprint for the
+	// sections its piece refers to; read it, as an agent would.
+	if stage != "product" && stage != "engineering" && bytes.Contains(brief, []byte("`.loop/context/blueprint.md`")) {
+		f.bash("cat .loop/context/blueprint.md")
+	}
 	switch stage {
 	case "triage":
 		return f.triage(scenario, brief, sc)
@@ -355,6 +394,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return f.review(scenario, brief)
 	case "product", "engineering":
 		return f.planTurn(scenario, stage, item, brief, sc, progress)
+	case "orchestrate":
+		return f.orchestrate(scenario, orchTurn, brief, progress)
 	}
 
 	// The common path: a change, committed on the item's branch (a resumed run finds it there).
@@ -832,4 +873,82 @@ func chat(config string) error {
 func readFile(p string) string {
 	b, _ := os.ReadFile(p)
 	return string(b)
+}
+
+// orchestrate plays an orchestrate turn from loopd's snapshot in .loop/context/snapshot.json.
+func (f *fake) orchestrate(play, turn string, brief []byte, progress func(string)) int {
+	progress("turn " + turn)
+	if play == OrchInvalidOnce {
+		play = OrchInvalid
+		if isRetry(brief) {
+			play = OrchReact
+		}
+	}
+	var snap struct {
+		Turn *struct {
+			Triggers []struct {
+				Reason string `json:"reason"`
+				ItemID int64  `json:"item_id"`
+			} `json:"triggers"`
+		} `json:"turn"`
+		Items []struct {
+			ID    int64  `json:"id"`
+			Stage string `json:"stage"`
+		} `json:"items"`
+	}
+	f.bash("ls -a .loop/context")
+	json.Unmarshal([]byte(readFile(filepath.Join(f.cwd, ".loop", "context", "snapshot.json"))), &snap)
+	actions := []any{}
+	switch play {
+	case OrchInvalid:
+		actions = append(actions, map[string]any{"action": "approve", "item_id": 1, "reason": "it looks done"})
+	case OrchAgentsUp:
+		actions = append(actions, map[string]any{"action": "agents", "active_agents": 6, "reason": "more hands"})
+		refused := regexp.MustCompile(`(?m)^- (\w+)( #\d+)?: refused \((\d+) (\w+)\)`).FindAllSubmatch(brief, -1)
+		var seen []string
+		for _, m := range refused {
+			seen = append(seen, fmt.Sprintf("%s%s %s %s", m[1], m[2], m[3], m[4]))
+		}
+		if len(seen) > 0 {
+			actions = append(actions, map[string]any{"action": "note", "text": "refused last turn: " + strings.Join(seen, "; "), "reason": "learning"})
+		}
+	case OrchNote:
+		actions = append(actions, map[string]any{"action": "note", "text": "turn " + turn + ": looked at the board", "reason": "a sweep"})
+	case OrchPersona:
+		actions = personaActions(turn, []byte(readFile(filepath.Join(f.cwd, ".loop", "context", "snapshot.json"))))
+	default: // OrchReact
+		stage := map[int64]string{}
+		for _, it := range snap.Items {
+			stage[it.ID] = it.Stage
+		}
+		retry := map[int64]bool{}
+		var order []int64
+		if snap.Turn != nil {
+			for _, tr := range snap.Turn.Triggers {
+				var ids []int64
+				switch tr.Reason {
+				case "run_failed":
+					ids = []int64{tr.ItemID}
+				case "due":
+					for _, it := range snap.Items {
+						ids = append(ids, it.ID)
+					}
+				}
+				for _, id := range ids {
+					if stage[id] == "needs_you" && !retry[id] {
+						retry[id] = true
+						order = append(order, id)
+					}
+				}
+			}
+		}
+		for _, id := range order {
+			actions = append(actions, map[string]any{"action": "retry", "item_id": id, "reason": "a runner error: retry with the backoff"})
+		}
+		actions = append(actions, map[string]any{"action": "note", "text": fmt.Sprintf("turn %s: %d item(s) open, %d retried", turn, len(snap.Items), len(order)), "reason": "what I saw"})
+	}
+	res, _ := json.Marshal(map[string]any{"actions": actions})
+	f.write("out/result.json", string(res))
+	f.result("Turn done.")
+	return 0
 }

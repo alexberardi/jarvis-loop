@@ -246,6 +246,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 	// at demo, jarvis-loop's at the stand-in for jarvis-loop.
 	s.Store.SetRepos(Repos)
 	s.Store.SetDefaultHoldRules(SandboxHoldRules())
+	s.Store.SetLoopRepo(LoopSlug)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -313,7 +314,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 	}
 	verify := true
 	cfg := runner.Config{
-		LoopdURL: s.LoopdURL, Token: runnerTok, Name: RunnerName, Capabilities: []string{}, Slots: 1,
+		LoopdURL: s.LoopdURL, Token: runnerTok, OrchestratorToken: orchTok, Name: RunnerName, Capabilities: []string{}, Slots: 1,
 		WorkRoot: filepath.Join(dir, "work"), Claude: opts.Bin.Claude, Guard: opts.Bin.Guard, Mode: runner.ModeAuto,
 		PollSeconds: 2, UserEmulator: "emulator-5554", VerifyPR: &verify,
 		LoopdTokens: tokPath, LoopdData: filepath.Join(dir, "loopd"), Stages: opts.Stages,
@@ -482,6 +483,7 @@ func (s *Stack) Close() {
 // Claimed is what one poll of the runner claimed: an item, or a plan's turn (zero: nothing).
 type Claimed struct {
 	Item, Plan int64
+	Orch       int64  // an orchestrate turn's id
 	Stage      string // the item's stage when claimed ("" for a plan turn)
 }
 
@@ -652,6 +654,9 @@ func (s *Stack) claimedSince(id int64) (Claimed, bool) {
 			return Claimed{Item: e.ItemID, Stage: e.To}, true
 		case "plan_turn_claimed":
 			return Claimed{Plan: e.PlanID}, true
+		case store.KindOrchClaimed:
+			n, _ := e.Data["turn"].(float64)
+			return Claimed{Orch: int64(n)}, true
 		}
 	}
 	return Claimed{}, false

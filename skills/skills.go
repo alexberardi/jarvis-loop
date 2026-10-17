@@ -27,3 +27,9 @@ var Product string
 //
 //go:embed engineering/SKILL.md
 var Engineering string
+
+// Orchestrator is the orchestrator's persona (skills/orchestrator/SKILL.md), the start of each
+// day's orchestrate session.
+//
+//go:embed orchestrator/SKILL.md
+var Orchestrator string

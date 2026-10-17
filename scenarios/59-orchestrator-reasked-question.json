@@ -1,0 +1,59 @@
+{
+  "name": "orchestrator-reasked-question",
+  "about": "Recorded 2026-10-16: an agent asking again a question the user had answered (docs/phases/08-orchestrator.md, piece 4). The orchestrator (the persona play) leaves a new question to the user, answers the re-asked one from the history with the user's own words (kind history), and when the agent asks it once more, escalates with a recommendation instead of answering again. loopd's limits hold underneath: the same answer twice in a row is refused, a different one goes, and a third on the same head is refused; asked once more, its second escalation inside 10 minutes is refused (one ping per 10 minutes).",
+  "stages": ["build", "orchestrate"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the timer rounding", "priority": "P2"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "question"},
+    {"do": "script", "for": "orchestrate", "play": "persona"},
+
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}, "question": {"a": "^Should the timer round up or down\\?$"},
+     "events": [{"kind": "orchestrate_done", "data": {"actions": "^0$"}, "count": 1}],
+     "no_events": [{"item": "a", "kind": "answered"}, {"item": "a", "kind": "orchestrator.escalated"}]},
+
+    {"do": "reply", "item": "a", "text": "Round down, like the kitchen timer."},
+    {"do": "expect", "stage": {"a": "build"}, "events": [{"item": "a", "kind": "answered", "actor": "approver", "count": 1}]},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [{"item": "a", "kind": "answered", "actor": "orchestrator",
+                 "data": {"answer_kind": "^history$", "answer": "^Round down, like the kitchen timer\\.$", "question": "^Should the timer round up or down\\?$"}, "count": 1}]},
+
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "events": [{"item": "a", "kind": "orchestrator.escalated", "actor": "orchestrator",
+                 "data": {"text": "asked \"Should the timer round up or down\\?\" again after I answered it", "recommendation": "\\. Because "}, "count": 1}]},
+
+    {"do": "orchestrator", "item": "a", "action": "POST /orchestrator/items/{item}/answer",
+     "body": {"kind": "history", "text": "Round down, like the kitchen timer.", "reason": "again"}, "refused": "HTTP 409.*\"code\":\"limit\".*the same answer"},
+    {"do": "orchestrator", "item": "a", "action": "POST /orchestrator/items/{item}/answer",
+     "body": {"kind": "history", "text": "Round down to the whole minute.", "reason": "in other words"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "orchestrator", "item": "a", "action": "POST /orchestrator/items/{item}/answer",
+     "body": {"kind": "history", "text": "Round down, always.", "reason": "a third try"}, "refused": "HTTP 409.*\"code\":\"limit\".*already 2 answers on this head"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "needs_you"},
+    "events": [
+      {"item": "a", "kind": "answered", "actor": "orchestrator", "count": 2},
+      {"item": "a", "kind": "answered", "actor": "approver", "count": 1},
+      {"item": "a", "kind": "orchestrator.escalated", "actor": "orchestrator", "count": 1},
+      {"item": "a", "kind": "refused", "actor": "orchestrator", "data": {"action": "^answer$", "code": "^limit$"}, "count": 2},
+      {"item": "a", "kind": "refused", "actor": "orchestrator", "data": {"action": "^escalate$", "code": "^too_soon$"}, "count": 1}
+    ],
+    "agent_runs": {"build": 4, "orchestrate": 4}
+  }
+}

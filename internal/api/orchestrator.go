@@ -49,11 +49,11 @@ var onBehalfRoutes = map[string]bool{
 // differently from it.
 func (s *server) controlForUser(ctx context.Context, c store.ControlPatch) error {
 	via := store.ViaFrom(ctx)
-	if via == "" || (c.HoldRules == nil && c.Limits == nil && c.MaxRunMinutes == nil) {
+	if via == "" || (c.HoldRules == nil && c.Limits == nil && c.MaxRunMinutes == nil && c.OrchTurnsPerDay == nil) {
 		return nil
 	}
 	return s.st.Refused(ctx, via, 0, "control", &pipeline.Error{Code: CodeNotOnBehalf,
-		Message: "for the user, the orchestrator may only pause the loop (stopped, active_agents): the hold rules, limits and run time are the user's own"})
+		Message: "for the user, the orchestrator may only pause the loop (stopped, active_agents): the hold rules, limits, run time and the orchestrator's cap are the user's own"})
 }
 
 // slackActor is how the approver's own Slack actions appear in events (internal/slack's
@@ -364,4 +364,33 @@ func (s *server) orchAskApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, ev)
+}
+
+// orchSnapshot is what an orchestrate turn sees (store.OrchSnapshot).
+func (s *server) orchSnapshot(w http.ResponseWriter, r *http.Request) {
+	snap, err := s.st.OrchSnapshot(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
+}
+
+// orchTurnResult is a runner finishing the orchestrate turn it holds.
+func (s *server) orchTurnResult(w http.ResponseWriter, r *http.Request) {
+	turn, err := strconv.ParseInt(r.PathValue("turn"), 10, 64)
+	if err != nil || turn <= 0 {
+		badRequest(w, "turn must be a positive number")
+		return
+	}
+	var body store.OrchTurnResult
+	if !decode(w, r, &body) {
+		return
+	}
+	t, err := s.st.OrchestrateResult(r.Context(), PrincipalFrom(r.Context()).Name, turn, body)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"turn": t})
 }

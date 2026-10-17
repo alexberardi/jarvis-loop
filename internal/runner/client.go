@@ -39,8 +39,10 @@ type Claim struct {
 	Item  Item   `json:"item"`
 	Stage string `json:"stage"`
 	// Plan and Turn are a plan turn's (Kind plan).
-	Plan  *pipeline.Plan     `json:"plan,omitempty"`
-	Turn  *pipeline.PlanTurn `json:"turn,omitempty"`
+	Plan *pipeline.Plan     `json:"plan,omitempty"`
+	Turn *pipeline.PlanTurn `json:"turn,omitempty"`
+	// Orch is an orchestrate turn's (Kind orchestrate).
+	Orch  *OrchTurn `json:"orchestrate,omitempty"`
 	Lease struct {
 		ID        string    `json:"id"`
 		ExpiresAt time.Time `json:"expires_at"`
@@ -125,15 +127,23 @@ func (c *Client) json(ctx context.Context, method, path string, in, out any) (in
 	return c.do(ctx, method, path, ct, body, out)
 }
 
-// Claim asks for work in the given stages; nil when there is none. Stage plan is not an item
-// stage: it asks for plan turns too (kinds), and alone, for plan turns only.
+// Claim asks for work in the given stages; nil when there is none. Stages plan and orchestrate
+// are not item stages: they ask for plan or orchestrate turns too (kinds), and alone, for those
+// only.
 func (c *Client) Claim(ctx context.Context, agent string, caps, stages []string) (*Claim, error) {
 	body := map[string]any{"agent": agent, "capabilities": caps, "stages": stages}
-	if slices.Contains(stages, StagePlan) {
-		items := slices.DeleteFunc(slices.Clone(stages), func(s string) bool { return s == StagePlan })
-		kinds := []string{pipeline.WorkPlan}
+	turnKinds := map[string]string{StagePlan: pipeline.WorkPlan, StageOrchestrate: pipeline.WorkOrchestrate}
+	if slices.ContainsFunc(stages, func(s string) bool { return turnKinds[s] != "" }) {
+		var items, kinds []string
+		for _, s := range stages {
+			if k := turnKinds[s]; k != "" {
+				kinds = append(kinds, k)
+			} else {
+				items = append(items, s)
+			}
+		}
 		if len(items) > 0 {
-			kinds = []string{pipeline.WorkItem, pipeline.WorkPlan}
+			kinds = append([]string{pipeline.WorkItem}, kinds...)
 		}
 		body["stages"], body["kinds"] = items, kinds
 	}
@@ -148,6 +158,22 @@ func (c *Client) Claim(ctx context.Context, agent string, caps, stages []string)
 	return &cl, nil
 }
 
+// OrchTurnResult finishes the orchestrate turn this runner holds the lease on.
+func (c *Client) OrchTurnResult(ctx context.Context, turn int64, r OrchTurnResult) error {
+	_, err := c.json(ctx, "POST", fmt.Sprintf("/orchestrate/turns/%d/result", turn), r, nil)
+	return err
+}
+
+// Snapshot is loopd's snapshot for the orchestrator (with the orchestrator's token), as loopd
+// sent it.
+func (c *Client) Snapshot(ctx context.Context) ([]byte, error) {
+	var raw json.RawMessage
+	if _, err := c.json(ctx, "GET", "/orchestrator/snapshot", nil, &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
 // PlanTurnResult finishes the plan turn this runner holds the lease on.
 func (c *Client) PlanTurnResult(ctx context.Context, plan, turn int64, r pipeline.TurnResult) (pipeline.PlanTurn, error) {
 	var out struct {
@@ -159,8 +185,18 @@ func (c *Client) PlanTurnResult(ctx context.Context, plan, turn int64, r pipelin
 
 // PlanDoc is a plan's latest document of a kind (brief, blueprint); nil when it has none yet.
 func (c *Client) PlanDoc(ctx context.Context, plan int64, kind string) (*pipeline.PlanDoc, error) {
+	return c.PlanDocVersion(ctx, plan, kind, 0)
+}
+
+// PlanDocVersion is version v of a plan's document of a kind (0: the latest); nil when there is
+// no such version.
+func (c *Client) PlanDocVersion(ctx context.Context, plan int64, kind string, v int) (*pipeline.PlanDoc, error) {
 	var d pipeline.PlanDoc
-	_, err := c.json(ctx, "GET", fmt.Sprintf("/plans/%d/docs/%s", plan, kind), nil, &d)
+	path := fmt.Sprintf("/plans/%d/docs/%s", plan, kind)
+	if v > 0 {
+		path += fmt.Sprintf("?v=%d", v)
+	}
+	_, err := c.json(ctx, "GET", path, nil, &d)
 	var ae *APIError
 	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
 		return nil, nil
@@ -169,6 +205,15 @@ func (c *Client) PlanDoc(ctx context.Context, plan int64, kind string) (*pipelin
 		return nil, err
 	}
 	return &d, nil
+}
+
+// Plan is a plan (its stage and approved versions).
+func (c *Client) Plan(ctx context.Context, id int64) (pipeline.Plan, error) {
+	var out struct {
+		Plan pipeline.Plan `json:"plan"`
+	}
+	_, err := c.json(ctx, "GET", fmt.Sprintf("/plans/%d", id), nil, &out)
+	return out.Plan, err
 }
 
 // Heartbeat keeps a lease alive, with what the run is doing (nil: unchanged); true means stop.

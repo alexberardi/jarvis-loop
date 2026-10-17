@@ -17,7 +17,7 @@ const StageLand = "land"
 
 // RunnerStages are every stage a runner may claim: the agent stages, land, and plan (plan turns,
 // plan.go; never a default: a runner opts in).
-var RunnerStages = []string{StageTriage, StageBuild, StageReview, StageLand, StagePlan}
+var RunnerStages = []string{StageTriage, StageBuild, StageReview, StageLand, StagePlan, StageOrchestrate}
 
 // The runner's Verification footer on every PR it opens (PRBody). Land requires the heading and
 // the body to end with the trailer: the runner appends the footer after the agent's text, so an
@@ -136,8 +136,8 @@ func failed(format string, args ...any) Decision {
 }
 
 // Decide runs the gates in the spec's order (docs/phases/06-land.md): the PR, review approval
-// for this head, the changed paths, CI, harness evidence, hold, mergeable. The first gate that
-// does not pass decides.
+// for this head, the changed paths, a conflict, CI, harness evidence, hold, mergeable. The first
+// gate that does not pass decides.
 func Decide(f LandFacts) Decision {
 	pr := f.PR
 	// 1. The PR.
@@ -175,6 +175,12 @@ func Decide(f LandFacts) Decision {
 	// 3. The changed paths (computed by the caller; loopd recomputes risk on them).
 	if len(f.Paths) == 0 {
 		return failed("PR #%d changes no files against %s", pr.Number, f.Base)
+	}
+	// 3b. Conflicting: GitHub runs no pull_request CI on a PR that conflicts with its base, so
+	// waiting for CI would time out; a conflict goes to the conflict path at once (it never merges:
+	// a docs/ merge makes a new head for review, anything else goes back to build).
+	if pr.Mergeable == "CONFLICTING" || pr.MergeStateStatus == "DIRTY" {
+		return Decision{Action: ActConflict}
 	}
 	// 4. CI on this head.
 	var fails, pending []string
@@ -216,11 +222,8 @@ func Decide(f LandFacts) Decision {
 		return advance("hold", map[string]string{"reason": "on the hold list", "head_sha": pr.HeadRefOid})
 	}
 	// 7. Mergeable.
-	switch pr.Mergeable {
-	case "MERGEABLE":
+	if pr.Mergeable == "MERGEABLE" {
 		return Decision{Action: ActMerge} // behind but clean merges as is; main's CI catches the rest
-	case "CONFLICTING":
-		return Decision{Action: ActConflict}
 	}
 	return Decision{Action: ActWait, Wait: "GitHub's mergeability check"}
 }

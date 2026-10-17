@@ -245,6 +245,8 @@ func TestActForUser(t *testing.T) {
 		`{"max_run_minutes": 600}`,
 		`{"hold_rules":[]}}`,
 		`{"hold_rules":[],"max_run_minutes":600}]`,
+		`{"orchestrator_turns_per_day": 2000}`,
+		`{"stopped": true, "orchestrator_turns_per_day": 2000}`,
 	} {
 		ts := "100.3" + strconv.Itoa(i)
 		if err := e.store.RecordSlackMessage(ctx, "C0LOOP", ts, slack.Approver, "what's up with #3?"); err != nil {
@@ -258,7 +260,8 @@ func TestActForUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(after.HoldRules) == 0 || len(after.HoldRules) != len(before.HoldRules) || after.MaxRunMinutes != before.MaxRunMinutes || after.Stopped {
+	if len(after.HoldRules) == 0 || len(after.HoldRules) != len(before.HoldRules) || after.MaxRunMinutes != before.MaxRunMinutes || after.Stopped ||
+		after.OrchTurnsPerDay != before.OrchTurnsPerDay {
 		t.Fatalf("control changed: %+v -> %+v", before, after)
 	}
 	if err := e.store.RecordSlackMessage(ctx, "C0LOOP", "100.3", slack.Approver, "pause the loop"); err != nil {

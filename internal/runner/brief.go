@@ -38,6 +38,9 @@ type Item struct {
 	// BuildSession the OpenCode session its last qwen build left, which the next one resumes.
 	Builder      string `json:"builder,omitempty"`
 	BuildSession string `json:"build_session,omitempty"`
+	// PlanID and PlanPiece link an item filed from a plan to its piece (0: not from a plan).
+	PlanID    int64 `json:"plan_id,omitempty"`
+	PlanPiece int   `json:"plan_piece,omitempty"`
 }
 
 // ItemTrust is the part of a trust OK the runner needs.
@@ -100,6 +103,12 @@ type RunInfo struct {
 	// Answers is the file with the questions agents asked on the item and the user's answers (""
 	// when there were none).
 	Answers string
+	// PlanID and PlanPiece are the plan an item was filed from and its piece (0: none), and
+	// PlanDocs the plan's approved documents the runner wrote (.loop/context/blueprint.md,
+	// brief.md).
+	PlanID    int64
+	PlanPiece int
+	PlanDocs  []string
 	// ContextErrs say what the runner could not fetch (the agent is told; the run goes on).
 	ContextErrs []string
 	// CILog is the failing CI log the runner fetched (triage of a red main's P1; build after land
@@ -130,7 +139,7 @@ type Checkout struct {
 
 func stageSkill(stage string) string {
 	skill := map[string]string{StageTriage: skills.Triage, StageBuild: skills.Build, StageReview: skills.Review,
-		pipeline.PersonaProduct: skills.Product, pipeline.PersonaEngineering: skills.Engineering}[stage]
+		pipeline.PersonaProduct: skills.Product, pipeline.PersonaEngineering: skills.Engineering, StageOrchestrate: skills.Orchestrator}[stage]
 	if strings.HasPrefix(skill, "---\n") {
 		if i := strings.Index(skill[4:], "\n---\n"); i >= 0 {
 			skill = skill[4+i+5:]
@@ -293,6 +302,13 @@ func Brief(stage string, it Item, r RunInfo) string {
 	}
 	if r.Answers != "" {
 		fmt.Fprintf(&b, "- **The user already answered questions on this item**: `%s`. Read it first. An answer overrides the ask where they conflict (for example, a step it says to skip or list under not verified), and the newest answer wins. Do not ask a question that file already answers; act on the answer.\n", r.Answers)
+	}
+	if r.PlanID > 0 && len(r.PlanDocs) > 0 {
+		docs := make([]string, len(r.PlanDocs))
+		for i, f := range r.PlanDocs {
+			docs[i] = "`" + f + "`"
+		}
+		fmt.Fprintf(&b, "- **This item is piece %d of plan P%d.** Your piece is in the ask; the plan's whole approved documents are in %s, for the sections your piece points at (a table, the rules, the names). Read them there; do not ask the user for what they contain.\n", r.PlanPiece, r.PlanID, strings.Join(docs, " and "))
 	}
 	if len(r.Context) > 0 {
 		b.WriteString("- Context from the runner (read these):")

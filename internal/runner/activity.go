@@ -103,6 +103,9 @@ func (r *Runner) agentActivity(ru *run, st *streamStats) *pipeline.Activity {
 	if ru.plan != nil {
 		a.Phase, a.Persona, a.PlanID = "plan agent", ru.stage, ru.plan.ID
 	}
+	if ru.orch != nil {
+		a.Phase = "orchestrator agent"
+	}
 	a.Todos = append([]pipeline.Todo(nil), st.act.todos...)
 	a.Recent = append([]string(nil), st.act.recent...)
 	fitActivity(a)

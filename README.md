@@ -53,6 +53,10 @@ for a build ([docs/decisions/2026-10-16-land-lane.md](docs/decisions/2026-10-16-
 With `"plan"` in `stages` (phase 7, [docs/phases/07-planning.md](docs/phases/07-planning.md)) it
 also takes plans' turns: the product and engineering personas, one short agent per turn in
 `<work_root>/plan-<id>/`, resuming the persona's session (`plan_turn_minutes`, default 15).
+With `"orchestrate"` in `stages` and loopd's orchestrator token in `orchestrator_token` (phase 8,
+[docs/phases/08-orchestrator.md](docs/phases/08-orchestrator.md)) it also takes the orchestrator's
+turns: one short read-only agent per turn in `<work_root>/orchestrator/`, resuming the day's session,
+whose actions the runner sends to loopd with that token. Why: [docs/decisions/2026-10-17-orchestrate-turns.md](docs/decisions/2026-10-17-orchestrate-turns.md).
 With a `qwen` block (`base_url`, `credentials_file`, `model`, `max_minutes`, `opencode`), build runs
 of items whose plan piece says `builder: qwen` run OpenCode in the verify fence against jarvisd,
 through a proxy in the runner that adds the app credentials; the second bounce turns the item to

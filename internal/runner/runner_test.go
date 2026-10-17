@@ -48,6 +48,7 @@ func TestMain(m *testing.M) {
 const (
 	runnerToken = "runner-token-0123456789abcdef"
 	userToken   = "user-token-0123456789abcdef"
+	orchToken   = "orchestrator-token-0123456789"
 )
 
 var t0 = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
@@ -121,7 +122,7 @@ func newRig(t *testing.T, scenario string) *rig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	toks, err := api.ParseTokens(strings.NewReader(runnerToken + "\trunner\tdevbox\n" + userToken + "\tuser\talex\n"))
+	toks, err := api.ParseTokens(strings.NewReader(runnerToken + "\trunner\tdevbox\n" + userToken + "\tuser\talex\n" + orchToken + "\torchestrator\tloop\n"))
 	if err != nil {
 		t.Fatal(err)
 	}

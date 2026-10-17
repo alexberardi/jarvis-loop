@@ -264,6 +264,15 @@ same file and a note that it is already committed. Review checks the piece again
 section and its verification plan; triage checks the blueprint still matches the code (a mismatch
 → `question` on the item, not a silent rewrite).
 
+As built (item #90, 2026-10-17): triage, build and review of an item with a `plan_id` get the
+plan's **approved** blueprint and brief (the versions named by `blueprint_approved` and
+`brief_approved`, fetched with `?v=N` and checked against their sha256, never a later draft) as
+`.loop/context/blueprint.md` and `brief.md`, and the brief says the piece is in the ask and the
+whole blueprint is there for the sections it points at, so the agent reads them instead of asking
+(item #78 had asked the user to paste a section). A fetch that fails is a "Not available this run"
+line; the run goes on. Committing the plan into the repo is not built yet. Scenario
+`58-plan-item-context`.
+
 ## Harness (loop-sandbox scenarios, test-first)
 
 1. Dependencies: B depends on A → B not claimed until A is done; A dropped → B to needs-you.

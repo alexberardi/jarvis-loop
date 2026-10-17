@@ -1,0 +1,42 @@
+{
+  "name": "plan-item-context",
+  "about": "An item filed from a plan gets the plan's approved documents (item #90). Piece 1 of the blueprint points at a section outside it ('the names in Shared names'), which item #78 had to ask the user to paste. For triage, build and review of the piece, the runner writes the approved blueprint and brief (the versions the user approved, by number, checked against their sha256) to .loop/context/blueprint.md and brief.md, lists them under the context with their version and sha, and the brief says: your piece is in the ask, the whole blueprint is there for the sections it points at, do not ask for what it contains. The fake agent reads blueprint.md (its stream shows the Shared names section). An item not from a plan gets neither.",
+  "steps": [
+    {"do": "plan", "plan": "p", "title": "Pantry list", "priority": "P2", "text": "a pantry list"},
+    {"do": "plan_turn", "plan": "p", "text": "Brief ready.", "brief": "# Pantry list\n\nA list of what is in the pantry.", "ready": true},
+    {"do": "plan_approve", "plan": "p", "doc": "brief"},
+    {"do": "plan_turn", "plan": "p", "text": "Blueprint ready.", "ready": true,
+     "blueprint": "# Blueprint\n\nApproach: a table, then a page.\n\n## Shared names\n\n- table: pantry_items\n- route: /pantry\n\n## Pieces\n\n### 1. Pantry table\n- repo: sandbox/demo\n- size: S\n- depends on: none\n\nThe table, with the names in Shared names.\n\n### 2. Pantry page\n- depends on: 1\n\nShow the list at the route in Shared names.\n\n## Risks\n\nNone.\n"},
+    {"do": "plan_approve", "plan": "p", "doc": "blueprint", "text": "go"},
+    {"do": "plan_items", "plan": "p", "pieces": ["p1", "p2"]},
+    {"do": "expect", "stage": {"p1": "triage", "p2": "triage"}},
+    {"do": "script", "item": "p1", "for": "triage", "play": "reproduce"},
+    {"do": "runner", "claims": "p1"},
+    {"do": "wait", "stage": {"p1": "build"}, "within": "30s"},
+    {"do": "script", "item": "p1", "play": "good"},
+    {"do": "runner", "claims": "p1"},
+    {"do": "wait", "stage": {"p1": "review"}, "within": "30s"},
+    {"do": "script", "item": "p1", "for": "review", "play": "approve"},
+    {"do": "runner", "claims": "p1"},
+    {"do": "wait", "stage": {"p1": "land"}, "within": "30s"},
+    {"do": "add", "item": "plain", "title": "Not from a plan"},
+    {"do": "script", "item": "plain", "for": "triage", "play": "reproduce"},
+    {"do": "runner", "claims": "plain"},
+    {"do": "wait", "stage": {"plain": "build"}, "within": "30s"},
+    {"do": "expect", "run_files": [
+      {"item": "p1", "stage": "triage", "file": "brief.md", "text": "\\*\\*This item is piece 1 of plan P1\\.\\*\\* Your piece is in the ask; the plan's whole approved documents are in `\\.loop/context/blueprint\\.md` and `\\.loop/context/brief\\.md`, for the sections your piece points at \\(a table, the rules, the names\\)\\. Read them there; do not ask the user for what they contain\\."},
+      {"item": "p1", "stage": "triage", "file": "brief.md", "text": "`\\.loop/context/blueprint\\.md` \\(plan P1's approved blueprint, v1, sha256 [0-9a-f]{7}\\); `\\.loop/context/brief\\.md` \\(plan P1's approved product brief, v1, sha256 [0-9a-f]{7}\\)"},
+      {"item": "p1", "stage": "triage", "file": "stream.jsonl", "text": "(?s)cat \\.loop/context/blueprint\\.md.*table: pantry_items"},
+      {"item": "p1", "stage": "build", "file": "brief.md", "text": "\\*\\*This item is piece 1 of plan P1\\.\\*\\*.*do not ask the user for what they contain\\."},
+      {"item": "p1", "stage": "build", "file": "stream.jsonl", "text": "(?s)## Shared names.*route: /pantry"},
+      {"item": "p1", "stage": "review", "file": "brief.md", "text": "\\*\\*This item is piece 1 of plan P1\\.\\*\\*.*do not ask the user for what they contain\\."},
+      {"item": "p1", "stage": "review", "file": "stream.jsonl", "text": "table: pantry_items"},
+      {"item": "plain", "stage": "triage", "file": "brief.md", "no_text": "of plan P|blueprint\\.md"},
+      {"item": "plain", "stage": "triage", "file": "stream.jsonl", "no_text": "blueprint\\.md"}
+    ]}
+  ],
+  "expect": {
+    "plans": {"p": {"stage": "split", "items": 2}},
+    "agent_runs": {"triage": 2, "build": 1, "review": 1}
+  }
+}

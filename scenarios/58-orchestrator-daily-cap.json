@@ -1,0 +1,29 @@
+{
+  "name": "orchestrator-daily-cap",
+  "about": "The daily cap (docs/phases/08-orchestrator.md, \"Cost\": 150 a day, configurable; 2 here): two turns start, the third waits (one orchestrator.capped event, no agent run) until the day rolls; the next day's turn starts a new session (daily rotation), the second resumed the first's.",
+  "stages": ["build", "orchestrate"],
+  "steps": [
+    {"do": "control", "orchestrator_turns_per_day": 2},
+    {"do": "script", "for": "orchestrate", "play": "note"},
+    {"do": "orchestrator_message", "text": "one"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "orchestrator_message", "text": "two"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "orchestrator_message", "text": "three"},
+    {"do": "runner", "claims": "none"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "agent_runs": {"orchestrate": 2},
+     "events": [{"kind": "orchestrator.capped", "actor": "loopd", "data": {"limit": "^2$"}, "count": 1}]},
+    {"do": "clock", "advance": "24h"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "agent_runs": {"orchestrate": 3},
+    "events": [{"kind": "orchestrate_claimed", "data": {"resume": "^$"}, "count": 2},
+               {"kind": "orchestrate_claimed", "data": {"resume": "^fake-session-orchestrator-1$"}, "count": 1},
+               {"kind": "orchestrator.capped", "count": 1}]
+  }
+}

@@ -16,6 +16,8 @@ type Control struct {
 	MaxRunMinutes int            `json:"max_run_minutes"`
 	Limits        map[string]int `json:"limits"`
 	HoldRules     []HoldRule     `json:"hold_rules"`
+	// OrchTurnsPerDay caps the orchestrate turns started in a day (0: none).
+	OrchTurnsPerDay int `json:"orchestrator_turns_per_day"`
 }
 
 // LimitKeys are the resources and stages that can carry a limit. Build has none: it is bounded
@@ -29,6 +31,8 @@ func DefaultControl() Control {
 		MaxRunMinutes: 45,
 		Limits:        map[string]int{"gpu": 2, "voice": 1, "emulator": 1, "triage": 1, "review": 2, "land": 1},
 		HoldRules:     DefaultHoldRules(),
+
+		OrchTurnsPerDay: DefaultOrchTurnsPerDay,
 	}
 }
 
@@ -42,6 +46,9 @@ func (c Control) Validate() error {
 	}
 	if c.MaxRunMinutes < 1 || c.MaxRunMinutes > 24*60 {
 		return errf(CodeInvalidField, "max_run_minutes must be 1 to 1440")
+	}
+	if c.OrchTurnsPerDay < 0 || c.OrchTurnsPerDay > MaxOrchTurnsPerDay {
+		return errf(CodeInvalidField, "orchestrator_turns_per_day must be 0 to %d", MaxOrchTurnsPerDay)
 	}
 	for k, v := range c.Limits {
 		if !slices.Contains(LimitKeys, k) {
@@ -81,8 +88,8 @@ type ClaimRequest struct {
 	Capabilities []string
 	// Stages, when set, limits the claim to these stages (a runner that only builds).
 	Stages []Stage
-	// Kinds is the work the runner takes: WorkItem, WorkPlan (plan turns). Empty: items only, so a
-	// runner that predates plans never gets a turn.
+	// Kinds is the work the runner takes: WorkItem, WorkPlan (plan turns), WorkOrchestrate.
+	// Empty: items only, so a runner that predates plans never gets a turn.
 	Kinds []string
 }
 
@@ -110,18 +117,24 @@ type TurnCandidate struct {
 	CreatedAt time.Time
 }
 
-// Work is what a claim gets: an item or a plan turn.
+// Work is what a claim gets: an item, a plan turn or an orchestrate turn.
 type Work struct {
 	Item *Item
 	Turn *TurnCandidate
+	Orch *OrchCandidate
 }
 
-// ChooseWork picks an item (Choose) or a queued plan turn. Turns share the active-agents limit
-// with items (live includes the running turns); a turn's priority is its plan's, and a turn beats
-// an item of the same priority: the user is in the conversation.
-func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, req ClaimRequest) (Work, bool) {
+// ChooseWork picks an item (Choose), a queued plan turn or the queued orchestrate turn (orch, nil
+// when there is none to start). Turns share the active-agents limit with items (live includes the
+// running turns); a plan turn's priority is its plan's, and it beats an item of the same priority:
+// the user is in the conversation. The orchestrate turn beats everything (it gets the next free
+// slot), one at a time.
+func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest) (Work, bool) {
 	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
 		return Work{}, false
+	}
+	if orch != nil && req.wants(WorkOrchestrate) && !slices.ContainsFunc(live, func(l LiveLease) bool { return l.Stage == OrchestrateStage }) {
+		return Work{Orch: orch}, true
 	}
 	var it Item
 	okItem := false

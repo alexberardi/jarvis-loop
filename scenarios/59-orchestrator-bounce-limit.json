@@ -1,0 +1,45 @@
+{
+  "name": "orchestrator-bounce-limit",
+  "about": "Recorded 2026-10-16: an item at the review bounce limit (docs/phases/08-orchestrator.md, piece 4). At the second bounce the orchestrator (the persona play) answers once, kind bounce: go on with the reviewer's notes. When review bounces it to the limit again, it escalates to the user with a recommendation instead; loopd refuses a second bounce answer on the item.",
+  "stages": ["build", "review", "orchestrate"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording", "priority": "P2"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "for": "review", "play": "bounce"},
+    {"do": "script", "for": "orchestrate", "play": "persona"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}, "events": [{"item": "a", "kind": "advanced", "outcome": "bounce", "count": 2}]},
+
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [{"item": "a", "kind": "answered", "actor": "orchestrator",
+                 "data": {"answer_kind": "^bounce$", "answer": "^Go on with the reviewer's notes: fix each must-fix point, then open the PR again\\.$"}, "count": 1}]},
+
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "orchestrator", "item": "a", "action": "POST /orchestrator/items/{item}/answer",
+     "body": {"kind": "bounce", "text": "Go on with the notes once more.", "reason": "again"}, "refused": "HTTP 409.*\"code\":\"limit\".*once per item"}
+  ],
+  "expect": {
+    "stage": {"a": "needs_you"},
+    "events": [
+      {"item": "a", "kind": "answered", "actor": "orchestrator", "count": 1},
+      {"item": "a", "kind": "orchestrator.escalated", "actor": "orchestrator",
+       "data": {"text": "hit the review bounce limit again", "recommendation": "\\. Because "}, "count": 1}
+    ],
+    "agent_runs": {"orchestrate": 2}
+  }
+}
