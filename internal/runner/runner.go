@@ -677,6 +677,9 @@ type outcome struct {
 	detail   string
 	exitCode int
 	stats    streamStats
+	// stderr is the end of the agent's stderr.log, on one line: why an agent that printed
+	// nothing died.
+	stderr string
 }
 
 type streamStats struct {
@@ -863,6 +866,7 @@ func (r *Runner) runAgent(ctx context.Context, ru *run, brief string) (out outco
 		return outcome{reason: endStartFailed, detail: err.Error()}
 	}
 	defer stderr.Close()
+	defer func() { out.stderr = stderrTail(stderr.Name(), 600) }()
 	cmd := r.agentCommand(ru)
 	handle := func(line []byte) (string, string) { return r.handle(ru, &out.stats, line) }
 	if ru.builder == pipeline.BuilderQwen {
@@ -1073,9 +1077,30 @@ func (r *Runner) advance(ctx context.Context, ru *run, outcome string, fields ma
 
 func (out outcome) lastOutput() string {
 	if out.stats.lastText == "" {
+		if out.stderr != "" {
+			return "(no output); stderr: " + out.stderr
+		}
 		return "(no output)"
 	}
 	return out.stats.lastText
+}
+
+// stderrTail is the last n bytes or so of an agent's stderr log, its whitespace folded to single
+// spaces.
+func stderrTail(path string, n int) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	s := strings.Join(strings.Fields(string(b)), " ")
+	if len(s) <= n {
+		return s
+	}
+	i := len(s) - n
+	for i < len(s) && !utf8RuneStart(s[i]) {
+		i++
+	}
+	return "…" + s[i:]
 }
 
 func (r *Runner) metrics(ru *run, out outcome, f map[string]string) map[string]string {
