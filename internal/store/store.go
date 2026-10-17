@@ -65,7 +65,7 @@ type Store struct {
 
 	reposMu sync.RWMutex
 	repos   []string
-	aliases map[string]string // lower-case alias -> slug (loopd's --repos-file)
+	aliases map[string]string   // lower-case alias -> slug (loopd's --repos-file)
 	rules   []pipeline.HoldRule // the built-in hold rules; nil: pipeline.DefaultHoldRules
 	// loopRepo is the loop's own repo (SetLoopRepo): a merge to it starts an orchestrate turn.
 	loopRepo string
