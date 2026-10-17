@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // gitRig is a "GitHub" bare repo with main, and the runner's mirror of it.
@@ -137,5 +138,106 @@ func TestFactsSeeUncommittedWork(t *testing.T) {
 	f, _ = r.g.Facts(r.ctx, r.mirror, wt, "main", "loop/1-x")
 	if strings.Join(f.Dirty, "|") != "M a.txt|?? new.txt" {
 		t.Fatalf("dirty %q", f.Dirty)
+	}
+}
+
+// An agent's own git in its worktree (switch -c, commit, config) holds the mirror's config.lock
+// for a moment; the runner's git call that meets it waits and retries instead of failing (#31's
+// land: "could not lock config file config: File exists").
+func TestGitRetriesALockHeldByAnotherProcess(t *testing.T) {
+	r := newGitRig(t)
+	lock := filepath.Join(r.mirror, "config.lock")
+	if err := os.WriteFile(lock, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	go func() { time.Sleep(400 * time.Millisecond); os.Remove(lock) }()
+	if err := r.g.EnsureMirror(r.ctx, r.mirror, RepoConfig{Remote: r.remote + "/", Base: "main"}); err != nil {
+		t.Fatalf("refresh while another git held config.lock: %v", err)
+	}
+	if got := gitT(t, r.mirror, "config", "remote.origin.url"); got != r.remote+"/" {
+		t.Errorf("remote.origin.url %q, want %q", got, r.remote+"/")
+	}
+}
+
+// A lock that never goes away still fails, with git's message, once the retries run out.
+func TestGitGivesUpOnAStuckLock(t *testing.T) {
+	r := newGitRig(t)
+	os.WriteFile(filepath.Join(r.mirror, "config.lock"), nil, 0o644)
+	start := time.Now()
+	err := r.g.EnsureMirror(r.ctx, r.mirror, RepoConfig{Remote: r.remote + "/", Base: "main"})
+	if err == nil || !strings.Contains(err.Error(), "could not lock config file") {
+		t.Fatalf("err %v, want git's lock error", err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("gave up after %v; the retries should be bounded", d)
+	}
+}
+
+// A refresh writes the mirror's config only when a value changed: every write takes
+// config.lock, which a parallel run's refresh then fails on.
+func TestEnsureMirrorLeavesConfigAlone(t *testing.T) {
+	r := newGitRig(t)
+	cfg := filepath.Join(r.mirror, "config")
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(cfg, old, old)
+	if err := r.g.EnsureMirror(r.ctx, r.mirror, RepoConfig{Remote: r.remote, Base: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(cfg); !fi.ModTime().Equal(old) {
+		t.Errorf("config rewritten on a refresh with the same remote (mtime %v)", fi.ModTime())
+	}
+	if err := r.g.EnsureMirror(r.ctx, r.mirror, RepoConfig{Remote: r.remote + "/", Base: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitT(t, r.mirror, "config", "remote.origin.url"); got != r.remote+"/" {
+		t.Errorf("remote.origin.url %q after a change, want %q", got, r.remote+"/")
+	}
+}
+
+// The mirror's own config keeps signing and hooks off for the agents' commits in worktrees, even
+// though the runner's git calls pass the same values as -c overrides.
+func TestMirrorConfigTurnsSigningOff(t *testing.T) {
+	r := newGitRig(t)
+	for key, want := range map[string]string{"commit.gpgsign": "false", "tag.gpgsign": "false", "core.hooksPath": "/dev/null"} {
+		if got := gitT(t, r.mirror, "config", "--local", "--get", key); got != want {
+			t.Errorf("mirror %s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+// Claude Code's sandbox creates empty read-only placeholder files to mount over the paths it
+// protects, the mirror's config.lock among them, and one left behind blocked every git call on
+// the mirror ("could not lock config file config: File exists", 2026-10-16). The runner removes
+// that placeholder; git's own lock (created writable) is never touched.
+func TestEnsureMirrorClearsASandboxPlaceholderLock(t *testing.T) {
+	r := newGitRig(t)
+	lock := filepath.Join(r.mirror, "config.lock")
+	os.WriteFile(lock, nil, 0o444)
+	if err := r.g.EnsureMirror(r.ctx, r.mirror, RepoConfig{Remote: r.remote + "/", Base: "main"}); err != nil {
+		t.Fatalf("refresh with a sandbox placeholder lock: %v", err)
+	}
+	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+		t.Errorf("placeholder config.lock still there (%v)", err)
+	}
+	os.WriteFile(lock, []byte("[core]\n"), 0o644) // a git process's own lock, mid-write
+	if err := r.g.EnsureMirror(r.ctx, r.mirror, RepoConfig{Remote: r.remote, Base: "main"}); err == nil {
+		t.Error("refresh succeeded through another git's live lock")
+	}
+	if _, err := os.Stat(lock); err != nil {
+		t.Errorf("git's own lock was removed: %v", err)
+	}
+}
+
+// Starting an item's branch from origin/<base> must not write tracking config: the mirror's
+// config is shared, and agents' sandboxes keep a placeholder config.lock on it while they run.
+func TestAddWorktreeWritesNoConfig(t *testing.T) {
+	r := newGitRig(t)
+	cfg := filepath.Join(r.mirror, "config")
+	before, _ := os.ReadFile(cfg)
+	if _, err := r.g.AddWorktree(r.ctx, r.mirror, filepath.Join(t.TempDir(), "wt"), "loop/9-x", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := os.ReadFile(cfg); string(after) != string(before) {
+		t.Errorf("AddWorktree changed the mirror's config:\n%s", after)
 	}
 }
