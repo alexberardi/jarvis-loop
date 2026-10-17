@@ -22,6 +22,7 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/clock"
 	"github.com/alexberardi/jarvis-loop/internal/fakeclaude"
 	"github.com/alexberardi/jarvis-loop/internal/guard"
+	"github.com/alexberardi/jarvis-loop/internal/harness"
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 	"github.com/alexberardi/jarvis-loop/internal/store"
 )
@@ -32,6 +33,8 @@ func TestMain(m *testing.M) {
 	switch os.Getenv("LOOP_TEST_AS") {
 	case "claude":
 		os.Exit(fakeclaude.Main(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	case "harness":
+		os.Exit(harness.Main(os.Args[1:]))
 	case "guard":
 		path, err := guard.ConfigPath(os.Args[1:], os.Getenv)
 		if err != nil {

@@ -35,6 +35,9 @@ type SettingsInput struct {
 	ExcludedCommands []string
 	// ReadOnly is a triage or review run: no commits (loop-guard checks every spelling too).
 	ReadOnly bool
+	// HarnessSocket is the runner's harness broker socket, for the build and review runs of a repo
+	// with a harness ("" otherwise): the one Unix socket the sandbox lets the agent connect to.
+	HarnessSocket string
 }
 
 // DefaultDomains are the hosts sandboxed commands may reach: GitHub (Go modules, reading), the Go module
@@ -126,7 +129,7 @@ func pathRules(p string) []string {
 
 // AllowRules are the strict mode's allowlist (dontAsk denies everything else that would prompt).
 func AllowRules(in SettingsInput) []string {
-	return []string{
+	rules := []string{
 		"Bash(go *)", "Bash(gofmt *)", "Bash(npm *)", "Bash(npx *)", "Bash(git *)",
 		"Bash(gh pr view *)", "Bash(gh pr checks *)", "Bash(gh pr list *)",
 		"Bash(gh pr comment *)", "Bash(scripts/check)", "Bash(scripts/check *)", "Bash(scripts/sandbox *)",
@@ -134,6 +137,10 @@ func AllowRules(in SettingsInput) []string {
 		// The working directory (the worktree, relative so it is the same rule for every item).
 		"Edit(./**)",
 	}
+	if in.HarnessSocket != "" {
+		rules = append(rules, "Bash(loop-harness *)")
+	}
+	return rules
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
@@ -173,6 +180,11 @@ func GenerateSettings(in SettingsInput) ([]byte, error) {
 			"deniedDomains":   denied,
 			"strictAllowlist": true,
 		},
+	}
+	if in.HarnessSocket != "" {
+		// loop-harness talks to the runner's broker (harness.go); every other Unix socket stays
+		// closed (never allowAllUnixSockets).
+		sandbox["network"].(map[string]any)["allowUnixSockets"] = []string{in.HarnessSocket}
 	}
 	if len(in.ExcludedCommands) > 0 {
 		sandbox["excludedCommands"] = in.ExcludedCommands

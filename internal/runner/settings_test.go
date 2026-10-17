@@ -23,10 +23,16 @@ func goldenInput(mode string) SettingsInput {
 }
 
 func TestSettingsGolden(t *testing.T) {
-	for _, name := range []string{ModeAuto, ModeStrict, ModeAuto + "_readonly"} {
+	// The _harness files are a repo with a harness (harness.go): its agents may reach the broker's
+	// socket. The others prove no one else may.
+	for _, name := range []string{ModeAuto, ModeStrict, ModeAuto + "_readonly", ModeAuto + "_harness", ModeStrict + "_harness"} {
 		mode, ro := strings.CutSuffix(name, "_readonly")
+		mode, hs := strings.CutSuffix(mode, "_harness")
 		in := goldenInput(mode)
 		in.ReadOnly = ro
+		if hs {
+			in.HarnessSocket = "/home/u/.cache/jarvis-loop/work/harness.sock"
+		}
 		got, err := GenerateSettings(in)
 		if err != nil {
 			t.Fatal(err)
@@ -204,6 +210,44 @@ func TestDenyRulesKillAndPush(t *testing.T) {
 		"gh pr edit 3 --body x"} {
 		if denied(rules, cmd) == "" {
 			t.Errorf("%q is not denied", cmd)
+		}
+	}
+}
+
+// Only a repo with a harness gets a Unix socket, exactly the broker's (never allowAllUnixSockets),
+// and, in strict mode, loop-harness in the allowlist.
+func TestSettingsHarnessSocket(t *testing.T) {
+	type shape struct {
+		Permissions struct {
+			Allow []string `json:"allow"`
+		} `json:"permissions"`
+		Sandbox struct {
+			Network map[string]any `json:"network"`
+		} `json:"sandbox"`
+	}
+	for _, mode := range []string{ModeAuto, ModeStrict} {
+		for _, sock := range []string{"", "/w/harness.sock"} {
+			in := goldenInput(mode)
+			in.HarnessSocket = sock
+			b, _ := GenerateSettings(in)
+			var s shape
+			if err := json.Unmarshal(b, &s); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := s.Sandbox.Network["allowAllUnixSockets"]; ok {
+				t.Errorf("%s: allowAllUnixSockets must never be set", mode)
+			}
+			got, _ := json.Marshal(s.Sandbox.Network["allowUnixSockets"])
+			want := "null"
+			if sock != "" {
+				want = `["/w/harness.sock"]`
+			}
+			if string(got) != want {
+				t.Errorf("%s, socket %q: allowUnixSockets %s, want %s", mode, sock, got, want)
+			}
+			if allowed := slices.Contains(s.Permissions.Allow, "Bash(loop-harness *)"); allowed != (mode == ModeStrict && sock != "") {
+				t.Errorf("%s, socket %q: loop-harness allowed %v", mode, sock, allowed)
+			}
 		}
 	}
 }

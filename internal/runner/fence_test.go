@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/alexberardi/jarvis-loop/internal/fakeclaude"
+	"github.com/alexberardi/jarvis-loop/internal/harness"
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
@@ -64,7 +65,8 @@ func TestFenceHidesSecrets(t *testing.T) {
 		g.r.Cfg.Path() + `; do echo "file $f: [$(cat "$f" 2>/dev/null)]"; done
 echo "ssh dir: [$(ls -A ~/.ssh 2>/dev/null)]"
 echo "installed: [$(cat ~/.config/jarvis-harness/installed.env)]"
-echo "env: GH=[$GH_TOKEN] GITHUB=[$GITHUB_TOKEN] KEY=[$MY_API_KEY] AWS=[$AWS_SECRET] SOCK=[$SSH_AUTH_SOCK] ASKPASS=[$GIT_ASKPASS] PLAIN=[$PLAIN_VAR] PROMPT=[$GIT_TERMINAL_PROMPT]"
+echo "app key: [$INSTALLED_APP_KEY]"
+echo "env: GH=[$GH_TOKEN]GITHUB=[$GITHUB_TOKEN] KEY=[$MY_API_KEY] AWS=[$AWS_SECRET] SOCK=[$SSH_AUTH_SOCK] ASKPASS=[$GIT_ASKPASS] PLAIN=[$PLAIN_VAR] PROMPT=[$GIT_TERMINAL_PROMPT]"
 echo "credential helper: [$(git config --get credential.helper)]"
 exec 3<>/dev/tcp/127.0.0.1/` + port + ` && printf 'GET / HTTP/1.0\r\nHost: x\r\n\r\n' >&3 && echo "loopback: $(cat <&3 | tail -1)"`
 	g.verifyRepo(VerifyStep{Name: "probe", Run: probe})
@@ -77,9 +79,26 @@ exec 3<>/dev/tcp/127.0.0.1/` + port + ` && printf 'GET / HTTP/1.0\r\nHost: x\r\n
 		t.Fatalf("stage %s (question %q); log:\n%s", d.Item.Stage, d.Item.Question, g.logs.String())
 	}
 	run := g.lastRun(id, StageBuild)
+	// The agent's harness commands (harness.go) run in the same fence: alone, and in the keeper,
+	// whose up exported a secret of its own.
+	g.harnessRepo("")
+	g.harnessSession()
+	_, alone, err := call(t, harness.OpRun, probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, out, err := call(t, harness.OpUp, ""); code != 0 || err != nil {
+		t.Fatalf("up: %d %q %v", code, out, err)
+	}
+	_, kept, err := call(t, harness.OpRun, probe)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, out := range map[string]string{
-		"verify": g.read(filepath.Join(run, "verify", "verify-1-probe", "output.log")),
-		"setup":  g.read(filepath.Join(run, "setup.log")),
+		"verify":         g.read(filepath.Join(run, "verify", "verify-1-probe", "output.log")),
+		"setup":          g.read(filepath.Join(run, "setup.log")),
+		"harness run":    "\n" + alone,
+		"harness keeper": "\n" + kept,
 	} {
 		out = out[strings.Index(out, "\nfile ")+1:] // setup.log starts with the command itself
 		for _, bad := range []string{"SECRET", "PRIVATE KEY", "loopd-token", "/run/agent.sock", "/bin/askpass", "id_ed25519\n", "db]"} {
@@ -87,7 +106,7 @@ exec 3<>/dev/tcp/127.0.0.1/` + port + ` && printf 'GET / HTTP/1.0\r\nHost: x\r\n
 				t.Errorf("%s saw %q:\n%s", name, bad, out)
 			}
 		}
-		for _, want := range []string{"ssh dir: []", "installed: [INSTALLED_APP_ID=app]", "PLAIN=[kept]", "PROMPT=[0]",
+		for _, want := range []string{"ssh dir: []", "app key: []", "installed: [INSTALLED_APP_ID=app]", "PLAIN=[kept]", "PROMPT=[0]",
 			"credential helper: []", "loopback: LOOPBACK-OK", "file " + g.r.Cfg.Path() + ": []"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("%s lacks %q:\n%s", name, want, out)

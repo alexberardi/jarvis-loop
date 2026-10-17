@@ -107,6 +107,11 @@ items run:
 
 The first real item is in this repo, which has no harness, so none is needed yet.
 
+**Since 2026-10-16** (item #67): none of the three. A repo's `harness` config gives its build and
+review agents `loop-harness`, which asks the runner to run harness commands in its verify fence
+over a Unix socket (the only one `allowUnixSockets` opens). `excludedCommands` stays empty.
+See `2026-10-16-harness-broker.md`.
+
 ## The runner
 
 - **Claims only `build`**: new optional `stages` on `POST /claim` (validated work stages;

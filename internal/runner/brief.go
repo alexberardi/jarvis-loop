@@ -83,6 +83,10 @@ type RunInfo struct {
 	// CILog is the failing CI log the runner fetched (triage of a red main's P1; build after land
 	// sent the item back for red CI), relative to the working directory.
 	CILog *TriageFile
+	// Harness is the repo's harness when the agent has a session (build, review), and HarnessBin
+	// the loop-harness on its PATH.
+	Harness    *HarnessConfig
+	HarnessBin string
 	// PR and HeadSHA are the PR a review run reviews, at that commit.
 	PR      int
 	HeadSHA string
@@ -298,6 +302,26 @@ func Brief(stage string, it Item, r RunInfo) string {
 		}
 	}
 	fmt.Fprintf(&b, "- Scratch dir (temp files, GOTMPDIR): `%s`\n- Sandbox name for the harness: `%s`\n", r.Scratch, r.Sandbox)
+	if r.Harness != nil {
+		b.WriteString(harnessNote(stage, r))
+	}
+	return b.String()
+}
+
+// harnessNote tells a build or review agent how to use the repo's harness through the runner.
+func harnessNote(stage string, r RunInfo) string {
+	var b strings.Builder
+	b.WriteString("\n## The harness, through the runner\n\n")
+	fmt.Fprintf(&b, "Your sandbox cannot run this repo's harness (no loopback, no harness credentials, no `/dev/kvm`, and what a command starts dies with it), so the runner runs it for you with `loop-harness` (on your PATH; `%s`), in the fence its own verify steps use: the host's network, the harness's credentials (the user's other credentials stay hidden), this worktree writable. Run it from this worktree:\n\n", r.HarnessBin)
+	fmt.Fprintf(&b, "- `loop-harness up`: runs `%s` and keeps what it starts running until your run ends.\n", oneLine(r.Harness.Up))
+	b.WriteString("- `loop-harness run '<command>'`: one command in this worktree, next to the running harness (e.g. `go run ./tools/pipeline say ...`, `scripts/mobile-shot --sandbox $LOOP_SANDBOX ...`). Its output streams back and its exit code is `loop-harness`'s; files it writes here (screenshots) you can Read. Without `up` it runs alone in a fresh fence.\n")
+	fmt.Fprintf(&b, "- `loop-harness down`: runs `%s`. `loop-harness status`: is it up.\n", oneLine(r.Harness.Down))
+	fmt.Fprintf(&b, "\nEach command may take %s; `$LOOP_SANDBOX` is `%s`. Every command's full log is in `.loop/scratch/harness/<n>.log`. The runner ends the harness when your run ends", r.Harness.Timeout(), r.Sandbox)
+	if stage == StageBuild {
+		b.WriteString(", and its verify steps still run after you, on their own harness. Copy what you looked at (screenshots, the log of the run that shows the change) into `.loop/evidence/` and name it in the PR body; what the harness showed is verified, so leave it out of `not_verified`.\n")
+	} else {
+		b.WriteString(". Name in your review what you ran and what it showed.\n")
+	}
 	return b.String()
 }
 

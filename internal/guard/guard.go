@@ -368,6 +368,14 @@ func (c *Config) checkScript(script, cwd, target string, depth int) Decision {
 			if d := c.checkScript(strings.Join(argv[1:], " "), cwd, target, depth+1); d.Deny {
 				return d
 			}
+		case "loop-harness":
+			// The runner runs it in the worktree, outside the agent's sandbox (the harness broker):
+			// the same rules as any script.
+			if len(argv) > 2 && argv[1] == "run" {
+				if d := c.checkScript(strings.Join(argv[2:], " "), cwd, target, depth+1); d.Deny {
+					return d
+				}
+			}
 		case "cd", "pushd", "popd":
 			movedDir = true
 		}

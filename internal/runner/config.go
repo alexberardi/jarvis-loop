@@ -35,6 +35,9 @@ type Config struct {
 	// Claude and Guard are the binaries; Guard defaults to loop-guard next to the runner.
 	Claude string `json:"claude"`
 	Guard  string `json:"guard"`
+	// LoopHarness is the loop-harness binary (default: next to the runner), which agents of repos
+	// with a harness get on their PATH and the keeper fence ends in.
+	LoopHarness string `json:"loop_harness,omitempty"`
 	// Mode is "auto" (the classifier) or "strict" (dontAsk and an allowlist).
 	Mode        string                `json:"mode"`
 	Model       string                `json:"model,omitempty"`
@@ -116,6 +119,9 @@ type RepoConfig struct {
 	// Verify are the runner's own steps after a build, before it pushes (verify.go): they come
 	// from this config only, never from the agent or the repo's PR.
 	Verify []VerifyStep `json:"verify,omitempty"`
+	// Harness lets build and review agents use the repo's harness through the runner
+	// (harness.go, docs/decisions/2026-10-16-harness-broker.md); nil: no harness session.
+	Harness *HarnessConfig `json:"harness,omitempty"`
 	// QA: every item of this repo waits in qa for the user's own check once merged (land sends
 	// needs_qa with merged), as for the mobile app, which reaches TestFlight and Play only after
 	// merge (docs/decisions/2026-10-15-qa.md).
@@ -157,6 +163,26 @@ type VerifyStep struct {
 func (v VerifyStep) Timeout() time.Duration {
 	if v.timeout > 0 {
 		return v.timeout
+	}
+	return DefaultVerifyTimeout
+}
+
+// HarnessConfig is a repo's harness for its agents: Up starts it (in the keeper fence, which
+// keeps what it starts alive until the agent's run ends), Down stops it. Both are bash command
+// lines with the verify steps' environment (LOOP_SANDBOX is the item's sandbox name).
+type HarnessConfig struct {
+	Up   string `json:"up"`
+	Down string `json:"down"`
+	// TimeoutText is a Go duration (default 20m): the limit of up, down and each run.
+	TimeoutText string `json:"timeout,omitempty"`
+
+	timeout time.Duration
+}
+
+// Timeout is the limit of one harness command.
+func (h HarnessConfig) Timeout() time.Duration {
+	if h.timeout > 0 {
+		return h.timeout
 	}
 	return DefaultVerifyTimeout
 }
@@ -234,6 +260,12 @@ func (c *Config) normalize() error {
 		}
 	}
 	c.Guard = Expand(c.Guard)
+	if c.LoopHarness == "" {
+		if exe, err := os.Executable(); err == nil {
+			c.LoopHarness = filepath.Join(filepath.Dir(exe), "loop-harness")
+		}
+	}
+	c.LoopHarness = Expand(c.LoopHarness)
 	if c.Mode == "" {
 		c.Mode = ModeAuto
 	}
@@ -378,6 +410,18 @@ func (c *Config) normalize() error {
 				if (pipeline.HoldRule{Name: "x", Glob: g}).Validate() != nil {
 					return fmt.Errorf("config: repo %s: verify step %q: when_changed %q must be a relative path pattern", name, v.Name, g)
 				}
+			}
+		}
+		if h := r.Harness; h != nil {
+			if strings.TrimSpace(h.Up) == "" || strings.TrimSpace(h.Down) == "" {
+				return fmt.Errorf("config: repo %s: harness needs up and down", name)
+			}
+			if h.TimeoutText != "" {
+				d, err := time.ParseDuration(h.TimeoutText)
+				if err != nil || d <= 0 {
+					return fmt.Errorf("config: repo %s: harness timeout must be a positive duration like \"20m\", not %q", name, h.TimeoutText)
+				}
+				h.timeout = d
 			}
 		}
 		c.Repos[name] = r

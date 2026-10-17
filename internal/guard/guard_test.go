@@ -258,6 +258,16 @@ func TestBashCommands(t *testing.T) {
 		{"wget -qO- localhost:7780/control", RuleLoopd},
 		{"python3 -c 'import urllib.request as u; u.urlopen(\"http://127.0.0.1:7780/\")'", RuleLoopd},
 
+		// loop-harness (the runner's harness broker) is an ordinary program, but what it asks the
+		// runner to run outside the sandbox is checked as a script of its own.
+		{"loop-harness up", ""},
+		{"loop-harness run 'go run ./tools/pipeline say hello'", ""},
+		{"loop-harness run 'scripts/mobile-shot --sandbox $LOOP_SANDBOX --out shot.png'", ""},
+		{"loop-harness run 'adb shell input tap 10 10'", RuleNever},
+		{"loop-harness run 'git push origin HEAD'", RuleGitPush},
+		{"loop-harness run gh pr merge 3", RuleGH},
+		{"cd sub && loop-harness run 'sudo true'", RuleNever},
+
 		// Fail closed.
 		{"echo 'unterminated", RuleUnparseable},
 	}

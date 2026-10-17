@@ -73,3 +73,32 @@ func TestRetryBrief(t *testing.T) {
 		}
 	}
 }
+
+// A repo with a harness: the brief says how to use it through the runner, after the static part;
+// a repo without one says nothing about it.
+func TestBriefHarness(t *testing.T) {
+	it := Item{ID: 12, Title: "Fix the timer"}
+	h := &HarnessConfig{Up: "scripts/sandbox up --name $LOOP_SANDBOX", Down: "scripts/sandbox down --name $LOOP_SANDBOX --purge"}
+	info := RunInfo{Slug: "a/b", Base: "main", Branch: "loop/12-x", Worktree: "/w", Scratch: "/s", Sandbox: "loop-12",
+		Harness: h, HarnessBin: "/w/bin/loop-harness"}
+	plain := BuildBrief(it, RunInfo{Slug: "a/b", Base: "main", Branch: "loop/12-x", Worktree: "/w", Scratch: "/s", Sandbox: "loop-12"})
+	if strings.Contains(plain, "loop-harness") {
+		t.Error("a repo without a harness gets no loop-harness note")
+	}
+	for _, stage := range []string{StageBuild, StageReview} {
+		b := Brief(stage, it, info)
+		for _, want := range []string{"## The harness, through the runner", "`loop-harness up`: runs `scripts/sandbox up --name $LOOP_SANDBOX`",
+			"`loop-harness run '<command>'`", "`scripts/sandbox down --name $LOOP_SANDBOX --purge`", "`/w/bin/loop-harness`", "20m0s",
+			"`$LOOP_SANDBOX` is `loop-12`", ".loop/scratch/harness/"} {
+			if !strings.Contains(b, want) {
+				t.Errorf("%s brief lacks %q", stage, want)
+			}
+		}
+		if strings.Index(b, "loop-harness") < strings.Index(b, "## The item") {
+			t.Errorf("%s: the harness note belongs after the static part", stage)
+		}
+		if stage == StageBuild && !strings.Contains(b, "verify steps still run after you") {
+			t.Error("the build brief says the runner's verify still runs")
+		}
+	}
+}
