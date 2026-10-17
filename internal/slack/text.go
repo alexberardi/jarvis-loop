@@ -20,6 +20,13 @@ func Escape(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
 }
 
+// Unescape undoes Slack's escapes of &, < and > in the text it sends (and only those, in one
+// pass, so "&amp;lt;" stays "&lt;"). Text from Slack is unescaped once, on intake (incoming), and
+// escaped again only on output.
+func Unescape(s string) string {
+	return strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&").Replace(s)
+}
+
 // Clip cuts s to at most max characters, ending it with "… (full text on loopd[: hint])".
 func Clip(s string, max int, hint string) string {
 	if utf8.RuneCountInString(s) <= max {
@@ -59,6 +66,12 @@ var mentionRe = regexp.MustCompile(`<[@!#][^>]*>`)
 // stripMentions removes Slack's <@U…>, <!…> and <#C…> tokens from a message's text.
 func stripMentions(s string) string {
 	return strings.TrimSpace(mentionRe.ReplaceAllString(s, " "))
+}
+
+// incoming is the text of a message from Slack as typed: the mention tokens stripped (they are
+// Slack's own <…> tokens, so before unescaping), then Slack's escapes undone.
+func incoming(s string) string {
+	return Unescape(stripMentions(s))
 }
 
 var wordRe = regexp.MustCompile(`[a-z0-9']+(?:-[a-z0-9']+)*`)

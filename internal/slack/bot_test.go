@@ -1010,10 +1010,21 @@ func TestMentionAddsAnItem(t *testing.T) {
 	if len(rows) != 1 || rows[0].Priority != "P4" || rows[0].Title != "tidy the logs" {
 		t.Fatalf("rows %+v", rows)
 	}
+	// Slack's escapes are undone once: the title and the ask are the words as typed.
+	mention(Approver, "CELSEWHERE", "<@U0BOT> fix the &lt;tool_call&gt; parsing &amp; retries")
+	rows, _ = e.st.ListItems(e.ctx, "", "")
+	if len(rows) != 2 {
+		t.Fatalf("rows %+v", rows)
+	}
+	for _, r := range rows {
+		if d, _ := e.st.GetItem(e.ctx, r.ID); r.Title != "tidy the logs" && (d.Item.Title != "fix the <tool_call> parsing & retries" || d.Item.Ask != d.Item.Title) {
+			t.Fatalf("escaped add: %+v", d.Item)
+		}
+	}
 	// Someone else: refused and recorded; the ephemeral goes only to an allowed channel.
 	mention(other, "CELSEWHERE", "<@U0BOT> add a thing")
 	mention(other, ChannelLoop, "<@U0BOT> add a thing")
-	if rows, _ := e.st.ListItems(e.ctx, "", ""); len(rows) != 1 {
+	if rows, _ := e.st.ListItems(e.ctx, "", ""); len(rows) != 2 {
 		t.Fatal("someone else added an item")
 	}
 	eph := only(t, e.calls(), "chat.postEphemeral") // calls() fails any post outside the two channels
