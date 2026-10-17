@@ -912,6 +912,9 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 			runnerName, strings.Join(caps, ","), now.UnixNano()); err != nil {
 			return err
 		}
+		if err := s.checkUnservable(tx, now); err != nil {
+			return err
+		}
 		ctl, err := s.loadControl(tx)
 		if err != nil {
 			return err
@@ -1037,6 +1040,10 @@ func (s *Store) Sweep(ctx context.Context) error {
 	}
 	s.tickMu.Unlock()
 	if tick {
+		// Unservable first, so the orchestrator's idle trigger skips what it already flagged.
+		if err := s.tx(ctx, func(tx *sql.Tx) error { return s.checkUnservable(tx, now) }); err != nil {
+			return err
+		}
 		if err := s.OrchTick(ctx); err != nil {
 			return err
 		}
@@ -1260,6 +1267,9 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 			if err := s.dependencyClosed(tx, id); err != nil {
 				return err
 			}
+		}
+		if err := s.checkUnservable(tx, now); err != nil {
+			return err
 		}
 		if err := s.planItemSettled(tx, tr.Item); err != nil {
 			return err

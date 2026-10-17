@@ -225,7 +225,7 @@ func TestClaimAdvanceAndLeaseRules(t *testing.T) {
 	for _, e := range d.Events {
 		kinds = append(kinds, e.Kind)
 	}
-	if strings.Join(kinds, ",") != "created,claimed,refused,refused,evidence,advanced,refused,refused" {
+	if strings.Join(kinds, ",") != "created,claimed,refused,refused,evidence,advanced,unservable,refused,refused" {
 		t.Fatalf("events: %v", kinds)
 	}
 

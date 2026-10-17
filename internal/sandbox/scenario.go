@@ -49,6 +49,8 @@ type Step struct {
 	After []string `json:"after,omitempty"`
 	// triage: what the item needs from a runner (its resources, comma-separated)
 	Resources string `json:"resources,omitempty"`
+	// hand_claim: what the hand runner offers when it claims (comma-separated)
+	Capabilities string `json:"capabilities,omitempty"`
 	// script: how the fake claude plays the item's runs of a stage (default build), and the repo
 	// a triage run picks
 	For   string `json:"for,omitempty"` // the stage the script is for: triage, build (default), review
@@ -419,6 +421,23 @@ func (p *player) step(st Step) error {
 			return err
 		}
 		return s.hand.Advance(p.ctx, r.id, "reproduced", map[string]string{"area": "sandbox", "size": "S", "risk": "normal", "resources": st.Resources}, nil)
+	case "hand_claim":
+		r, err := p.ref(st.Item)
+		if err != nil {
+			return err
+		}
+		var caps []string
+		if st.Capabilities != "" {
+			caps = strings.Split(st.Capabilities, ",")
+		}
+		cl, err := s.hand.Claim(p.ctx, "hand-builder", caps, []string{"build"})
+		if err != nil {
+			return err
+		}
+		if cl == nil || cl.Item.ID != r.id {
+			return fmt.Errorf("the hand runner (%s) claimed %+v in build, want #%d", st.Capabilities, cl, r.id)
+		}
+		return nil
 	case "script":
 		if st.For == "orchestrate" {
 			b, _ := json.Marshal(map[string]string{"play": st.Play})

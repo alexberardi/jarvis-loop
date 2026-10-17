@@ -456,6 +456,16 @@ func who(actor string) string {
 	return Escape(actor)
 }
 
+// listOf is a list field of an event's data (JSON: a list of strings).
+func listOf(d map[string]any, k string) []string {
+	list, _ := d[k].([]any)
+	out := make([]string, 0, len(list))
+	for _, x := range list {
+		out = append(out, fmt.Sprint(x))
+	}
+	return out
+}
+
 func str(d map[string]any, k string) string {
 	s, _ := d[k].(string)
 	return s
@@ -517,6 +527,15 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 			text += "\n*Recommend:* " + f("recommendation", 600) + " _Because_ " + f("reason", 400)
 		}
 		return Message{Text: text, Blocks: []map[string]any{section(text)}}, true
+	}
+	if e.Kind == store.KindUnservable {
+		// loopd's own check (docs/decisions/2026-10-17-unservable-items.md): no claim can take it.
+		text := fmt.Sprintf("<@%s> %s waits in %s, but no runner seen in the last %dh offers %s. Bring up a runner with it, or change the item's resources; it is claimed as soon as a runner offers it.",
+			Approver, ref(id, it.Title), Escape(e.To), int(pipeline.RunnerSeenWindow.Hours()), b.field(strings.Join(listOf(e.Data, "missing"), " + "), 200, id))
+		return Message{Text: text}, true
+	}
+	if e.Kind == store.KindServable {
+		return Message{Text: fmt.Sprintf("A runner offers %s now; it can claim this from the %s queue.", b.field(strings.Join(listOf(e.Data, "missing"), " + "), 200, id), Escape(e.To))}, true
 	}
 	if strings.HasPrefix(e.Actor, orchestratorPrefix) {
 		return Message{Text: b.orchestratorLine(ctx, e)}, true

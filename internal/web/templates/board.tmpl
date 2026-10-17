@@ -100,6 +100,7 @@
 {{- if .SlackURL}}<a href="{{.SlackURL}}">thread</a>{{end}}
 {{- if .PlanID}}<a class="label" href="/board/plans/{{.PlanID}}">plan P{{.PlanID}}</a>{{end}}
 {{- if .Builder}}<span class="label">builder: {{.Builder}}</span>{{end}}
+{{- if and .Unservable (not .ClaimedBy)}}<span class="label">{{unservable .Unservable}}</span>{{end}}
 {{- range .Waits}}<span class="label">waiting on {{.}}</span>{{end}}
 </div>
 {{- if .Reason}}

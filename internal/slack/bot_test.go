@@ -1239,6 +1239,28 @@ func TestBuilderFallbackLine(t *testing.T) {
 	}
 }
 
+// unservable mentions the approver once with what no runner offers; servable is one line.
+func TestUnservableLines(t *testing.T) {
+	e := newBotEnv(t)
+	it, err := e.st.AddItem(e.ctx, "user:alex", store.NewItem{Title: "Mac app", Repo: "jarvis-server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		kind string
+		want string
+	}{
+		{store.KindUnservable, "<@" + Approver + "> #1 Mac app waits in build, but no runner seen in the last 24h offers macos. Bring up a runner with it, or change the item's resources; it is claimed as soon as a runner offers it."},
+		{store.KindServable, "A runner offers macos now; it can claim this from the build queue."},
+	} {
+		ev := store.Event{ItemID: it.ID, Actor: "loopd", Kind: c.kind, From: "build", To: "build", Data: map[string]any{"missing": []any{"macos"}}}
+		m, ok := e.b.describe(e.ctx, ev, store.Detail{Item: it})
+		if !ok || m.Text != c.want {
+			t.Errorf("got %q, want %q", m.Text, c.want)
+		}
+	}
+}
+
 // /loop add sets the repo when the text names a configured one, with the priority words too;
 // otherwise the repo stays empty for triage.
 func TestAddRepoWords(t *testing.T) {

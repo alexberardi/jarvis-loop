@@ -1,0 +1,27 @@
+{
+  "name": "unservable-resources",
+  "about": "#92: an item needs a capability no runner offers (macos, while the only runners have none). loopd flags it the moment triage sets its resources: an unservable event naming what is missing, one mention of the user in the thread and a badge on the board, before any clock moves, so without waiting for the orchestrator's idle limit or a turn. More polls and a 3h idle stretch do not repeat it. When a runner offering macos claims, the flag clears and that runner gets the item.",
+  "stages": ["build"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Mac server app progress window", "priority": "P4"},
+    {"do": "triage", "item": "a", "resources": "macos"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [{"item": "a", "kind": "unservable", "actor": "loopd", "data": {"missing": "macos"}, "count": 1}]},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "3h"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [{"item": "a", "kind": "unservable", "count": 1}],
+     "no_events": [{"item": "a", "kind": "claimed", "actor": "runner"}]},
+
+    {"do": "hand_claim", "item": "a", "capabilities": "macos"}
+  ],
+  "expect": {
+    "stage": {"a": "build"},
+    "events": [
+      {"item": "a", "kind": "servable", "actor": "loopd", "data": {"missing": "macos"}, "count": 1},
+      {"item": "a", "kind": "claimed", "count": 2}
+    ],
+    "agent_runs": {"build": 0}
+  }
+}

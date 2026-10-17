@@ -231,6 +231,8 @@ func goldenItems() []store.BoardItem {
 			WaitingOn: []int64{12}, Waits: []pipeline.WaitChain{{Path: []int64{12, 5}, Root: "in review"}}, UpdatedAt: now},
 		{BoardRow: row(12, "Show the plan link", "P2", "triage", "intake", "alexberardi/jarvis-loop", 0, "", time.Hour),
 			WaitingOn: []int64{5, 8}, Waits: []pipeline.WaitChain{{Path: []int64{5}, Root: "in review"}, {Path: []int64{8}, Root: "held for approval"}}, PlanID: 2, Builder: "qwen", UpdatedAt: now},
+		{BoardRow: row(13, "Mac app progress window", "P4", "build", "ready", "alexberardi/jarvis-server", 0, "", 6*time.Hour),
+			Unservable: []string{"macos"}, UpdatedAt: now},
 		{BoardRow: row(5, "Board page", "P2", "review", "review", "alexberardi/jarvis-loop", 14, "devbox/reviewer-1", 2*day), UpdatedAt: now},
 		{BoardRow: row(6, "Bump sqlite", "P3", "land", "land (queued)", "alexberardi/jarvis-server", 31, "", 4*day), UpdatedAt: now},
 		{BoardRow: row(7, "Which emulator?", "P1", "needs_you", "needs-you", "alexberardi/jarvis-server", 0, "", 1*day),
@@ -324,7 +326,7 @@ func TestBoardColumns(t *testing.T) {
 	if strings.Join(names, ",") != "Planning,Triage,Build,Review,Needs you,Approval,QA,Done" {
 		t.Errorf("columns %v", names)
 	}
-	want := map[string][]int64{"Triage": {1, 2, 12}, "Build": {3, 4}, "Review": {5, 6}, "Needs you": {7}, "Approval": {8}, "Done": {9}}
+	want := map[string][]int64{"Triage": {1, 2, 12}, "Build": {3, 4, 13}, "Review": {5, 6}, "Needs you": {7}, "Approval": {8}, "Done": {9}}
 	for k, ids := range want {
 		if !slicesEqual(got[k], ids) {
 			t.Errorf("%s: %v, want %v", k, got[k], ids)
