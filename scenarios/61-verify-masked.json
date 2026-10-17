@@ -1,0 +1,88 @@
+{
+  "name": "verify-masked",
+  "about": "Item #97: a verify step fails because it reads a file the fence hides (verify_mask), as jarvis-server's sandbox sourcing the harness's prod-llm.env did. That is the runner's config, not the change: nothing is pushed, the item is not bounced back to build but goes to the user, with the masked path and the step in the reason and never the file's contents.",
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "via": "slack",
+      "title": "verify hits the mask",
+      "text": "[mobile] show the pairing code larger"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "verify",
+      "outcome": "masked"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "needs_you"
+    },
+    "prs": 0,
+    "remote": {
+      "repo": "sandbox/jarvis-node-mobile",
+      "only": true
+    },
+    "events": [
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "failed",
+        "actor": "runner",
+        "data": {
+          "error": "^the runner's verify \"mobile shots\" could not read /.*/work/prod-llm\\.env: verify_mask hides it from fenced steps, so this is the runner's config, not the change; nothing was pushed\\."
+        },
+        "count": 1
+      },
+      {
+        "item": "a",
+        "kind": "evidence",
+        "actor": "runner",
+        "data": {
+          "name": "^verify-2-mobile-shots\\.log$"
+        },
+        "count": 1
+      }
+    ],
+    "no_events": [
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "verify_failed"
+      },
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "pr_opened"
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "text": "needs you: the runner's verify \"mobile shots\" could not read .*prod-llm\\.env: verify_mask hides it"
+      }
+    ],
+    "no_messages": [
+      {
+        "text": "sandbox-prod-app"
+      },
+      {
+        "text": "Back to build"
+      }
+    ],
+    "absent": [
+      "work/1-verify-demo"
+    ]
+  }
+}

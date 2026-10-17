@@ -1295,6 +1295,11 @@ func (r *Runner) reportBuild(ctx context.Context, ru *run, out outcome, raw []by
 			fail("uploading the verify output: " + err.Error())
 			return
 		}
+		if bad.Masked != "" {
+			// Not a bounce: the next build would hit the same mask. To the user.
+			fail(VerifyMaskedReason(*bad))
+			return
+		}
 		r.advance(ctx, ru, "verify_failed", r.metrics(ru, out, map[string]string{
 			"reason": VerifyFailedReason(*bad), "verify_step": bad.Name, "log_tail": VerifyLogTail(*bad), "head_sha": facts.HeadSHA}), nil)
 		return

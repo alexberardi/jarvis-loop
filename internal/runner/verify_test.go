@@ -348,3 +348,60 @@ func TestSetupRunsBeforeTheAgent(t *testing.T) {
 func ItemBranchName(id int64, title string) string {
 	return fmt.Sprintf("loop/%d-%s", id, Slug(title))
 }
+
+// A step that fails reading a file the fence masks (verify_mask) is the runner's problem, not the
+// change's: the item goes to the user without a bounce, and the message names the path, never its
+// contents.
+func TestVerifyMaskedFileIsNotTheChangesFault(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	if err := g.r.ProbeFence(); err != nil {
+		t.Fatalf("bubblewrap cannot run here (the runner needs it): %v", err)
+	}
+	secret := filepath.Join(t.TempDir(), "prod-llm.env")
+	if err := os.WriteFile(secret, []byte("PROD_APP_ID=SECRET-ID\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g.r.Cfg.VerifyMask = append(g.r.Cfg.VerifyMask, secret)
+	g.verifyRepo(VerifyStep{Name: "pipeline scenarios", Run: `set -eu; . ` + secret + `; echo "app $PROD_APP_ID"`})
+	id := g.toBuild("Add a feature")
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.NeedsYou || d.Item.BounceCount != 0 || d.Item.PR != 0 {
+		t.Fatalf("stage %s bounces %d pr %d (question %q); log:\n%s", d.Item.Stage, d.Item.BounceCount, d.Item.PR, d.Item.Question, g.logs.String())
+	}
+	ev := g.advanced(id)
+	msg, _ := ev.Data["error"].(string)
+	want := `the runner's verify "pipeline scenarios" could not read ` + secret + `: verify_mask hides it from fenced steps, so this is the runner's config, not the change; nothing was pushed`
+	if ev.Outcome != "failed" || !strings.HasPrefix(msg, want) || strings.Contains(msg, "SECRET-ID") {
+		t.Fatalf("event %s %+v", ev.Outcome, ev.Data)
+	}
+	var names []string
+	for _, e := range d.Evidence {
+		names = append(names, e.Name)
+	}
+	if !slices.Contains(names, "verify-1-pipeline-scenarios.log") {
+		t.Fatalf("evidence %v", names)
+	}
+	if g.remoteHead(ItemBranchName(id, "Add a feature")) != "" || g.prs.calls() != 0 {
+		t.Fatal("pushed after a masked verify")
+	}
+}
+
+func TestMaskedRead(t *testing.T) {
+	mask := []string{"/h/.config/jarvis-harness/prod-llm.env", "/h/.ssh"}
+	for _, c := range []struct{ log, want string }{
+		{"/h/.config/jarvis-harness/prod-background.env: line 3: /h/.config/jarvis-harness/prod-llm.env: Permission denied\nPROD_APP_ID: unbound variable\n",
+			"/h/.config/jarvis-harness/prod-llm.env"},
+		{"cat: /h/.ssh/id_ed25519: No such file or directory\n", "/h/.ssh"},
+		{"open /h/.ssh/config: permission denied\n", "/h/.ssh"},
+		// Not masked: the change's own failure.
+		{"/repo/scripts/run: Permission denied\n", ""},
+		{"/h/.config/jarvis-harness/prod-llm.env.bak: Permission denied\n", ""},
+		{"/h/.sshx/key: Permission denied\n", ""},
+		{"FAIL: TestHome\n", ""},
+	} {
+		if got := maskedRead(c.log, mask); got != c.want {
+			t.Errorf("maskedRead(%q) = %q, want %q", c.log, got, c.want)
+		}
+	}
+}

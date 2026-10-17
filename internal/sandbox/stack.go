@@ -312,6 +312,13 @@ func StartStack(opts Options) (st *Stack, err error) {
 	if err := os.MkdirAll(s.scripts, 0o755); err != nil {
 		return nil, err
 	}
+	// The masked stand-in exists (the fence only masks what is there); its value is never shown.
+	if err := os.MkdirAll(filepath.Join(dir, "work"), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, VerifyMaskedFile), []byte("PROD_APP_ID=sandbox-prod-app\n"), 0o600); err != nil {
+		return nil, err
+	}
 	verify := true
 	cfg := runner.Config{
 		LoopdURL: s.LoopdURL, Token: runnerTok, OrchestratorToken: orchTok, Name: RunnerName, Capabilities: []string{}, Slots: 1,
@@ -319,6 +326,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 		PollSeconds: 2, UserEmulator: "emulator-5554", VerifyPR: &verify,
 		LoopdTokens: tokPath, LoopdData: filepath.Join(dir, "loopd"), Stages: opts.Stages,
 		VerifyLock: filepath.Join(dir, "verify.lock"),
+		VerifyMask: append(runner.DefaultVerifyMask(runner.Home()), filepath.Join(dir, VerifyMaskedFile)),
 		Repos: map[string]runner.RepoConfig{
 			RepoKey: {Remote: s.Remote, Slug: RepoSlug, Base: "main", Group: "server", Description: "the sandbox's demo app"},
 			LoopKey: {Remote: s.LoopRemote, Slug: LoopSlug, Base: "main", Group: "loop", Description: "the loop itself (loopd, the runner, the Slack bot)",
@@ -390,6 +398,14 @@ var (
 // keeps readable (the rest of the stack dir may be under a /tmp the fence makes private).
 const VerifyFailFile = "work/verify-fail"
 
+// VerifyMaskedFile is a stand-in for the harness's prod env files: in the runner's verify_mask, so
+// fenced steps cannot read it. VerifyMaskedMarker's presence (a scenario's "verify" step with outcome
+// "masked") makes "mobile shots" source it, as jarvis-server's sandbox sources prod-llm.env.
+const (
+	VerifyMaskedFile   = "work/prod-llm.env"
+	VerifyMaskedMarker = "work/verify-masked"
+)
+
 // MobileTrustedFile is the stand-in node-mobile's deny_write path: a harness file the runner
 // trusts, whose change verify runs only on the user's trust OK (scenario 56).
 const MobileTrustedFile = "tools/shoot"
@@ -400,6 +416,7 @@ const MobileTrustedFile = "tools/shoot"
 // and a step that only runs when web/ changed.
 func MobileVerify(dir string) []runner.VerifyStep {
 	fail := filepath.Join(dir, VerifyFailFile)
+	masked, marker := filepath.Join(dir, VerifyMaskedFile), filepath.Join(dir, VerifyMaskedMarker)
 	return []runner.VerifyStep{
 		{Name: "unit tests", Run: `test -f README.md && echo "unit tests: 12 passed at $LOOP_HEAD"`},
 		{Name: "mobile shots", Repo: RepoKey, Run: `set -e
@@ -410,6 +427,7 @@ printf 'PNG
 ' > "$LOOP_EVIDENCE_DIR/home-light.png"
 printf '{"screens":["home"],"head":"%s"}
 ' "$LOOP_HEAD" > "$LOOP_EVIDENCE_DIR/index.json"
+if [ -e ` + shellQuote(marker) + ` ]; then set -u; . ` + shellQuote(masked) + `; echo "app $PROD_APP_ID"; fi
 if [ -e ` + shellQuote(fail) + ` ]; then echo "FAIL: the home screen is blank (home-light.png)"; exit 1; fi
 echo "shots: 1 screen, light"`},
 		{Name: "web screenshots", Run: "echo should not run; exit 1", WhenChanged: []string{"web/**"}},
