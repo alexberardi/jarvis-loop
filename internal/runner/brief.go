@@ -31,6 +31,10 @@ type Item struct {
 	Source string `json:"source"`
 	// Approval is the user's approval of a held merge, for the head they saw (land reads it).
 	Approval *ItemApproval `json:"approval,omitempty"`
+	// Builder is who builds it (pipeline.BuilderQwen: OpenCode, opencode.go; else claude), and
+	// BuildSession the OpenCode session its last qwen build left, which the next one resumes.
+	Builder      string `json:"builder,omitempty"`
+	BuildSession string `json:"build_session,omitempty"`
 }
 
 // ItemApproval is the part of an approval land needs.
