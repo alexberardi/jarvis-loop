@@ -18,8 +18,10 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/store"
 )
 
-// The swim-lane board (docs/decisions/2026-10-15-board.md): read-only, server-rendered, no
-// JavaScript. It signs in with a board (or user) token passed once as ?t=, kept in a cookie.
+// The swim-lane board (docs/decisions/2026-10-15-board.md): read-only, server-rendered. Its only
+// JavaScript is live.js, which refreshes the "Working now" section from GET /board/working
+// (docs/decisions/2026-10-16-working-now.md). It signs in with a board (or user) token passed
+// once as ?t=, kept in a cookie.
 
 // BoardCookie holds the token the board was opened with.
 const BoardCookie = "loop_board"
@@ -45,9 +47,9 @@ type boardPage struct {
 	cfg    BoardConfig
 }
 
-// NewBoard returns the handler for GET /board, GET /board/items/{id},
-// GET /board/items/{id}/evidence/{n}, GET /board/plans/{id} and GET /board/plans/{id}/{kind}/{v},
-// and nothing else.
+// NewBoard returns the handler for GET /board, GET /board/working, GET /board/live.js,
+// GET /board/items/{id}, GET /board/items/{id}/evidence/{n}, GET /board/plans/{id} and
+// GET /board/plans/{id}/{kind}/{v}, and nothing else.
 func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardConfig) http.Handler {
 	if cfg.Clock == nil {
 		cfg.Clock = clock.Real{}
@@ -55,12 +57,21 @@ func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardCo
 	p := &boardPage{st: st, tokens: tokens, log: log, cfg: cfg}
 	mux := http.NewServeMux()
 	mux.Handle("GET /board", p.auth(p.board))
+	mux.Handle("GET /board/working", p.auth(p.working))
+	mux.Handle("GET /board/live.js", p.auth(p.liveJS))
 	mux.Handle("GET /board/items/{id}", p.auth(p.item))
 	mux.Handle("GET /board/items/{id}/evidence/{n}", p.auth(p.evidence))
 	mux.Handle("GET /board/plans/{id}", p.auth(p.plan))
 	mux.Handle("GET /board/plans/{id}/{kind}/{v}", p.auth(p.planDoc))
 	return mux
 }
+
+// boardCSP is every board page's policy; liveCSP adds what live.js needs (the board and the item
+// page): the script from /board/live.js and fetches of /board/working, nothing inline.
+const (
+	boardCSP = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'none'; frame-ancestors 'none'"
+	liveCSP  = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; script-src 'self'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'"
+)
 
 // boardKinds may read the board: its own read-only kind, and the user, who may do more anyway.
 var boardKinds = []string{api.KindBoard, api.KindUser}
@@ -72,7 +83,7 @@ func (p *boardPage) auth(next http.HandlerFunc) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'none'; frame-ancestors 'none'")
+		h.Set("Content-Security-Policy", boardCSP)
 		q := r.URL.Query()
 		if q.Has("t") {
 			// The link with the token is opened once: keep the token in a cookie and drop it
@@ -147,7 +158,15 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, err)
 		return
 	}
-	v := boardView(items, plans, p.cfg.Clock.Now(), r.URL.Query().Get("closed") == "1", p.cfg.SlackWorkspace)
+	work, err := p.st.Working(r.Context(), 0)
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
+	now := p.cfg.Clock.Now()
+	v := boardView(items, plans, now, r.URL.Query().Get("closed") == "1", p.cfg.SlackWorkspace)
+	v.Working = workingView(work, now, 0)
+	w.Header().Set("Content-Security-Policy", liveCSP)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := boardTmpl.Execute(w, v); err != nil {
 		p.log.Error("render board", "err", err)
@@ -170,10 +189,50 @@ func (p *boardPage) item(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, err)
 		return
 	}
+	now := p.cfg.Clock.Now()
+	v := itemView(d, ch, ts, now, p.cfg.SlackWorkspace)
+	if d.Lease != nil {
+		work, err := p.st.Working(r.Context(), id)
+		if err != nil {
+			p.fail(w, err)
+			return
+		}
+		ws := workingView(work, now, id)
+		v.Working = &ws
+		w.Header().Set("Content-Security-Policy", liveCSP)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := itemTmpl.Execute(w, itemView(d, ch, ts, p.cfg.Clock.Now(), p.cfg.SlackWorkspace)); err != nil {
+	if err := itemTmpl.Execute(w, v); err != nil {
 		p.log.Error("render item", "err", err)
 	}
+}
+
+// working is the "Working now" section's inside, for live.js: every live lease, or one item's
+// (?item=N).
+func (p *boardPage) working(w http.ResponseWriter, r *http.Request) {
+	var id int64
+	if q := r.URL.Query().Get("item"); q != "" {
+		n, err := strconv.ParseInt(q, 10, 64)
+		if err != nil || n <= 0 {
+			http.NotFound(w, r)
+			return
+		}
+		id = n
+	}
+	work, err := p.st.Working(r.Context(), id)
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := workingTmpl.ExecuteTemplate(w, "working", workingView(work, p.cfg.Clock.Now(), id)); err != nil {
+		p.log.Error("render working", "err", err)
+	}
+}
+
+func (p *boardPage) liveJS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Write(liveJS)
 }
 
 func (p *boardPage) plan(w http.ResponseWriter, r *http.Request) {
@@ -288,7 +347,36 @@ type column struct {
 // Count is the column's cards, plans included.
 func (c column) Count() int { return len(c.Cards) + len(c.Plans) }
 
+// workingCard is a live lease's "Working now" card.
+type workingCard struct {
+	store.Working
+	// Elapsed is the seconds since the claim.
+	Elapsed int64
+}
+
+// workingSection is the "Working now" section: its cards, and where live.js refreshes it from.
+type workingSection struct {
+	Src   string
+	Cards []workingCard
+}
+
+func workingView(work []store.Working, now time.Time, item int64) workingSection {
+	v := workingSection{Src: "/board/working", Cards: []workingCard{}}
+	if item > 0 {
+		v.Src += "?item=" + strconv.FormatInt(item, 10)
+	}
+	for _, w := range work {
+		el := int64(now.Sub(w.ClaimedAt) / time.Second)
+		if el < 0 {
+			el = 0
+		}
+		v.Cards = append(v.Cards, workingCard{Working: w, Elapsed: el})
+	}
+	return v
+}
+
 type boardData struct {
+	Working    workingSection
 	Columns    []column
 	ShowClosed bool
 	Now        time.Time
@@ -313,7 +401,7 @@ var lanes = []struct {
 }
 
 func boardView(items []store.BoardItem, plans []store.PlanRow, now time.Time, showClosed bool, slackBase string) boardData {
-	v := boardData{ShowClosed: showClosed, Now: now, PlanCount: len(plans)}
+	v := boardData{ShowClosed: showClosed, Now: now, PlanCount: len(plans), Working: workingView(nil, now, 0)}
 	for _, l := range lanes {
 		col := column{Name: l.name, Note: l.note, Cards: []card{}}
 		if l.name == "Planning" {
@@ -405,6 +493,8 @@ type itemData struct {
 	Age       int64
 	Events    []eventRow
 	Evidence  []evidenceRow
+	// Working is the item's "Working now" card while a lease is live (nil otherwise).
+	Working *workingSection
 }
 
 // maxDataText caps an event's data on the page; the full record is in `loop show`.
@@ -452,11 +542,15 @@ func stamp(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
 //go:embed templates/*.tmpl
 var templateFS embed.FS
 
+//go:embed templates/live.js
+var liveJS []byte
+
 var funcs = template.FuncMap{"age": age, "size": size, "stamp": stamp, "turnLabel": turnLabel}
 
 var (
-	boardTmpl = template.Must(template.New("board.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/board.tmpl", "templates/style.tmpl"))
-	itemTmpl  = template.Must(template.New("item.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/item.tmpl", "templates/style.tmpl"))
-	planTmpl  = template.Must(template.New("plan.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plan.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
-	docTmpl   = template.Must(template.New("plandoc.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plandoc.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
+	boardTmpl   = template.Must(template.New("board.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/board.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
+	itemTmpl    = template.Must(template.New("item.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/item.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
+	workingTmpl = template.Must(template.New("working.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/working.tmpl"))
+	planTmpl    = template.Must(template.New("plan.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plan.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
+	docTmpl     = template.Must(template.New("plandoc.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plandoc.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
 )

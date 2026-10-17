@@ -1,0 +1,69 @@
+{{define "working"}}
+<h2>Working now · {{len .Cards}}</h2>
+{{- range .Cards}}
+<article class="work">
+{{- if .ItemID}}
+<a class="title" href="/board/items/{{.ItemID}}">#{{.ItemID}} {{.Title}}</a>
+{{- else}}
+<a class="title" href="/board/plans/{{.PlanID}}">P{{.PlanID}} {{.Title}}</a>
+{{- end}}
+<div class="meta">
+<span class="label">{{.Stage}}{{if .Persona}} · {{.Persona}}{{end}}</span>
+<span>{{.Runner}}/{{.Agent}}</span>
+<span>{{age .Elapsed}}</span>
+{{- with .Activity}}
+{{- if .Phase}}<span>{{.Phase}}{{if .Step}}: {{.Step}} ({{age .StepElapsedS}}){{end}}</span>{{end}}
+{{- if .ToolCalls}}<span>{{.ToolCalls}} tool calls</span>{{end}}
+{{- end}}
+</div>
+{{- with .Activity}}
+{{- if .Todos}}
+<ul class="todos">
+{{- range .Todos}}
+<li class="{{.Status}}">{{if eq .Status "completed"}}✓{{else if eq .Status "in_progress"}}▶{{else}}○{{end}} {{.Text}}</li>
+{{- end}}
+</ul>
+{{- end}}
+{{- if .Recent}}
+<ol class="calls">
+{{- range .Recent}}
+<li>{{.}}</li>
+{{- end}}
+</ol>
+{{- end}}
+{{- if .Message}}
+<p class="said">{{.Message}}</p>
+{{- end}}
+{{- else}}
+{{- if .Note}}
+<p class="said">{{.Note}}</p>
+{{- end}}
+{{- end}}
+</article>
+{{- else}}
+<p class="note">Nothing running.</p>
+{{- end}}
+{{end}}
+
+{{define "working-style"}}<style>
+.working { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 8px; margin-bottom: 16px; }
+.working > h2, .working > .note { grid-column: 1 / -1; }
+.working > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 0 0; }
+.working > .note { color: var(--muted); font-size: 13px; margin: 0; }
+.work { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; min-width: 0; }
+.work .meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.work .label { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.work .title { font-weight: 600; text-decoration: none; color: var(--fg); display: block; overflow-wrap: anywhere; }
+.work ul, .work ol { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; overflow-wrap: anywhere; }
+.work .todos .completed { color: var(--muted); text-decoration: line-through; }
+.work .todos .in_progress { font-weight: 600; }
+.work .calls li { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12px; }
+.work .said { margin: 6px 0 0; font-size: 13px; font-style: italic; overflow-wrap: anywhere; }
+</style>{{end}}
+
+{{define "working-section"}}
+<section class="working" id="working" data-live="{{.Src}}">
+{{- template "working" .}}
+</section>
+<script src="/board/live.js" defer></script>
+{{end}}

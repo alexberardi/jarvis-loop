@@ -1,0 +1,31 @@
+{
+  "name": "working-now",
+  "about": "The board's Working now section while an agent runs: after a heartbeat its card shows the agent's to-do list (from TodoWrite, with checkmarks), its last tool calls (Bash as its description, never the command) and its latest message, on the board and in the fragment the page refreshes from every 5 s. When the run ends (here /loop stop) the card goes. Nothing new is said in Slack.",
+  "steps": [
+    {"do": "add", "item": "a", "title": "Show what agents do"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "todos_hang"},
+    {"do": "runner", "claims": "a"},
+    {"do": "agent_running", "item": "a"},
+    {"do": "expect", "board": {"a": {"column": "Build", "working": "Show what agents do", "working_not": "build agent"}}},
+    {"do": "clock", "advance": "60s"},
+    {"do": "expect", "board": {"a": {"column": "Build",
+      "working": "(?s)#\\d+ Show what agents do</a>.*<span class=\"label\">build</span>.*<span>build agent</span><span>3 tool calls</span>.*<li class=\"completed\">✓ Read the brief</li>\\s*<li class=\"in_progress\">▶ Write the failing test</li>\\s*<li class=\"pending\">○ Fix the &lt;b&gt;board&lt;/b&gt;</li>.*<li>Bash: Run the board tests</li>\\s*<li>Write: wip.txt</li>.*<p class=\"said\">Writing the failing test for the card.</p>",
+      "working_not": "SECRET_CMD_MARKER|<b>board",
+      "page": "(?s)<section class=\"working\" id=\"working\" data-live=\"/board/working\\?item=\\d+\">.*▶ Write the failing test"}}},
+    {"do": "command", "as": "approver", "text": "stop", "answer": "^Stopped: running agents stop at their next heartbeat"},
+    {"do": "clock", "advance": "60s"},
+    {"do": "runner_idle"},
+    {"do": "expect", "leased": {"a": false}, "board": {"a": {"column": "Build", "not_working": true}}}
+  ],
+  "expect": {
+    "stage": {"a": "build"},
+    "leased": {"a": false},
+    "events": [{"item": "a", "kind": "stopped"}],
+    "messages": [
+      {"thread": "a", "text": "^Claimed for build\\.$"},
+      {"thread": "a", "text": "^Stopped; back in the build queue\\.$"}
+    ],
+    "prs": 0
+  }
+}

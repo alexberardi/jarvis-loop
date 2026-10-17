@@ -162,11 +162,17 @@ type EvidenceMatch struct {
 }
 
 // BoardMatch is an item's or a plan's card on the board: its column, a regexp on the card's
-// HTML, and one on its page (/board/items/{id} or /board/plans/{id}).
+// HTML, and one on its page (/board/items/{id} or /board/plans/{id}). Working is a regexp on its
+// "Working now" card, both in the board's section and in the fragment live.js refreshes it from
+// (/board/working), and WorkingNot one it must not match; NotWorking: it has no such card in
+// either.
 type BoardMatch struct {
-	Column string `json:"column"`
-	Card   string `json:"card,omitempty"`
-	Page   string `json:"page,omitempty"`
+	Column     string `json:"column"`
+	Card       string `json:"card,omitempty"`
+	Page       string `json:"page,omitempty"`
+	Working    string `json:"working,omitempty"`
+	WorkingNot string `json:"working_not,omitempty"`
+	NotWorking bool   `json:"not_working,omitempty"`
 }
 
 // RunMatch checks a file in one of an item's run dirs (work/runs/<id>-<stage>-<time>[-n]/), or

@@ -7,6 +7,7 @@
 <meta http-equiv="refresh" content="30">
 <title>Jarvis Loop board</title>
 {{template "style"}}
+{{template "working-style"}}
 <style>
 .lanes { display: flex; gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 8px; align-items: flex-start; }
 .lane { flex: 0 0 min(85vw, 300px); scroll-snap-align: start; background: var(--lane); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
@@ -21,7 +22,8 @@
 </head>
 <body>
 <h1>Jarvis Loop</h1>
-<p class="sub">{{.Total}} items ·{{if .PlanCount}} {{.PlanCount}} open plans ·{{end}} {{stamp .Now}} · refreshes every 30 s · {{if .ShowClosed}}<a href="/board">hide closed</a>{{else}}<a href="/board?closed=1">show closed</a>{{end}}</p>
+<p class="sub">{{.Total}} items ·{{if .PlanCount}} {{.PlanCount}} open plans ·{{end}} {{stamp .Now}} · refreshes every 30 s (working now: every 5 s) · {{if .ShowClosed}}<a href="/board">hide closed</a>{{else}}<a href="/board?closed=1">show closed</a>{{end}}</p>
+{{- template "working-section" .Working}}
 <div class="lanes">
 {{- range .Columns}}
 <section class="lane">

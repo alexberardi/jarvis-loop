@@ -63,6 +63,7 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 			ciWait = capAt
 		}
 	}
+	started := r.Clock.Now()
 	hb := r.Clock.NewTimer(r.heartbeatEvery())
 	defer func() { hb.Stop() }()
 	// sleep waits one poll, keeping the lease alive; false means stop (shutdown, or loopd ended
@@ -70,6 +71,7 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 	sleep := func(note string) bool {
 		poll := r.Clock.NewTimer(LandPollEvery)
 		defer poll.Stop()
+		waiting := r.Clock.Now()
 		for {
 			select {
 			case <-ctx.Done():
@@ -77,7 +79,7 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 			case <-poll.C():
 				return true
 			case <-hb.C():
-				stop, err := r.Client.Heartbeat(ctx, lr.lease, note)
+				stop, err := r.Client.Heartbeat(ctx, lr.lease, note, r.stepActivity(StageLand, note, started, waiting))
 				var ae *APIError
 				if err == nil && stop || errors.As(err, &ae) && ae.Status >= 400 && ae.Status < 500 {
 					lr.log.Info("land stopped by loopd", "err", err)

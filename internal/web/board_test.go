@@ -85,7 +85,9 @@ func TestBoardCookieFlow(t *testing.T) {
 			t.Errorf("%s %q, want %q", h, got, want)
 		}
 	}
-	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'none'") || strings.Contains(csp, "script-src") {
+	// The board runs live.js, from itself only: no inline script, no other origin.
+	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'none'") || !strings.Contains(csp, "script-src 'self';") ||
+		strings.Contains(csp, "unsafe-inline'; img") == false || strings.Contains(csp, "script-src 'self' ") {
 		t.Errorf("CSP %q", csp)
 	}
 	if resp, body := get(t, srv.URL+"/board/items/1", cookie); resp.StatusCode != 200 || !strings.Contains(body, "wake word") {
@@ -155,7 +157,7 @@ func TestBoardRoutesOnly(t *testing.T) {
 			t.Errorf("GET %s: %d, want 404", path, resp.StatusCode)
 		}
 	}
-	for _, path := range []string{"/board", "/board/items/1", "/board/items/1/evidence/1", "/board/plans/1", "/board/plans/1/brief/1", "/items", "/claim", "/ui/control"} {
+	for _, path := range []string{"/board", "/board/working", "/board/live.js", "/board/items/1", "/board/items/1/evidence/1", "/board/plans/1", "/board/plans/1/brief/1", "/items", "/claim", "/ui/control"} {
 		for _, method := range []string{"POST", "PUT", "PATCH", "DELETE"} {
 			req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader("{}"))
 			req.AddCookie(cookie)
@@ -282,8 +284,9 @@ func TestBoardGolden(t *testing.T) {
 		}
 		checkGolden(t, name, b.Bytes())
 		out := b.String()
-		if strings.Contains(out, "<script") || strings.Contains(out, "http-equiv=\"refresh\" content=\"30\"") == false {
-			t.Errorf("%s: scripts, or no 30 s refresh", name)
+		if strings.Count(out, "<script") != 1 || !strings.Contains(out, `<script src="/board/live.js" defer></script>`) ||
+			strings.Contains(out, "http-equiv=\"refresh\" content=\"30\"") == false {
+			t.Errorf("%s: a script other than live.js, or no 30 s refresh", name)
 		}
 		if strings.Contains(out, "Old done item") {
 			t.Errorf("%s shows an item done 15 days ago", name)
