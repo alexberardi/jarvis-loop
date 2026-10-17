@@ -204,3 +204,26 @@ func TestMirrorConfigTurnsSigningOff(t *testing.T) {
 		}
 	}
 }
+
+// Claude Code's sandbox creates empty read-only placeholder files to mount over the paths it
+// protects, the mirror's config.lock among them, and one left behind blocked every git call on
+// the mirror ("could not lock config file config: File exists", 2026-10-16). The runner removes
+// that placeholder; git's own lock (created writable) is never touched.
+func TestEnsureMirrorClearsASandboxPlaceholderLock(t *testing.T) {
+	r := newGitRig(t)
+	lock := filepath.Join(r.mirror, "config.lock")
+	os.WriteFile(lock, nil, 0o444)
+	if err := r.g.EnsureMirror(r.ctx, r.mirror, RepoConfig{Remote: r.remote + "/", Base: "main"}); err != nil {
+		t.Fatalf("refresh with a sandbox placeholder lock: %v", err)
+	}
+	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+		t.Errorf("placeholder config.lock still there (%v)", err)
+	}
+	os.WriteFile(lock, []byte("[core]\n"), 0o644) // a git process's own lock, mid-write
+	if err := r.g.EnsureMirror(r.ctx, r.mirror, RepoConfig{Remote: r.remote, Base: "main"}); err == nil {
+		t.Error("refresh succeeded through another git's live lock")
+	}
+	if _, err := os.Stat(lock); err != nil {
+		t.Errorf("git's own lock was removed: %v", err)
+	}
+}

@@ -66,6 +66,17 @@ func (g Git) run(ctx context.Context, dir string, args ...string) (string, error
 	}
 }
 
+// clearSandboxLock removes the mirror's config.lock when it is Claude Code's sandbox placeholder:
+// the sandbox creates empty read-only files to mount over the paths it protects and can leave
+// them behind, and a leftover config.lock fails every git call that writes the config. git's own
+// lock files are created writable, so a live one is never removed.
+func clearSandboxLock(mirror string) {
+	lock := filepath.Join(mirror, "config.lock")
+	if fi, err := os.Lstat(lock); err == nil && fi.Mode().IsRegular() && fi.Size() == 0 && fi.Mode().Perm()&0o222 == 0 {
+		_ = os.Remove(lock)
+	}
+}
+
 // setConfig writes a mirror config value only when the mirror's own file differs: every write
 // takes config.lock, which an agent's git in a worktree may be holding. --local, because run's
 // -c overrides (commit.gpgsign, core.hooksPath) would otherwise answer for the file.
@@ -86,6 +97,7 @@ const MirrorExclude = "# the runner's files, never committed\n.loop/\n# installe
 // the user's clone when given (read only), then fetched from the remote. The user's clone is
 // never written.
 func (g Git) EnsureMirror(ctx context.Context, mirror string, r RepoConfig) error {
+	clearSandboxLock(mirror)
 	if _, err := os.Stat(filepath.Join(mirror, "HEAD")); os.IsNotExist(err) {
 		if err := os.MkdirAll(mirror, 0o700); err != nil {
 			return err
