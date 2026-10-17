@@ -38,6 +38,9 @@ const (
 	Dirty      = "dirty"       // good, but a change left uncommitted
 	Hang       = "hang"        // write a file, then wait forever
 	IgnoreTerm = "ignore_term" // like hang, but ignore SIGTERM
+	// TodosHang is hang after a to-do list (TodoWrite) and a described Bash call whose command
+	// holds SECRET_CMD_MARKER (which must never reach the board).
+	TodosHang  = "todos_hang"
 	Exit3      = "exit3"       // print something and exit 3
 	UsageLimit = "usage_limit" // the plan's session limit
 	NoArm      = "noarm"       // run tools without the hooks (settings not applied)
@@ -216,6 +219,21 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		"permissionMode": mode, "tools": []string{"Bash", "Read", "Edit", "Write"}, "apiKeySource": "none", "claude_code_version": "fake"})
 
 	switch scenario {
+	case TodosHang:
+		f.tool("TodoWrite", map[string]any{"todos": []any{
+			map[string]any{"content": "Read the brief", "activeForm": "Reading the brief", "status": "completed"},
+			map[string]any{"content": "Write the failing test", "activeForm": "Writing the failing test", "status": "in_progress"},
+			map[string]any{"content": "Fix the <b>board</b>", "activeForm": "Fixing the board", "status": "pending"},
+		}}, func() (string, error) { return "Todos have been modified successfully.", nil })
+		f.tool("Bash", map[string]any{"command": "true SECRET_CMD_MARKER", "description": "Run the board tests"}, func() (string, error) {
+			return "", nil
+		})
+		f.write("wip.txt", "half done\n")
+		f.say("Writing the failing test for the card.")
+		progress("hanging")
+		for {
+			time.Sleep(time.Hour)
+		}
 	case Hang, IgnoreTerm:
 		f.write("wip.txt", "half done\n")
 		f.say("working on it")

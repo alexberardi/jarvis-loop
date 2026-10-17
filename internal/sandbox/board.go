@@ -67,6 +67,24 @@ func boardCards(page string) (items, plans map[int64][2]string) {
 	return items, plans
 }
 
+// workingCards maps each "Working now" card to its HTML, by "items/<id>" or "plans/<id>"; html
+// is the board (its section only) or the /board/working fragment.
+func workingCards(html string) map[string]string {
+	if i := strings.Index(html, `<section class="working"`); i >= 0 {
+		html = html[i:]
+		if j := strings.Index(html, "</section>"); j >= 0 {
+			html = html[:j]
+		}
+	}
+	out := map[string]string{}
+	for _, card := range strings.Split(html, `<article class="work">`)[1:] {
+		if id := cardID.FindStringSubmatch(card); id != nil {
+			out[id[1]+"/"+id[2]] = card
+		}
+	}
+	return out
+}
+
 func (p *player) boardProblems(want map[string]BoardMatch) []string {
 	page, client, err := p.s.boardSession()
 	if err != nil {
@@ -102,6 +120,9 @@ func (p *player) boardProblems(want map[string]BoardMatch) []string {
 				out = append(out, fmt.Sprintf("board: %s (%s)'s card does not match %q:\n%s", alias, name, m.Card, c[1]))
 			}
 		}
+		if m.Working != "" || m.WorkingNot != "" || m.NotWorking {
+			out = append(out, p.workingProblems(client, page, alias, name, strings.TrimPrefix(path, "/board/"), m)...)
+		}
 		if m.Page == "" {
 			continue
 		}
@@ -114,6 +135,39 @@ func (p *player) boardProblems(want map[string]BoardMatch) []string {
 			out = append(out, "board: "+err.Error())
 		} else if !ok {
 			out = append(out, fmt.Sprintf("board: %s's page %s does not match %q", alias, path, m.Page))
+		}
+	}
+	return out
+}
+
+func (p *player) workingProblems(client *http.Client, page, alias, name, key string, m BoardMatch) []string {
+	frag, _, err := boardGet(client, p.s.BoardURL+"/board/working")
+	if err != nil {
+		return []string{"board: " + err.Error()}
+	}
+	var out []string
+	for _, src := range [][2]string{{"the board's Working now", page}, {"/board/working", frag}} {
+		card, ok := workingCards(src[1])[key]
+		switch {
+		case m.NotWorking && ok:
+			out = append(out, fmt.Sprintf("board: %s (%s) has a card in %s, want none:\n%s", alias, name, src[0], card))
+		case m.NotWorking:
+		case !ok:
+			out = append(out, fmt.Sprintf("board: %s (%s) has no card in %s", alias, name, src[0]))
+		default:
+			if ok, err := matches(m.Working, card); err != nil {
+				out = append(out, "board: "+err.Error())
+			} else if !ok {
+				out = append(out, fmt.Sprintf("board: %s (%s)'s card in %s does not match %q:\n%s", alias, name, src[0], m.Working, card))
+			}
+			if m.WorkingNot == "" {
+				continue
+			}
+			if bad, err := matches(m.WorkingNot, card); err != nil {
+				out = append(out, "board: "+err.Error())
+			} else if bad {
+				out = append(out, fmt.Sprintf("board: %s (%s)'s card in %s matches %q:\n%s", alias, name, src[0], m.WorkingNot, card))
+			}
 		}
 	}
 	return out
