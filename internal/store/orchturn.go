@@ -542,9 +542,14 @@ func (s *Store) OrchTick(ctx context.Context) error {
 }
 
 // orchIdle queues an idle trigger for each item waiting (unclaimed, its dependencies done) in a
-// work stage longer than its stage allows, once per wait.
+// work stage longer than its stage allows, once per wait. An item flagged unservable is skipped:
+// loopd has told the user already.
 func (s *Store) orchIdle(tx *sql.Tx, now time.Time) error {
 	waiting, err := waitingItems(tx)
+	if err != nil {
+		return err
+	}
+	flagged, err := unservableMissing(tx)
 	if err != nil {
 		return err
 	}
@@ -553,7 +558,7 @@ func (s *Store) orchIdle(tx *sql.Tx, now time.Time) error {
 		return err
 	}
 	for _, it := range waiting {
-		if len(waitingOn(it, deps)) > 0 || !pipeline.IdlePast(it.Stage, it.UpdatedAt, now) {
+		if len(waitingOn(it, deps)) > 0 || !pipeline.IdlePast(it.Stage, it.UpdatedAt, now) || flagged[it.ID] != nil {
 			continue
 		}
 		var seen int64

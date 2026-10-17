@@ -27,6 +27,8 @@ type WaitNode struct {
 	Stage     Stage
 	Claimed   bool
 	DependsOn []int64
+	// Unservable is the resources no runner offers it (Unservable), when loopd flagged it.
+	Unservable []string
 }
 
 // WaitChain is what an item waits on, followed to its root (docs/phases/08-orchestrator.md, "Talking
@@ -78,6 +80,9 @@ func WaitChains(id int64, items map[int64]WaitNode) []WaitChain {
 			}
 			if next == 0 {
 				c.Root = WaitRoot(n.Stage, n.Claimed)
+				if len(n.Unservable) > 0 && !n.Claimed {
+					c.Root = UnservableRoot(n.Unservable)
+				}
 				break
 			}
 			loop := next == id || slices.Contains(c.Path, next)

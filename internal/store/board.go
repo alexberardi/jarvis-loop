@@ -23,10 +23,16 @@ type BoardItem struct {
 	PlanID int64
 	// Builder is who its plan piece says should build it ("": not from a plan).
 	Builder string
+	// Unservable is the resources no runner offers it, when loopd flagged it (pipeline.Unservable).
+	Unservable []string
 }
 
 // BoardItems is every item as a board card, in ListItems' order.
 func (s *Store) BoardItems(ctx context.Context) ([]BoardItem, error) {
+	flagged, err := unservableMissing(s.r)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.r.QueryContext(ctx, `SELECT i.id, i.title, i.priority, i.stage, i.repo, i.pr, i.created_at,
 		COALESCE(l.runner || '/' || l.agent, ''), i.question, i.hold_reason, i.slack_channel, i.slack_ts, i.updated_at,
 		i.depends_on, i.plan_id, i.builder FROM items i LEFT JOIN leases l ON l.item_id = i.id AND l.ended_at IS NULL
@@ -54,7 +60,8 @@ func (s *Store) BoardItems(ctx context.Context) ([]BoardItem, error) {
 		}
 		deps = append(deps, d)
 		stages[b.ID] = pipeline.Stage(b.Stage)
-		nodes[b.ID] = pipeline.WaitNode{Stage: pipeline.Stage(b.Stage), Claimed: b.ClaimedBy != "", DependsOn: d}
+		b.Unservable = flagged[b.ID]
+		nodes[b.ID] = pipeline.WaitNode{Stage: pipeline.Stage(b.Stage), Claimed: b.ClaimedBy != "", DependsOn: d, Unservable: b.Unservable}
 		b.CreatedAt, b.UpdatedAt = fromNanos(created), fromNanos(updated)
 		b.AgeSeconds = int64(now.Sub(b.CreatedAt) / time.Second)
 		b.Display = pipeline.Display(pipeline.Stage(b.Stage), b.ClaimedBy != "")
