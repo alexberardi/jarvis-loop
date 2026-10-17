@@ -8,7 +8,8 @@ import (
 // Trust is the approver's OK for the runner's verify to run one exact commit that changes a file
 // the runner trusts (a repo's deny_write paths: the harness verify itself runs). The runner's
 // refusal records the commit and its trusted-file diff stat; the approver's OK binds to that sha,
-// and the first verify of it uses the OK up (docs/decisions/2026-10-16-trusted-files.md).
+// and it stays valid for that sha until a verify of it reaches a verdict on the code (pr_opened or
+// verify_failed); a run that ends otherwise leaves it (docs/decisions/2026-10-16-trusted-files.md).
 type Trust struct {
 	// HeadSHA is the commit verify refused, and the only one the OK lets it run.
 	HeadSHA string `json:"head_sha"`
@@ -18,7 +19,9 @@ type Trust struct {
 	// By and At are the approver's OK; empty until given.
 	By string    `json:"by,omitempty"`
 	At time.Time `json:"at,omitzero"`
-	// Used: a verify ran the commit under this OK; another run needs another OK.
+	// Used: a verify of the commit under this OK reached a verdict on the code (pr_opened or
+	// verify_failed); another run needs another OK. A runner fault, a question or the usage
+	// limit leaves it unused.
 	Used bool `json:"used,omitempty"`
 }
 
@@ -41,7 +44,8 @@ const (
 )
 
 // applyTrustFields records what an advance from build says about trust: the OK used by a verify
-// (it must be the item's OK, for that commit), and a new refusal waiting for an OK.
+// (it must be the item's OK, for that commit; only a verdict on the code uses it up), and a new
+// refusal waiting for an OK.
 func applyTrustFields(it *Item, from Stage, o Outcome, f fields, data map[string]any) error {
 	_, used := f[FieldTrustUsed]
 	_, refused := f[FieldTrustSHA]
@@ -59,9 +63,11 @@ func applyTrustFields(it *Item, from Stage, o Outcome, f fields, data map[string
 		if o == PROpened && strings.TrimSpace(f["head_sha"]) != sha {
 			return errf(CodeSHAMismatch, "verify ran %s under the OK but the PR head is %s", sha, f["head_sha"])
 		}
-		t := *it.Trust
-		t.Used = true
-		it.Trust = &t
+		if usesTrust(o) {
+			t := *it.Trust
+			t.Used = true
+			it.Trust = &t
+		}
 	}
 	if refused {
 		if o != Failed {
@@ -84,6 +90,13 @@ func applyTrustFields(it *Item, from Stage, o Outcome, f fields, data map[string
 		data["trust_needed"] = true
 	}
 	return nil
+}
+
+// usesTrust reports whether a build outcome is a verdict on the code verify ran under the OK: the
+// PR opened, or verify found a real regression (a runner fault is failed since #97). Anything else
+// (failed, question, usage_limit) never judged the code, so the OK stays valid for its sha.
+func usesTrust(o Outcome) bool {
+	return o == PROpened || o == VerifyFailed
 }
 
 // ApplyTrust records the approver's OK for verify to run headSHA, the commit verify refused for

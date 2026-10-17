@@ -23,11 +23,16 @@ rule in [2026-10-15-all-repos.md](2026-10-15-all-repos.md); each point is enforc
   or the reply is refused and nothing is recorded), and
   `loop trust <id> --sha <sha>` (`POST /items/{id}/trust`, a user token only). Slack refuses anyone
   but the approver (`IsApprover`) and records the refusal. The OK moves the item back to build.
-- **Once.** The runner's verify skips the refusal only when the item's trust has an OK, is not
-  used, and is for exactly the head being verified. It then reports `trust_used: <sha>` with its
-  outcome (`pr_opened`, `verify_failed` or `failed`), and loopd marks the OK used; loopd refuses a
-  `trust_used` that is not the item's unused OK, or (on `pr_opened`) not the PR head. Any other
-  head, including a later commit on the same branch, is refused again and needs a new OK.
+- **Until a verdict.** The runner's verify skips the refusal only when the item's trust has an OK,
+  is not used, and is for exactly the head being verified. It then reports `trust_used: <sha>` with
+  its outcome, and loopd refuses a `trust_used` that is not the item's unused OK, or (on
+  `pr_opened`) not the PR head. loopd marks the OK used only when the run reached a verdict on the
+  code: `pr_opened` or `verify_failed` (a real regression; a runner fault in verify is `failed`
+  since #97). A run that ends in `failed`, `question` or `usage_limit` never judged the code, so the
+  OK stays valid for its sha and resubmitting the same head needs no second OK (#98: twice the user
+  had to OK an unchanged diff again after a runner fault or an answered question). Any other head,
+  including a later commit on the same branch, is refused again and needs a new OK; the OK never
+  covers more than the one commit the user saw.
 - **The rebuild adds nothing.** The build after the OK runs the agent again (it writes the result
   the runner needs for the PR); its brief says the user OK'd that commit and to add no commit, since
   a new one voids the OK. The guard still refuses the agent's Write/Edit on `deny_write` paths: the
