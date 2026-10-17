@@ -18,7 +18,9 @@ rule in [2026-10-15-all-repos.md](2026-10-15-all-repos.md); each point is enforc
 - **The OK is the approver's, for that sha.** `ApplyTrust` (pipeline/trust.go) accepts it only in
   needs-you, only while a refusal waits for an OK, and only for the refused sha (`sha_mismatch`
   otherwise). The surfaces: the **Trust this commit** button on the needs-you message (its value
-  binds the sha), a reply `trust` (or `trust it`, `trust <sha>`) in that thread, and
+  binds the sha), a reply `trust` (or `trust it`, `trust <sha>`) in that thread (a bare `trust`
+  OKs the latest refusal; a named sha must be a prefix, 7 or more characters, of the refused one,
+  or the reply is refused and nothing is recorded), and
   `loop trust <id> --sha <sha>` (`POST /items/{id}/trust`, a user token only). Slack refuses anyone
   but the approver (`IsApprover`) and records the refusal. The OK moves the item back to build.
 - **Once.** The runner's verify skips the refusal only when the item's trust has an OK, is not

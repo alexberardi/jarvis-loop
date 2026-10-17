@@ -90,7 +90,31 @@ func (b *Bot) trust(ctx context.Context, channel, msgTS, user string, itemID int
 }
 
 // trustReply is the approver's "trust" reply in a needs-you thread: the OK for the commit the
-// latest refusal named.
+// latest refusal named. A reply that names a sha must name that commit; any other sha is refused
+// and nothing is recorded, so an OK typed for an older refusal cannot trust a newer commit.
 func (b *Bot) trustReply(ctx context.Context, m slackEvent, it pipeline.Item) {
-	b.trust(ctx, m.Channel, "", m.User, it.ID, it.Trust.HeadSHA, "reply")
+	sha, ok := trustReplySHA(incoming(m.Text), it.Trust.HeadSHA)
+	if !ok {
+		b.threadReply(ctx, m.ThreadTS, fmt.Sprintf("Not trusted: that OK was for `%s`, but verify refused `%s`. Use the latest message.", short(sha), short(it.Trust.HeadSHA)))
+		return
+	}
+	b.trust(ctx, m.Channel, "", m.User, it.ID, sha, "reply")
+}
+
+// trustReplySHA picks the commit a trust reply OKs: head for a bare "trust" (or "trust it" /
+// "trust this"), or for "trust <sha>" whose sha is a prefix (at least 7 hex characters) of head.
+// Otherwise it returns the typed sha and false.
+func trustReplySHA(text, head string) (string, bool) {
+	ws := strings.Fields(strings.ToLower(stripMentions(text)))
+	if len(ws) < 2 {
+		return head, true
+	}
+	typed := strings.Trim(ws[1], "`")
+	if !isHex(typed) {
+		return head, true
+	}
+	if head != "" && strings.HasPrefix(strings.ToLower(head), typed) {
+		return head, true
+	}
+	return typed, false
 }

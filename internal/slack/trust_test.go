@@ -13,3 +13,26 @@ func TestIsTrustReply(t *testing.T) {
 		}
 	}
 }
+
+func TestTrustReplySHA(t *testing.T) {
+	const head = "0123abcd4567ef890123abcd4567ef890123abcd"
+	for _, c := range []struct {
+		text, want string
+		ok         bool
+	}{
+		{"trust", head, true},
+		{"<@U1> trust it", head, true},
+		{"trust this", head, true},
+		{"trust 0123abc", head, true},
+		{"trust `0123ABCD`", head, true},
+		{"trust " + head, head, true},
+		{"trust 0000000", "0000000", false},
+		{"trust 0123abce", "0123abce", false},
+		{"trust " + head + "0", head + "0", false},
+	} {
+		got, ok := trustReplySHA(c.text, head)
+		if got != c.want || ok != c.ok {
+			t.Errorf("trustReplySHA(%q) = %q, %v; want %q, %v", c.text, got, ok, c.want, c.ok)
+		}
+	}
+}
