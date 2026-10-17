@@ -7,7 +7,7 @@ against the loop itself. **Proves:** a day of normal work needs the user only fo
 product calls and QA, never to explain to an agent how to get unstuck, and never in a separate
 chat with Claude.
 
-Status: **draft for the user's review** (2026-10-16). Nothing here is built.
+Status: **designed** (2026-10-16; the user's answers are in "Decisions" at the end). Nothing here is built.
 
 ## Why (2026-10-16, one day of real use)
 
@@ -102,8 +102,8 @@ In the item's thread, mentioning the user, one message:
 
 - **Accept** records the recommendation as the user's answer (approver only, like approvals).
   **Other…** or any reply in the thread is the answer instead. Approvals keep their own buttons.
-- Pings are batched (one message listing several items when they come together), and quiet hours
-  (default 22:00–08:00) hold everything but approvals and a red main until morning.
+- Pings are batched: several items that need the user within a few minutes go in one message.
+  No quiet hours (the user's choice).
 
 ### Process issues: tickets against the loop
 
@@ -131,6 +131,22 @@ loop like any other item, held where the hold rules say.
   escalations, its tickets, and its notebook. Every card that waits says on what ("waiting on
   #35 → needs you").
 
+### Its own persona in Slack
+
+The orchestrator is a **separate Slack app, `@orchestrator`** (its own bot user, name and icon; a
+manifest in `docs/slack/orchestrator-manifest.yml`, created once by the user), so the user can
+mention it in any thread or DM it directly. loopd holds its tokens next to the loop bot's and
+keeps one socket per app.
+
+- **It acts for the user when the user tells it to.** "drop #61 and #63", "move the autonomy items
+  up", "answer #46: open the PR without the PNGs", "pause the loop" — run as the user (the actor
+  is the user, "via orchestrator"), so they may go beyond its own authority, including drops.
+  **Approvals and trusted-file OKs stay on their sha-bound buttons**: asked to approve, it posts
+  the item's approval message with the button instead.
+- Only the approver's messages can make it act; anyone else gets an answer, never an action.
+- When it acts on its own, it stays within "What it may do".
+- Claude chats stop handling loop items once it runs: stuck items are its job.
+
 ## Cost
 
 A turn is small (the snapshot, a few items, its notebook) and resumes a cached session. Sweeps
@@ -143,7 +159,9 @@ standup reports its own spend.
 0. Prerequisites in flight: #67 (agents use the harness), #70 (trusted-file OK).
 1. **loopd: the orchestrator token kind and its actions** (answer, retry, priority, add, link,
    escalate, agents-down, note), each limit enforced and tested; events with reasons.
-2. **Slack: recommendations with Accept**, batching and quiet hours; "Orchestrator: …" lines.
+2. **Slack: the `@orchestrator` app** (manifest, second socket, mentions and DMs), recommendations
+   with Accept, batching, "Orchestrator: …" lines, and acting for the user on the approver's
+   say-so.
 3. **Runner: orchestrate turns**: triggers, snapshot, result contract, notebook, daily rotation.
 4. **The orchestrator persona** (its skill: the authority table, the answer kinds, how to write a
    recommendation, process-issue patterns), with scenario tests on recorded situations from
@@ -156,15 +174,15 @@ standup reports its own spend.
 loop-sandbox scenarios, test-first: a runner error is retried then escalated on the third try; an
 answered question is answered from history; a bounce limit is sent back once, then escalated; a
 product question is escalated with a recommendation and Accept records it as the user's answer;
-two items with the same error signature produce one P1 ticket; the orchestrator's approve, drop
-or OK is refused by loopd; quiet hours hold a ping until morning.
+two items with the same error signature produce one P1 ticket; the orchestrator's own approve, drop
+or OK is refused by loopd; the approver's "drop #61" to `@orchestrator` drops it as the user;
+someone else's is refused; "approve #28" posts the approval button instead of approving.
 
-## Open questions for the user
+## Decisions (user, 2026-10-16)
 
-1. **Model** for the orchestrator: the same as builders, or a cheaper one (its turns are short and
-   frequent)?
-2. **Quiet hours**: 22:00–08:00 OK? Weekends?
-3. **Priorities**: may it change P2–P5 on its own (proposed), or only recommend?
-4. **Drops**: never (proposed), or may it close obvious duplicates it can prove?
-5. **This chat**: once it runs, should Claude sessions like this one stop answering loop items
-   directly and leave that to the orchestrator?
+1. **Model:** the same as the builders.
+2. **Quiet hours:** none; pings are batched.
+3. **Priorities:** it may change P2–P5 on its own.
+4. **Drops:** never on its own; only when the user tells it to.
+5. **Who handles stuck items:** the orchestrator only, as its own Slack persona the user can ping
+   directly to take action. Claude chats stop doing it.
