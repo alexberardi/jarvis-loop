@@ -1153,7 +1153,8 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 			return err
 		}
 		for _, n := range tr.Also {
-			if err := s.event(tx, Event{ItemID: id, Actor: actor, Kind: n.Kind, From: string(tr.From), To: string(tr.To), Data: n.Data}); err != nil {
+			// A note, not a transition: it stays in the stage the advance left the item in.
+			if err := s.event(tx, Event{ItemID: id, Actor: actor, Kind: n.Kind, From: string(tr.To), To: string(tr.To), Data: n.Data}); err != nil {
 				return err
 			}
 		}

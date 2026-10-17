@@ -1217,6 +1217,28 @@ func TestGuardRefusedLineHidesTheCommand(t *testing.T) {
 	}
 }
 
+// builder_fallback is one line in the thread, never a second needs-you message.
+func TestBuilderFallbackLine(t *testing.T) {
+	e := newBotEnv(t)
+	it, err := e.st.AddItem(e.ctx, "user:alex", store.NewItem{Title: "x", Repo: "jarvis-server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		data map[string]any
+		want string
+	}{
+		{map[string]any{"from": "qwen", "to": "claude", "bounce_count": 2}, "Builder: qwen → claude for the rest of this item (second strike)."},
+		{map[string]any{"from": "qwen", "to": "claude", "this_run_only": true, "reason": "runner devbox has no qwen config"}, "No qwen builder on this runner: this build runs with claude."},
+	} {
+		ev := store.Event{ItemID: it.ID, Actor: "runner:devbox", Kind: "builder_fallback", From: "needs_you", To: "needs_you", Data: c.data}
+		m, ok := e.b.describe(e.ctx, ev, store.Detail{Item: it})
+		if !ok || m.Text != c.want {
+			t.Errorf("got %q, want %q", m.Text, c.want)
+		}
+	}
+}
+
 // /loop add sets the repo when the text names a configured one, with the priority words too;
 // otherwise the repo stays empty for triage.
 func TestAddRepoWords(t *testing.T) {

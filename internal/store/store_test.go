@@ -849,6 +849,12 @@ func TestQwenBuilderFallback(t *testing.T) {
 	if d.Item.Builder != "claude" || !hasEvent(d.Events, "builder_fallback") {
 		t.Fatalf("stored: builder %q, events %+v", d.Item.Builder, d.Events)
 	}
+	// The note is not a transition of its own: the bot must not post the needs-you message twice.
+	for _, e := range d.Events {
+		if e.Kind == "builder_fallback" && (e.From != string(pipeline.NeedsYou) || e.To != string(pipeline.NeedsYou)) {
+			t.Fatalf("builder_fallback %s -> %s, want needs_you -> needs_you", e.From, e.To)
+		}
+	}
 	cards, _ := s.BoardItems(ctx)
 	for _, cd := range cards {
 		if cd.ID == it.ID && cd.Builder != "claude" {

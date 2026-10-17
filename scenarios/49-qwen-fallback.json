@@ -1,6 +1,6 @@
 {
   "name": "qwen-fallback",
-  "about": "The qwen builder's second strike (docs/decisions/2026-10-16-qwen-builder.md): a qwen item bounced at review twice goes to the user as any item does, and loopd flips its builder to claude for the rest (event builder_fallback, the card shows builder: claude). After the user's answer the build runs claude -p (no -s, no opencode), reports builder claude, and the item goes on.",
+  "about": "The qwen builder's second strike (docs/decisions/2026-10-16-qwen-builder.md): a qwen item bounced at review twice goes to the user as any item does, and loopd flips its builder to claude for the rest (event builder_fallback, the card shows builder: claude). After the user's answer the build runs claude -p (no -s, no opencode), reports builder claude, and the item goes on. The thread says the needs-you once, then one line for the switch.",
   "steps": [
     {
       "do": "plan",
@@ -203,6 +203,20 @@
     "agent_runs": {
       "build": 3,
       "review": 3
-    }
+    },
+    "messages": [
+      {
+        "thread": "a",
+        "text": "^<@U0C9AFPAMD4> #\\d+ Pantry table needs you: "
+      },
+      {
+        "thread": "a",
+        "text": "^Builder: qwen → claude for the rest of this item \\(second strike\\)\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "^Answered by "
+      }
+    ]
   }
 }
