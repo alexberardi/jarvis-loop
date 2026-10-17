@@ -139,3 +139,30 @@ func TestFactsSeeUncommittedWork(t *testing.T) {
 		t.Fatalf("dirty %q", f.Dirty)
 	}
 }
+
+// A worktree's config may name commands git runs by itself (core.fsmonitor, hooks); the runner's
+// git, which runs unfenced after the agent, runs none of them.
+func TestGitRunsNoPlantedCommand(t *testing.T) {
+	r := newGitRig(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main")
+	ran := filepath.Join(t.TempDir(), "ran")
+	planted := filepath.Join(t.TempDir(), "planted.sh")
+	os.WriteFile(planted, []byte("#!/bin/sh\ntouch "+ran+"\n"), 0o755)
+	gitT(t, wt, "config", "core.fsmonitor", planted)
+	os.MkdirAll(filepath.Join(r.mirror, "hooks"), 0o755)
+	os.WriteFile(filepath.Join(r.mirror, "hooks", "pre-commit"), []byte("#!/bin/sh\ntouch "+ran+"\n"), 0o755)
+	os.WriteFile(filepath.Join(wt, "b.txt"), []byte("b\n"), 0o644)
+	if _, err := r.g.Facts(r.ctx, r.mirror, wt, "main", "loop/1-x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.g.run(r.ctx, wt, "add", "b.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.g.run(r.ctx, wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ran); !os.IsNotExist(err) {
+		t.Fatalf("a planted command ran: %v", err)
+	}
+}
