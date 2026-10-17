@@ -9,6 +9,11 @@
 // "<path to change>"}) overrides the scenario for that item's runs, and the fake appends its
 // progress ("started", "hanging") to <dir>/<item id>.state, so the harness knows when a hanging
 // agent is really running. These files are the harness's plumbing, not tool calls.
+//
+// Called as `run ...` it is a stand-in for `opencode run --format json` instead (the runner's
+// qwen builder): it reads the provider from $OPENCODE_CONFIG, makes one chat request through it
+// (the runner's proxy, which must answer 200), resumes a session it started with -s (in the same
+// directory) and plays the same build scripts, speaking OpenCode's JSON events. It runs no hooks.
 package fakeclaude
 
 import (
@@ -16,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -28,16 +34,24 @@ import (
 
 // Scenarios.
 const (
-	Good       = "good"        // commit on the item branch, evidence, a ready_for_pr result (the runner pushes)
-	Escape     = "escape"      // try to write outside the worktree and push main first (refused), then good
-	Lying      = "lying"       // good, but the result's head_sha is not HEAD
-	Malformed  = "malformed"   // commit, then a result that is not JSON
-	NoResult   = "noresult"    // commit, exit 0, no result
-	Question   = "question"    // a question result
-	CommitAsk  = "commit_ask"  // commit, then a question (the commit stays in the runner's mirror)
-	Dirty      = "dirty"       // good, but a change left uncommitted
-	Hang       = "hang"        // write a file, then wait forever
-	IgnoreTerm = "ignore_term" // like hang, but ignore SIGTERM
+	Good   = "good"   // commit on the item branch, evidence, a ready_for_pr result (the runner pushes)
+	Escape = "escape" // try to write outside the worktree and push main first (refused), then good
+	// Repoint the worktree's git (its .git file, the admin dir's commondir and config.worktree,
+	// renaming the admin dir and the mirror's worktrees dir away), then good.
+	GitTamper = "git_tamper"
+	// Give the mirror a commondir (with a test that left the mirror writable), then good.
+	GitTamperMirror = "git_tamper_mirror"
+	// Plant in the shared mirror: its commondir, another worktree's commondir and a file in its
+	// worktrees dir, then good.
+	GitTamperShared = "git_tamper_shared"
+	Lying           = "lying"       // good, but the result's head_sha is not HEAD
+	Malformed       = "malformed"   // commit, then a result that is not JSON
+	NoResult        = "noresult"    // commit, exit 0, no result
+	Question        = "question"    // a question result
+	CommitAsk       = "commit_ask"  // commit, then a question (the commit stays in the runner's mirror)
+	Dirty           = "dirty"       // good, but a change left uncommitted
+	Hang            = "hang"        // write a file, then wait forever
+	IgnoreTerm      = "ignore_term" // like hang, but ignore SIGTERM
 	// TodosHang is hang after a to-do list (TodoWrite) and a described Bash call whose command
 	// holds SECRET_CMD_MARKER (which must never reach the board).
 	TodosHang  = "todos_hang"
@@ -103,6 +117,8 @@ var stagePlays = map[string][]string{
 }
 
 type fake struct {
+	// oc: playing opencode, not claude.
+	oc        bool
 	out       io.Writer
 	cwd       string
 	mode      string
@@ -122,10 +138,13 @@ func (f *fake) emit(v any) {
 // Main runs the fake with claude's arguments and returns its exit code.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	f := &fake{out: stdout, runHooks: true}
+	if len(args) > 0 && args[0] == "run" {
+		f.oc, f.runHooks = true, false
+	}
 	var settings, resume string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "--resume":
+		case "--resume", "-s":
 			i++
 			resume = args[i]
 		case "--settings":
@@ -210,17 +229,40 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if strings.HasPrefix(item, "P") {
 		f.session = "fake-session-" + item + "-" + stage
 	}
+	if f.oc {
+		f.session = "ses_fake_" + item + "_" + scenario
+	}
+	// Claude's sessions are the harness's; OpenCode keeps its own in its data dir, the one place
+	// the fence lets it write besides the worktree.
+	sessions := os.Getenv("FAKE_CLAUDE_SCRIPTS")
+	if d := os.Getenv("XDG_DATA_HOME"); f.oc && d != "" {
+		sessions = filepath.Join(d, "opencode")
+	}
 	if resume != "" {
-		if err := checkSession(os.Getenv("FAKE_CLAUDE_SCRIPTS"), resume, f.cwd); err != nil {
+		if err := checkSession(sessions, resume, f.cwd); err != nil {
 			fmt.Fprintf(stderr, "No conversation found with session ID: %s (%v)\n", resume, err)
 			return 1
 		}
 		f.session = resume
-	} else if strings.HasPrefix(item, "P") {
-		saveSession(os.Getenv("FAKE_CLAUDE_SCRIPTS"), f.session, f.cwd)
+	} else if strings.HasPrefix(item, "P") || f.oc {
+		saveSession(sessions, f.session, f.cwd)
 	}
-	f.emit(map[string]any{"type": "system", "subtype": "init", "session_id": f.session, "cwd": f.cwd, "model": "fake-model",
-		"permissionMode": mode, "tools": []string{"Bash", "Read", "Edit", "Write"}, "apiKeySource": "none", "claude_code_version": "fake"})
+	if f.oc {
+		progress("opencode " + f.session)
+		// OpenCode's session store, which the runner looks for before it resumes.
+		if d := os.Getenv("XDG_DATA_HOME"); d != "" {
+			os.MkdirAll(filepath.Join(d, "opencode"), 0o700)
+			os.WriteFile(filepath.Join(d, "opencode", "opencode.db"), []byte("fake\n"), 0o600)
+		}
+		if err := chat(os.Getenv("OPENCODE_CONFIG")); err != nil {
+			f.emit(map[string]any{"type": "error", "sessionID": f.session, "error": map[string]any{"name": "APIError",
+				"data": map[string]any{"message": err.Error()}}})
+			return 1
+		}
+	} else {
+		f.emit(map[string]any{"type": "system", "subtype": "init", "session_id": f.session, "cwd": f.cwd, "model": "fake-model",
+			"permissionMode": mode, "tools": []string{"Bash", "Read", "Edit", "Write"}, "apiKeySource": "none", "claude_code_version": "fake"})
+	}
 
 	if scenario == Harness || scenario == HarnessHang {
 		f.bash("loop-harness up && loop-harness run 'echo harness-ok > .loop/evidence/harness.txt'")
@@ -269,6 +311,33 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f.say("hello from manual mode")
 		f.result("nothing done")
 		return 0
+	case GitTamper, GitTamperMirror, GitTamperShared:
+		admin := strings.TrimPrefix(strings.TrimSpace(readFile(filepath.Join(f.cwd, ".git"))), "gitdir: ")
+		mirror := filepath.Dir(filepath.Dir(admin))
+		evil := filepath.Join(f.cwd, ".loop", "scratch", "evil.git")
+		f.bash("git init -q --bare " + shellQuote(evil) + " && git --git-dir=" + shellQuote(evil) + " config core.fsmonitor 'touch " +
+			filepath.Join(f.cwd, ".loop", "scratch", "pwned") + "'")
+		if scenario == GitTamperMirror {
+			f.write(filepath.Join(mirror, "commondir"), evil+"\n")
+			break
+		}
+		if scenario == GitTamperShared {
+			f.write(filepath.Join(mirror, "commondir"), evil+"\n")
+			ents, _ := os.ReadDir(filepath.Join(mirror, "worktrees"))
+			for _, e := range ents {
+				if other := filepath.Join(mirror, "worktrees", e.Name()); other != admin {
+					f.write(filepath.Join(other, "commondir"), evil+"\n")
+				}
+			}
+			f.write(filepath.Join(mirror, "worktrees", "planted", "gitdir"), evil+"\n")
+			break
+		}
+		f.write(".git", "gitdir: "+evil+"\n")
+		f.write(filepath.Join(admin, "commondir"), evil+"\n")
+		f.write(filepath.Join(admin, "config.worktree"), "[core]\n\tfsmonitor = touch pwned\n")
+		f.bash("mv .git .git.moved")
+		f.bash("mv " + shellQuote(admin) + " " + shellQuote(admin+".moved"))
+		f.bash("mv " + shellQuote(filepath.Dir(admin)) + " " + shellQuote(filepath.Dir(admin)+".moved"))
 	case Escape:
 		outside := filepath.Join(filepath.Dir(f.cwd), "escaped.txt")
 		f.write(outside, "I got out\n")
@@ -374,12 +443,22 @@ func git(dir string, args ...string) string {
 }
 
 func (f *fake) say(text string) {
+	if f.oc {
+		f.emit(map[string]any{"type": "text", "sessionID": f.session, "part": map[string]any{"type": "text", "text": text}})
+		return
+	}
 	f.emit(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": text}}}})
 }
 
 // result ends the run. The token counts are made up: a warm cache (79% read) by default, a cold
 // one (10%) in the low_cache scenario.
 func (f *fake) result(text string) {
+	if f.oc {
+		f.say(text)
+		f.emit(map[string]any{"type": "step_finish", "sessionID": f.session, "part": map[string]any{"type": "step-finish", "reason": "stop",
+			"tokens": map[string]any{"input": 12000, "output": 800}, "cost": 0}})
+		return
+	}
 	usage := map[string]any{"input_tokens": 1000, "output_tokens": 4000, "cache_creation_input_tokens": 20000, "cache_read_input_tokens": 79000}
 	if f.scenario == LowCache {
 		usage = map[string]any{"input_tokens": 70000, "output_tokens": 4000, "cache_creation_input_tokens": 20000, "cache_read_input_tokens": 10000}
@@ -419,6 +498,16 @@ func (f *fake) tool(name string, input map[string]any, run func() (string, error
 	f.n++
 	f.turns++
 	id := fmt.Sprintf("toolu_%02d", f.n)
+	if f.oc {
+		out, err := run()
+		state := map[string]any{"status": "completed", "input": input, "output": out}
+		if err != nil {
+			state["status"], state["error"] = "error", err.Error()
+		}
+		f.emit(map[string]any{"type": "tool_use", "sessionID": f.session, "part": map[string]any{"type": "tool",
+			"tool": strings.ToLower(name), "callID": id, "state": state}})
+		return
+	}
 	f.emit(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []any{
 		map[string]any{"type": "tool_use", "id": id, "name": name, "input": input}}}})
 	result, isErr := "", false
@@ -681,4 +770,53 @@ func (f *fake) planTurn(play, persona, plan string, brief []byte, sc script, pro
 	f.write("out/result.json", string(res))
 	f.result("Turn done.")
 	return 0
+}
+
+// chat is the fake opencode's one model request, through the provider its config names (the
+// runner's proxy), with the config's key as the bearer token, as OpenCode's OpenAI-compatible
+// provider sends it.
+func chat(config string) error {
+	b, err := os.ReadFile(config)
+	if err != nil {
+		return fmt.Errorf("no opencode config: %v", err)
+	}
+	var c struct {
+		Model    string `json:"model"`
+		Provider map[string]struct {
+			Options struct {
+				BaseURL string `json:"baseURL"`
+				APIKey  string `json:"apiKey"`
+			} `json:"options"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal(b, &c); err != nil {
+		return err
+	}
+	prov, model, _ := strings.Cut(c.Model, "/")
+	p, ok := c.Provider[prov]
+	if !ok || p.Options.BaseURL == "" {
+		return fmt.Errorf("the config has no provider %q", prov)
+	}
+	body, _ := json.Marshal(map[string]any{"model": model, "stream": true, "messages": []any{map[string]string{"role": "user", "content": "build it"}}})
+	req, err := http.NewRequest("POST", p.Options.BaseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+p.Options.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("Cannot connect to API: %v", err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(out, []byte("[DONE]")) {
+		return fmt.Errorf("the model answered %d: %s", resp.StatusCode, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func readFile(p string) string {
+	b, _ := os.ReadFile(p)
+	return string(b)
 }

@@ -163,3 +163,43 @@ func matchRe(pattern, s string) (bool, error) {
 	}
 	return re.MatchString(s), nil
 }
+
+// The digest compares the window's build runs by builder (docs/decisions/2026-10-16-qwen-builder.md):
+// runs, average wall time, Claude's cost, and qwen items that fell back to claude.
+func TestDigestComparesBuilders(t *testing.T) {
+	e := newBotEnv(t)
+	e.clk.Advance(30 * time.Minute)
+	e.b.Tick(e.ctx)
+	id := e.add("ship it")
+	e.runner(id, "a1", pipeline.Reproduced, map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": ""})
+	e.runner(id, "builder", pipeline.PROpened, map[string]string{"repo": "jarvis-server", "pr": "7", "branch": "loop/1-x", "head_sha": shaA,
+		"builder": "qwen", "run_seconds": "600", "session_id": "ses_1"}, "M x.go")
+	e.runner(id, "reviewer", pipeline.Bounce, map[string]string{"notes": "add a test"})
+	e.runner(id, "builder", pipeline.PROpened, map[string]string{"repo": "jarvis-server", "pr": "7", "branch": "loop/1-x", "head_sha": shaB,
+		"builder": "qwen", "run_seconds": "1200", "session_id": "ses_1"}, "M x.go")
+	e.runner(id, "reviewer", pipeline.Bounce, map[string]string{"notes": "still no test"}) // the second strike: needs you, then claude
+	// (The item is not a plan's here, so loopd records no fallback itself.)
+	if err := e.st.Record(e.ctx, store.Event{ItemID: id, Actor: "runner:devbox", Kind: "builder_fallback", Data: map[string]any{"from": "qwen", "to": "claude"}}); err != nil {
+		t.Fatal(err)
+	}
+	// A run-only fallback (a runner without a qwen config) is not counted.
+	if err := e.st.Record(e.ctx, store.Event{ItemID: id, Actor: "runner:devbox", Kind: "builder_fallback", Data: map[string]any{"this_run_only": true}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.Answer(e.ctx, "user:alex", id, "go on"); err != nil {
+		t.Fatal(err)
+	}
+	e.runner(id, "builder", pipeline.PROpened, map[string]string{"repo": "jarvis-server", "pr": "7", "branch": "loop/1-x", "head_sha": shaA,
+		"builder": "claude", "run_seconds": "300", "total_cost_usd": "0.4200"}, "M x.go")
+	e.calls()
+	e.clk.Advance(4 * time.Hour)
+	e.b.Tick(e.ctx)
+	posts := only(t, e.calls(), "chat.postMessage")
+	if len(posts) != 1 {
+		t.Fatalf("posts %+v", posts)
+	}
+	txt := allText(posts[0])
+	if want := "Builds: claude 1 run, avg 5 min, $0.42 · qwen 2 runs, avg 15 min · 1 fell back to claude"; !strings.Contains(txt, want) {
+		t.Fatalf("digest lacks %q:\n%s", want, txt)
+	}
+}

@@ -177,7 +177,8 @@ func TestFenceFailsClosed(t *testing.T) {
 func TestDefaultVerifyMask(t *testing.T) {
 	m := DefaultVerifyMask("/h")
 	for _, want := range []string{"/h/.ssh", "/h/.config/gh", "/h/.config/jarvis-loop", "/h/.config/jarvis-harness/slack.env",
-		"/h/.local/share/jarvis-loop", "/h/.gnupg", "/h/.netrc", "/h/.git-credentials", "/h/.config/git/credentials", "/h/.docker/config.json"} {
+		"/h/.local/share/jarvis-loop", "/h/.gnupg", "/h/.netrc", "/h/.git-credentials", "/h/.config/git/credentials", "/h/.docker/config.json",
+		"/h/.claude/.credentials.json", "/h/.config/opencode", "/h/.local/share/opencode", "/h/.local/state/opencode", "/h/.cache/opencode"} {
 		if !slices.Contains(m, want) {
 			t.Errorf("default mask lacks %s", want)
 		}

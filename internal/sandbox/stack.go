@@ -115,6 +115,7 @@ type Stack struct {
 	cancel context.CancelFunc
 	bg     sync.WaitGroup
 	srv    *http.Server
+	qwen   *fakeQwen
 	board  *http.Server
 	// boardTok is the board token (kind board) the board expectation signs in with.
 	boardTok string
@@ -313,6 +314,12 @@ func StartStack(opts Options) (st *Stack, err error) {
 				Description: "the household's phone app (screens, chat, pairing)", Verify: MobileVerify(dir), QA: true},
 		},
 	}
+	if s.qwen, err = startFakeQwen(); err != nil {
+		return nil, err
+	}
+	if cfg.Qwen, err = s.qwen.config(dir, opts.Bin.Claude); err != nil {
+		return nil, err
+	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	cfgPath := filepath.Join(dir, "runner.json")
 	if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
@@ -445,6 +452,7 @@ func (s *Stack) Close() {
 	if s.board != nil {
 		s.board.Close()
 	}
+	s.qwen.Close()
 	if s.Slack != nil {
 		s.Slack.Close()
 	}
@@ -719,7 +727,7 @@ func (c *apiClient) do(method, path string, in, out any) error {
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("%s %s: HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
-	if out != nil {
+	if out != nil && resp.StatusCode != http.StatusNoContent {
 		return json.Unmarshal(raw, out)
 	}
 	return nil

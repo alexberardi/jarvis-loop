@@ -49,6 +49,10 @@ for a build ([docs/decisions/2026-10-16-land-lane.md](docs/decisions/2026-10-16-
 With `"plan"` in `stages` (phase 7, [docs/phases/07-planning.md](docs/phases/07-planning.md)) it
 also takes plans' turns: the product and engineering personas, one short agent per turn in
 `<work_root>/plan-<id>/`, resuming the persona's session (`plan_turn_minutes`, default 15).
+With a `qwen` block (`base_url`, `credentials_file`, `model`, `max_minutes`, `opencode`), build runs
+of items whose plan piece says `builder: qwen` run OpenCode in the verify fence against jarvisd,
+through a proxy in the runner that adds the app credentials; the second bounce turns the item to
+claude. Why and the gaps: [docs/decisions/2026-10-16-qwen-builder.md](docs/decisions/2026-10-16-qwen-builder.md).
 
 Harness (phase 4b, [docs/phases/04b-loop-harness.md](docs/phases/04b-loop-harness.md)):
 `scripts/loop-sandbox run` plays `scenarios/*.json` against the real loopd wiring, runner, bot and
