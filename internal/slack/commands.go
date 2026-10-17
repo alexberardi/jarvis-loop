@@ -61,6 +61,7 @@ func (b *Bot) Late(ctx context.Context, env Envelope, payload map[string]any) {
 }
 
 func (b *Bot) runCommand(ctx context.Context, c command) string {
+	c.Text = Unescape(c.Text)
 	fields := strings.Fields(c.Text)
 	if len(fields) == 0 {
 		return helpText

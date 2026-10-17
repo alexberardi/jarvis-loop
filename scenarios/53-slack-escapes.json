@@ -1,0 +1,22 @@
+{
+  "name": "slack-escapes",
+  "about": "Slack sends &, < and > as &amp;, &lt; and &gt; (the fake passes the wire form through). loopd unescapes Slack text once on intake and escapes it only on output: an item added with /loop as 'fix the &lt;tool_call&gt; parsing &amp; retries' is stored as 'fix the <tool_call> parsing & retries', and its thread shows it escaped once (never &amp;lt;); a needs-you answer and a #plan message are stored as typed too.",
+  "steps": [
+    {"do": "add", "via": "slack", "item": "a", "title": "fix the &lt;tool_call&gt; parsing &amp; retries"},
+    {"do": "expect",
+     "events": [{"item": "a", "kind": "created", "data": {"title": "^fix the <tool_call> parsing & retries$"}, "count": 1}],
+     "messages": [{"parent": "a", "text": "fix the &lt;tool_call&gt; parsing &amp; retries"}],
+     "no_messages": [{"text": "&amp;lt;|&amp;amp;"}]},
+    {"do": "script", "item": "a", "for": "triage", "play": "triage_question"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}},
+    {"do": "reply", "item": "a", "as": "approver", "text": "keep &lt;tool_call&gt; &amp; &lt;/tool_call&gt; as they are"},
+    {"do": "wait", "events": [{"item": "a", "kind": "answered", "data": {"answer": "^keep <tool_call> & </tool_call> as they are$"}, "count": 1}]},
+    {"do": "plan_post", "as": "approver", "plan": "p", "text": "Parse &lt;tool_call&gt; blocks &amp; retries"},
+    {"do": "wait", "events": [{"plan": "p", "kind": "plan_created", "data": {"title": "^Parse <tool_call> blocks & retries$"}, "count": 1}]}
+  ],
+  "expect": {
+    "no_messages": [{"text": "&amp;lt;|&amp;amp;"}]
+  }
+}

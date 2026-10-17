@@ -850,7 +850,7 @@ func (b *Bot) onMessage(ctx context.Context, m slackEvent) {
 	if err != nil {
 		return
 	}
-	text := stripMentions(m.Text)
+	text := incoming(m.Text)
 	switch d.Item.Stage {
 	case pipeline.NeedsYou:
 		if !IsApprover(m.User) {
@@ -904,7 +904,7 @@ func (b *Bot) onMention(ctx context.Context, m slackEvent) {
 		b.refuse(ctx, m.Channel, m.User, 0, "add")
 		return
 	}
-	text := stripMentions(m.Text)
+	text := incoming(m.Text)
 	if _, err := b.add(ctx, m.User, text); err != nil {
 		b.ephemeral(ctx, m.Channel, m.User, Escape(errMessage(err))+" Try: @jarvis-loop <what to do>")
 	}

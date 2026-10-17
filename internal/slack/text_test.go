@@ -333,3 +333,25 @@ func TestParseAfter(t *testing.T) {
 		}
 	}
 }
+
+// Slack sends &, < and > as &amp;, &lt; and &gt;; incoming text is unescaped once, after the
+// mention tokens are stripped, so a typed "<@U1>" (sent as &lt;@U1&gt;) stays text.
+func TestUnescapeIncoming(t *testing.T) {
+	for in, want := range map[string]string{
+		"fix &lt;tool_call&gt; parsing": "fix <tool_call> parsing",
+		"a &amp;amp; b":                 "a &amp; b",
+		"a &amp;lt; b":                  "a &lt; b",
+		"plain text, &quot;as is&quot;": "plain text, &quot;as is&quot;",
+		"x &gt; y &amp;&amp; y &lt; z":  "x > y && y < z",
+	} {
+		if got := Unescape(in); got != want {
+			t.Errorf("Unescape(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := incoming("<@U0BOT> add &lt;@U1&gt; &amp; &lt;tool_call&gt;"); got != "add <@U1> & <tool_call>" {
+		t.Fatalf("incoming: %q", got)
+	}
+	if got := Escape(Unescape("&lt;tool_call&gt; &amp;")); got != "&lt;tool_call&gt; &amp;" {
+		t.Fatalf("round trip: %q", got)
+	}
+}

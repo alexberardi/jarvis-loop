@@ -24,7 +24,7 @@ func (b *Bot) onPlanMessage(ctx context.Context, m slackEvent) {
 		b.c.Log.Info("slack: ignored a #plan message from someone other than the approver", "user", m.User, "ts", m.TS)
 		return
 	}
-	text := stripMentions(m.Text)
+	text := incoming(m.Text)
 	if text == "" {
 		return
 	}
