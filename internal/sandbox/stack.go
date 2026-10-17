@@ -719,7 +719,7 @@ func (c *apiClient) do(method, path string, in, out any) error {
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("%s %s: HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
-	if out != nil {
+	if out != nil && resp.StatusCode != http.StatusNoContent {
 		return json.Unmarshal(raw, out)
 	}
 	return nil
