@@ -1,0 +1,25 @@
+{
+  "name": "plan-waits-on-item",
+  "about": "A blueprint piece can wait for an existing loop item: '#N' in its 'depends on:' line is an item, a bare N a piece. #1 is already open; piece 2's 'depends on: 1, #1' files #3 depending on piece 1's item (#2) and on #1, posted as waiting on both. A blueprint naming an item that does not exist is refused at the approve and files nothing; the plan stays at blueprint until engineering fixes it.",
+  "steps": [
+    {"do": "add", "item": "a", "title": "Pantry schema decision"},
+    {"do": "plan", "plan": "p", "title": "Pantry list", "priority": "P2", "text": "a pantry list"},
+    {"do": "plan_turn", "plan": "p", "text": "Brief ready.", "brief": "# Pantry list\n\nA list of what is in the pantry.", "ready": true},
+    {"do": "plan_approve", "plan": "p", "doc": "brief"},
+    {"do": "plan_turn", "plan": "p", "text": "Blueprint ready.", "ready": true,
+     "blueprint": "# Blueprint\n\n## Pieces\n\n### 1. Pantry table\n- repo: sandbox/demo\n- depends on: none\n\nThe table.\n\n### 2. Pantry API\n- depends on: 1, #9\n\nList and add.\n"},
+    {"do": "plan_approve", "plan": "p", "doc": "blueprint", "text": "go", "refused": "piece 2 waits on #9, which does not exist"},
+    {"do": "expect", "plans": {"p": {"stage": "blueprint", "items": 0}}},
+    {"do": "plan_reply", "plan": "p", "as": "approver", "text": "#9 is not an item: wait on #1"},
+    {"do": "plan_turn", "plan": "p", "text": "Fixed.", "ready": true,
+     "blueprint": "# Blueprint\n\n## Pieces\n\n### 1. Pantry table\n- repo: sandbox/demo\n- depends on: none\n\nThe table.\n\n### 2. Pantry API\n- depends on: 1, #1\n\nList and add.\n"},
+    {"do": "plan_approve", "plan": "p", "doc": "blueprint", "text": "go"},
+    {"do": "expect", "plans": {"p": {"stage": "split", "items": 2}}},
+    {"do": "plan_items", "plan": "p", "pieces": ["p1", "p2"]},
+    {"do": "expect", "depends_on": {"p1": [], "p2": ["p1", "a"]},
+     "messages": [{"parent": "p2", "text": "· Waiting on #2, #1"}]}
+  ],
+  "expect": {
+    "plans": {"p": {"stage": "split", "items": 2}}
+  }
+}
