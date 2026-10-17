@@ -130,3 +130,33 @@ func TestTrustFieldsChecked(t *testing.T) {
 	_, err = ApplyAdvance(item(Review), Advance{Outcome: Failed, Fields: map[string]string{"error": "x", FieldTrustSHA: sha1, FieldTrustPaths: "p"}}, t0)
 	wantCode(t, err, CodeInvalidField)
 }
+
+// A run that ends without a verdict on the code (a runner fault, a question, the usage limit)
+// leaves the OK valid for its commit: the next verify of the same head runs without a new OK.
+func TestTrustKeptWithoutAVerdict(t *testing.T) {
+	tr, err := ApplyTrust(refused(t), "alex", sha1, t0)
+	wantCode(t, err, "")
+	it := tr.Item
+	for _, a := range []Advance{
+		{Outcome: Failed, Fields: map[string]string{"error": "verify_mask: no such file", FieldTrustUsed: sha1}},
+		{Outcome: Question, Fields: map[string]string{"question": "resubmit?", FieldTrustUsed: sha1}},
+		{Outcome: UsageLimit, Fields: map[string]string{"error": "usage limit", FieldTrustUsed: sha1}},
+	} {
+		tr, err := ApplyAdvance(it, a, t0)
+		wantCode(t, err, "")
+		if tr.Item.Trust == nil || tr.Item.Trust.Used || !TrustAllows(tr.Item.Trust, sha1) {
+			t.Fatalf("%s used up the OK: %+v", a.Outcome, tr.Item.Trust)
+		}
+		if TrustAllows(tr.Item.Trust, sha2) {
+			t.Fatalf("%s: the OK is still for %s only", a.Outcome, sha1)
+		}
+		// trust_used is still checked: a commit the approver did not OK is refused.
+		bad := Advance{Outcome: a.Outcome, Fields: map[string]string{}}
+		for k, v := range a.Fields {
+			bad.Fields[k] = v
+		}
+		bad.Fields[FieldTrustUsed] = sha2
+		_, err = ApplyAdvance(it, bad, t0)
+		wantCode(t, err, CodeInvalidField)
+	}
+}

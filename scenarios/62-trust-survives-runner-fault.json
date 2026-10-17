@@ -1,0 +1,32 @@
+{
+  "name": "trust-survives-runner-fault",
+  "about": "Item #98: the approver OKs a trusted-file commit, and verify under the OK fails on the runner's own fence (verify_mask), a runner error that never judged the code. The OK is not used up: after a reply of retry, verify runs the same commit again without a second refusal or a second OK, the PR opens and the OK is used then.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "shoot dark mode too", "text": "[mobile] shoot dark mode too"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "trusted_change", "file": "tools/shoot"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "failed", "actor": "runner", "data": {"trust_sha": "^[0-9a-f]{40}$"}}]},
+    {"do": "press", "item": "a", "as": "approver", "button": "trust"},
+    {"do": "expect", "stage": {"a": "build"}, "events": [{"item": "a", "kind": "trusted", "actor": "approver"}]},
+    {"do": "verify", "outcome": "masked"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "failed", "actor": "runner", "data": {"trust_used": "^[0-9a-f]{40}$", "error": "verify_mask hides it"}}]},
+    {"do": "verify", "outcome": "pass"},
+    {"do": "reply", "item": "a", "as": "approver", "text": "retry"},
+    {"do": "expect", "stage": {"a": "build"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review"},
+     "events": [
+       {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "data": {"trust_used": "^[0-9a-f]{40}$"}},
+       {"item": "a", "kind": "advanced", "outcome": "failed", "data": {"trust_sha": "^[0-9a-f]{40}$"}, "count": 1},
+       {"item": "a", "kind": "trusted", "count": 1}
+     ]}
+  ]
+}
