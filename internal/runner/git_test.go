@@ -227,3 +227,17 @@ func TestEnsureMirrorClearsASandboxPlaceholderLock(t *testing.T) {
 		t.Errorf("git's own lock was removed: %v", err)
 	}
 }
+
+// Starting an item's branch from origin/<base> must not write tracking config: the mirror's
+// config is shared, and agents' sandboxes keep a placeholder config.lock on it while they run.
+func TestAddWorktreeWritesNoConfig(t *testing.T) {
+	r := newGitRig(t)
+	cfg := filepath.Join(r.mirror, "config")
+	before, _ := os.ReadFile(cfg)
+	if _, err := r.g.AddWorktree(r.ctx, r.mirror, filepath.Join(t.TempDir(), "wt"), "loop/9-x", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := os.ReadFile(cfg); string(after) != string(before) {
+		t.Errorf("AddWorktree changed the mirror's config:\n%s", after)
+	}
+}

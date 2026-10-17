@@ -186,7 +186,7 @@ func (g Git) AddWorktree(ctx context.Context, mirror, path, branch, base string)
 		_, err := g.run(ctx, mirror, "worktree", "add", "-q", path, branch)
 		return ahead, err
 	}
-	_, err := g.run(ctx, mirror, "worktree", "add", "-q", "-B", branch, path, start)
+	_, err := g.run(ctx, mirror, "worktree", "add", "-q", "--no-track", "-B", branch, path, start)
 	return ahead, err
 }
 
