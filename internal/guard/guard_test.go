@@ -252,7 +252,44 @@ func TestBashCommands(t *testing.T) {
 		{"cat ${HOME}/.config/jarvis-harness/slack.env", RuleProtectedPath},
 		{"cat ~/.config/jarvis-loop/tokens", RuleProtectedPath},
 		{"cat ~/.ssh/id_ed25519", RuleProtectedPath},
-		{"ls " + f.checkout + "-wt", ""}, // a different directory that shares the prefix
+		{"ls " + f.checkout + "-wt", ""},                                   // a different directory that shares the prefix
+		{"cat < " + f.checkout + "/x", RuleProtectedPath},                  // a redirection target
+		{"ls > " + f.checkout + "/x", RuleProtectedPath},                   // a redirection target
+		{"python3 -c \"open('" + f.checkout + "/x')\"", RuleProtectedPath}, // a script string is an argument
+		{"python3 <<< \"open('" + f.checkout + "/x')\"", RuleProtectedPath},
+		{"x=$(cat " + f.checkout + "/x)", RuleProtectedPath},
+		{"P=" + f.checkout + " make", RuleProtectedPath},
+		{"bash -c 'echo " + f.checkout + "'", RuleProtectedPath},
+
+		// A path that is only text (a heredoc written to a file, a comment, echo's arguments) names
+		// nothing the command opens (#95). A heredoc an interpreter reads is a script, and data that
+		// a pipe, a substitution or any other command in the same call could turn into a command or
+		// a path is refused as before: the exemption holds only when every segment is a sink.
+		{"cat > .loop/scratch/body.md <<'X'\nnot verified: needs " + f.checkout + "/installed.env\nX", ""},
+		{"mkdir -p .loop/scratch && cat <<'X' > .loop/scratch/body.md\nsee " + f.checkout + "\nX", ""},
+		{"mkdir -p .loop/scratch && cat <<'X' > .loop/scratch/body.md\nsee " + f.checkout + "\nX\ngit status", RuleProtectedPath},
+		{"echo 'cat " + f.checkout + "/x' > s.sh; bash s.sh", RuleProtectedPath},
+		{"cat > s.sh <<'X'\ncat " + f.checkout + "/x\nX\nsh s.sh", RuleProtectedPath},
+		{"echo " + f.checkout + " > l; xargs -a l cat", RuleProtectedPath},
+		{"printf -vq '%s' " + f.checkout + "; cat \"$q\"", RuleProtectedPath},
+		{"printf -vq '%s' " + f.checkout + "; echo \"$q\" > .loop/scratch/n", RuleProtectedPath},
+		{"tee .loop/scratch/body.md <<X\nsee " + f.checkout + "\nX", ""},
+		{"ls # not " + f.checkout, ""},
+		{"echo 'see " + f.checkout + "' > .loop/scratch/note.md", ""},
+		{"printf '%s\\n' 'see " + f.checkout + "' >> .loop/scratch/note.md", ""},
+		{"python3 - <<'PY'\nopen('.loop/scratch/body.md','w').write('needs " + f.checkout + "')\nPY", RuleProtectedPath},
+		{"bash <<'X'\nls " + f.checkout + "\nX", RuleProtectedPath},
+		{"cat <<'X' | python3\nopen('" + f.checkout + "/x')\nX", RuleProtectedPath},
+		{"echo 'open(\"" + f.checkout + "/x\")' | python3", RuleProtectedPath},
+		{"cat > s.sh <<X\n$(ls " + f.checkout + ")\nX", RuleProtectedPath}, // an unquoted heredoc runs its substitutions
+		{"cat > s.sh <<X\n`ls " + f.checkout + "`\nX", RuleProtectedPath},
+		{"python3 <(echo \"open('" + f.checkout + "/x')\")", RuleProtectedPath},
+		{"cat $(echo " + f.checkout + "/x)", RuleProtectedPath},
+		{"watch echo '$(cat " + f.checkout + "/x)'", RuleProtectedPath},
+		{"printf -v p '" + f.checkout + "'; cat \"$p\"", RuleProtectedPath},
+		{"echo " + f.checkout + " > .loop/scratch/n; cat " + f.checkout, RuleProtectedPath},
+		{"echo hi > " + f.checkout + "/x", RuleProtectedPath},
+		{"cat " + f.checkout + "/x <<'X' > out\nhi\nX", RuleProtectedPath},
 		{"scripts/mobile-shot --serial emulator-5554", RuleProtectedWord},
 		{"curl http://127.0.0.1:7780/items", RuleLoopd},
 		{"wget -qO- localhost:7780/control", RuleLoopd},

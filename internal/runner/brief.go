@@ -280,7 +280,7 @@ func Brief(stage string, it Item, r RunInfo) string {
 			for _, v := range r.Verify {
 				fmt.Fprintf(&b, " %s;", oneLine(v))
 			}
-			b.WriteString(" a failure comes back to you in `.loop/review/verify.md`.\n")
+			b.WriteString(" a failure comes back to you in `.loop/review/verify.md`, which is all there is of it (the harness it ran on is the user's; do not look for it).\n")
 		}
 		if it.Summary != "" {
 			fmt.Fprintf(&b, "- Notes so far: %s\n", it.Summary)

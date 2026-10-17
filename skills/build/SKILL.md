@@ -22,6 +22,9 @@ unsure, stop and ask (outcome `question`) instead of guessing.
   caches; network only to GitHub and the package registries). A refusal is final: do not retry
   it another way. If the item cannot be done without it, return `question` and say exactly what
   you needed and why.
+- Write the PR body, notes and other long text with the Write tool (into `.loop/scratch/`), not
+  with a shell heredoc into an interpreter: `loop-guard` reads a script fed to `python3`, `bash` and
+  the like as code, so one that merely mentions a protected path is refused.
 - Use relative paths (or paths under this worktree) for `rm -r`; absolute `rm -rf` is refused.
 
 ## What to do
@@ -32,7 +35,11 @@ unsure, stop and ask (outcome `question`) instead of guessing.
    **If the item was sent back**, the brief lists `.loop/review/`: the review notes (from loopd)
    and the PR's comments, or `verify.md` when the runner's own verify failed. Read them first and
    fix each point on the same branch (the worktree continues it); the runner then updates the
-   open PR instead of opening another.
+   open PR instead of opening another. `verify.md` is all the evidence there is of a verify
+   failure: the runner ran it outside your sandbox, and the installed `jarvisd` and its harness
+   config (`~/.config/jarvis-harness/`) are the user's, so do not go looking at them. Fix what the
+   output shows; if it does not show enough, return `question`, or name the scenario you could not
+   run in `not_verified`.
 2. Write the failing test first, then the fix; keep the change as small as the item asks.
 3. Verify with the repo's harness where the item needs it, under the sandbox name given below
    (`--name <sandbox>`), never `default`. In a fresh jarvis-server worktree, the runner has
