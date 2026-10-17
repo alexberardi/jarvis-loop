@@ -232,9 +232,6 @@
       ]
     },
     "network": {
-      "allowUnixSockets": [
-        "/home/u/.cache/jarvis-loop/work/harness.sock"
-      ],
       "allowedDomains": [
         "github.com",
         "api.github.com",

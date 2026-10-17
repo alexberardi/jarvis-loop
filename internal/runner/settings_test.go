@@ -23,16 +23,14 @@ func goldenInput(mode string) SettingsInput {
 }
 
 func TestSettingsGolden(t *testing.T) {
-	// The _harness files are a repo with a harness (harness.go): its agents may reach the broker's
-	// socket. The others prove no one else may.
-	for _, name := range []string{ModeAuto, ModeStrict, ModeAuto + "_readonly", ModeAuto + "_harness", ModeStrict + "_harness"} {
+	// strict_harness is a repo with a harness (harness.go): its agents may run loop-harness. Its
+	// spool is in the worktree, so the sandbox itself is the same as for every other repo.
+	for _, name := range []string{ModeAuto, ModeStrict, ModeAuto + "_readonly", ModeStrict + "_harness"} {
 		mode, ro := strings.CutSuffix(name, "_readonly")
 		mode, hs := strings.CutSuffix(mode, "_harness")
 		in := goldenInput(mode)
 		in.ReadOnly = ro
-		if hs {
-			in.HarnessSocket = "/home/u/.cache/jarvis-loop/work/harness.sock"
-		}
+		in.Harness = hs
 		got, err := GenerateSettings(in)
 		if err != nil {
 			t.Fatal(err)
@@ -214,39 +212,38 @@ func TestDenyRulesKillAndPush(t *testing.T) {
 	}
 }
 
-// Only a repo with a harness gets a Unix socket, exactly the broker's (never allowAllUnixSockets),
-// and, in strict mode, loop-harness in the allowlist.
-func TestSettingsHarnessSocket(t *testing.T) {
+// A repo with a harness gets loop-harness in strict mode's allowlist and nothing else: no Unix
+// socket (Claude Code ignores allowUnixSockets on Linux, and allowAllUnixSockets is never set),
+// no excluded command, no wider sandbox.
+func TestSettingsHarness(t *testing.T) {
 	type shape struct {
 		Permissions struct {
 			Allow []string `json:"allow"`
 		} `json:"permissions"`
 		Sandbox struct {
-			Network map[string]any `json:"network"`
+			Network          map[string]any `json:"network"`
+			ExcludedCommands []string       `json:"excludedCommands"`
 		} `json:"sandbox"`
 	}
 	for _, mode := range []string{ModeAuto, ModeStrict} {
-		for _, sock := range []string{"", "/w/harness.sock"} {
+		for _, hs := range []bool{false, true} {
 			in := goldenInput(mode)
-			in.HarnessSocket = sock
+			in.Harness = hs
 			b, _ := GenerateSettings(in)
 			var s shape
 			if err := json.Unmarshal(b, &s); err != nil {
 				t.Fatal(err)
 			}
-			if _, ok := s.Sandbox.Network["allowAllUnixSockets"]; ok {
-				t.Errorf("%s: allowAllUnixSockets must never be set", mode)
+			for _, k := range []string{"allowUnixSockets", "allowAllUnixSockets"} {
+				if _, ok := s.Sandbox.Network[k]; ok {
+					t.Errorf("%s, harness %v: %s must never be set", mode, hs, k)
+				}
 			}
-			got, _ := json.Marshal(s.Sandbox.Network["allowUnixSockets"])
-			want := "null"
-			if sock != "" {
-				want = `["/w/harness.sock"]`
+			if s.Sandbox.ExcludedCommands != nil {
+				t.Errorf("%s, harness %v: excludedCommands %v", mode, hs, s.Sandbox.ExcludedCommands)
 			}
-			if string(got) != want {
-				t.Errorf("%s, socket %q: allowUnixSockets %s, want %s", mode, sock, got, want)
-			}
-			if allowed := slices.Contains(s.Permissions.Allow, "Bash(loop-harness *)"); allowed != (mode == ModeStrict && sock != "") {
-				t.Errorf("%s, socket %q: loop-harness allowed %v", mode, sock, allowed)
+			if allowed := slices.Contains(s.Permissions.Allow, "Bash(loop-harness *)"); allowed != (mode == ModeStrict && hs) {
+				t.Errorf("%s, harness %v: loop-harness allowed %v", mode, hs, allowed)
 			}
 		}
 	}

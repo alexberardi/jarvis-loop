@@ -122,7 +122,7 @@ own config only: the logs and files they write are the item's evidence and are
 listed apart in the PR's Verification footer; a failure sends the build back (counted like a
 bounce) with nothing pushed. Details: `docs/decisions/2026-10-15-all-repos.md`. While a build or review agent works,
 a repo with a `harness` lets it use the harness through the runner too: `loop-harness up | run | down`
-asks the runner, over a Unix socket only that agent's sandbox may reach, to run the command in the
+asks the runner, through a spool in the agent's own worktree (checked by the run's token and its guard), to run the command in the
 same fence, next to a keeper fence that holds the running sandbox until the agent ends. Details:
 `docs/decisions/2026-10-16-harness-broker.md`.
 

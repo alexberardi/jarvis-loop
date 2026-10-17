@@ -471,3 +471,28 @@ func TestHarnessRealClaude(t *testing.T) {
 		t.Error("claude asked to leave the sandbox: the command must have run inside it")
 	}
 }
+
+// TestHarnessServe keeps a session open for a client run by hand, from another process (for
+// example a Bash command of a Claude Code agent, inside its own OS sandbox):
+//
+//	LOOP_HARNESS_SERVE=$PWD/.loop/scratch/serve go test ./internal/runner -run TestHarnessServe -v
+//
+// It writes the session's worktree to $LOOP_HARNESS_SERVE/worktree, then serves until
+// $LOOP_HARNESS_SERVE/stop exists (or five minutes pass).
+func TestHarnessServe(t *testing.T) {
+	dir := os.Getenv("LOOP_HARNESS_SERVE")
+	if dir == "" {
+		t.Skip("set LOOP_HARNESS_SERVE to a directory to serve a session by hand")
+	}
+	g := newRig(t, fakeclaude.Good)
+	g.harnessRepo("2m")
+	_, wt := g.harnessSession()
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "worktree"), []byte(wt+"\n"), 0o644)
+	for end := time.Now().Add(5 * time.Minute); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(dir, "stop")); err == nil {
+			break
+		}
+	}
+	t.Logf("harness logs:\n%s", g.read(filepath.Join(wt, ".loop", "scratch", "harness", "1.log")))
+}

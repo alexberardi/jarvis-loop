@@ -80,9 +80,15 @@ exec 3<>/dev/tcp/127.0.0.1/` + port + ` && printf 'GET / HTTP/1.0\r\nHost: x\r\n
 	}
 	run := g.lastRun(id, StageBuild)
 	// The agent's harness commands (harness.go) run in the same fence: alone, and in the keeper,
-	// whose up exported a secret of its own.
+	// whose up exported a secret of its own. The broker's guard refuses a command that names a
+	// protected path (TestHarnessGuard) but reads no script files, so the probe runs from one: the
+	// fence must hide the secrets from what the guard let through.
 	g.harnessRepo("")
-	g.harnessSession()
+	_, wt := g.harnessSession()
+	if err := os.WriteFile(filepath.Join(wt, ".loop", "scratch", "probe.sh"), []byte(probe), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	probe = "sh .loop/scratch/probe.sh"
 	_, alone, err := call(t, harness.OpRun, probe)
 	if err != nil {
 		t.Fatal(err)

@@ -14,29 +14,48 @@ commands for the agent, in the fence its verify steps already use (`fence.go`).
   20m). `loop_harness` (default: next to `loop-runner`) is the client binary. jarvis-server:
   `up` = `grep -q INSTALLED_LLM_LABEL scripts/sandbox && export JARVIS_HARNESS_ENV="$HOME/.config/jarvis-harness/prod-background.env"; scripts/fetch-sherpa-libs.sh >/dev/null && scripts/sandbox up --name $LOOP_SANDBOX`,
   `down` = `scripts/sandbox down --name $LOOP_SANDBOX --purge`.
-- **Socket and session.** The runner listens on `<work_root>/harness.sock` (0600; a stale one is
-  removed), started by the first session. For each agent run of a build or review of such a repo it
-  opens a session with a random 32-byte token and writes `.loop/harness.json` `{socket, token}` in
-  the worktree (`.loop/` is never committed). The session ends as soon as the agent does (exit,
-  time cap, lease lost, runner shutdown), before the runner's own verify, which starts its own
-  harness under the same sandbox name. `loop-runner` also ends any left when it stops.
-- **Who may call.** Tokens are compared in constant time. The token sits in a file other items'
-  agents could read, so the broker also checks the caller with `SO_PEERCRED`: the runner's uid,
-  and a working directory inside the session's worktree. Commands always run in the session's
-  worktree; the client never names a directory.
-- **Protocol.** One JSON line `{token, op, cmd}`; replies are JSON lines, output frames then
-  `{exit}` or `{error}`. Ops: `up`, `run`, `down`, `status`. The client exits with the command's
-  code (125 when the broker refused, 124 on a timeout). Every command's full output goes to
-  `.loop/scratch/harness/<n>.log`. Requests run one at a time per session; the client going away
-  (the agent's Bash timeout) cancels its command.
+- **Spool and session.** For each agent run of a build or review of such a repo the runner opens
+  a session with a random 32-byte token, makes a fresh spool `.loop/harness/{req,out}/` in the
+  worktree, and writes `.loop/harness.json` `{spool, token}` (`.loop/` is never committed). The
+  runner opens the spool and the log dir as `os.Root`s before the agent starts, so a symlink the
+  agent puts there later cannot send the runner's reads or writes out of them. The session ends
+  as soon as the agent does (exit, time cap, lease lost, runner shutdown), before the runner's own
+  verify, which starts its own harness under the same sandbox name; the spool and harness.json are
+  removed then. `loop-runner` also ends any left when it stops.
+- **Who may call.** Only that run's agent can write in its worktree (other items' agents are
+  sandboxed to their own), which is the caller check; the token must match too (constant-time
+  compare). Commands always run in the session's worktree; the client never names a directory.
+- **Protocol.** The client writes `req/<id>.json` (`{token, op, cmd}`, written to a temp name and
+  renamed into place; `<id>` is 32 random hex digits) and keeps `req/<id>.alive` fresh (every
+  second) while it waits. The broker polls `req/` (every 50 ms), removes the request, appends the
+  output to `out/<id>.log` and writes `out/<id>.exit` (`{exit}` or `{error}`, renamed into place)
+  last; the client tails the log and stops at the exit file. Ops: `up`, `run`, `down`, `status`.
+  The client exits with the command's code (125 when the broker refused, 124 on a timeout). Every
+  command's full output also goes to `.loop/scratch/harness/<n>.log`. Requests run one at a time
+  per session; an `.alive` gone or older than 10 s (the client was killed, or the agent's Bash
+  timeout hit) cancels its command.
 - **Environment.** As verify's: the agent's environment through `fencedEnv` (no tokens, keys or
   secrets), plus `LOOP_ITEM`, `LOOP_WORKTREE`, `LOOP_EVIDENCE_DIR`, `LOOP_SANDBOX`, `LOOP_REPO`,
   `LOOP_BASE`, `LOOP_MIRROR`. What `up` exports (the harness's env file) stays in up's shell: later
   commands get the runner's environment, not the keeper shell's.
-- **Agent side.** Only for harness repos: `sandbox.network.allowUnixSockets` = the socket (never
-  `allowAllUnixSockets`); `<work_root>/bin` (holding only a `loop-harness` link) first on PATH;
-  strict mode allows `Bash(loop-harness *)`; the brief's "This run" part says what it can run and
-  that verify still runs after (the static part is unchanged, so the prompt cache is too).
+- **Agent side.** The sandbox settings do not change: the spool is in the worktree, which the
+  agent may already write. Only for harness repos: `<work_root>/bin` (holding only a
+  `loop-harness` link) first on PATH; strict mode allows `Bash(loop-harness *)`; the brief's "This
+  run" part says what it can run and that verify still runs after (the static part is unchanged,
+  so the prompt cache is too).
+
+## Why a spool, not a Unix socket
+
+The first build (PR #37 as first sent) had the runner listen on `<work_root>/harness.sock` and gave
+harness repos' agents `sandbox.network.allowUnixSockets` = that socket. Review found it cannot
+work on Linux: Claude Code 2.1.287 documents `allowUnixSockets` as "macOS only ... Ignored on
+Linux (seccomp cannot filter by path)", and its Linux seccomp filter refuses `socket(AF_UNIX)`
+outright, so the agent's client could never connect. `allowAllUnixSockets` and
+`excludedCommands` would loosen the sandbox, which the ask rules out, and loopback is off the
+network allowlist. Files in the worktree are the one channel the Linux sandbox already gives
+the agent, so the transport became the spool. It also makes a better caller check than the
+socket's `SO_PEERCRED` did. The socket, `allowUnixSockets` and the test-only TCP fallback are
+gone.
 
 ## Pid namespaces: commands run inside the keeper
 
@@ -64,6 +83,14 @@ outside the agent's sandbox and its deny rules (which match only the start of th
 So the guard checks `loop-harness run <cmd>` as it checks `bash -c <cmd>`: `adb` (which would
 reach the user's emulator through the host's adb server), `ssh`, `sudo`, `git push`, `gh pr merge`
 and the rest are refused there too. Pushing would fail anyway (the fence has no credentials).
+
+The hook sees only what the agent's Bash runs, and an agent can write a request itself. So the
+broker also checks every `run` command with the run's own guard config (the `guard.json` its hook
+uses) before it runs it, refuses with exit 125, and records the refusal like the hook does. Like
+the hook, it reads the command, not the scripts it runs: `sh x.sh` runs what is in `x.sh`. What
+stands behind that is the fence (masked credential files, no secrets in the environment, no git
+credentials), not the agent's sandbox: a harness command has host network and can read what
+verify can, the harness's `prod-background.env` included.
 
 ## Not decided here
 
