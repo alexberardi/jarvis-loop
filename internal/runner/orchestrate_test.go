@@ -14,6 +14,7 @@ import (
 
 	"github.com/alexberardi/jarvis-loop/internal/fakeclaude"
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
+	"github.com/alexberardi/jarvis-loop/skills"
 	"github.com/alexberardi/jarvis-loop/internal/store"
 )
 
@@ -238,5 +239,40 @@ func TestOrchestrateConfig(t *testing.T) {
 	c.OrchestratorToken = orchToken
 	if err := c.normalize(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The orchestrator's first prompt of the day is its skill, then the result contract (a golden
+// file, like the stages' static briefs): the same bytes every day, one cacheable prefix.
+func TestOrchStaticIsTheSkillThenTheContract(t *testing.T) {
+	path := filepath.Join("testdata", "brief_orchestrate.golden.md")
+	if *update {
+		if err := os.WriteFile(path, []byte(OrchStatic), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err, "(run go test ./internal/runner -run OrchStatic -update)")
+	}
+	if OrchStatic != string(want) {
+		t.Errorf("%s differs from OrchStatic; review and rerun with -update", path)
+	}
+	skill := strings.TrimSpace(skills.Orchestrator[strings.Index(skills.Orchestrator, "\n---\n")+5:])
+	if !strings.HasPrefix(OrchStatic, skill) || strings.HasPrefix(OrchStatic, "---") {
+		t.Error("OrchStatic must start with the orchestrator's skill, without its frontmatter")
+	}
+	for _, s := range []string{"## The result contract", "## Answers you may give", "## Process issues", "**Never**", "`alexberardi/jarvis-loop`"} {
+		if !strings.Contains(OrchStatic, s) {
+			t.Errorf("OrchStatic has no %q", s)
+		}
+	}
+	for _, k := range pipeline.AnswerKinds {
+		if !strings.Contains(skills.Orchestrator, "**`"+k+"`**") {
+			t.Errorf("the skill does not explain the answer kind %q", k)
+		}
+	}
+	if strings.Contains(OrchStatic, TurnHeading) {
+		t.Error("the skill contains the turn heading")
 	}
 }

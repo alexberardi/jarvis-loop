@@ -139,7 +139,7 @@ type Checkout struct {
 
 func stageSkill(stage string) string {
 	skill := map[string]string{StageTriage: skills.Triage, StageBuild: skills.Build, StageReview: skills.Review,
-		pipeline.PersonaProduct: skills.Product, pipeline.PersonaEngineering: skills.Engineering}[stage]
+		pipeline.PersonaProduct: skills.Product, pipeline.PersonaEngineering: skills.Engineering, StageOrchestrate: skills.Orchestrator}[stage]
 	if strings.HasPrefix(skill, "---\n") {
 		if i := strings.Index(skill[4:], "\n---\n"); i >= 0 {
 			skill = skill[4+i+5:]
