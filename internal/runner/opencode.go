@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,6 +42,14 @@ func (r *Runner) pickBuilder(ctx context.Context, ru *run) {
 		}
 		return
 	}
+	if err := qwenUsable(ctx, r.Cfg.Qwen); err != nil {
+		r.Log.Warn("a qwen item, but qwen cannot run here: building with claude", "item", ru.item.ID, "err", err)
+		if err := r.Client.Event(ctx, ru.item.ID, "builder_fallback", map[string]any{"from": pipeline.BuilderQwen, "to": pipeline.BuilderClaude,
+			"reason": err.Error(), "this_run_only": true}); err != nil {
+			r.Log.Warn("builder_fallback event", "item", ru.item.ID, "err", err)
+		}
+		return
+	}
 	ru.builder = pipeline.BuilderQwen
 	ru.maxRun = time.Duration(r.Cfg.Qwen.MaxMinutes) * time.Minute
 	// Resume the item's last qwen session when its store is still here (another runner, or a
@@ -51,6 +61,41 @@ func (r *Runner) pickBuilder(ctx context.Context, ru *run) {
 			r.Log.Warn("the qwen session to resume is not on this runner; starting a new one", "item", ru.item.ID, "session", s)
 		}
 	}
+}
+
+// qwenDialTimeout bounds pickBuilder's check that jarvisd is reachable.
+const qwenDialTimeout = 3 * time.Second
+
+// qwenUsable checks, before a qwen run is chosen, what would make OpenCode die before its first
+// request (#96): the binary is missing, or is a mise shim (which fails in the fence), or jarvisd's
+// address does not take a connection.
+func qwenUsable(ctx context.Context, q *QwenConfig) error {
+	bin, err := exec.LookPath(q.OpenCode)
+	if err != nil {
+		return fmt.Errorf("opencode not found: %w", err)
+	}
+	if real, err := filepath.EvalSymlinks(bin); err == nil && filepath.Base(real) == "mise" {
+		return fmt.Errorf("qwen.opencode %s is a mise shim, which fails in the fence: set it to the real binary (mise which opencode)", bin)
+	}
+	u, err := url.Parse(q.BaseURL)
+	if err != nil {
+		return fmt.Errorf("qwen endpoint unreachable: %w", err)
+	}
+	host := u.Host
+	if u.Port() == "" {
+		port := "80"
+		if u.Scheme == "https" {
+			port = "443"
+		}
+		host = net.JoinHostPort(u.Hostname(), port)
+	}
+	d := net.Dialer{Timeout: qwenDialTimeout}
+	c, err := d.DialContext(ctx, "tcp", host)
+	if err != nil {
+		return fmt.Errorf("qwen endpoint unreachable: %w", err)
+	}
+	c.Close()
+	return nil
 }
 
 // openCodeHome is the item's OpenCode data, state and cache (XDG_*), kept across its runs.

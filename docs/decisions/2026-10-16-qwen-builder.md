@@ -13,7 +13,9 @@ background slot (Qwen3.8-27B, 128k context, one request at a time) instead of `c
   `background`), `max_minutes` (default 45; loopd's `max_run_minutes` still applies) and
   `opencode` (the binary; prefer the real one over mise's shim). No `qwen` block: qwen items
   build with claude on that runner (a `builder_fallback` event with `this_run_only`; loopd's
-  builder stays qwen).
+  builder stays qwen). The same fallback, with the reason, when the block cannot work: the
+  `opencode` binary is missing or is mise's shim, or `base_url` takes no TCP connection within 3 s
+  (checked before each qwen run, #96). A run that dies with no output reports its stderr's tail.
 - **The agent never sees the credentials.** The runner reads the file per run and starts a proxy
   of its own on `127.0.0.1:<random>` (`qwenproxy.go`) for that run only: it accepts only the run's
   random bearer token and only `POST /v1/chat/completions` and `GET /v1/models`, drops any
