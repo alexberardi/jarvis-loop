@@ -920,3 +920,57 @@ func TestAgentRunsShareTheirPrefix(t *testing.T) {
 		g.r.cleanup(g.ctx, ru, g.r.Log)
 	}
 }
+
+// After the user answers a question, the next run gets the question and the answer in
+// .loop/context/answers.md and the brief tells it the answer wins: without it a fresh run hit the
+// same wall and asked again (items #34 and #46 asked 3 and 4 times, 2026-10-16).
+func TestAnswersReachTheNextRun(t *testing.T) {
+	g := newRig(t, fakeclaude.Question)
+	id := g.toBuild("Ask me")
+	g.runOnce()
+	q := g.item(id).Item.Question
+	if q == "" {
+		t.Fatal("no question")
+	}
+	if _, err := g.st.Answer(g.ctx, "user:alex", id, "Skip the emulator run;\nlist it under not verified."); err != nil {
+		t.Fatal(err)
+	}
+	cl, err := g.r.Client.Claim(g.ctx, "b", nil, []string{StageBuild})
+	if err != nil || cl == nil || cl.Item.ID != id {
+		t.Fatalf("claim %+v %v", cl, err)
+	}
+	ru, _ := g.r.newRun(cl, "b")
+	brief, err := g.r.prepare(g.ctx, ru)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.r.cleanup(g.ctx, ru, g.r.Log)
+	answers := g.read(filepath.Join(ru.wt, ".loop", "context", "answers.md"))
+	for _, want := range []string{"## Answer 1 (", "> " + strings.ReplaceAll(q, "\n", "\n> "), "> Skip the emulator run;\n> list it under not verified."} {
+		if !strings.Contains(answers, want) {
+			t.Fatalf("answers.md lacks %q:\n%s", want, answers)
+		}
+	}
+	if !strings.Contains(brief, "**The user already answered questions on this item**: `.loop/context/answers.md`") {
+		t.Fatalf("brief:\n%s", brief[strings.Index(brief, ItemHeading):])
+	}
+}
+
+// A run on an item nobody answered gets no answers file and no line in the brief.
+func TestNoAnswersNoFile(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	id := g.toBuild("Quiet")
+	cl, _ := g.r.Client.Claim(g.ctx, "b", nil, []string{StageBuild})
+	if cl == nil || cl.Item.ID != id {
+		t.Fatal("no claim")
+	}
+	ru, _ := g.r.newRun(cl, "b")
+	brief, err := g.r.prepare(g.ctx, ru)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.r.cleanup(g.ctx, ru, g.r.Log)
+	if _, err := os.Stat(filepath.Join(ru.wt, ".loop", "context", "answers.md")); err == nil || strings.Contains(brief, "already answered") {
+		t.Fatal("answers context without an answer")
+	}
+}

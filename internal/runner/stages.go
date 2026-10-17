@@ -117,6 +117,7 @@ func (r *Runner) prepareTriage(ctx context.Context, ru *run, info *RunInfo) erro
 	if sha := MainRedCommit(ru.item, ru.repo.Slug); sha != "" && ru.repoKey != "" {
 		r.mainRedLog(ctx, ru, info, sha)
 	}
+	r.answersContext(ctx, ru, info, filepath.Join(".loop", "context", "answers.md"))
 
 	all := make([]string, 0, len(r.Cfg.Repos))
 	for k := range r.Cfg.Repos {
@@ -297,7 +298,36 @@ func (r *Runner) prepareReview(ctx context.Context, ru *run, info *RunInfo) erro
 	if it.BounceCount > 0 {
 		r.reviewContext(ctx, ru, info, filepath.Join(".loop", "context", "previous-reviews.md"), "")
 	}
+	r.answersContext(ctx, ru, info, filepath.Join(".loop", "context", "answers.md"))
 	return nil
+}
+
+// answersContext writes to rel every question an agent asked on the item and the user's answer,
+// so the next run acts on them instead of asking again (the answer is recorded on loopd, but a run
+// starts fresh).
+func (r *Runner) answersContext(ctx context.Context, ru *run, info *RunInfo, rel string) {
+	d, err := r.Client.Detail(ctx, ru.item.ID)
+	if err != nil {
+		info.ContextErrs = append(info.ContextErrs, "the earlier answers from loopd: "+err.Error())
+		return
+	}
+	var b strings.Builder
+	n := 0
+	for _, e := range d.Events {
+		if e.Kind != "answered" {
+			continue
+		}
+		n++
+		q, _ := e.Data["question"].(string)
+		a, _ := e.Data["answer"].(string)
+		fmt.Fprintf(&b, "\n## Answer %d (%s, %s stage)\n\nQuestion:\n\n> %s\n\nAnswer:\n\n> %s\n", n, e.At.UTC().Format("2006-01-02 15:04 UTC"), e.To,
+			strings.ReplaceAll(strings.TrimSpace(q), "\n", "\n> "), strings.ReplaceAll(strings.TrimSpace(a), "\n", "\n> "))
+	}
+	if n == 0 {
+		return
+	}
+	writeContext(ru, info, rel, "earlier questions on this item and the user's answers, newest last", "# Earlier questions and answers (from loopd)\n"+b.String())
+	info.Answers = rel
 }
 
 // heldNotes writes to rel why a held item came back to build (pipeline.ApplyRebuild): the user's

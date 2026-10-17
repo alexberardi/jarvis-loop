@@ -542,6 +542,7 @@ func (r *Runner) prepareBuild(ctx context.Context, ru *run, info *RunInfo) error
 	if ru.item.PR > 0 {
 		r.heldNotes(ctx, ru, info, filepath.Join(".loop", "review", "held.md"))
 	}
+	r.answersContext(ctx, ru, info, filepath.Join(".loop", "context", "answers.md"))
 	return nil
 }
 
