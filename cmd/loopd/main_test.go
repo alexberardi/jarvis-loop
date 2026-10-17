@@ -15,6 +15,7 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/api"
 	"github.com/alexberardi/jarvis-loop/internal/clock"
 	"github.com/alexberardi/jarvis-loop/internal/loopd"
+	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/store"
 	"github.com/alexberardi/jarvis-loop/internal/web"
 )
@@ -194,5 +195,47 @@ alexberardi/jarvis-server
 		if _, _, err := parseReposFile(text); err == nil {
 			t.Errorf("%s accepted", name)
 		}
+	}
+}
+
+// The @orchestrator app's tokens: orchestrator-slack.env next to --slack-env's file by default,
+// off when that file is absent; an explicit file must exist, be 0600 and hold another app's tokens.
+func TestOrchestratorSlackEnv(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string, mode os.FileMode) string {
+		p := filepath.Join(dir, name)
+		os.WriteFile(p, []byte(body), 0o600)
+		os.Chmod(p, mode)
+		return p
+	}
+	loopEnv := write("slack.env", "SLACK_BOT_TOKEN=xoxb-loop\nSLACK_APP_TOKEN=xapp-loop\n", 0o600)
+	if tok, err := orchestratorTokens(loopEnv, "", slack.Tokens{Bot: "xoxb-loop", App: "xapp-loop"}); err != nil || tok != nil {
+		t.Fatalf("absent default: %v %v", tok, err)
+	}
+	if tok, err := orchestratorTokens("", "", slack.Tokens{}); err != nil || tok != nil {
+		t.Fatalf("no Slack: %v %v", tok, err)
+	}
+	write("orchestrator-slack.env", "SLACK_BOT_TOKEN=xoxb-orch\nSLACK_APP_TOKEN=xapp-orch\n", 0o600)
+	loop := slack.Tokens{Bot: "xoxb-loop", App: "xapp-loop"}
+	tok, err := orchestratorTokens(loopEnv, "", loop)
+	if err != nil || tok == nil || tok.Bot != "xoxb-orch" || tok.App != "xapp-orch" {
+		t.Fatalf("default next to slack.env: %v", err)
+	}
+	if tok, err := orchestratorTokens(loopEnv, "off", loop); err != nil || tok != nil {
+		t.Fatalf("off: %v %v", tok, err)
+	}
+	if _, err := orchestratorTokens(loopEnv, filepath.Join(dir, "missing.env"), loop); err == nil {
+		t.Fatal("an explicit missing file was accepted")
+	}
+	if _, err := orchestratorTokens("", filepath.Join(dir, "orchestrator-slack.env"), slack.Tokens{}); err == nil {
+		t.Fatal("accepted without --slack-env")
+	}
+	same := write("same.env", "SLACK_BOT_TOKEN=xoxb-loop\nSLACK_APP_TOKEN=xapp-other\n", 0o600)
+	if _, err := orchestratorTokens(loopEnv, same, loop); err == nil || strings.Contains(err.Error(), "xoxb-loop") {
+		t.Fatalf("the loop bot's token twice: %v", err)
+	}
+	open := write("open.env", "SLACK_BOT_TOKEN=xoxb-secret\nSLACK_APP_TOKEN=xapp-secret\n", 0o644)
+	if _, err := orchestratorTokens(loopEnv, open, loop); err == nil || !strings.Contains(err.Error(), "0600") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("mode 0644: %v", err)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/slack"
+	"github.com/alexberardi/jarvis-loop/internal/store"
 )
 
 // doAs is do with an X-Loop-On-Behalf header.
@@ -300,5 +301,56 @@ func TestOrchestratorTokenKind(t *testing.T) {
 	}
 	if p, ok := toks.Lookup(orchTok); !ok || p.Kind != KindOrchestrator || p.Actor() != orchActor {
 		t.Fatalf("%+v %v", p, ok)
+	}
+}
+
+// Piece 2's hand-off (docs/decisions/2026-10-17-orchestrator-slack.md): the messages people sent
+// the orchestrator, its replies, and the approval message it has posted instead of approving.
+func TestOrchestratorSlackRoutes(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	for _, ts := range []string{"1.1", "1.2"} {
+		if _, _, err := e.store.OrchMessage(ctx, store.OrchestratorMessage{Channel: "D1", TS: ts, User: slack.Approver, Text: "what's stuck?", Approver: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got struct {
+		Messages []store.Event `json:"messages"`
+	}
+	e.do(orchTok, "GET", "/orchestrator/messages", nil, 200, &got)
+	if len(got.Messages) != 2 || got.Messages[0].Data["text"] != "what's stuck?" {
+		t.Fatalf("messages %+v", got.Messages)
+	}
+	e.do(orchTok, "GET", fmt.Sprintf("/orchestrator/messages?since=%d", got.Messages[0].ID), nil, 200, &got)
+	if len(got.Messages) != 1 {
+		t.Fatalf("since: %+v", got.Messages)
+	}
+	e.refused(orchTok, "GET", "/orchestrator/messages?since=x", nil, 400, "bad_request")
+
+	var ev store.Event
+	e.do(orchTok, "POST", "/orchestrator/replies", map[string]any{"channel": "D1", "thread_ts": "1.1", "text": "nothing is stuck"}, 201, &ev)
+	if ev.Kind != store.KindOrchReply || ev.Data["text"] != "nothing is stuck" {
+		t.Fatalf("reply %+v", ev)
+	}
+	e.do(orchTok, "POST", "/orchestrator/replies", map[string]any{"channel": slack.ChannelLoop, "thread_ts": "1.1", "text": "ok"}, 201, nil)
+	e.refused(orchTok, "POST", "/orchestrator/replies", map[string]any{"channel": "C0GENERAL", "text": "hi"}, 400, "bad_request")
+	e.refused(userTok, "POST", "/orchestrator/replies", map[string]any{"channel": "D1", "text": "hi"}, 403, "forbidden")
+
+	id := e.addItem("x")
+	e.refused(orchTok, "POST", fmt.Sprintf("/orchestrator/items/%d/approval", id), map[string]any{"reason": "asked to approve"}, 409, "wrong_stage")
+
+	// Waiting on a trusted-file OK, the item's trust message is posted again; nothing is trusted.
+	e.mustClaim("triager", id, "triage")
+	e.upload(runnerTok, id, "repro.log", []byte("x\n"), 201)
+	e.advance(id, "reproduced", map[string]string{"area": "harness", "size": "S", "risk": "normal", "resources": ""}, 200)
+	e.mustClaim("builder", id, "build")
+	e.advance(id, "failed", map[string]string{"error": "the change touches tools/pipeline", "trust_sha": shaA,
+		"trusted_paths": "tools/pipeline", "trusted_diffstat": "tools/pipeline | 2 +-"}, 200)
+	e.do(orchTok, "POST", fmt.Sprintf("/orchestrator/items/%d/approval", id), map[string]any{"reason": "asked to OK the trusted files"}, 201, &ev)
+	if ev.Kind != store.KindOrchApprovalAsked || ev.Data["trust"] != true || ev.Data["trust_sha"] != shaA {
+		t.Fatalf("trust asked %+v", ev)
+	}
+	if d := e.get(id); d.Item.Stage != "needs_you" {
+		t.Fatalf("trusted: %+v", d.Item)
 	}
 }

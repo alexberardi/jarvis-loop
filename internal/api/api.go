@@ -87,6 +87,11 @@ func New(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
 	route("POST /orchestrator/agents", orch, s.orchAgents)
 	route("POST /orchestrator/notes", orch, s.orchNote)
 	route("GET /orchestrator/notes", reads, s.orchNotebook)
+	// Its Slack side (piece 2): the messages people sent it, its replies, and the approval message
+	// it has posted instead of approving.
+	route("GET /orchestrator/messages", reads, s.orchMessages)
+	route("POST /orchestrator/replies", orch, s.orchReply)
+	route("POST /orchestrator/items/{id}/approval", orch, s.orchAskApproval)
 	route("GET /orchestrator/snapshot", reads, s.orchSnapshot)
 	route("POST /orchestrate/turns/{turn}/result", runner, s.orchTurnResult)
 	return Logged(log, mux)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,6 +48,9 @@ type Config struct {
 	// TickEvery is how often Run applies due reply approvals and checks the digest (default 5 s).
 	// The loop's harness, on a fake clock, makes it short so a moved clock takes effect at once.
 	TickEvery time.Duration
+	// Orchestrator is the @orchestrator app, when loopd runs it: messages that mention it are its
+	// (never an answer or an approval here), and it posts the escalations. nil: off.
+	Orchestrator *Orchestrator
 }
 
 // Bot turns pipeline events into Slack messages and Slack actions into pipeline calls.
@@ -64,6 +68,7 @@ type Bot struct {
 	planHeaders map[int64]string
 	digestTS    time.Time // the boundary the failures below are for
 	digestNG    int       // failed attempts to post that digest
+	self        string    // the loop bot's own user id, once toOrchestrator has needed it
 }
 
 const (
@@ -254,6 +259,9 @@ func (b *Bot) handleEvent(ctx context.Context, e store.Event) {
 		}
 	} else if e.Kind == "created" {
 		return
+	}
+	if e.Kind == store.KindOrchEscalated && b.c.Orchestrator != nil {
+		return // the @orchestrator app posts it, with its buttons
 	}
 	if m, ok := b.describe(ctx, e, d); ok {
 		m.Channel, m.ThreadTS = ChannelLoop, ts
@@ -489,6 +497,34 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	if e.Kind == "deployed" {
 		return b.deployedMessage(e, d), true
 	}
+	if e.Kind == store.KindOrchApprovalAsked {
+		// Asked to approve (or to OK trusted files), the orchestrator has the approval (or trust)
+		// message posted again: the button is the user's, sha-bound.
+		m := b.heldMessage(e, d)
+		lead := "Orchestrator: approvals are yours, so here is its approval message again — " + f("reason", 300)
+		if e.Data["trust"] == true {
+			m = b.trustMessage(e, d)
+			lead = "Orchestrator: trusted-file OKs are yours, so here is its trust message again — " + f("reason", 300)
+		}
+		m.Blocks = append([]map[string]any{section(lead)}, m.Blocks...)
+		m.Text = lead + "\n" + m.Text
+		return m, true
+	}
+	if e.Kind == store.KindOrchEscalated {
+		// Only when loopd runs without the @orchestrator app (it posts these, with Accept).
+		text := fmt.Sprintf("<@%s> Orchestrator: %s needs you: %s", Approver, ref(id, it.Title), f("text", 800))
+		if r := str(e.Data, "recommendation"); r != "" {
+			text += "\n*Recommend:* " + f("recommendation", 600) + " _Because_ " + f("reason", 400)
+		}
+		return Message{Text: text, Blocks: []map[string]any{section(text)}}, true
+	}
+	if strings.HasPrefix(e.Actor, orchestratorPrefix) {
+		return Message{Text: b.orchestratorLine(ctx, e)}, true
+	}
+	by := who(e.Actor)
+	if via := str(e.Data, "via"); strings.HasPrefix(via, orchestratorPrefix) {
+		by += " via orchestrator"
+	}
 
 	var text string
 	switch e.Kind {
@@ -508,18 +544,21 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		}
 		text += ". Active agents set to 0; back in the queue."
 	case "answered":
-		text = fmt.Sprintf("Answered by %s: %s → %s.", who(e.Actor), f("answer", 600), e.To)
+		text = fmt.Sprintf("Answered by %s: %s → %s.", by, f("answer", 600), e.To)
+		if e.Data["accepted"] != nil {
+			text = fmt.Sprintf("Answered by %s, accepting the orchestrator's recommendation: %s → %s.", by, f("answer", 600), e.To)
+		}
 	case "approved":
-		text = fmt.Sprintf("Approved by %s for `%s`: '%s' → land.", who(e.Actor), short(str(e.Data, "head_sha")), f("words", 300))
+		text = fmt.Sprintf("Approved by %s for `%s`: '%s' → land.", by, short(str(e.Data, "head_sha")), f("words", 300))
 	case "trusted":
-		text = fmt.Sprintf("Trusted files OK'd by %s for `%s`: verify runs that commit once → build.", who(e.Actor), short(str(e.Data, "head_sha")))
+		text = fmt.Sprintf("Trusted files OK'd by %s for `%s`: verify runs that commit once → build.", by, short(str(e.Data, "head_sha")))
 	case "held":
-		text = fmt.Sprintf("Kept holding (%s).", who(e.Actor))
+		text = fmt.Sprintf("Kept holding (%s).", by)
 	case "rebuild":
 		if strings.HasPrefix(e.Actor, "runner:") {
 			text = "Back to build: " + f("notes", 400)
 		} else {
-			text = fmt.Sprintf("Sent back to build by %s: '%s'.", who(e.Actor), f("notes", 600))
+			text = fmt.Sprintf("Sent back to build by %s: '%s'.", by, f("notes", 600))
 		}
 	case "patched":
 		var parts []string
@@ -529,9 +568,9 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		if t, ok := e.Data["title"].(map[string]any); ok {
 			parts = append(parts, "Title: "+b.field(str(t, "to"), 300, id))
 		}
-		text = strings.Join(parts, "; ") + fmt.Sprintf(" (%s).", who(e.Actor))
+		text = strings.Join(parts, "; ") + fmt.Sprintf(" (%s).", by)
 	case "refused":
-		text = fmt.Sprintf("Refused %s from %s: %s", Escape(str(e.Data, "action")), who(e.Actor), f("message", 300))
+		text = fmt.Sprintf("Refused %s from %s: %s", Escape(str(e.Data, "action")), by, f("message", 300))
 	case "guard_refused":
 		// The rule and the tool only: the refused command or path can hold anything.
 		text = fmt.Sprintf("Guard refused a %s call (%s); details on loopd (`loop show %d`).", Escape(str(e.Data, "tool")), Escape(str(e.Data, "rule")), id)
@@ -544,13 +583,13 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	case "low_cache_hit":
 		text = fmt.Sprintf("Low prompt-cache hit ratio on this run (%s over %s turns).", Escape(str(e.Data, "cache_hit_ratio")), Escape(str(e.Data, "num_turns")))
 	case "approval_cancelled":
-		text = fmt.Sprintf("Reply approval cancelled by %s; still held.", who(e.Actor))
+		text = fmt.Sprintf("Reply approval cancelled by %s; still held.", by)
 	case "land_waiting":
 		return Message{}, false // pending CI does not post; the parent's stage line says it
 	case "main_ci":
 		text = b.mainCILine(ctx, e, id)
 	case "dropped":
-		text = "Dropped by " + who(e.Actor)
+		text = "Dropped by " + by
 		if w := str(e.Data, "words"); w != "" {
 			text += ": '" + f("words", 300) + "'"
 		}
@@ -562,16 +601,16 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	case "pr_closed":
 		return Message{}, false // the dropped line already said so
 	case "qa_marked":
-		text = fmt.Sprintf("Marked for your check once merged (%s): it waits in qa after it lands.", who(e.Actor))
+		text = fmt.Sprintf("Marked for your check once merged (%s): it waits in qa after it lands.", by)
 	case "verified":
-		text = "Verified by " + who(e.Actor)
+		text = "Verified by " + by
 		if w := str(e.Data, "words"); w != "" && w != VerifiedWords {
 			text += ": '" + f("words", 300) + "'"
 		}
 		text += ". Done."
 	case "reopened":
 		text = fmt.Sprintf("Reopened by %s: '%s'. Filed #%v (%s) with those words; this one is done.",
-			who(e.Actor), f("words", 300), e.Data["reopen_item"], pipeline.ReopenPriority)
+			by, f("words", 300), e.Data["reopen_item"], pipeline.ReopenPriority)
 	case "advanced":
 		switch pipeline.Outcome(e.Outcome) {
 		case pipeline.Reproduced:
@@ -621,6 +660,41 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		text = Escape(e.Kind) + "."
 	}
 	return Message{Text: text}, true
+}
+
+// orchestratorLine is an orchestrator's own action on the item, with its reason: "Orchestrator:
+// retried the run (failure 1) → build — index.lock left by a killed run."
+func (b *Bot) orchestratorLine(ctx context.Context, e store.Event) string {
+	f := func(k string, max int) string { return b.field(str(e.Data, k), max, e.ItemID) }
+	var what string
+	switch e.Kind {
+	case "answered":
+		what = fmt.Sprintf("answered (%s) '%s' → %s", f("answer_kind", 20), f("answer", 600), e.To)
+	case "retried":
+		what = fmt.Sprintf("retried the run (failure %v) → %s", e.Data["failure"], e.To)
+	case "patched":
+		what = "changed the item"
+		if p, ok := e.Data["priority"].(map[string]any); ok {
+			what = fmt.Sprintf("priority %s → %s", str(p, "from"), str(p, "to"))
+		}
+	case store.KindLinked:
+		what = "now waits on #?"
+		if after, ok := e.Data["after"].(float64); ok {
+			what = "now waits on " + b.refID(ctx, int64(after))
+		}
+	case store.KindOrchAdded:
+		what = "filed this item"
+	case store.KindOrchSeenAgain:
+		what = "saw this again"
+	case "refused":
+		return fmt.Sprintf("Orchestrator: tried to %s; refused: %s", Escape(str(e.Data, "action")), f("message", 300))
+	default:
+		what = Escape(e.Kind)
+	}
+	if r := f("reason", 400); r != "" {
+		what += " — " + r
+	}
+	return "Orchestrator: " + what + "."
 }
 
 // mainCILine is main's CI on an item's merge commit, as the land script recorded it.
@@ -787,8 +861,9 @@ type interaction struct {
 	User    struct{ ID string } `json:"user"`
 	Channel struct{ ID string } `json:"channel"`
 	Message struct {
-		TS       string `json:"ts"`
-		ThreadTS string `json:"thread_ts"`
+		TS       string           `json:"ts"`
+		ThreadTS string           `json:"thread_ts"`
+		Blocks   []map[string]any `json:"blocks"`
 	} `json:"message"`
 	Container struct {
 		ChannelID string `json:"channel_id"`
@@ -842,8 +917,55 @@ func errMessage(err error) string {
 	return "something went wrong; see loopd's log"
 }
 
+// toOrchestrator reports whether a message is addressed to the @orchestrator app: its own socket
+// records it, so the loop bot leaves it alone ("@orchestrator answer #46: …" is not an answer,
+// "@orchestrator approve #28" not an approval). Until the orchestrator's auth.test has answered,
+// a message that mentions anyone but the loop bot itself counts as the orchestrator's (and any
+// mention does, while the loop bot does not know its own id either): left alone, never misread.
+func (b *Bot) toOrchestrator(ctx context.Context, text string) bool {
+	o := b.c.Orchestrator
+	if o == nil {
+		return false
+	}
+	if o.BotUser() != "" {
+		return o.Mentions(text)
+	}
+	users := userMentionRe.FindAllStringSubmatch(text, -1)
+	if len(users) == 0 {
+		return false
+	}
+	self := b.selfUser(ctx)
+	for _, u := range users {
+		if self == "" || u[1] != self {
+			return true
+		}
+	}
+	return false
+}
+
+var userMentionRe = regexp.MustCompile(`<@([A-Z0-9]+)(?:\|[^>]*)?>`)
+
+// selfUser is the loop bot's own Slack user id (auth.test, asked once it answers), or "".
+func (b *Bot) selfUser(ctx context.Context) string {
+	b.mu.Lock()
+	self := b.self
+	b.mu.Unlock()
+	if self != "" {
+		return self
+	}
+	id, err := b.c.API.AuthTest(ctx)
+	if err != nil {
+		b.c.Log.Warn("slack: auth.test; mentions are left to the orchestrator until it answers", "err", err.Error())
+		return ""
+	}
+	b.mu.Lock()
+	b.self = id
+	b.mu.Unlock()
+	return id
+}
+
 func (b *Bot) onMessage(ctx context.Context, m slackEvent) {
-	if m.BotID != "" || m.Subtype != "" || m.User == "" {
+	if m.BotID != "" || m.Subtype != "" || m.User == "" || b.toOrchestrator(ctx, m.Text) {
 		return
 	}
 	if m.Channel == ChannelPlan {
@@ -902,7 +1024,7 @@ func (b *Bot) onMessage(ctx context.Context, m slackEvent) {
 }
 
 func (b *Bot) onMention(ctx context.Context, m slackEvent) {
-	if m.BotID != "" || m.User == "" {
+	if m.BotID != "" || m.User == "" || b.toOrchestrator(ctx, m.Text) {
 		return
 	}
 	// In #plan every message is the conversation's (onMessage), mentioning the bot or not.

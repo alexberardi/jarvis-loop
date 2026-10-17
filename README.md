@@ -18,6 +18,10 @@ threads in `#loop`, `/loop`, answers and approvals by reply or button, the activ
 and the 4-hourly digest in `#loop-digest` ([docs/phases/03-slack.md](docs/phases/03-slack.md)),
 and plan threads in `#plan` (`/loop plans`, [docs/phases/07-planning.md](docs/phases/07-planning.md));
 the ⏳/✅ reactions there need the app's `reactions:write` scope, and are skipped (logged) without it.
+The `@orchestrator` app ([docs/slack/orchestrator-manifest.yml](docs/slack/orchestrator-manifest.yml),
+[docs/phases/08-orchestrator.md](docs/phases/08-orchestrator.md)) runs beside it, on its own socket,
+when `orchestrator-slack.env` (0600, the same two keys, the second app's tokens) sits next to the
+`--slack-env` file, or `--orchestrator-slack-env FILE` names one (`off` turns it off).
 
 Repos: `loopd --repos alexberardi/jarvis-loop,alexberardi/jarvis-server` names the repos the loop
 works on: triage may give an item without a repo only one of these, and `/loop add` recognises

@@ -33,7 +33,7 @@
     {"do": "orchestrator", "item": "a", "action": "POST /items/{item}/drop", "as": "approver", "text": "drop #1, I'll redo it", "body": {"words": "drop #1, I'll redo it"}},
     {"do": "expect", "stage": {"a": "closed"},
      "events": [{"item": "a", "kind": "dropped", "actor": "approver", "data": {"via": "^orchestrator:loop$", "words": "^drop #1, I'll redo it$"}, "count": 1}],
-     "messages": [{"thread": "a", "from": "bot", "text": "^Dropped by you: 'drop #1, I'll redo it'"}]},
+     "messages": [{"thread": "a", "from": "bot", "text": "^Dropped by you via orchestrator: 'drop #1, I'll redo it'"}]},
     {"do": "orchestrator", "item": "a", "action": "POST /items/{item}/drop", "as": "approver", "message": "last", "body": {}, "refused": "HTTP 409.*\"code\":\"message_used\""},
 
     {"do": "orchestrator", "action": "POST /orchestrator/agents", "body": {"active_agents": 2, "reason": "every run fails on the git lock"}},

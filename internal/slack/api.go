@@ -46,8 +46,15 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("slack %s: HTTP %d", e.Method, e.Status)
 }
 
-// Channels lists the channels a client may post in; empty means none.
+// Channels lists the channels a client may post in; empty means none. DMs is a pseudo-entry: the
+// client may also post in direct-message channels (the orchestrator's app answers its DMs).
 type Channels []string
+
+// DMs, in a client's Channels, lets it post in direct-message channels.
+const DMs = "D*"
+
+// IsDM reports whether a channel id is a direct-message channel.
+func IsDM(channel string) bool { return len(channel) > 1 && channel[0] == 'D' }
 
 // API is a minimal Slack Web API client: JSON over net/http, only the methods loopd uses.
 type API struct {
@@ -92,6 +99,7 @@ type response struct {
 	TS      string `json:"ts"`
 	URL     string `json:"url"`
 	Channel string `json:"channel"`
+	UserID  string `json:"user_id"`
 }
 
 func (a *API) call(ctx context.Context, method string, body any) (response, error) {
@@ -145,7 +153,7 @@ func (a *API) call(ctx context.Context, method string, body any) (response, erro
 }
 
 func (a *API) allowed(channel string) error {
-	if !slices.Contains(a.channels, channel) {
+	if !slices.Contains(a.channels, channel) && !(IsDM(channel) && slices.Contains(a.channels, DMs)) {
 		return ErrChannelNotAllowed
 	}
 	return nil
@@ -276,4 +284,17 @@ func (a *API) OpenConnection(ctx context.Context) (string, error) {
 		return "", &Error{Method: "apps.connections.open", Code: "no_url"}
 	}
 	return r.URL, nil
+}
+
+// AuthTest is the bot token's own user id (auth.test): the orchestrator's app learns which
+// mentions are of it.
+func (a *API) AuthTest(ctx context.Context) (string, error) {
+	r, err := a.call(ctx, "auth.test", map[string]any{})
+	if err != nil {
+		return "", err
+	}
+	if r.UserID == "" {
+		return "", &Error{Method: "auth.test", Code: "no_user_id"}
+	}
+	return r.UserID, nil
 }

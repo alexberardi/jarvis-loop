@@ -23,7 +23,7 @@ import (
 func DefaultVerifyMask(home string) []string {
 	var out []string
 	for _, p := range []string{".ssh", ".config/gh", ".config/jarvis-loop", ".config/jarvis-harness/slack.env",
-		".local/share/jarvis-loop", ".gnupg", ".netrc", ".git-credentials", ".config/git/credentials", ".docker/config.json",
+		".config/jarvis-harness/orchestrator-slack.env", ".local/share/jarvis-loop", ".gnupg", ".netrc", ".git-credentials", ".config/git/credentials", ".docker/config.json",
 		// Claude's login, and the user's own OpenCode (its auth, config and sessions): a qwen run
 		// gets its own (opencode.go).
 		".claude/.credentials.json", ".config/opencode", ".local/share/opencode", ".local/state/opencode", ".cache/opencode"} {

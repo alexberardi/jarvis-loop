@@ -10,7 +10,8 @@ chat with Claude.
 Status: **designed** (2026-10-16; the user's answers are in "Decisions" at the end). Built: piece 1 (the
 orchestrator token and its actions, [decision](../decisions/2026-10-16-orchestrator-token.md)), piece
 3 (the runner's orchestrate turns, [decision](../decisions/2026-10-17-orchestrate-turns.md)), piece 4
-(the persona and the recorded-situation scenarios, [decision](../decisions/2026-10-17-orchestrator-persona.md)).
+(the persona and the recorded-situation scenarios, [decision](../decisions/2026-10-17-orchestrator-persona.md)),
+piece 2 (the `@orchestrator` Slack app, [decision](../decisions/2026-10-17-orchestrator-slack.md)).
 
 ## Why (2026-10-16, one day of real use)
 

@@ -1,0 +1,42 @@
+{
+  "name": "orchestrator-accept",
+  "about": "A product question is escalated with a recommendation (docs/phases/08-orchestrator.md, piece 2). After the batch window the @orchestrator app posts it in the item's thread, mentioning the approver, with [Accept] [Other…]. Someone else's Accept is refused; the approver's records the recommendation as their answer, marked as accepted, and the buttons give way to 'Accepted by you.'",
+  "stages": ["build"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Round the timer display"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "question"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}},
+
+    {"do": "orchestrator", "item": "a", "action": "POST /orchestrator/escalations",
+     "body": {"item_id": "{id}", "text": "the agent asks whether the timer rounds up or down", "recommendation": "round down, as the oven's own display does", "reason": "it matches what people see on the oven"}},
+    {"do": "expect", "no_messages": [{"thread": "a", "from": "orchestrator"}]},
+    {"do": "clock", "advance": "2m"},
+    {"do": "expect", "messages": [{"thread": "a", "from": "orchestrator",
+      "text": "^<@U0C9AFPAMD4> \\*#1 Round the timer display\\* needs you: the agent asks whether the timer rounds up or down\\n\\*Recommend:\\* round down, as the oven's own display does _Because_ it matches what people see on the oven",
+      "buttons": ["Accept", "Other…"]}]},
+
+    {"do": "press", "as": "other", "item": "a", "button": "orch_accept"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "messages": [{"kind": "ephemeral", "to": "other", "from": "orchestrator", "text": "only the approver"}],
+     "events": [{"item": "a", "kind": "refused", "actor": "other", "data": {"action": "^accept$"}, "count": 1}]},
+
+    {"do": "press", "as": "approver", "item": "a", "button": "orch_other"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "messages": [{"kind": "ephemeral", "to": "approver", "from": "orchestrator", "text": "^Reply in #1's thread"}]},
+
+    {"do": "press", "as": "approver", "item": "a", "button": "orch_accept"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [{"item": "a", "kind": "answered", "actor": "approver", "data": {"answer": "^round down, as the oven's own display does$", "accepted": "^[0-9]+$"}, "count": 1}],
+     "messages": [
+       {"thread": "a", "from": "orchestrator", "text": "Accepted by you\\."},
+       {"thread": "a", "from": "bot", "text": "^Answered by you, accepting the orchestrator's recommendation: round down, as the oven's own display does → build\\.$"}
+     ]}
+  ],
+  "expect": {
+    "stage": {"a": "build"},
+    "no_events": [{"item": "a", "kind": "answered", "actor": "other"}]
+  }
+}

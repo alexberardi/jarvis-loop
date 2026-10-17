@@ -292,6 +292,80 @@ func (s *server) orchNotebook(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"notes": notes})
 }
 
+// orchMessages lists the messages to the orchestrator (mentions and DMs) after event id since, at
+// most limit (default and cap 200): what triggers its turns (piece 3).
+func (s *server) orchMessages(w http.ResponseWriter, r *http.Request) {
+	var since int64
+	limit := 200
+	if v := r.URL.Query().Get("since"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			badRequest(w, "since must be an event id")
+			return
+		}
+		since = n
+	}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			badRequest(w, "limit must be a positive number")
+			return
+		}
+		limit = min(n, 200)
+	}
+	msgs, err := s.st.OrchMessages(r.Context(), since, limit)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"messages": msgs})
+}
+
+// replyChannel is where the orchestrator may answer: the loop's channels and DMs with it.
+func replyChannel(c string) bool {
+	return c == slack.ChannelLoop || c == slack.ChannelDigest || c == slack.ChannelPlan || slack.IsDM(c)
+}
+
+func (s *server) orchReply(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Channel  string `json:"channel"`
+		ThreadTS string `json:"thread_ts"`
+		Text     string `json:"text"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.Channel != "" && !replyChannel(body.Channel) {
+		badRequest(w, "channel must be #loop, #loop-digest, #plan or a DM with the orchestrator")
+		return
+	}
+	ev, err := s.st.OrchReply(r.Context(), actor(r), body.Channel, body.ThreadTS, body.Text)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, ev)
+}
+
+func (s *server) orchAskApproval(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	ev, err := s.st.OrchAskApproval(r.Context(), actor(r), id, body.Reason)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, ev)
+}
+
 // orchSnapshot is what an orchestrate turn sees (store.OrchSnapshot).
 func (s *server) orchSnapshot(w http.ResponseWriter, r *http.Request) {
 	snap, err := s.st.OrchSnapshot(r.Context())

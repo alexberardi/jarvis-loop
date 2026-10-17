@@ -20,13 +20,14 @@ func (g *rig) fakeHome() string {
 	g.t.Helper()
 	home := filepath.Join(g.t.TempDir(), "home")
 	for p, body := range map[string]string{
-		".config/gh/hosts.yml":                 "github.com:\n  oauth_token: gho_SECRETPUSHTOKEN\n",
-		".ssh/id_ed25519":                      "PRIVATE KEY\n",
-		".config/jarvis-loop/tokens":           "loopd-token\trunner\tdevbox\n",
-		".config/jarvis-harness/slack.env":     "SLACK_BOT_TOKEN=xoxb-SECRET\n",
-		".config/jarvis-harness/installed.env": "INSTALLED_APP_ID=app\n",
-		".git-credentials":                     "https://u:SECRET@github.com\n",
-		".local/share/jarvis-loop/loop.db":     "db\n",
+		".config/gh/hosts.yml":                          "github.com:\n  oauth_token: gho_SECRETPUSHTOKEN\n",
+		".ssh/id_ed25519":                               "PRIVATE KEY\n",
+		".config/jarvis-loop/tokens":                    "loopd-token\trunner\tdevbox\n",
+		".config/jarvis-harness/slack.env":              "SLACK_BOT_TOKEN=xoxb-SECRET\n",
+		".config/jarvis-harness/installed.env":          "INSTALLED_APP_ID=app\n",
+		".config/jarvis-harness/orchestrator-slack.env": "SLACK_BOT_TOKEN=xoxb-ORCHSECRET\n",
+		".git-credentials":                              "https://u:SECRET@github.com\n",
+		".local/share/jarvis-loop/loop.db":              "db\n",
 	} {
 		f := filepath.Join(home, p)
 		os.MkdirAll(filepath.Dir(f), 0o700)
@@ -61,7 +62,7 @@ func TestFenceHidesSecrets(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "LOOPBACK-OK") }))
 	defer srv.Close()
 	port := srv.URL[strings.LastIndex(srv.URL, ":")+1:]
-	probe := `for f in ~/.config/gh/hosts.yml ~/.ssh/id_ed25519 ~/.config/jarvis-loop/tokens ~/.config/jarvis-harness/slack.env ~/.git-credentials ~/.local/share/jarvis-loop/loop.db ` +
+	probe := `for f in ~/.config/gh/hosts.yml ~/.ssh/id_ed25519 ~/.config/jarvis-loop/tokens ~/.config/jarvis-harness/slack.env ~/.config/jarvis-harness/orchestrator-slack.env ~/.git-credentials ~/.local/share/jarvis-loop/loop.db ` +
 		g.r.Cfg.Path() + `; do echo "file $f: [$(cat "$f" 2>/dev/null)]"; done
 echo "ssh dir: [$(ls -A ~/.ssh 2>/dev/null)]"
 echo "installed: [$(cat ~/.config/jarvis-harness/installed.env)]"
@@ -177,7 +178,7 @@ func TestFenceFailsClosed(t *testing.T) {
 func TestDefaultVerifyMask(t *testing.T) {
 	m := DefaultVerifyMask("/h")
 	for _, want := range []string{"/h/.ssh", "/h/.config/gh", "/h/.config/jarvis-loop", "/h/.config/jarvis-harness/slack.env",
-		"/h/.local/share/jarvis-loop", "/h/.gnupg", "/h/.netrc", "/h/.git-credentials", "/h/.config/git/credentials", "/h/.docker/config.json",
+		"/h/.config/jarvis-harness/orchestrator-slack.env", "/h/.local/share/jarvis-loop", "/h/.gnupg", "/h/.netrc", "/h/.git-credentials", "/h/.config/git/credentials", "/h/.docker/config.json",
 		"/h/.claude/.credentials.json", "/h/.config/opencode", "/h/.local/share/opencode", "/h/.local/state/opencode", "/h/.cache/opencode"} {
 		if !slices.Contains(m, want) {
 			t.Errorf("default mask lacks %s", want)
