@@ -3,6 +3,9 @@ package slack
 import (
 	"context"
 	"fmt"
+	"math"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -143,6 +146,9 @@ func (b *Bot) digestMessage(ctx context.Context, from, to time.Time, evs []store
 			fmt.Fprintf(&sb, "• #%d %s%s\n", id, b.field(title, 120, id), notes[fmt.Sprintf("%s/%d", s.name, id)])
 		}
 	}
+	if line := buildersLine(evs); line != "" {
+		fmt.Fprintf(&sb, "\n%s\n", line)
+	}
 	if ctl, err := b.c.Store.Control(ctx); err == nil {
 		fmt.Fprintf(&sb, "\nActive agents: %d of 6", ctl.ActiveAgents)
 		if ctl.Stopped {
@@ -154,4 +160,61 @@ func (b *Bot) digestMessage(ctx context.Context, from, to time.Time, evs []store
 	}
 	text := Clip(sb.String(), MaxChars, "loop status")
 	return Message{Channel: ChannelDigest, Text: text, Blocks: []map[string]any{section(text)}}, true
+}
+
+// buildersLine compares the window's build runs by builder (docs/decisions/2026-10-16-qwen-builder.md):
+// runs, average wall time and Claude's cost per builder, and the qwen items that fell back to
+// claude for good. Empty when no build run reported its builder.
+func buildersLine(evs []store.Event) string {
+	type tally struct {
+		runs int
+		secs float64
+		cost float64
+	}
+	by := map[string]*tally{}
+	fell := 0
+	for _, e := range evs {
+		if e.Kind == "builder_fallback" && e.Data["this_run_only"] == nil {
+			fell++
+		}
+		name := str(e.Data, "builder")
+		if e.From != string(pipeline.Build) || name == "" {
+			continue
+		}
+		t := by[name]
+		if t == nil {
+			t = &tally{}
+			by[name] = t
+		}
+		t.runs++
+		s, _ := strconv.ParseFloat(str(e.Data, "run_seconds"), 64)
+		c, _ := strconv.ParseFloat(str(e.Data, "total_cost_usd"), 64)
+		t.secs += s
+		t.cost += c
+	}
+	if len(by) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(by))
+	for n := range by {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	parts := []string{}
+	for _, n := range names {
+		t := by[n]
+		p := fmt.Sprintf("%s %d run", Escape(n), t.runs)
+		if t.runs != 1 {
+			p += "s"
+		}
+		p += fmt.Sprintf(", avg %d min", int(math.Round(t.secs/float64(t.runs)/60)))
+		if t.cost > 0 {
+			p += fmt.Sprintf(", $%.2f", t.cost)
+		}
+		parts = append(parts, p)
+	}
+	if fell > 0 {
+		parts = append(parts, fmt.Sprintf("%d fell back to claude", fell))
+	}
+	return "Builds: " + strings.Join(parts, " · ")
 }

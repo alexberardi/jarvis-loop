@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alexberardi/jarvis-loop/internal/api"
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/slackfake"
@@ -107,6 +108,14 @@ type Step struct {
 	Version     int      `json:"version,omitempty"`
 	Refused     string   `json:"refused,omitempty"`
 	Pieces      []string `json:"pieces,omitempty"`
+
+	// orchestrator: the orchestrator's token calls loopd: Action is "METHOD /path" ({item} is the
+	// item's id), Body its JSON ("{head}" in a value is the item's head sha). With As, it acts on a
+	// message As just wrote (Text), recorded as loopd's Slack layer will record it (piece 2 of
+	// docs/phases/08-orchestrator.md); with Message "last", on the previous one. Refused: it must
+	// be refused, a regexp on the error.
+	Action string         `json:"action,omitempty"`
+	Body   map[string]any `json:"body,omitempty"`
 
 	Expect
 }
@@ -295,6 +304,9 @@ type player struct {
 	items map[string]itemRef
 	plans map[string]int64
 	ctx   context.Context
+	// the messages orchestrator steps act on: how many, and the last one ("<channel>/<ts>")
+	orchMsgs int
+	lastMsg  string
 }
 
 func (p *player) ref(alias string) (itemRef, error) {
@@ -646,8 +658,68 @@ func (p *player) step(st Step) error {
 		return p.planStep(st)
 	case "plan_post", "plan_reply":
 		return p.planSlack(st)
+	case "orchestrator":
+		return p.orchestrate(st)
 	}
 	return fmt.Errorf("unknown step %q", st.Do)
+}
+
+func (p *player) orchestrate(st Step) error {
+	method, path, ok := strings.Cut(st.Action, " ")
+	if !ok {
+		return fmt.Errorf("orchestrator: action %q must be \"METHOD /path\"", st.Action)
+	}
+	body := map[string]any{}
+	for k, v := range st.Body {
+		body[k] = v
+	}
+	if st.Item != "" {
+		r, err := p.ref(st.Item)
+		if err != nil {
+			return err
+		}
+		path = strings.ReplaceAll(path, "{item}", strconv.FormatInt(r.id, 10))
+		d, err := p.s.Store.GetItem(p.ctx, r.id)
+		if err != nil {
+			return err
+		}
+		for k, v := range body {
+			if v == "{head}" {
+				body[k] = d.Item.HeadSHA
+			}
+		}
+	}
+	var hdr map[string]string
+	if st.As != "" {
+		if st.Message != "last" {
+			user, err := userID(st.As)
+			if err != nil {
+				return err
+			}
+			p.orchMsgs++
+			ts := fmt.Sprintf("%d.%06d", Start.Unix(), p.orchMsgs)
+			if err := p.s.Store.RecordSlackMessage(p.ctx, slack.ChannelLoop, ts, user, st.Text); err != nil {
+				return err
+			}
+			p.lastMsg = slack.ChannelLoop + "/" + ts
+		}
+		hdr = map[string]string{api.OnBehalfHeader: p.lastMsg}
+	}
+	err := p.s.orch.doHeader(method, path, hdr, body, nil)
+	if st.Refused == "" {
+		return err
+	}
+	if err == nil {
+		return fmt.Errorf("orchestrator %s: not refused, want /%s/", st.Action, st.Refused)
+	}
+	re, rerr := regexp.Compile(st.Refused)
+	if rerr != nil {
+		return rerr
+	}
+	if !re.MatchString(err.Error()) {
+		return fmt.Errorf("orchestrator %s: refused with %q, want /%s/", st.Action, err, st.Refused)
+	}
+	return nil
 }
 
 func (p *player) add(st Step) error {

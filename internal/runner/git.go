@@ -43,7 +43,7 @@ func lockBusy(stderr string) bool {
 }
 
 func (g Git) run(ctx context.Context, dir string, args ...string) (string, error) {
-	full := append([]string{"-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)
+	full := append([]string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)
 	for i := 0; ; i++ {
 		cmd := exec.CommandContext(ctx, "git", full...)
 		cmd.Dir = dir

@@ -26,6 +26,7 @@ const (
 	userTok   = "user-token-0123456789abcdef"
 	runnerTok = "runner-token-0123456789abcdef"
 	otherTok  = "other-runner-token-0123456789"
+	orchTok   = "orchestrator-token-0123456789"
 	shaA      = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	shaB      = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	shaM      = "cccccccccccccccccccccccccccccccccccccccc"
@@ -49,7 +50,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	toks, err := ParseTokens(strings.NewReader(fmt.Sprintf("# comment\n%s\tuser\talex\n%s\trunner\tdevbox\n\n%s\trunner\tmac\n", userTok, runnerTok, otherTok)))
+	toks, err := ParseTokens(strings.NewReader(fmt.Sprintf("# comment\n%s\tuser\talex\n%s\trunner\tdevbox\n\n%s\trunner\tmac\n%s\torchestrator\tloop\n", userTok, runnerTok, otherTok, orchTok)))
 	if err != nil {
 		t.Fatal(err)
 	}

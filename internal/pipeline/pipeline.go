@@ -179,11 +179,15 @@ type Item struct {
 	// PlanID and PlanPiece link an item filed from a plan to its piece (docs/phases/07-planning.md).
 	PlanID    int64 `json:"plan_id,omitempty"`
 	PlanPiece int   `json:"plan_piece,omitempty"`
-	// Builder is who the plan's piece says should build it (BuilderQwen, BuilderClaude; "": not
-	// from a plan). Nothing reads it yet beyond /loop show and the board.
-	Builder   string    `json:"builder,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	// Builder is who builds it (BuilderQwen, BuilderClaude; "": not from a plan, claude): the
+	// plan's piece says, and a qwen item's second strike flips it to claude for the rest
+	// (docs/decisions/2026-10-16-qwen-builder.md).
+	Builder string `json:"builder,omitempty"`
+	// BuildSession is the OpenCode session of the item's last qwen build, which its next build
+	// resumes ("" for none).
+	BuildSession string    `json:"build_session,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // ValidPriority reports whether p is P1–P5.
@@ -239,6 +243,14 @@ type Transition struct {
 	Data map[string]any
 	// ActiveAgentsZero: the outcome turns the active-agents number to 0 (usage_limit).
 	ActiveAgentsZero bool
+	// Also are more events to record after the transition's own (builder_fallback).
+	Also []Note
+}
+
+// Note is an event a transition records besides its own.
+type Note struct {
+	Kind string
+	Data map[string]any
 }
 
 // Advance is a lease holder finishing a stage.
@@ -290,6 +302,13 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		data["agent"] = a.Agent
 	}
 	tr := Transition{From: from, Outcome: a.Outcome, Kind: "advanced", Data: data}
+	// A qwen build's OpenCode session, which the item's next build resumes.
+	if from == Build && it.Builder == BuilderQwen && strings.TrimSpace(a.Fields["builder"]) == BuilderQwen {
+		if sess := strings.TrimSpace(a.Fields["session_id"]); sess != "" {
+			it.BuildSession = sess
+		}
+	}
+	builder := it.Builder
 	needPaths := func() ([]ChangedPath, error) {
 		if len(a.ChangedPaths) == 0 {
 			return nil, errf(CodeMissingField, "changed_paths is required for %s", a.Outcome)
@@ -621,6 +640,10 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		}
 		it = toNeedsYou(it, from, msg)
 	}
+	if builder == BuilderQwen && it.Builder == BuilderClaude {
+		tr.Also = append(tr.Also, Note{Kind: "builder_fallback", Data: map[string]any{
+			"from": BuilderQwen, "to": BuilderClaude, "bounce_count": it.BounceCount, "outcome": string(a.Outcome)}})
+	}
 	it.UpdatedAt = now
 	tr.Item = it
 	tr.To = it.Stage
@@ -641,11 +664,19 @@ func checkTriageRepo(it Item, repo string, repos []string) error {
 	return nil
 }
 
+// QwenStrikes is the bounce at which a qwen item's builder becomes claude for the rest: the first
+// strike's build resumes the qwen session, the second goes to claude.
+const QwenStrikes = 2
+
 // bounce sends an item back to build, or to the user at the second bounce (a review's or the
-// runner's verify, counted together).
+// runner's verify, counted together). A qwen item's QwenStrikes-th bounce flips it to claude.
 func bounce(it Item, data map[string]any, why string) Item {
 	it.BounceCount++
 	data["bounce_count"] = it.BounceCount
+	if it.Builder == BuilderQwen && it.BounceCount >= QwenStrikes {
+		it.Builder, it.BuildSession = BuilderClaude, ""
+		data["builder_fallback"] = true
+	}
 	if it.BounceCount >= 2 {
 		return toNeedsYou(it, Build, why)
 	}

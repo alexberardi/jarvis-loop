@@ -72,6 +72,8 @@ func run(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// Harness sessions end with their runs; this ends any left (keepers, then down).
+	defer r.CloseHarness()
 	// Probe the fence once: without it, setup, prepare, cleanup and verify commands refuse to run
 	// (their items go to the user); nothing ever runs them unfenced.
 	if err := r.ProbeFence(); err != nil {

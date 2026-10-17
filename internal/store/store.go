@@ -58,6 +58,7 @@ type Store struct {
 	wmu     sync.Mutex
 	emitMu  sync.Mutex
 	pending []Event
+	via     string // the open transaction's WithVia: every event it writes says so
 	subsMu  sync.RWMutex
 	subs    []func(Event)
 
@@ -199,6 +200,7 @@ func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
 func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
 	s.wmu.Lock()
 	s.pending = nil
+	s.via = ViaFrom(ctx)
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		s.wmu.Unlock()
@@ -253,6 +255,9 @@ func (s *Store) event(tx *sql.Tx, e Event) error {
 	if e.Data == nil {
 		e.Data = map[string]any{}
 	}
+	if s.via != "" {
+		e.Data["via"] = s.via
+	}
 	data, err := json.Marshal(e.Data)
 	if err != nil {
 		return err
@@ -305,7 +310,7 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
 	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of, ci_red_sha,
-	depends_on, plan_id, plan_piece, awaiting_deploy, builder, trust`
+	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust`
 
 type scanner interface{ Scan(...any) error }
 
@@ -321,7 +326,7 @@ func scanItem(row scanner) (pipeline.Item, error) {
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
 		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf, &it.CIRedSHA,
-		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &trust)
+		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust)
 	if err != nil {
 		return it, err
 	}
@@ -404,10 +409,10 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 	}
 	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
-		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, depends_on=?, awaiting_deploy=?, trust=? WHERE id=?`,
+		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=?, trust=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
-		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, joinIDs(it.DependsOn), it.AwaitingDeploy, trust, it.ID)
+		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, trust, it.ID)
 	return err
 }
 
@@ -1191,6 +1196,12 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 		tr.Data["lease"] = l.ID
 		if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
 			return err
+		}
+		for _, n := range tr.Also {
+			// A note, not a transition: it stays in the stage the advance left the item in.
+			if err := s.event(tx, Event{ItemID: id, Actor: actor, Kind: n.Kind, From: string(tr.To), To: string(tr.To), Data: n.Data}); err != nil {
+				return err
+			}
 		}
 		if tr.Item.Stage == pipeline.Closed {
 			if err := s.dependencyClosed(tx, id); err != nil {

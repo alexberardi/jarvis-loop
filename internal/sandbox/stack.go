@@ -51,6 +51,8 @@ const (
 	RunnerName = "sandbox"
 	HandRunner = "hand"
 	UserName   = "sandbox"
+	// OrchName is the orchestrator token's name (docs/phases/08-orchestrator.md).
+	OrchName = "loop"
 	// Other is the Slack member who is not the approver.
 	Other = "U0SANDBOXOTHER"
 	// SlackWorkspace is loopd's --slack-workspace in the sandbox, for the board's thread links.
@@ -108,6 +110,7 @@ type Stack struct {
 	user    *apiClient
 	hand    *runner.Client
 	handAPI *apiClient // the hand runner's raw API, for plan turns (the runner has no client for them yet)
+	orch    *apiClient // the orchestrator's token, for its actions (its runner turns are piece 3)
 	scripts string
 	log     *slog.Logger
 
@@ -115,6 +118,7 @@ type Stack struct {
 	cancel context.CancelFunc
 	bg     sync.WaitGroup
 	srv    *http.Server
+	qwen   *fakeQwen
 	board  *http.Server
 	// boardTok is the board token (kind board) the board expectation signs in with.
 	boardTok string
@@ -216,11 +220,12 @@ func StartStack(opts Options) (st *Stack, err error) {
 	// Tokens, as loopd reads them: a 0600 file.
 	userTok, runnerTok, handTok := randToken("sbx-user-"), randToken("sbx-runner-"), randToken("sbx-hand-")
 	s.boardTok = randToken("sbx-board-")
+	orchTok := randToken("sbx-orch-")
 	slackToks := slack.Tokens{Bot: randToken("xoxb-sandbox-"), App: randToken("xapp-sandbox-")}
-	s.Secrets = []string{userTok, runnerTok, handTok, slackToks.Bot, slackToks.App, s.boardTok}
+	s.Secrets = []string{userTok, runnerTok, handTok, slackToks.Bot, slackToks.App, s.boardTok, orchTok}
 	tokPath := filepath.Join(dir, "tokens")
-	tokText := fmt.Sprintf("%s\tuser\t%s\n%s\trunner\t%s\n%s\trunner\t%s\n%s\tboard\tphone\n",
-		userTok, UserName, runnerTok, RunnerName, handTok, HandRunner, s.boardTok)
+	tokText := fmt.Sprintf("%s\tuser\t%s\n%s\trunner\t%s\n%s\trunner\t%s\n%s\tboard\tphone\n%s\torchestrator\t%s\n",
+		userTok, UserName, runnerTok, RunnerName, handTok, HandRunner, s.boardTok, orchTok, OrchName)
 	if err := os.WriteFile(tokPath, []byte(tokText), 0o600); err != nil {
 		return nil, err
 	}
@@ -314,6 +319,12 @@ func StartStack(opts Options) (st *Stack, err error) {
 				DenyWrite: []string{MobileTrustedFile}},
 		},
 	}
+	if s.qwen, err = startFakeQwen(); err != nil {
+		return nil, err
+	}
+	if cfg.Qwen, err = s.qwen.config(dir, opts.Bin.Claude); err != nil {
+		return nil, err
+	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	cfgPath := filepath.Join(dir, "runner.json")
 	if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
@@ -331,6 +342,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 	s.user = &apiClient{base: s.LoopdURL, token: userTok}
 	s.hand = &runner.Client{Base: s.LoopdURL, Token: handTok}
 	s.handAPI = &apiClient{base: s.LoopdURL, token: handTok}
+	s.orch = &apiClient{base: s.LoopdURL, token: orchTok}
 	if opts.RealClock {
 		s.bg.Add(1)
 		go func() { defer s.bg.Done(); s.Runner.Run(s.ctx) }()
@@ -450,6 +462,7 @@ func (s *Stack) Close() {
 	if s.board != nil {
 		s.board.Close()
 	}
+	s.qwen.Close()
 	if s.Slack != nil {
 		s.Slack.Close()
 	}
@@ -704,6 +717,10 @@ type apiClient struct {
 }
 
 func (c *apiClient) do(method, path string, in, out any) error {
+	return c.doHeader(method, path, nil, in, out)
+}
+
+func (c *apiClient) doHeader(method, path string, hdr map[string]string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		b, _ := json.Marshal(in)
@@ -715,6 +732,9 @@ func (c *apiClient) do(method, path string, in, out any) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return err
@@ -724,7 +744,7 @@ func (c *apiClient) do(method, path string, in, out any) error {
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("%s %s: HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
-	if out != nil {
+	if out != nil && resp.StatusCode != http.StatusNoContent {
 		return json.Unmarshal(raw, out)
 	}
 	return nil

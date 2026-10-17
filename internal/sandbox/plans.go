@@ -119,11 +119,17 @@ func (p *player) planTurn(st Step, id int64) error {
 		Kind string            `json:"kind"`
 		Turn pipeline.PlanTurn `json:"turn"`
 	}
-	if err := p.s.handAPI.do("POST", "/claim", map[string]any{"agent": HandPlanner, "kinds": []string{pipeline.WorkPlan}}, &c); err != nil {
+	// The turn a plan_reply queues comes from the bot's async handling of the Slack event.
+	if err := eventually(10*time.Second, func() error {
+		if err := p.s.handAPI.do("POST", "/claim", map[string]any{"agent": HandPlanner, "kinds": []string{pipeline.WorkPlan}}, &c); err != nil {
+			return err
+		}
+		if c.Kind != pipeline.WorkPlan {
+			return fmt.Errorf("no plan turn to claim (want one of %s)", st.Plan)
+		}
+		return nil
+	}); err != nil {
 		return err
-	}
-	if c.Kind != pipeline.WorkPlan {
-		return fmt.Errorf("no plan turn to claim (want one of %s)", st.Plan)
 	}
 	if c.Turn.PlanID != id {
 		return fmt.Errorf("claimed a turn of plan P%d, want %s (P%d)", c.Turn.PlanID, st.Plan, id)

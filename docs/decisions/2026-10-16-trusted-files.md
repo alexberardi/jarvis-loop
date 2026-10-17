@@ -13,7 +13,7 @@ rule in [2026-10-15-all-repos.md](2026-10-15-all-repos.md); each point is enforc
   `trust_sha` (the head), `trusted_paths` (the trusted files it changes, old and new names) and
   `trusted_diffstat` (`git diff --stat` of those files against the base), and attaches the full
   diff of those files as evidence `trusted-files.diff` (cut at 1 MB). Nothing is pushed, as before.
-  loopd records them on the item as `trust` (JSON column, migration `0013_trust.sql`,
+  loopd records them on the item as `trust` (JSON column, migration `0015_trust.sql`,
   `pipeline.Trust`), replacing any earlier one.
 - **The OK is the approver's, for that sha.** `ApplyTrust` (pipeline/trust.go) accepts it only in
   needs-you, only while a refusal waits for an OK, and only for the refused sha (`sha_mismatch`

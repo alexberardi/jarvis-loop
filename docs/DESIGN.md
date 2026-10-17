@@ -71,7 +71,7 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | leases | which runner and agent hold which item at which stage, with an expiry kept alive by heartbeats. An expired lease returns the item to its queue |
 | control | the active-agents number (0–6), stop, the per-run time cap |
 
-**API** (JSON over HTTP, a bearer token per runner and one for the user; a `board` token reads the web board only and is refused by every API route)
+**API** (JSON over HTTP, a bearer token per runner and one for the user; a `board` token reads the web board only and is refused by every API route; an `orchestrator` token reads and acts only through `/orchestrator/…` within its limits, [decision](decisions/2026-10-16-orchestrator-token.md))
 
 | Call | Does |
 | --- | --- |
@@ -123,7 +123,11 @@ listed apart in the PR's Verification footer; a failure sends the build back (co
 bounce) with nothing pushed. A change to a file the runner trusts (`deny_write`) is not verified
 until the approver OKs that exact commit (Trust button or `loop trust`); verify then runs it once
 and land holds the PR. Details: `docs/decisions/2026-10-15-all-repos.md`,
-`docs/decisions/2026-10-16-trusted-files.md`.
+`docs/decisions/2026-10-16-trusted-files.md`. While a build or review agent works,
+a repo with a `harness` lets it use the harness through the runner too: `loop-harness up | run | down`
+asks the runner, through a spool in the agent's own worktree (checked by the run's token and its guard), to run the command in the
+same fence, next to a keeper fence that holds the running sandbox until the agent ends. Details:
+`docs/decisions/2026-10-16-harness-broker.md`.
 
 **Cleanup** is the runner's, not the agent's: when a lease ends for any reason it removes that item's worktree, takes down its sandbox and stops its emulator. It never touches anything it did not start, so a stray process from another session is reported, not killed.
 

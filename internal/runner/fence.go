@@ -16,13 +16,17 @@ import (
 // helper. Without a working bubblewrap they do not run at all.
 
 // DefaultVerifyMask are the paths under home masked by default: credentials (ssh, gh, gpg, git,
-// netrc, docker), loopd's tokens and data, and the Slack tokens. The harness's
+// netrc, docker, claude's login), the user's OpenCode, loopd's tokens and data, and the Slack
+// tokens. The harness's
 // ~/.config/jarvis-harness/installed.env stays readable: jarvis-server's sandbox needs it for
 // the LLM tap, and it is an app client for the local jarvisd only.
 func DefaultVerifyMask(home string) []string {
 	var out []string
 	for _, p := range []string{".ssh", ".config/gh", ".config/jarvis-loop", ".config/jarvis-harness/slack.env",
-		".local/share/jarvis-loop", ".gnupg", ".netrc", ".git-credentials", ".config/git/credentials", ".docker/config.json"} {
+		".local/share/jarvis-loop", ".gnupg", ".netrc", ".git-credentials", ".config/git/credentials", ".docker/config.json",
+		// Claude's login, and the user's own OpenCode (its auth, config and sessions): a qwen run
+		// gets its own (opencode.go).
+		".claude/.credentials.json", ".config/opencode", ".local/share/opencode", ".local/state/opencode", ".cache/opencode"} {
 		out = append(out, filepath.Join(home, p))
 	}
 	return out
@@ -87,6 +91,21 @@ func gitAdminDir(dir string) string {
 	return filepath.Clean(p)
 }
 
+// worktreePlumbing are the files of a linked worktree that tell git where its repository and
+// config are: its .git file, and its admin dir's commondir, gitdir and config.worktree (created
+// empty when missing, so it cannot be grown). Fenced code may commit (index, HEAD, logs and refs
+// stay writable) but not repoint the runner's own unfenced git at a repository it made.
+func worktreePlumbing(dir, admin string) []string {
+	if admin == "" {
+		return nil
+	}
+	cw := filepath.Join(admin, "config.worktree")
+	if f, err := os.OpenFile(cw, os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		f.Close()
+	}
+	return []string{filepath.Join(dir, ".git"), filepath.Join(admin, "commondir"), filepath.Join(admin, "gitdir"), cw}
+}
+
 // envHome is HOME as the command will see it.
 func envHome(env []string) string {
 	for i := len(env) - 1; i >= 0; i-- {
@@ -125,6 +144,18 @@ func (r *Runner) ProbeFence() error {
 // extra writable paths, the configured verify_writable and the runner's fence caches; /tmp is
 // private. It does not check the probe.
 func (r *Runner) fenced(dir, script string, env, extraWritable []string) (*exec.Cmd, error) {
+	return r.fencedWith(dir, script, env, fenceOpts{Writable: extraWritable})
+}
+
+// fenceOpts are what a fenced command gets besides the defaults: more writable paths, paths made
+// read-only again inside writable ones, and paths bound read-only before the writable ones (so
+// they are visible at all under the private /tmp, or read-only around writable dirs inside them).
+type fenceOpts struct {
+	Writable, ReadOnly, Visible []string
+}
+
+// fencedWith is fenced with options.
+func (r *Runner) fencedWith(dir, script string, env []string, o fenceOpts) (*exec.Cmd, error) {
 	bwrap := r.Cfg.Bwrap
 	if bwrap == "" {
 		bwrap = DefaultBwrap
@@ -160,6 +191,11 @@ func (r *Runner) fenced(dir, script string, env, extraWritable []string) (*exec.
 	if fi, err := os.Stat(r.Cfg.WorkRoot); err == nil && fi.IsDir() {
 		args = append(args, "--ro-bind", r.Cfg.WorkRoot, r.Cfg.WorkRoot)
 	}
+	for _, p := range uniq(o.Visible) {
+		if _, err := os.Stat(p); err == nil {
+			args = append(args, "--ro-bind", p, p)
+		}
+	}
 	for _, p := range r.Cfg.VerifyMask {
 		fi, err := os.Stat(p)
 		switch {
@@ -171,11 +207,19 @@ func (r *Runner) fenced(dir, script string, env, extraWritable []string) (*exec.
 			args = append(args, "--ro-bind", "/dev/null", p)
 		}
 	}
-	writable := append([]string{dir, gitAdminDir(dir), cacheRoot}, extraWritable...)
-	writable = append(writable, r.Cfg.VerifyWritable...)
+	// The worktree's admin dir last, so it is a mount point of its own (it cannot be renamed
+	// away) whatever holds it.
+	admin := gitAdminDir(dir)
+	writable := append([]string{dir, cacheRoot}, o.Writable...)
+	writable = append(append(writable, r.Cfg.VerifyWritable...), admin)
 	for _, p := range uniq(writable) {
 		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
 			args = append(args, "--bind", p, p)
+		}
+	}
+	for _, p := range uniq(append(worktreePlumbing(dir, admin), o.ReadOnly...)) {
+		if _, err := os.Stat(p); err == nil {
+			args = append(args, "--ro-bind", p, p)
 		}
 	}
 	args = append(args, "--unshare-pid", "--proc", "/proc", "--die-with-parent", "--new-session",
@@ -188,8 +232,13 @@ func (r *Runner) fenced(dir, script string, env, extraWritable []string) (*exec.
 
 // fence is fenced after the probe: an error says why the command cannot run (fail closed).
 func (r *Runner) fence(dir, script string, env, extraWritable []string) (*exec.Cmd, error) {
+	return r.fenceWith(dir, script, env, fenceOpts{Writable: extraWritable})
+}
+
+// fenceWith is fencedWith after the probe.
+func (r *Runner) fenceWith(dir, script string, env []string, o fenceOpts) (*exec.Cmd, error) {
 	if err := r.ProbeFence(); err != nil {
 		return nil, err
 	}
-	return r.fenced(dir, script, env, extraWritable)
+	return r.fencedWith(dir, script, env, o)
 }

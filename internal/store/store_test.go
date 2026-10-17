@@ -830,3 +830,67 @@ func TestTrustRoundTrip(t *testing.T) {
 		t.Fatalf("loaded %+v trust %+v (%v)", loaded, loaded.Trust, err)
 	}
 }
+
+// A qwen item keeps its build session for the next build; its second strike sets the builder to
+// claude, clears the session and records builder_fallback.
+func TestQwenBuilderFallback(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	it := add(t, s, "a qwen piece", "")
+	if _, err := s.w.Exec(`UPDATE items SET builder = 'qwen' WHERE id = ?`, it.ID); err != nil {
+		t.Fatal(err)
+	}
+	step := func(agent string, out pipeline.Outcome, f map[string]string, paths []string, ev bool) pipeline.Item {
+		t.Helper()
+		c, err := s.Claim(ctx, runner, pipeline.ClaimRequest{Runner: runner, Agent: agent})
+		if err != nil || c == nil || c.Item.ID != it.ID {
+			t.Fatalf("claim for %s: %+v %v", out, c, err)
+		}
+		if ev {
+			if _, err := s.AddEvidence(ctx, runner, it.ID, "log", "run.log", strings.NewReader("ok\n")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := s.Advance(ctx, runner, it.ID, out, f, paths)
+		if err != nil {
+			t.Fatalf("%s: %v", out, err)
+		}
+		return got
+	}
+	step("triager", pipeline.Reproduced, map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": ""}, nil, true)
+	step("builder", pipeline.PROpened, map[string]string{"repo": "o/r", "pr": "7", "branch": "loop/1-x", "head_sha": shaA,
+		"builder": "qwen", "session_id": "ses_abc"}, []string{"M x.go"}, true)
+	step("reviewer", pipeline.Bounce, map[string]string{"notes": "fix it"}, nil, false)
+	d, err := s.GetItem(ctx, it.ID)
+	if err != nil || d.Item.Builder != "qwen" || d.Item.BuildSession != "ses_abc" || d.Item.Stage != pipeline.Build {
+		t.Fatalf("after the first strike: %+v %v", d.Item, err)
+	}
+	// The build claim carries both to the runner.
+	c, err := s.Claim(ctx, runner, pipeline.ClaimRequest{Runner: runner, Agent: "builder"})
+	if err != nil || c == nil || c.Item.Builder != "qwen" || c.Item.BuildSession != "ses_abc" {
+		t.Fatalf("build claim: %+v %v", c, err)
+	}
+	if _, err := s.AddEvidence(ctx, runner, it.ID, "log", "verify.log", strings.NewReader("FAIL\n")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Advance(ctx, runner, it.ID, pipeline.VerifyFailed, map[string]string{"reason": "verify failed", "builder": "qwen", "session_id": "ses_abc"}, nil)
+	if err != nil || got.Builder != "claude" || got.BuildSession != "" || got.Stage != pipeline.NeedsYou {
+		t.Fatalf("second strike: %+v %v", got, err)
+	}
+	d, _ = s.GetItem(ctx, it.ID)
+	if d.Item.Builder != "claude" || !hasEvent(d.Events, "builder_fallback") {
+		t.Fatalf("stored: builder %q, events %+v", d.Item.Builder, d.Events)
+	}
+	// The note is not a transition of its own: the bot must not post the needs-you message twice.
+	for _, e := range d.Events {
+		if e.Kind == "builder_fallback" && (e.From != string(pipeline.NeedsYou) || e.To != string(pipeline.NeedsYou)) {
+			t.Fatalf("builder_fallback %s -> %s, want needs_you -> needs_you", e.From, e.To)
+		}
+	}
+	cards, _ := s.BoardItems(ctx)
+	for _, cd := range cards {
+		if cd.ID == it.ID && cd.Builder != "claude" {
+			t.Fatalf("card builder %q", cd.Builder)
+		}
+	}
+}
