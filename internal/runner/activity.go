@@ -105,7 +105,26 @@ func (r *Runner) agentActivity(ru *run, st *streamStats) *pipeline.Activity {
 	}
 	a.Todos = append([]pipeline.Todo(nil), st.act.todos...)
 	a.Recent = append([]string(nil), st.act.recent...)
+	fitActivity(a)
 	return a
+}
+
+// fitActivity drops calls, then to-dos from the end, until the activity fits loopd's byte cap
+// (long multibyte lists can pass every per-field limit and still be too big).
+func fitActivity(a *pipeline.Activity) {
+	for {
+		b, _ := json.Marshal(a)
+		switch {
+		case len(b) <= pipeline.MaxActivityBytes:
+			return
+		case len(a.Recent) > 0:
+			a.Recent = a.Recent[1:]
+		case len(a.Todos) > 0:
+			a.Todos = a.Todos[:len(a.Todos)-1]
+		default:
+			return
+		}
+	}
 }
 
 // stepActivity is the activity of a run outside its agent (setup, verify, land): the phase and

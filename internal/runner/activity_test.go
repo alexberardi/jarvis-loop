@@ -94,6 +94,26 @@ func TestActivityKeepsTheLastCalls(t *testing.T) {
 	}
 }
 
+func TestActivityFitsTheByteCap(t *testing.T) {
+	var a liveActivity
+	long := strings.Repeat("<é>", pipeline.MaxActivityTodo)
+	var todos []any
+	for range pipeline.MaxActivityTodos {
+		todos = append(todos, map[string]string{"content": long, "status": "pending"})
+	}
+	in, _ := json.Marshal(map[string]any{"todos": todos})
+	a.observe("/wt", toolUse{Name: "TodoWrite", Input: in})
+	a.observe("/wt", toolUse{Name: "Bash", Input: json.RawMessage(`{"description":"` + long + `"}`)})
+	r := &Runner{Clock: NewFakeClock(t0)}
+	act := r.agentActivity(&run{stage: StageBuild, started: t0}, &streamStats{act: a})
+	if err := act.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if len(act.Todos) == 0 || len(act.Todos) == pipeline.MaxActivityTodos {
+		t.Fatalf("%d to-dos kept", len(act.Todos))
+	}
+}
+
 func equalJSON(a, b any) bool {
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
