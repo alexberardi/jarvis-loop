@@ -26,14 +26,17 @@ that records those messages and posts what the orchestrator says. Its turns are 
 - **The loop bot leaves those messages alone.** A message that mentions the orchestrator's bot
   user is never an answer, a reply approval, a held note, a plan message or an `@jarvis-loop` add:
   "@orchestrator answer #46: …" or "@orchestrator approve #28" in a thread is the orchestrator's
-  only. Without the app, nothing changes.
+  only. Until the orchestrator's `auth.test` has answered, the loop bot cannot tell its mention, so
+  a message that mentions anyone but the loop bot itself (its own id from its own `auth.test`,
+  asked then) is left alone too, and any mention while that is unknown as well: never misread as
+  an approval, a trust OK or an answer. Without the app, nothing changes.
 - **The hand-off to piece 3:**
 
   | Route (orchestrator token) | What |
   |---|---|
-  | `GET /orchestrator/messages?since=<event id>&limit=` | the `orchestrator.message` events after that id, oldest first (default and cap 200; any reading token). A turn's trigger and its "user's replies since its last turn" |
+  | `GET /orchestrator/messages?since=<event id>&limit=` | the `orchestrator.message` events after that id, oldest first (default and cap 200; any reading token, so loopd's own tokens can read DM text). A turn's trigger and its "user's replies since its last turn" |
   | `POST /orchestrator/replies` `{channel, thread_ts, text}` | an `orchestrator.reply` event, which the app posts (escaped) as itself; `channel` must be `#loop`, `#loop-digest`, `#plan` or a DM (400 otherwise) |
-  | `POST /orchestrator/items/{id}/approval` `{reason}` | asked to approve, it cannot: an `orchestrator.approval_asked` event on an item **held for approval** (409 `wrong_stage` otherwise, a `refused` event), and the loop bot posts the item's approval message again in its thread, with its sha-bound buttons and the reason ("Orchestrator: approvals are yours, so here is its approval message again — …"). Trusted-file OKs (#70) will get the same when that route lands |
+  | `POST /orchestrator/items/{id}/approval` `{reason}` | asked to approve, it cannot: an `orchestrator.approval_asked` event on an item **held for approval** or **waiting on the approver's OK of trusted files** (#70; 409 `wrong_stage` otherwise, a `refused` event), and the loop bot posts the item's approval message again in its thread, with its sha-bound buttons and the reason ("Orchestrator: approvals are yours, so here is its approval message again — …"); for trusted files, the item's trust message with its Trust button bound to the refused commit (`data.trust`, the refusal's `trust_sha` / `trusted_paths` / `trusted_diffstat`; "Orchestrator: trusted-file OKs are yours, so here is its trust message again — …"). Nothing is approved or trusted |
 
   Acting for the user stays as piece 1 built it: the turn calls the user's route with
   `X-Loop-On-Behalf: <channel>/<ts>` of the recorded message.
@@ -42,7 +45,9 @@ that records those messages and posts what the orchestrator says. Its turns are 
   title** needs you: <text>", "**Recommend:** … _Because_ <reason>", and **[Accept] [Other…]**.
   Accept is there only when it can be the answer: the item is in needs_you and there is a
   recommendation; never for an approval (the item is held: it says to use the approval
-  message's button) or an escalation about no item.
+  message's button), an item waiting on a trusted-file OK (the recommendation's words are not the
+  OK verify needs: it says to use the trust message's button, and `AcceptRecommendation` refuses
+  it too), or an escalation about no item.
   - **Accept** is the approver's (`IsApprover`, as approvals; anyone else gets the usual
     ephemeral and a `refused` event). It runs `store.AcceptRecommendation`: the recommendation is
     the approver's answer (`answered`, actor `slack:<approver>`, `data.accepted` = the escalation's

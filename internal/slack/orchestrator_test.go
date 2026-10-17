@@ -26,15 +26,22 @@ type orchEnv struct {
 
 func newOrchEnv(t *testing.T) *orchEnv {
 	t.Helper()
+	e := newUnidentifiedOrchEnv(t)
+	if err := e.o.Identify(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// newUnidentifiedOrchEnv is an orchEnv whose orchestrator has not had auth.test's answer yet.
+func newUnidentifiedOrchEnv(t *testing.T) *orchEnv {
+	t.Helper()
 	e := newBotEnv(t)
 	e.f.AddApp(slackfake.App{Name: "orchestrator", BotToken: testOrchToken, AppToken: "xapp-orch-test", BotUser: orchUser})
 	api := NewAPI(e.f.baseURL(), testOrchToken, Channels{ChannelLoop, ChannelDigest, ChannelPlan, DMs})
 	api.Sleep = e.sl.Sleep
 	o, err := NewOrchestrator(OrchestratorConfig{Store: e.st, API: api, Clock: e.clk, Log: slog.New(slog.NewTextHandler(e.logs, nil)), Sleep: e.sl.Sleep})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := o.Identify(e.ctx); err != nil {
 		t.Fatal(err)
 	}
 	o.Attach()
@@ -146,6 +153,35 @@ func TestMentionOfTheOrchestratorIsNotAnApproval(t *testing.T) {
 	e.toLoop(Approver, e.thread(h), "<@"+orchUser+"> approve #1")
 	if len(e.b.pending) != 0 {
 		t.Fatal("a mention of the orchestrator started a reply approval")
+	}
+}
+
+// Until the orchestrator's auth.test answers, the loop bot cannot tell its mention: a message
+// mentioning anyone but the loop bot is left alone, so "@orchestrator approve" is no approval and
+// "@orchestrator trust" no OK. A mention of the loop bot itself is still its own.
+func TestMentionBeforeTheOrchestratorIsIdentified(t *testing.T) {
+	e := newUnidentifiedOrchEnv(t)
+	if e.o.BotUser() != "" {
+		t.Fatal("identified")
+	}
+	h := e.add("held")
+	e.toHeld(h, shaA)
+	tr := e.add("trusted")
+	e.toTrust(tr, shaB)
+	q := e.add("question")
+	e.toNeedsYou(q, "skip the screenshots?")
+	e.orchCalls()
+	e.toLoop(Approver, e.thread(h), "<@"+orchUser+"> approve #1")
+	if len(e.b.pending) != 0 {
+		t.Fatal("a mention of the orchestrator started a reply approval")
+	}
+	e.toLoop(Approver, e.thread(tr), "<@"+orchUser+"> trust")
+	if d := e.item(tr); d.Item.Stage != pipeline.NeedsYou || d.Item.Trust.By != "" {
+		t.Fatalf("a mention of the orchestrator trusted: %s %+v", d.Item.Stage, d.Item.Trust)
+	}
+	e.toLoop(Approver, e.thread(q), "<@"+slackfake.BotUser+"> open the PR without them")
+	if d := e.item(q); d.Item.Stage == pipeline.NeedsYou {
+		t.Fatal("a mention of the loop bot did not answer")
 	}
 }
 
@@ -355,6 +391,64 @@ func TestApprovalAskedPostsTheButton(t *testing.T) {
 	if e.item(id).Item.Stage != pipeline.Held {
 		t.Fatal("approved")
 	}
+}
+
+// Asked to OK trusted files, the orchestrator has the loop bot post the item's trust message again,
+// with its button bound to the refused commit; nothing is trusted.
+func TestTrustAskedPostsTheButton(t *testing.T) {
+	e := newOrchEnv(t)
+	id := e.add("x")
+	e.toTrust(id, shaA)
+	e.orchCalls()
+	if _, err := e.st.OrchAskApproval(e.ctx, orchActor, id, "you said OK the trusted files"); err != nil {
+		t.Fatal(err)
+	}
+	loop, _ := e.orchCalls()
+	posts := only(t, loop, "chat.postMessage")
+	if len(posts) != 1 || posts[0].Body["thread_ts"] != e.thread(id) {
+		t.Fatalf("posts %+v", loop)
+	}
+	if v := elementValue(posts[0], "trust"); v != fmt.Sprintf("%d:%s", id, shaA) {
+		t.Fatalf("trust button %q in %s", v, allText(posts[0]))
+	}
+	if !strings.Contains(allText(posts[0]), "Orchestrator: trusted-file OKs are yours") || !strings.Contains(allText(posts[0]), "tools/pipeline") {
+		t.Fatalf("message %s", allText(posts[0]))
+	}
+	if d := e.item(id); d.Item.Stage != pipeline.NeedsYou || d.Item.Trust.By != "" {
+		t.Fatal("trusted")
+	}
+}
+
+// A recommendation about an item waiting on a trusted-file OK has no Accept: its words are not the
+// OK verify needs. It points to the trust message's button.
+func TestRecommendationNoAcceptOnTrust(t *testing.T) {
+	e := newOrchEnv(t)
+	id := e.add("x")
+	e.toTrust(id, shaA)
+	e.orchCalls()
+	e.escalate(id, "verify refused a change to tools/pipeline", "OK it: the change is the item's ask")
+	e.orchCalls()
+	e.clk.Advance(2 * time.Minute)
+	e.o.Tick(e.ctx)
+	_, orch := e.orchCalls()
+	posts := only(t, orch, "chat.postMessage")
+	if len(posts) != 1 {
+		t.Fatalf("posts %+v", orch)
+	}
+	if v := elementValue(posts[0], actionAccept); v != "" {
+		t.Fatalf("Accept on a trusted-file question: %s", allText(posts[0]))
+	}
+	if !strings.Contains(allText(posts[0]), "button on its trust message") {
+		t.Fatalf("no pointer to the trust button: %s", allText(posts[0]))
+	}
+}
+
+// toTrust has verify refuse id's build commit sha for changing a trusted file.
+func (e *orchEnv) toTrust(id int64, sha string) {
+	e.t.Helper()
+	e.runner(id, "a1", pipeline.Reproduced, map[string]string{"area": "harness", "size": "S", "risk": "normal", "resources": ""})
+	e.runner(id, "builder", pipeline.Failed, map[string]string{"error": "the change touches tools/pipeline", pipeline.FieldTrustSHA: sha,
+		pipeline.FieldTrustPaths: "tools/pipeline", pipeline.FieldTrustDiffstat: "tools/pipeline | 2 +-"})
 }
 
 // The orchestrator's own actions read "Orchestrator: <what> — <reason>"; the user's actions it

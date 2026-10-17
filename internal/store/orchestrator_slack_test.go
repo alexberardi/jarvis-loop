@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
@@ -136,5 +137,52 @@ func TestAcceptRecommendation(t *testing.T) {
 	}
 	if _, err := s.AcceptRecommendation(ctx, you, clkless.ID); code(err) != pipeline.CodeInvalidField {
 		t.Fatalf("not an escalation: %v", err)
+	}
+}
+
+// Asked to OK trusted files, it has the item's trust message posted again, for an item waiting on
+// that OK only: a plain question is refused, and nothing is trusted.
+func TestOrchAskTrust(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	it, err := s.AddItem(ctx, user, NewItem{Title: "trusted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	it.Stage, it.ReturnStage, it.Question = pipeline.NeedsYou, pipeline.Build, "verify refused"
+	if err := s.tx(ctx, func(tx *sql.Tx) error { return saveItem(tx, it) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.OrchAskApproval(ctx, orch, it.ID, "the user said OK the trusted files"); code(err) != pipeline.CodeWrongStage {
+		t.Fatalf("a plain question: %v", err)
+	}
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	it.Trust = &pipeline.Trust{HeadSHA: sha, Paths: []string{"tools/pipeline", "scripts/check"}, Diffstat: "tools/pipeline | 2 +-"}
+	if err := s.tx(ctx, func(tx *sql.Tx) error { return saveItem(tx, it) }); err != nil {
+		t.Fatal(err)
+	}
+	e, err := s.OrchAskApproval(ctx, orch, it.ID, "the user said OK the trusted files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Kind != KindOrchApprovalAsked || e.Data["trust"] != true || e.Data[pipeline.FieldTrustSHA] != sha ||
+		e.Data[pipeline.FieldTrustPaths] != "tools/pipeline,scripts/check" || e.Data[pipeline.FieldTrustDiffstat] != "tools/pipeline | 2 +-" {
+		t.Fatalf("event %+v", e)
+	}
+	esc, err := s.OrchEscalate(ctx, orch, it.ID, "verify refused tools/pipeline", "OK it", "the item asks for it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AcceptRecommendation(ctx, user, esc.ID); code(err) != pipeline.CodeWrongStage {
+		t.Fatalf("Accept as the OK: %v", err)
+	}
+	if d, _ := s.GetItem(ctx, it.ID); d.Item.Stage != pipeline.NeedsYou || d.Item.Trust.By != "" {
+		t.Fatalf("trusted: %+v", d.Item)
+	}
+	if _, err := s.Trust(ctx, user, it.ID, sha); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.OrchAskApproval(ctx, orch, it.ID, "again"); code(err) != pipeline.CodeWrongStage {
+		t.Fatalf("after the OK: %v", err)
 	}
 }

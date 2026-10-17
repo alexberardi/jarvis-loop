@@ -335,4 +335,19 @@ func TestOrchestratorSlackRoutes(t *testing.T) {
 
 	id := e.addItem("x")
 	e.refused(orchTok, "POST", fmt.Sprintf("/orchestrator/items/%d/approval", id), map[string]any{"reason": "asked to approve"}, 409, "wrong_stage")
+
+	// Waiting on a trusted-file OK, the item's trust message is posted again; nothing is trusted.
+	e.mustClaim("triager", id, "triage")
+	e.upload(runnerTok, id, "repro.log", []byte("x\n"), 201)
+	e.advance(id, "reproduced", map[string]string{"area": "harness", "size": "S", "risk": "normal", "resources": ""}, 200)
+	e.mustClaim("builder", id, "build")
+	e.advance(id, "failed", map[string]string{"error": "the change touches tools/pipeline", "trust_sha": shaA,
+		"trusted_paths": "tools/pipeline", "trusted_diffstat": "tools/pipeline | 2 +-"}, 200)
+	e.do(orchTok, "POST", fmt.Sprintf("/orchestrator/items/%d/approval", id), map[string]any{"reason": "asked to OK the trusted files"}, 201, &ev)
+	if ev.Kind != store.KindOrchApprovalAsked || ev.Data["trust"] != true || ev.Data["trust_sha"] != shaA {
+		t.Fatalf("trust asked %+v", ev)
+	}
+	if d := e.get(id); d.Item.Stage != "needs_you" {
+		t.Fatalf("trusted: %+v", d.Item)
+	}
 }

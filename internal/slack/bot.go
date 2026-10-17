@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,6 +68,7 @@ type Bot struct {
 	planHeaders map[int64]string
 	digestTS    time.Time // the boundary the failures below are for
 	digestNG    int       // failed attempts to post that digest
+	self        string    // the loop bot's own user id, once toOrchestrator has needed it
 }
 
 const (
@@ -496,10 +498,14 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		return b.deployedMessage(e, d), true
 	}
 	if e.Kind == store.KindOrchApprovalAsked {
-		// Asked to approve, the orchestrator has the approval message posted again: the button is
-		// the user's, sha-bound.
+		// Asked to approve (or to OK trusted files), the orchestrator has the approval (or trust)
+		// message posted again: the button is the user's, sha-bound.
 		m := b.heldMessage(e, d)
 		lead := "Orchestrator: approvals are yours, so here is its approval message again — " + f("reason", 300)
+		if e.Data["trust"] == true {
+			m = b.trustMessage(e, d)
+			lead = "Orchestrator: trusted-file OKs are yours, so here is its trust message again — " + f("reason", 300)
+		}
 		m.Blocks = append([]map[string]any{section(lead)}, m.Blocks...)
 		m.Text = lead + "\n" + m.Text
 		return m, true
@@ -913,13 +919,53 @@ func errMessage(err error) string {
 
 // toOrchestrator reports whether a message is addressed to the @orchestrator app: its own socket
 // records it, so the loop bot leaves it alone ("@orchestrator answer #46: …" is not an answer,
-// "@orchestrator approve #28" not an approval).
-func (b *Bot) toOrchestrator(text string) bool {
-	return b.c.Orchestrator != nil && b.c.Orchestrator.Mentions(text)
+// "@orchestrator approve #28" not an approval). Until the orchestrator's auth.test has answered,
+// a message that mentions anyone but the loop bot itself counts as the orchestrator's (and any
+// mention does, while the loop bot does not know its own id either): left alone, never misread.
+func (b *Bot) toOrchestrator(ctx context.Context, text string) bool {
+	o := b.c.Orchestrator
+	if o == nil {
+		return false
+	}
+	if o.BotUser() != "" {
+		return o.Mentions(text)
+	}
+	users := userMentionRe.FindAllStringSubmatch(text, -1)
+	if len(users) == 0 {
+		return false
+	}
+	self := b.selfUser(ctx)
+	for _, u := range users {
+		if self == "" || u[1] != self {
+			return true
+		}
+	}
+	return false
+}
+
+var userMentionRe = regexp.MustCompile(`<@([A-Z0-9]+)(?:\|[^>]*)?>`)
+
+// selfUser is the loop bot's own Slack user id (auth.test, asked once it answers), or "".
+func (b *Bot) selfUser(ctx context.Context) string {
+	b.mu.Lock()
+	self := b.self
+	b.mu.Unlock()
+	if self != "" {
+		return self
+	}
+	id, err := b.c.API.AuthTest(ctx)
+	if err != nil {
+		b.c.Log.Warn("slack: auth.test; mentions are left to the orchestrator until it answers", "err", err.Error())
+		return ""
+	}
+	b.mu.Lock()
+	b.self = id
+	b.mu.Unlock()
+	return id
 }
 
 func (b *Bot) onMessage(ctx context.Context, m slackEvent) {
-	if m.BotID != "" || m.Subtype != "" || m.User == "" || b.toOrchestrator(m.Text) {
+	if m.BotID != "" || m.Subtype != "" || m.User == "" || b.toOrchestrator(ctx, m.Text) {
 		return
 	}
 	if m.Channel == ChannelPlan {
@@ -978,7 +1024,7 @@ func (b *Bot) onMessage(ctx context.Context, m slackEvent) {
 }
 
 func (b *Bot) onMention(ctx context.Context, m slackEvent) {
-	if m.BotID != "" || m.User == "" || b.toOrchestrator(m.Text) {
+	if m.BotID != "" || m.User == "" || b.toOrchestrator(ctx, m.Text) {
 		return
 	}
 	// In #plan every message is the conversation's (onMessage), mentioning the bot or not.

@@ -104,6 +104,8 @@ func (s *Store) OrchReply(ctx context.Context, actor, channel, threadTS, text st
 
 // OrchAskApproval has the approval message of an item held for approval posted again, with its
 // sha-bound button: what the orchestrator does when the user asks it to approve (it never may).
+// For an item waiting on the approver's OK of trusted files, it is that item's trust message, with
+// its button bound to the refused commit (data.trust and the refusal's fields).
 func (s *Store) OrchAskApproval(ctx context.Context, actor string, id int64, reason string) (Event, error) {
 	var out Event
 	err := s.tx(ctx, func(tx *sql.Tx) error {
@@ -111,15 +113,20 @@ func (s *Store) OrchAskApproval(ctx context.Context, actor string, id int64, rea
 		if err != nil {
 			return err
 		}
-		if it.Stage != pipeline.Held {
-			return errf(pipeline.CodeWrongStage, "item is %s, not held for approval", it.Stage)
+		trust := it.Stage == pipeline.NeedsYou && it.Trust != nil && it.Trust.By == ""
+		if it.Stage != pipeline.Held && !trust {
+			return errf(pipeline.CodeWrongStage, "item is %s, not held for approval or waiting on a trusted-file OK", it.Stage)
 		}
 		r, err := pipeline.NeedReason(reason)
 		if err != nil {
 			return err
 		}
-		return s.recordEvent(tx, &out, Event{ItemID: id, Actor: actor, Kind: KindOrchApprovalAsked,
-			Data: map[string]any{"head_sha": it.HeadSHA, "reason": r}})
+		data := map[string]any{"head_sha": it.HeadSHA, "reason": r}
+		if trust {
+			data = map[string]any{"trust": true, "reason": r, pipeline.FieldTrustSHA: it.Trust.HeadSHA,
+				pipeline.FieldTrustPaths: strings.Join(it.Trust.Paths, ","), pipeline.FieldTrustDiffstat: it.Trust.Diffstat}
+		}
+		return s.recordEvent(tx, &out, Event{ItemID: id, Actor: actor, Kind: KindOrchApprovalAsked, Data: data})
 	})
 	if err != nil {
 		return out, s.refuse(ctx, actor, id, "approval", err)
@@ -154,6 +161,9 @@ func (s *Store) AcceptRecommendation(ctx context.Context, actor string, escalati
 		}
 		if it.Stage != pipeline.NeedsYou {
 			return errf(pipeline.CodeWrongStage, "item is %s, not needs_you: nothing to accept", it.Stage)
+		}
+		if it.Trust != nil && it.Trust.By == "" {
+			return errf(pipeline.CodeWrongStage, "the item waits on your OK of its trusted files: use the Trust button on its message")
 		}
 		all, err := itemEvents(tx, esc.ItemID)
 		if err != nil {

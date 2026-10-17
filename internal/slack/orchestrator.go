@@ -206,14 +206,15 @@ func (o *Orchestrator) handleEvent(ctx context.Context, e store.Event) {
 
 // recommendation is one escalation as an entry of a message: what the item needs, the
 // recommendation and why, and the buttons. Accept only where it can be the answer: an item waiting
-// on the user's answer, never an approval (that stays on its own button).
+// on the user's answer, never an approval or a trusted-file OK (those stay on their own buttons).
 func (o *Orchestrator) recommendation(ctx context.Context, e store.Event, mention bool) (string, []map[string]any) {
 	var head string
-	accept := false
+	accept, trust := false, false
 	if e.ItemID != 0 {
 		if d, err := o.c.Store.GetItem(ctx, e.ItemID); err == nil {
 			head = "*" + ref(e.ItemID, d.Item.Title) + "*"
 			accept = d.Item.Stage == pipeline.NeedsYou
+			trust = waitsForTrust(d.Item)
 		} else {
 			head = fmt.Sprintf("*#%d*", e.ItemID)
 		}
@@ -239,6 +240,10 @@ func (o *Orchestrator) recommendation(ctx context.Context, e store.Event, mentio
 	switch {
 	case approval:
 		text += "\nApprove it with the button on its approval message: approvals are yours, not mine."
+		accept = false
+	case trust:
+		// Accept would answer with the recommendation's words, not the OK verify needs.
+		text += "\nOK the trusted files with the button on its trust message: trusted-file OKs are yours, not mine."
 		accept = false
 	case rec == "" || !accept:
 		if e.ItemID != 0 && accept {

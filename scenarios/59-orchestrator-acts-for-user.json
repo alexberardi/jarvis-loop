@@ -1,6 +1,6 @@
 {
   "name": "orchestrator-acts-for-user",
-  "about": "The @orchestrator app acts for the approver only on the approver's own messages to it (docs/phases/08-orchestrator.md, piece 2): a DM or a mention, recorded by its socket, never by the loop bot. Someone else's 'drop #1' is refused; the approver's drops it as the approver, via the orchestrator. Asked in the item's thread to approve, it cannot: the loop bot does not take the mention as a reply approval, and the orchestrator has the approval message posted again with its sha-bound button. It answers in the DM it was asked in.",
+  "about": "The @orchestrator app acts for the approver only on the approver's own messages to it (docs/phases/08-orchestrator.md, piece 2): a DM or a mention, recorded by its socket, never by the loop bot. Someone else's 'drop #1' is refused; the approver's drops it as the approver, via the orchestrator. Asked in the item's thread to approve, it cannot: the loop bot does not take the mention as a reply approval, and the orchestrator has the approval message posted again with its sha-bound button. Asked in a thread to OK an item's trusted files (\"@orchestrator trust\"), the same: the loop bot does not take it as the OK, and the orchestrator has the trust message posted again with its button for that commit. It answers in the DM it was asked in.",
   "stages": ["build", "review", "land"],
   "steps": [
     {"do": "add", "item": "a", "title": "An old idea nobody needs"},
@@ -43,6 +43,23 @@
      "events": [{"kind": "orchestrator.message", "data": {"approver": "^true$", "text": "^approve #2$", "item_id": "^2$"}, "count": 1}],
      "no_messages": [{"thread": "b", "from": "bot", "text": "Approving|Not taken as an approval"}],
      "no_events": [{"item": "b", "kind": "approved"}]},
+
+    {"do": "add", "item": "c", "via": "slack", "title": "shoot dark mode too", "text": "[mobile] shoot dark mode too"},
+    {"do": "triage", "item": "c"},
+    {"do": "script", "item": "c", "play": "trusted_change", "file": "tools/shoot"},
+    {"do": "runner", "claims": "c"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"c": "needs_you"}},
+    {"do": "tell_orchestrator", "as": "approver", "where": "thread", "item": "c", "text": "trust"},
+    {"do": "orchestrator", "item": "c", "action": "POST /orchestrator/items/{item}/approval", "body": {"reason": "you asked me to OK the trusted files of #3"}},
+    {"do": "expect", "stage": {"c": "needs_you"},
+     "messages": [{"thread": "c", "from": "bot", "text": "^Orchestrator: trusted-file OKs are yours, so here is its trust message again — you asked me to OK the trusted files of #3(?s:.*)tools/shoot", "buttons": ["Trust this commit", "Drop"]}],
+     "events": [{"kind": "orchestrator.message", "data": {"approver": "^true$", "text": "^trust$", "item_id": "^3$"}, "count": 1}],
+     "no_messages": [{"thread": "c", "from": "bot", "text": "Not trusted|OK'd by you"}],
+     "no_events": [{"item": "c", "kind": "trusted"}, {"item": "c", "kind": "answered"}]},
+
+    {"do": "press", "as": "approver", "item": "c", "button": "trust", "text": "Orchestrator: trusted-file OKs are yours"},
+    {"do": "expect", "stage": {"c": "build"}, "events": [{"item": "c", "kind": "trusted", "actor": "approver", "count": 1}]},
 
     {"do": "press", "as": "approver", "item": "b", "button": "approve", "text": "Orchestrator: approvals are yours"},
     {"do": "expect", "events": [{"item": "b", "kind": "approved", "actor": "approver", "count": 1}],
