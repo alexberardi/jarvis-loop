@@ -17,6 +17,8 @@ type BoardItem struct {
 	UpdatedAt    time.Time
 	// WaitingOn is the items it depends on that are not done yet.
 	WaitingOn []int64
+	// Waits is each of those followed to the item that holds it up (pipeline.WaitChains).
+	Waits []pipeline.WaitChain
 	// PlanID is the plan that filed it (0: none).
 	PlanID int64
 	// Builder is who its plan piece says should build it ("": not from a plan).
@@ -37,6 +39,7 @@ func (s *Store) BoardItems(ctx context.Context) ([]BoardItem, error) {
 	var out []BoardItem
 	var deps [][]int64
 	stages := map[int64]pipeline.Stage{}
+	nodes := map[int64]pipeline.WaitNode{}
 	for rows.Next() {
 		var b BoardItem
 		var created, updated int64
@@ -51,6 +54,7 @@ func (s *Store) BoardItems(ctx context.Context) ([]BoardItem, error) {
 		}
 		deps = append(deps, d)
 		stages[b.ID] = pipeline.Stage(b.Stage)
+		nodes[b.ID] = pipeline.WaitNode{Stage: pipeline.Stage(b.Stage), Claimed: b.ClaimedBy != "", DependsOn: d}
 		b.CreatedAt, b.UpdatedAt = fromNanos(created), fromNanos(updated)
 		b.AgeSeconds = int64(now.Sub(b.CreatedAt) / time.Second)
 		b.Display = pipeline.Display(pipeline.Stage(b.Stage), b.ClaimedBy != "")
@@ -59,9 +63,10 @@ func (s *Store) BoardItems(ctx context.Context) ([]BoardItem, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// Every item is here, so the dependencies' stages are too.
+	// Every item is here, so the dependencies' stages are too, and their chains to the root.
 	for i := range out {
 		out[i].WaitingOn = waitingOn(pipeline.Item{Stage: pipeline.Stage(out[i].Stage), DependsOn: deps[i]}, stages)
+		out[i].Waits = pipeline.WaitChains(out[i].ID, nodes)
 	}
 	return out, nil
 }

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // Item dependencies (docs/phases/07-planning.md, "Item dependencies and the plan link"): an item
@@ -19,6 +20,110 @@ func WaitingOn(it Item, stages map[int64]Stage) []int64 {
 		}
 	}
 	return out
+}
+
+// WaitNode is what a wait chain needs to know of an item.
+type WaitNode struct {
+	Stage     Stage
+	Claimed   bool
+	DependsOn []int64
+}
+
+// WaitChain is what an item waits on, followed to its root (docs/phases/08-orchestrator.md, "Talking
+// to it"): Path is a dependency of the item not done yet, then that one's, and so on; Root is the
+// state of the last one ("needs you", "in build"), which holds up the rest.
+type WaitChain struct {
+	Path []int64
+	Root string
+}
+
+// String is the board's "#12 → #35 → needs you".
+func (c WaitChain) String() string {
+	var b strings.Builder
+	for _, id := range c.Path {
+		fmt.Fprintf(&b, "#%d → ", id)
+	}
+	return b.String() + c.Root
+}
+
+// WaitChains is one chain per dependency of item id not done yet, in its order; none for a done or
+// closed item. Past the first link a chain follows the first dependency not done of each item (that
+// item's own card shows the rest). A dependency missing from items ends its chain as "not found",
+// one already on the path as "a cycle".
+func WaitChains(id int64, items map[int64]WaitNode) []WaitChain {
+	it, ok := items[id]
+	if !ok || it.Stage == Done || it.Stage == Closed {
+		return nil
+	}
+	var out []WaitChain
+	for _, d := range it.DependsOn {
+		if n, ok := items[d]; ok && n.Stage == Done {
+			continue
+		}
+		c := WaitChain{Path: []int64{d}}
+		for cur := d; ; {
+			n, ok := items[cur]
+			if !ok {
+				c.Root = "not found"
+				break
+			}
+			next := int64(0)
+			if n.Stage != Closed {
+				for _, dd := range n.DependsOn {
+					if nn, ok := items[dd]; !ok || nn.Stage != Done {
+						next = dd
+						break
+					}
+				}
+			}
+			if next == 0 {
+				c.Root = WaitRoot(n.Stage, n.Claimed)
+				break
+			}
+			loop := next == id || slices.Contains(c.Path, next)
+			c.Path = append(c.Path, next)
+			if loop {
+				c.Root = "a cycle"
+				break
+			}
+			cur = next
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// WaitRoot is how a chain's root is shown: what the items behind it wait for.
+func WaitRoot(st Stage, claimed bool) string {
+	switch st {
+	case NeedsYou:
+		return "needs you"
+	case Held:
+		return "held for approval"
+	case Triage:
+		if claimed {
+			return "in triage"
+		}
+		return "waiting for triage"
+	case Build:
+		if claimed {
+			return "in build"
+		}
+		return "ready, not claimed"
+	case Review:
+		if claimed {
+			return "in review"
+		}
+		return "queued for review"
+	case Land:
+		if claimed {
+			return "landing"
+		}
+		return "queued to land"
+	case QA:
+		return "in qa"
+	}
+	return string(st)
 }
 
 // DependencyCycle finds a cycle in a dependency graph (item id -> the ids it depends on) and

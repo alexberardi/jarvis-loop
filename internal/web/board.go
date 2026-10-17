@@ -163,9 +163,15 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, err)
 		return
 	}
+	orch, err := p.st.OrchestratorBoard(r.Context(), orchLimit)
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
 	now := p.cfg.Clock.Now()
 	v := boardView(items, plans, now, r.URL.Query().Get("closed") == "1", p.cfg.SlackWorkspace)
 	v.Working = workingView(work, now, 0)
+	v.Orch = orchView(orch, items)
 	w.Header().Set("Content-Security-Policy", liveCSP)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := boardTmpl.Execute(w, v); err != nil {
@@ -377,11 +383,111 @@ func workingView(work []store.Working, now time.Time, item int64) workingSection
 
 type boardData struct {
 	Working    workingSection
+	Orch       orchSection
 	Columns    []column
 	ShowClosed bool
 	Now        time.Time
 	Total      int
 	PlanCount  int
+}
+
+// orchLimit is how many of each list the Orchestrator panel shows.
+const orchLimit = 15
+
+// orchRow is an orchestrator event on its panel.
+type orchRow struct {
+	store.Event
+	Title string
+	// Action is what it did: the event's kind, its stage change, or the refused action.
+	Action string
+	// For is who it acted for, when the user acted through it ("": itself, or loopd).
+	For string
+	// Text is an escalation's question or a refusal's message; Recommendation an escalation's.
+	Text, Recommendation, Reason string
+}
+
+type orchTicket struct {
+	ID       int64
+	Title    string
+	Priority string
+	Display  string
+}
+
+type orchNote struct {
+	At   time.Time
+	Text template.HTML
+}
+
+// orchSection is the board's Orchestrator panel (docs/phases/08-orchestrator.md, "Talking to it");
+// Show is false until the orchestrator has done something.
+type orchSection struct {
+	Show bool
+	// Last is its newest action or note. There is no record of its turns yet (piece 3).
+	Last        time.Time
+	Actions     []orchRow
+	Escalations []orchRow
+	Tickets     []orchTicket
+	Notes       []orchNote
+}
+
+func orchView(o store.OrchBoard, items []store.BoardItem) orchSection {
+	byID := map[int64]store.BoardItem{}
+	for _, it := range items {
+		byID[it.ID] = it
+	}
+	row := func(e store.Event) orchRow {
+		r := orchRow{Event: e, Title: byID[e.ItemID].Title, Action: strings.TrimPrefix(e.Kind, "orchestrator."), Reason: str(e.Data, "reason"),
+			Text: str(e.Data, "text"), Recommendation: str(e.Data, "recommendation")}
+		if e.To != "" && e.To != e.From {
+			r.Action += " (" + e.From + " → " + e.To + ")"
+		}
+		if e.Kind == "refused" {
+			r.Action, r.Text = "refused "+str(e.Data, "action"), str(e.Data, "message")
+		}
+		if via := str(e.Data, "via"); via != "" && via != e.Actor {
+			r.For = e.Actor
+		}
+		return r
+	}
+	var v orchSection
+	for _, e := range o.Actions {
+		v.Actions = append(v.Actions, row(e))
+		if e.At.After(v.Last) {
+			v.Last = e.At
+		}
+	}
+	for _, e := range o.Escalations {
+		v.Escalations = append(v.Escalations, row(e))
+	}
+	// Open ones first, then the rest, each newest first.
+	var done []orchTicket
+	for _, id := range o.Tickets {
+		it, ok := byID[id]
+		if !ok {
+			continue
+		}
+		t := orchTicket{ID: id, Title: it.Title, Priority: it.Priority, Display: it.Display}
+		if it.Stage == string(pipeline.Done) || it.Stage == string(pipeline.Closed) {
+			done = append(done, t)
+		} else {
+			v.Tickets = append(v.Tickets, t)
+		}
+	}
+	v.Tickets = append(v.Tickets, done...)
+	for _, e := range o.Notes {
+		// Model-written: through the allow-list renderer, never as HTML.
+		v.Notes = append(v.Notes, orchNote{At: e.At, Text: markdown(str(e.Data, "text"))})
+		if e.At.After(v.Last) {
+			v.Last = e.At
+		}
+	}
+	v.Show = len(v.Actions)+len(v.Escalations)+len(v.Tickets)+len(v.Notes) > 0
+	return v
+}
+
+func str(m map[string]any, k string) string {
+	s, _ := m[k].(string)
+	return s
 }
 
 // lanes maps the board's columns to display stages (pipeline.Display). Planning holds the open

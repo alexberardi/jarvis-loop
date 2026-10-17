@@ -117,3 +117,62 @@ func TestApplyDependencyClosed(t *testing.T) {
 		t.Fatal("not a dependency: moved")
 	}
 }
+
+func TestWaitChains(t *testing.T) {
+	n := func(st Stage, claimed bool, deps ...int64) WaitNode {
+		return WaitNode{Stage: st, Claimed: claimed, DependsOn: deps}
+	}
+	cases := []struct {
+		name  string
+		id    int64
+		items map[int64]WaitNode
+		want  []WaitChain
+	}{
+		{"no deps", 1, map[int64]WaitNode{1: n(Build, false)}, nil},
+		{"done dep skipped", 1, map[int64]WaitNode{1: n(Triage, false, 2), 2: n(Done, false)}, nil},
+		{"direct dep needs you", 1, map[int64]WaitNode{1: n(Triage, false, 2), 2: n(NeedsYou, false)},
+			[]WaitChain{{Path: []int64{2}, Root: "needs you"}}},
+		{"A→B→C needs you", 1, map[int64]WaitNode{1: n(Triage, false, 2), 2: n(Triage, false, 3), 3: n(NeedsYou, false)},
+			[]WaitChain{{Path: []int64{2, 3}, Root: "needs you"}}},
+		{"done link in the middle is the root's way", 1,
+			map[int64]WaitNode{1: n(Triage, false, 2), 2: n(Build, true, 3), 3: n(Done, false)},
+			[]WaitChain{{Path: []int64{2}, Root: "in build"}}},
+		{"two branches", 1,
+			map[int64]WaitNode{1: n(Triage, false, 2, 4), 2: n(Held, false), 3: n(Done, false), 4: n(Build, false, 3, 5), 5: n(Review, false)},
+			[]WaitChain{{Path: []int64{2}, Root: "held for approval"}, {Path: []int64{4, 5}, Root: "queued for review"}}},
+		{"closed dep", 1, map[int64]WaitNode{1: n(NeedsYou, false, 2), 2: n(Closed, false)},
+			[]WaitChain{{Path: []int64{2}, Root: "closed"}}},
+		{"missing dep", 1, map[int64]WaitNode{1: n(Triage, false, 9)},
+			[]WaitChain{{Path: []int64{9}, Root: "not found"}}},
+		{"cycle", 1, map[int64]WaitNode{1: n(Triage, false, 2), 2: n(Triage, false, 3), 3: n(Triage, false, 2)},
+			[]WaitChain{{Path: []int64{2, 3, 2}, Root: "a cycle"}}},
+		{"back to the item itself", 1, map[int64]WaitNode{1: n(Triage, false, 2), 2: n(Triage, false, 1)},
+			[]WaitChain{{Path: []int64{2, 1}, Root: "a cycle"}}},
+		{"roots by stage", 1,
+			map[int64]WaitNode{1: n(Triage, false, 2, 3, 4, 5, 6, 7), 2: n(Triage, false), 3: n(Triage, true), 4: n(Build, false),
+				5: n(Land, true), 6: n(QA, false), 7: n(Land, false)},
+			[]WaitChain{{Path: []int64{2}, Root: "waiting for triage"}, {Path: []int64{3}, Root: "in triage"},
+				{Path: []int64{4}, Root: "ready, not claimed"}, {Path: []int64{5}, Root: "landing"}, {Path: []int64{6}, Root: "in qa"},
+				{Path: []int64{7}, Root: "queued to land"}}},
+		{"a done item waits on nothing", 1, map[int64]WaitNode{1: n(Done, false, 2), 2: n(Build, false)}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := WaitChains(c.id, c.items)
+			if len(got) != len(c.want) {
+				t.Fatalf("got %+v, want %+v", got, c.want)
+			}
+			for i := range got {
+				if !slices.Equal(got[i].Path, c.want[i].Path) || got[i].Root != c.want[i].Root {
+					t.Fatalf("chain %d: got %+v, want %+v", i, got[i], c.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestWaitChainText(t *testing.T) {
+	if got := (WaitChain{Path: []int64{12, 35}, Root: "needs you"}).String(); got != "#12 → #35 → needs you" {
+		t.Fatalf("got %q", got)
+	}
+}

@@ -44,6 +44,13 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .card .reason { font-size: 13px; margin-top: 4px; }
 .label { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 .note { color: var(--muted); font-size: 13px; margin: 4px; }
+.orch { background: var(--lane); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
+.orch summary { font-weight: 600; cursor: pointer; }
+.orch h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 12px 0 4px; }
+.orch ul { margin: 0; padding-left: 18px; font-size: 14px; }
+.orch li { margin-bottom: 4px; }
+.orch .why { color: var(--muted); }
+.orch .notes > div { border-top: 1px solid var(--line); padding: 4px 0; font-size: 14px; }
 </style>
 </head>
 <body>
@@ -104,7 +111,7 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 <a class="title" href="/board/items/12">#12 Show the plan link</a>
 <div class="meta"><span>jarvis-loop</span>
 <span>P2</span>
-<span>1h</span><span class="label">intake</span><a class="label" href="/board/plans/2">plan P2</a><span class="label">builder: qwen</span><span class="label">waiting on #5, #8</span>
+<span>1h</span><span class="label">intake</span><a class="label" href="/board/plans/2">plan P2</a><span class="label">builder: qwen</span><span class="label">waiting on #5 → in review</span><span class="label">waiting on #8 → held for approval</span>
 </div>
 </article>
 </section>
@@ -121,7 +128,7 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 <a class="title" href="/board/items/4">#4 Retry the TTS call</a>
 <div class="meta"><span>jarvis-server</span>
 <span>P2</span>
-<span>26h</span><span class="label">ready</span>
+<span>26h</span><span class="label">ready</span><span class="label">waiting on #12 → #5 → in review</span>
 </div>
 </article>
 </section>

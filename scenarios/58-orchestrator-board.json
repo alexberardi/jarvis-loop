@@ -1,0 +1,36 @@
+{
+  "name": "orchestrator-board",
+  "about": "The board's Orchestrator panel and wait chains (docs/phases/08-orchestrator.md, piece 5). c waits on b, which waits on a: c's card follows the chain to a ('waiting on #2 → #1 → …') and says what holds it up, needs you once a asks a question. Before the orchestrator acts the board has no panel; after it escalates a, raises b's priority and writes a note, the panel shows the open escalation, the actions with their reasons and the note (markdown rendered, HTML escaped). Answering a closes the escalation.",
+  "stages": ["triage", "build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Plans table"},
+    {"do": "add", "item": "b", "title": "Plan turns", "after": ["a"]},
+    {"do": "add", "item": "c", "title": "Plan link on the board", "after": ["b"]},
+    {"do": "expect", "board_orchestrator": "^$",
+     "board": {"b": {"column": "Triage", "card": "waiting on #1 → waiting for triage"},
+               "c": {"column": "Triage", "card": "waiting on #2 → #1 → waiting for triage"}}},
+    {"do": "script", "item": "a", "for": "triage", "play": "triage_question"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you", "b": "triage", "c": "triage"},
+     "board": {"a": {"column": "Needs you"},
+               "b": {"column": "Triage", "card": "waiting on #1 → needs you"},
+               "c": {"column": "Triage", "card": "waiting on #2 → #1 → needs you"}}},
+
+    {"do": "orchestrator", "item": "a", "action": "POST /orchestrator/escalations",
+     "body": {"item_id": "{id}", "text": "Is a list of ids enough?", "recommendation": "yes, <keep it simple>", "reason": "a product call blocking two items"}},
+    {"do": "orchestrator", "item": "b", "action": "POST /orchestrator/items/{item}/priority", "body": {"priority": "P1", "reason": "two items wait on it"}},
+    {"do": "orchestrator", "action": "POST /orchestrator/notes", "body": {"text": "**#1** holds up #2 and #3 <b>x</b>", "reason": "a chain of three"}},
+    {"do": "expect",
+     "board_orchestrator": "(?s)<summary>Orchestrator · last action [^<]* · 1 open escalation</summary>.*Open escalations.*<a href=\"/board/items/1\">#1</a> <span class=\"reason\">Is a list of ids enough\\?</span> · recommends: yes, &lt;keep it simple&gt;.*Recent actions.*#2</a> Plan turns: <span class=\"label\">patched</span> <span class=\"why\">· because two items wait on it</span>.*#1</a> Plans table: <span class=\"label\">escalated</span>.*Notebook.*<strong>#1</strong> holds up #2 and #3 &lt;b&gt;x&lt;/b&gt;"},
+
+    {"do": "reply", "item": "a", "as": "approver", "text": "a list of ids is fine"},
+    {"do": "expect", "stage": {"a": "triage"},
+     "board_orchestrator": "<summary>Orchestrator · last action [^<·]*</summary>",
+     "board": {"c": {"column": "Triage", "card": "waiting on #2 → #1 → waiting for triage"}}}
+  ],
+  "expect": {
+    "stage": {"a": "triage", "b": "triage", "c": "triage"},
+    "agent_runs": {"triage": 1}
+  }
+}

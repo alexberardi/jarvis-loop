@@ -172,3 +172,27 @@ func (p *player) workingProblems(client *http.Client, page, alias, name, key str
 	}
 	return out
 }
+
+// orchPanel is the board's Orchestrator panel, or "" when it has none.
+func orchPanel(page string) string {
+	_, rest, ok := strings.Cut(page, `<details class="orch"`)
+	if !ok {
+		return ""
+	}
+	panel, _, _ := strings.Cut(rest, `</details>`)
+	return `<details class="orch"` + panel + `</details>`
+}
+
+func (p *player) orchPanelProblems(want string) []string {
+	page, _, err := p.s.boardSession()
+	if err != nil {
+		return []string{"board: " + err.Error()}
+	}
+	panel := orchPanel(page)
+	if ok, err := matches(want, panel); err != nil {
+		return []string{"board: " + err.Error()}
+	} else if !ok {
+		return []string{fmt.Sprintf("board: the Orchestrator panel does not match %q:\n%s", want, panel)}
+	}
+	return nil
+}

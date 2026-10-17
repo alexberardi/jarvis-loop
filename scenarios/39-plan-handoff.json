@@ -21,7 +21,7 @@
      "board": {"p": {"column": "Planning", "card": "<span class=\"label\">split</span>",
                      "page": "(?s)v1 · [^<]* · approved</p>.*<h3>2\\. Pantry API</h3>.*<td>2</td><td><a href=\"/board/items/2\">#2 Pantry API</a></td><td>triage</td><td><a href=\"/board/items/1\">#1</a></td>"},
                "p1": {"column": "Triage", "card": "<a class=\"label\" href=\"/board/plans/1\">plan P1</a><span class=\"label\">builder: qwen</span>", "page": "<dt>Plan</dt><dd><a href=\"/board/plans/1\">P1</a>, piece 1</dd>"},
-               "p2": {"column": "Triage", "card": "plan P1</a><span class=\"label\">builder: claude</span><span class=\"label\">waiting on #1</span>"}}},
+               "p2": {"column": "Triage", "card": "plan P1</a><span class=\"label\">builder: claude</span><span class=\"label\">waiting on #1 → waiting for triage</span>"}}},
     {"do": "script", "item": "p1", "for": "triage", "play": "triage_question"},
     {"do": "runner", "claims": "p1"},
     {"do": "runner_idle"},
