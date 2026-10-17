@@ -117,7 +117,12 @@ func (r *Runner) openCodeCommand(ru *run) (cmd *exec.Cmd, stop func(), err error
 		proxy.Close()
 	}
 	fail := func(e error) (*exec.Cmd, func(), error) { stop(); return nil, nil, e }
-	cfgDir := filepath.Join(ru.dir, "opencode")
+	// The config dir is in the item's OpenCode home, which the fence leaves writable: OpenCode
+	// writes a .gitignore there at start and installs its provider package there (it exits with
+	// "FileSystem.writeFile" otherwise). The runner rewrites opencode.json before every run, so
+	// what the agent may change there lasts one run at most.
+	home := r.openCodeHome(ru)
+	cfgDir := filepath.Join(home, "config")
 	cfgFile := filepath.Join(cfgDir, "opencode", "opencode.json")
 	b, err := openCodeConfig(proxy.URL(), token, q.Model)
 	if err != nil {
@@ -129,7 +134,6 @@ func (r *Runner) openCodeCommand(ru *run) (cmd *exec.Cmd, stop func(), err error
 	if err := os.WriteFile(cfgFile, b, 0o600); err != nil {
 		return fail(err)
 	}
-	home := r.openCodeHome(ru)
 	for _, d := range []string{"data", "state", "cache"} {
 		if err := os.MkdirAll(filepath.Join(home, d), 0o700); err != nil {
 			return fail(err)
