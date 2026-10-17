@@ -171,12 +171,23 @@ func (c *Client) PlanDoc(ctx context.Context, plan int64, kind string) (*pipelin
 	return &d, nil
 }
 
-// Heartbeat keeps a lease alive; true means stop.
-func (c *Client) Heartbeat(ctx context.Context, lease, note string) (bool, error) {
+// Heartbeat keeps a lease alive, with what the run is doing (nil: unchanged); true means stop.
+func (c *Client) Heartbeat(ctx context.Context, lease, note string, act *pipeline.Activity) (bool, error) {
 	var out struct {
 		Stop bool `json:"stop"`
 	}
-	if _, err := c.json(ctx, "POST", "/leases/"+lease+"/heartbeat", map[string]any{"note": note}, &out); err != nil {
+	body := map[string]any{"note": note}
+	if act != nil {
+		body["activity"] = act
+	}
+	_, err := c.json(ctx, "POST", "/leases/"+lease+"/heartbeat", body, &out)
+	var ae *APIError
+	if act != nil && errors.As(err, &ae) && ae.Status == http.StatusBadRequest {
+		// A loopd from before activity (or one that refuses this one): the lease still needs
+		// its heartbeat.
+		_, err = c.json(ctx, "POST", "/leases/"+lease+"/heartbeat", map[string]any{"note": note}, &out)
+	}
+	if err != nil {
 		return false, err
 	}
 	return out.Stop, nil

@@ -123,19 +123,22 @@ type PlanLease struct {
 	ExpiresAt time.Time
 	Note      string
 	EndedAt   *time.Time
+	Activity  *pipeline.Activity
 }
 
-const planLeaseCols = `id, turn_id, plan_id, runner, agent, claimed_at, expires_at, note, ended_at`
+const planLeaseCols = `id, turn_id, plan_id, runner, agent, claimed_at, expires_at, note, ended_at, activity`
 
 func scanPlanLease(row scanner) (PlanLease, error) {
 	var (
 		l                PlanLease
 		claimed, expires int64
 		ended            sql.NullInt64
+		activity         string
 	)
-	if err := row.Scan(&l.ID, &l.TurnID, &l.PlanID, &l.Runner, &l.Agent, &claimed, &expires, &l.Note, &ended); err != nil {
+	if err := row.Scan(&l.ID, &l.TurnID, &l.PlanID, &l.Runner, &l.Agent, &claimed, &expires, &l.Note, &ended, &activity); err != nil {
 		return l, err
 	}
+	l.Activity = parseActivity(activity)
 	l.ClaimedAt, l.ExpiresAt = fromNanos(claimed), fromNanos(expires)
 	if ended.Valid {
 		t := fromNanos(ended.Int64)
@@ -147,7 +150,7 @@ func scanPlanLease(row scanner) (PlanLease, error) {
 // lease is the plan lease as the claim's lease: stage "plan", no item.
 func (l PlanLease) lease() Lease {
 	return Lease{ID: l.ID, Stage: pipeline.PlanTurnStage, Runner: l.Runner, Agent: l.Agent, Resources: []string{},
-		ClaimedAt: l.ClaimedAt, ExpiresAt: l.ExpiresAt, Note: l.Note, EndedAt: l.EndedAt}
+		ClaimedAt: l.ClaimedAt, ExpiresAt: l.ExpiresAt, Note: l.Note, EndedAt: l.EndedAt, Activity: l.Activity}
 }
 
 func livePlanLeases(tx *sql.Tx) ([]PlanLease, error) {
@@ -168,7 +171,7 @@ func livePlanLeases(tx *sql.Tx) ([]PlanLease, error) {
 }
 
 func endPlanLease(tx *sql.Tx, id string, at time.Time, reason string) error {
-	_, err := tx.Exec(`UPDATE plan_leases SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL`, at.UnixNano(), reason, id)
+	_, err := tx.Exec(`UPDATE plan_leases SET ended_at = ?, end_reason = ?, activity = '' WHERE id = ? AND ended_at IS NULL`, at.UnixNano(), reason, id)
 	return err
 }
 
@@ -494,7 +497,7 @@ func (s *Store) DropPlan(ctx context.Context, actor string, id int64, words stri
 			if t == nil {
 				continue
 			}
-			if _, err := tx.Exec(`UPDATE plan_leases SET ended_at = ?, end_reason = 'dropped' WHERE turn_id = ? AND ended_at IS NULL`,
+			if _, err := tx.Exec(`UPDATE plan_leases SET ended_at = ?, end_reason = 'dropped', activity = '' WHERE turn_id = ? AND ended_at IS NULL`,
 				now.UnixNano(), t.ID); err != nil {
 				return err
 			}
@@ -753,7 +756,7 @@ func (s *Store) sweepPlans(tx *sql.Tx, now time.Time, maxRun time.Duration) erro
 }
 
 // planHeartbeat is Heartbeat for a turn's lease. found is false when no turn lease has that id.
-func (s *Store) planHeartbeat(tx *sql.Tx, runnerName, leaseID, note string) (stop, found bool, err error) {
+func (s *Store) planHeartbeat(tx *sql.Tx, runnerName, leaseID, note, actJSON string) (stop, found bool, err error) {
 	l, err := scanPlanLease(tx.QueryRow(`SELECT `+planLeaseCols+` FROM plan_leases WHERE id = ?`, leaseID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, false, nil
@@ -796,7 +799,10 @@ func (s *Store) planHeartbeat(tx *sql.Tx, runnerName, leaseID, note string) (sto
 	if note == "" {
 		note = l.Note
 	}
-	_, err = tx.Exec(`UPDATE plan_leases SET expires_at = ?, note = ? WHERE id = ?`, now.Add(LeaseTTL).UnixNano(), note, l.ID)
+	if actJSON == "" {
+		actJSON = encodedActivity(l.Activity)
+	}
+	_, err = tx.Exec(`UPDATE plan_leases SET expires_at = ?, note = ?, activity = ? WHERE id = ?`, now.Add(LeaseTTL).UnixNano(), note, actJSON, l.ID)
 	return false, true, err
 }
 

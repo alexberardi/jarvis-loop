@@ -79,7 +79,7 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | `GET /items`, `GET /items/{id}` | the board and one item with its history |
 | `PATCH /items/{id}` | change priority or title |
 | `POST /claim` | a runner asks for work matching its capabilities; returns an item, its stage brief and a lease, or nothing |
-| `POST /leases/{id}/heartbeat` | keep a lease alive; the answer says whether to stop |
+| `POST /leases/{id}/heartbeat` | keep a lease alive, with an optional `activity` (what the agent is doing, for the board's "Working now"; [decision](decisions/2026-10-16-working-now.md)); the answer says whether to stop |
 | `POST /items/{id}/advance` | finish a stage with its result and evidence; the server checks the exit criteria and picks the next stage |
 | `POST /items/{id}/evidence` | upload a file |
 | `POST /items/{id}/ask`, `/answer` | put an item in needs-you with a question; record the answer |
@@ -137,7 +137,7 @@ Slack is the user's whole interface: add work, answer questions and approve merg
 | drop an item | **Drop** on a held or needs-you message, or `/loop drop <id> [why]` (`loop drop <id>` on the CLI); its PR is closed, the branch stays |
 | check a merged change yourself | `/loop qa <id>` before it lands (or a repo's `qa: true`); then **Verified** / **Reopen** on the "Merged — waiting for your check" message, or `/loop verified <id>`, `/loop reopen <id> <what is wrong>` |
 | set priority | words when adding, or the dropdown on the item's first message |
-| see the board | `/loop status`; `/loop show <id>` for one item; on the LAN, the web board at `/board` (columns per stage, read-only, refreshes every 30 s) |
+| see the board | `/loop status`; `/loop show <id>` for one item; on the LAN, the web board at `/board` (a "Working now" card per running agent, refreshed every 5 s; columns per stage, read-only, refreshes every 30 s) |
 | turn spending up or down | the pinned **Active agents** message, `/loop agents <n>`, `/loop stop` |
 | catch up | a digest every 4 hours in `#loop-digest`: merged, held, failing, new, waiting for your check (qa), estimated spend |
 

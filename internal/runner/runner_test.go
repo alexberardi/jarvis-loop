@@ -736,6 +736,9 @@ func TestHeartbeatsThenStop(t *testing.T) {
 		if l == nil || !l.ExpiresAt.Equal(g.loopdClk.Now().Add(store.LeaseTTL)) {
 			t.Fatalf("heartbeat %d did not extend the lease: %+v", i, l)
 		}
+		if a := l.Activity; a == nil || a.Phase != "build agent" || a.ElapsedS != int64(60*(i+1)) {
+			t.Fatalf("heartbeat %d activity: %+v", i, a)
+		}
 	}
 	// The user stops everything: the next heartbeat says stop.
 	stop := true
