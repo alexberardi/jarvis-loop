@@ -148,8 +148,8 @@ func (r *Runner) fenced(dir, script string, env, extraWritable []string) (*exec.
 }
 
 // fenceOpts are what a fenced command gets besides the defaults: more writable paths, paths made
-// read-only again inside writable ones, and paths bound read-only so they are visible at all
-// (under the private /tmp).
+// read-only again inside writable ones, and paths bound read-only before the writable ones (so
+// they are visible at all under the private /tmp, or read-only around writable dirs inside them).
 type fenceOpts struct {
 	Writable, ReadOnly, Visible []string
 }

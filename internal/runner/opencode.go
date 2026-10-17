@@ -146,14 +146,15 @@ func (r *Runner) openCodeCommand(ru *run) (cmd *exec.Cmd, stop func(), err error
 	}
 	env := append(r.agentEnv(), openCodeEnv(cfgDir, cfgFile, home)...)
 	fc, err := r.fenceWith(ru.wt, script, env, fenceOpts{
-		// Its sessions, and the mirror's objects and refs (a commit in the worktree writes them);
-		// the mirror's config, hooks and info stay read-only, as the runner's own git reads them.
-		// Its worktrees dir is a mount point of its own, so the worktree's admin dir (and the
-		// plumbing the fence keeps read-only in it) cannot be renamed away and remade.
-		Writable: []string{home, ru.mirror, filepath.Join(ru.mirror, "worktrees")},
+		// Its sessions, and of the mirror only what a commit in the worktree writes: objects, refs
+		// and logs (the worktree's admin dir the fence binds last). The mirror is shared with the
+		// runner's other lanes (land, plans, other builds), so its root and worktrees/ stay
+		// read-only: no commondir, config or another worktree's plumbing can be planted there.
+		Writable: append([]string{home}, mirrorWritable(ru.mirror)...),
 		ReadOnly: mirrorReadOnly(ru.mirror),
-		// The binary's own dir, which may sit under the /tmp the fence makes private.
-		Visible: []string{filepath.Dir(bin)},
+		// The binary's own dir, which may sit under the /tmp the fence makes private; and the
+		// mirror, bound read-only before the writable paths inside it.
+		Visible: []string{filepath.Dir(bin), ru.mirror},
 	})
 	if err != nil {
 		return fail(err)
@@ -193,6 +194,16 @@ func restorePlumbing(before map[string]string) (changed []string, err error) {
 	}
 	slices.Sort(changed)
 	return changed, err
+}
+
+// mirrorWritable are the dirs of a bare mirror a commit in one of its worktrees writes (logs
+// created when missing); the rest of the mirror stays read-only.
+func mirrorWritable(mirror string) []string {
+	if mirror == "" {
+		return nil
+	}
+	os.MkdirAll(filepath.Join(mirror, "logs"), 0o755)
+	return []string{filepath.Join(mirror, "objects"), filepath.Join(mirror, "refs"), filepath.Join(mirror, "logs")}
 }
 
 // mirrorReadOnly are the paths of a bare mirror that run code in the runner's own git calls; they

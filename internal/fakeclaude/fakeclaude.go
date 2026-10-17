@@ -39,8 +39,11 @@ const (
 	// Repoint the worktree's git (its .git file, the admin dir's commondir and config.worktree,
 	// renaming the admin dir and the mirror's worktrees dir away), then good.
 	GitTamper = "git_tamper"
-	// Give the mirror a commondir (a file the fence cannot keep read-only), then good.
+	// Give the mirror a commondir (with a test that left the mirror writable), then good.
 	GitTamperMirror = "git_tamper_mirror"
+	// Plant in the shared mirror: its commondir, another worktree's commondir and a file in its
+	// worktrees dir, then good.
+	GitTamperShared = "git_tamper_shared"
 	Lying           = "lying"       // good, but the result's head_sha is not HEAD
 	Malformed       = "malformed"   // commit, then a result that is not JSON
 	NoResult        = "noresult"    // commit, exit 0, no result
@@ -298,7 +301,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f.say("hello from manual mode")
 		f.result("nothing done")
 		return 0
-	case GitTamper, GitTamperMirror:
+	case GitTamper, GitTamperMirror, GitTamperShared:
 		admin := strings.TrimPrefix(strings.TrimSpace(readFile(filepath.Join(f.cwd, ".git"))), "gitdir: ")
 		mirror := filepath.Dir(filepath.Dir(admin))
 		evil := filepath.Join(f.cwd, ".loop", "scratch", "evil.git")
@@ -306,6 +309,17 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			filepath.Join(f.cwd, ".loop", "scratch", "pwned") + "'")
 		if scenario == GitTamperMirror {
 			f.write(filepath.Join(mirror, "commondir"), evil+"\n")
+			break
+		}
+		if scenario == GitTamperShared {
+			f.write(filepath.Join(mirror, "commondir"), evil+"\n")
+			ents, _ := os.ReadDir(filepath.Join(mirror, "worktrees"))
+			for _, e := range ents {
+				if other := filepath.Join(mirror, "worktrees", e.Name()); other != admin {
+					f.write(filepath.Join(other, "commondir"), evil+"\n")
+				}
+			}
+			f.write(filepath.Join(mirror, "worktrees", "planted", "gitdir"), evil+"\n")
 			break
 		}
 		f.write(".git", "gitdir: "+evil+"\n")

@@ -250,10 +250,59 @@ func TestQwenBuildCannotRepointGit(t *testing.T) {
 	}
 }
 
-// The mirror's commondir need not exist, so the fence cannot keep it read-only: a run that writes
-// one fails as a boundary check, and the runner removes it before its own git reads the mirror.
+// The mirror is shared with the runner's other lanes, so the fence keeps it read-only but for the
+// objects, refs and logs a commit writes: the agent cannot give it a commondir, rewrite another
+// worktree's plumbing or add an admin dir, and the build still commits, pushes and opens its PR.
+func TestQwenBuildCannotPlantInMirror(t *testing.T) {
+	g, _ := qwenRig(t, fakeclaude.GitTamperShared)
+	mirror := g.r.mirrorPath("demo")
+	if err := g.r.Git.EnsureMirror(g.ctx, mirror, g.r.Cfg.Repos["demo"]); err != nil {
+		t.Fatal(err)
+	}
+	// Another lane's worktree of the same mirror (a land-conflict merge, a plan, a second build).
+	gitT(t, mirror, "worktree", "add", "-q", "--detach", filepath.Join(t.TempDir(), "other"), "origin/main")
+	otherCommondir := filepath.Join(mirror, "worktrees", "other", "commondir")
+	was := g.read(otherCommondir)
+	id := g.toBuild("Add a feature")
+	g.setBuilder(id, pipeline.BuilderQwen)
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.Review {
+		t.Fatalf("stage %s (%s); log:\n%s", d.Item.Stage, d.Item.Question, g.logs.String())
+	}
+	runs, _ := filepath.Glob(filepath.Join(g.r.Cfg.WorkRoot, "runs", fmt.Sprintf("%d-build-*", id)))
+	stream := g.read(filepath.Join(runs[0], "stream.jsonl"))
+	for _, p := range []string{mirror + "/commondir", otherCommondir, mirror + "/worktrees/planted/gitdir"} {
+		if !strings.Contains(stream, `"file_path":"`+p+`"`) {
+			t.Errorf("the agent never tried %s", p)
+		}
+	}
+	if n := strings.Count(stream, "read-only file system"); n != 3 {
+		t.Errorf("%d writes refused, want 3:\n%s", n, stream)
+	}
+	if _, err := os.Stat(filepath.Join(mirror, "commondir")); !os.IsNotExist(err) {
+		t.Errorf("mirror commondir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(mirror, "worktrees", "planted")); !os.IsNotExist(err) {
+		t.Errorf("planted admin dir: %v", err)
+	}
+	if got := g.read(otherCommondir); got != was {
+		t.Errorf("the other worktree's commondir is %q, was %q", got, was)
+	}
+	if h := g.remoteHead(d.Item.Branch); h == "" || g.prs.bodies[7] == "" {
+		t.Fatalf("the runner pushed %q and opened %v; log:\n%s", h, g.prs.bodies, g.logs.String())
+	}
+	if strings.Contains(g.logs.String(), endGitTampered) {
+		t.Fatalf("log:\n%s", g.logs.String())
+	}
+}
+
+// The second layer: should the mirror be writable after all (here a verify_writable that covers
+// it), a run that gives it a commondir fails as a boundary check, and the runner removes it
+// before its own git reads the mirror.
 func TestQwenBuildMirrorCommondir(t *testing.T) {
 	g, _ := qwenRig(t, fakeclaude.GitTamperMirror)
+	g.r.Cfg.VerifyWritable = append(g.r.Cfg.VerifyWritable, g.r.mirrorPath("demo"))
 	id := g.toBuild("Add a feature")
 	g.setBuilder(id, pipeline.BuilderQwen)
 	g.runOnce()
