@@ -69,6 +69,10 @@ const (
 	// NoChange is good on a fresh branch; on a resumed one (a rerun after a bounce) it commits
 	// nothing and reports the same head, as an agent that found nothing to fix would.
 	NoChange = "no_change"
+	// Harness is good, after using the repo's harness through the runner: loop-harness up, then a
+	// run that writes .loop/evidence/harness.txt. HarnessHang does the same, then hangs.
+	Harness     = "harness"
+	HarnessHang = "harness_hang"
 
 	// Triage plays (a triage run of a build play plays Reproduce).
 	Reproduce      = "reproduce"       // reproduced, with notes and a repro file; picks the script's repo when the item has none
@@ -260,6 +264,12 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			"permissionMode": mode, "tools": []string{"Bash", "Read", "Edit", "Write"}, "apiKeySource": "none", "claude_code_version": "fake"})
 	}
 
+	if scenario == Harness || scenario == HarnessHang {
+		f.bash("loop-harness up && loop-harness run 'echo harness-ok > .loop/evidence/harness.txt'")
+		if scenario == HarnessHang {
+			scenario = Hang
+		}
+	}
 	switch scenario {
 	case TodosHang:
 		f.tool("TodoWrite", map[string]any{"todos": []any{

@@ -58,6 +58,9 @@ type Runner struct {
 	fenceOnce sync.Once
 	fenceErr  error
 
+	hbMu sync.Mutex
+	hb   *harnessBroker // the harness broker's sessions (harness.go)
+
 	paused   atomic.Value // string: why the runner stopped claiming
 	mirrorMu sync.Map     // mirror path -> *sync.Mutex
 	watching atomic.Int64 // main-CI watches running
@@ -338,7 +341,7 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 		return
 	}
 	log.Info("agent starting", "worktree", ru.wt, "branch", ru.branch, "mode", r.Cfg.Mode, "builder", ru.builder, "resume", ru.resume)
-	out := r.runAgent(ctx, ru, brief)
+	out := r.runAgentHarness(ctx, ru, brief)
 	log.Info("agent ended", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
 	// Reporting and saving work must finish even when the runner is shutting down.
 	r.report(cleanupCtx, ru, out, log)
@@ -365,7 +368,7 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 		return
 	}
 	os.Remove(filepath.Join(ru.wt, ".loop", "result.json"))
-	out = r.runAgent(ctx, ru, brief)
+	out = r.runAgentHarness(ctx, ru, brief)
 	log.Info("agent ended (retry)", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
 	r.report(cleanupCtx, ru, out, log)
 }
@@ -439,6 +442,10 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 	}
 	info := RunInfo{Slug: ru.repo.Slug, Base: ru.repo.Base, Branch: ru.branch, Worktree: ru.wt, Scratch: ru.scratch, Sandbox: ru.sandbox,
 		RepoGroup: ru.repo.Group}
+	if ru.hasHarness() {
+		info.Harness = ru.repo.Harness
+		info.HarnessBin = filepath.Join(r.Cfg.harnessBinDir(), "loop-harness")
+	}
 	if ru.stage == StageBuild {
 		for _, v := range ru.repo.Verify {
 			info.Verify = append(info.Verify, v.Name)
@@ -501,11 +508,15 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 	// The same bytes for every item of the repo and stage (see
 	// docs/decisions/2026-10-15-prompt-caching.md); written atomically, as parallel slots share
 	// the file.
-	settings, err := GenerateSettings(SettingsInput{
+	in := SettingsInput{
 		Mode: r.Cfg.Mode, Guard: r.Cfg.Guard, Home: home, Protected: r.Cfg.Protected(), Secrets: r.Cfg.Secrets(),
 		LoopdAddrs: r.Cfg.LoopdAddrs(), AllowedDomains: r.Cfg.AllowedDomains, ExcludedCommands: ru.repo.ExcludedCommands,
 		ReadOnly: ru.stage != StageBuild,
-	})
+	}
+	if ru.hasHarness() {
+		in.Harness = true
+	}
+	settings, err := GenerateSettings(in)
 	if err != nil {
 		return "", err
 	}
@@ -773,7 +784,11 @@ func (r *Runner) handle(ru *run, st *streamStats, line []byte) (string, string) 
 func (r *Runner) agentCommand(ru *run) *exec.Cmd {
 	cmd := exec.Command(r.Cfg.Claude, ClaudeArgs(AgentArgs{Mode: r.Cfg.Mode, Settings: ru.settings, Model: r.Cfg.Model, Resume: ru.resume})...)
 	cmd.Dir = ru.wt
-	cmd.Env = append(r.agentEnv(),
+	env := r.agentEnv()
+	if ru.hasHarness() {
+		env = prependPath(env, r.Cfg.harnessBinDir())
+	}
+	cmd.Env = append(env,
 		guard.ConfigEnv+"="+filepath.Join(ru.dir, "guard.json"),
 		// Loop agents keep no auto memory (a per-worktree memory dir would be new every run) and
 		// fetch no claude.ai connectors (no MCP tools at all).
@@ -793,6 +808,37 @@ func (r *Runner) maxRun(ctx context.Context, ru *run) time.Duration {
 		maxRun = ru.maxRun // a plan turn's own cap
 	}
 	return maxRun
+}
+
+// hasHarness: the run's agent gets a harness session (harness.go).
+func (ru *run) hasHarness() bool {
+	return ru.repo.Harness != nil && (ru.stage == StageBuild || ru.stage == StageReview)
+}
+
+// prependPath puts dir first on env's PATH.
+func prependPath(env []string, dir string) []string {
+	out := append([]string(nil), env...)
+	for i, kv := range out {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			out[i] = "PATH=" + dir + string(os.PathListSeparator) + v
+			return out
+		}
+	}
+	return append(out, "PATH="+dir)
+}
+
+// runAgentHarness is runAgent with the repo's harness session, when it has one: open while the
+// agent runs, ended as soon as it stops (lease lost and shutdown too), before the runner's own
+// verify, which starts the harness itself.
+func (r *Runner) runAgentHarness(ctx context.Context, ru *run, brief string) outcome {
+	hs, err := r.startHarness(ru)
+	if err != nil {
+		return outcome{reason: endStartFailed, exitCode: -1, detail: "the harness session: " + err.Error()}
+	}
+	if hs != nil {
+		defer hs.end(context.WithoutCancel(ctx))
+	}
+	return r.runAgent(ctx, ru, brief)
 }
 
 // runAgent runs claude for one item, in its own process group, with heartbeats and the time cap.

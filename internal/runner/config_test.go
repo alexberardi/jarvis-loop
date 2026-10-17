@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeCfg(t *testing.T, body string, mode os.FileMode) string {
@@ -126,6 +127,38 @@ func TestConfigAllRepos(t *testing.T) {
 		"empty setup command":    strings.Replace(cfgAllRepos, `"mise exec node@22 -- npm ci --ignore-scripts"`, `" "`, 1),
 	} {
 		if _, err := LoadConfig(writeCfg(t, body, 0o600)); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}
+
+// A repo's harness (harness.go): up and down are required, the timeout defaults to 20 minutes.
+func TestConfigHarness(t *testing.T) {
+	withHarness := func(h string) string {
+		return strings.Replace(cfgBody, `"slug":"alexberardi/jarvis-server"`, `"slug":"alexberardi/jarvis-server","harness":`+h, 1)
+	}
+	c, err := LoadConfig(writeCfg(t, withHarness(`{"up":"scripts/sandbox up --name $LOOP_SANDBOX","down":"scripts/sandbox down --name $LOOP_SANDBOX --purge"}`), 0o600))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := c.Repos["jarvis-server"].Harness; h == nil || h.Timeout() != 20*time.Minute || !strings.HasPrefix(h.Up, "scripts/sandbox up") {
+		t.Fatalf("harness %+v", h)
+	}
+	if c.LoopHarness == "" || filepath.Base(c.LoopHarness) != "loop-harness" {
+		t.Fatalf("loop_harness default %q", c.LoopHarness)
+	}
+	c, err = LoadConfig(writeCfg(t, withHarness(`{"up":"u","down":"d","timeout":"90s"}`), 0o600))
+	if err != nil || c.Repos["jarvis-server"].Harness.Timeout() != 90*time.Second {
+		t.Fatalf("timeout: %v", err)
+	}
+	for name, h := range map[string]string{
+		"no down":      `{"up":"u"}`,
+		"no up":        `{"down":"d"}`,
+		"bad timeout":  `{"up":"u","down":"d","timeout":"soon"}`,
+		"unknown key":  `{"up":"u","down":"d","stop":"x"}`,
+		"zero timeout": `{"up":"u","down":"d","timeout":"0s"}`,
+	} {
+		if _, err := LoadConfig(writeCfg(t, withHarness(h), 0o600)); err == nil {
 			t.Errorf("%s accepted", name)
 		}
 	}

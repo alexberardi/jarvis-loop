@@ -23,10 +23,14 @@ func goldenInput(mode string) SettingsInput {
 }
 
 func TestSettingsGolden(t *testing.T) {
-	for _, name := range []string{ModeAuto, ModeStrict, ModeAuto + "_readonly"} {
+	// strict_harness is a repo with a harness (harness.go): its agents may run loop-harness. Its
+	// spool is in the worktree, so the sandbox itself is the same as for every other repo.
+	for _, name := range []string{ModeAuto, ModeStrict, ModeAuto + "_readonly", ModeStrict + "_harness"} {
 		mode, ro := strings.CutSuffix(name, "_readonly")
+		mode, hs := strings.CutSuffix(mode, "_harness")
 		in := goldenInput(mode)
 		in.ReadOnly = ro
+		in.Harness = hs
 		got, err := GenerateSettings(in)
 		if err != nil {
 			t.Fatal(err)
@@ -204,6 +208,43 @@ func TestDenyRulesKillAndPush(t *testing.T) {
 		"gh pr edit 3 --body x"} {
 		if denied(rules, cmd) == "" {
 			t.Errorf("%q is not denied", cmd)
+		}
+	}
+}
+
+// A repo with a harness gets loop-harness in strict mode's allowlist and nothing else: no Unix
+// socket (Claude Code ignores allowUnixSockets on Linux, and allowAllUnixSockets is never set),
+// no excluded command, no wider sandbox.
+func TestSettingsHarness(t *testing.T) {
+	type shape struct {
+		Permissions struct {
+			Allow []string `json:"allow"`
+		} `json:"permissions"`
+		Sandbox struct {
+			Network          map[string]any `json:"network"`
+			ExcludedCommands []string       `json:"excludedCommands"`
+		} `json:"sandbox"`
+	}
+	for _, mode := range []string{ModeAuto, ModeStrict} {
+		for _, hs := range []bool{false, true} {
+			in := goldenInput(mode)
+			in.Harness = hs
+			b, _ := GenerateSettings(in)
+			var s shape
+			if err := json.Unmarshal(b, &s); err != nil {
+				t.Fatal(err)
+			}
+			for _, k := range []string{"allowUnixSockets", "allowAllUnixSockets"} {
+				if _, ok := s.Sandbox.Network[k]; ok {
+					t.Errorf("%s, harness %v: %s must never be set", mode, hs, k)
+				}
+			}
+			if s.Sandbox.ExcludedCommands != nil {
+				t.Errorf("%s, harness %v: excludedCommands %v", mode, hs, s.Sandbox.ExcludedCommands)
+			}
+			if allowed := slices.Contains(s.Permissions.Allow, "Bash(loop-harness *)"); allowed != (mode == ModeStrict && hs) {
+				t.Errorf("%s, harness %v: loop-harness allowed %v", mode, hs, allowed)
+			}
 		}
 	}
 }
