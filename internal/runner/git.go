@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Git runs git for the runner. Every call turns hooks and signing off: the worktree is the
@@ -27,17 +28,53 @@ func (g Git) env() []string {
 	return append(append([]string{}, src...), "GIT_TERMINAL_PROMPT=0")
 }
 
+// lockRetries are the waits before each retry of a git call that met another git's lock file.
+// The runner's own mirror work is serialised (Runner.lockMirror), but agents run git in their
+// worktrees, which share the mirror's config and refs: a switch -c, commit or config there holds
+// config.lock or a ref lock for a moment. git takes those without waiting and changes nothing
+// when it can't, so the call is retried.
+var lockRetries = []time.Duration{100 * time.Millisecond, 250 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Second}
+
+// lockBusy says whether git's stderr is another process's lock file, not a real failure.
+func lockBusy(stderr string) bool {
+	return strings.Contains(stderr, "could not lock config file") ||
+		(strings.Contains(stderr, ".lock") && strings.Contains(stderr, "File exists")) ||
+		strings.Contains(stderr, "cannot lock ref")
+}
+
 func (g Git) run(ctx context.Context, dir string, args ...string) (string, error) {
 	full := append([]string{"-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...)
-	cmd.Dir = dir
-	cmd.Env = g.env()
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		return strings.TrimSpace(out.String()), fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, clip(strings.TrimSpace(errb.String()), 500))
+	for i := 0; ; i++ {
+		cmd := exec.CommandContext(ctx, "git", full...)
+		cmd.Dir = dir
+		cmd.Env = g.env()
+		var out, errb bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &errb
+		err := cmd.Run()
+		if err == nil {
+			return strings.TrimSpace(out.String()), nil
+		}
+		stderr := strings.TrimSpace(errb.String())
+		if i < len(lockRetries) && lockBusy(stderr) {
+			select {
+			case <-ctx.Done():
+			case <-time.After(lockRetries[i]):
+				continue
+			}
+		}
+		return strings.TrimSpace(out.String()), fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, clip(stderr, 500))
 	}
-	return strings.TrimSpace(out.String()), nil
+}
+
+// setConfig writes a mirror config value only when the mirror's own file differs: every write
+// takes config.lock, which an agent's git in a worktree may be holding. --local, because run's
+// -c overrides (commit.gpgsign, core.hooksPath) would otherwise answer for the file.
+func (g Git) setConfig(ctx context.Context, mirror, key, value string) error {
+	if cur, err := g.run(ctx, mirror, "config", "--local", "--get", key); err == nil && cur == value {
+		return nil
+	}
+	_, err := g.run(ctx, mirror, "config", key, value)
+	return err
 }
 
 // MirrorExclude is the mirror's info/exclude: the runner's own files, and what a repo's setup
@@ -62,11 +99,11 @@ func (g Git) EnsureMirror(ctx context.Context, mirror string, r RepoConfig) erro
 			{"commit.gpgsign", "false"}, {"tag.gpgsign", "false"},
 			{"core.hooksPath", "/dev/null"},
 		} {
-			if _, err := g.run(ctx, mirror, "config", kv[0], kv[1]); err != nil {
+			if err := g.setConfig(ctx, mirror, kv[0], kv[1]); err != nil {
 				return err
 			}
 		}
-	} else if _, err := g.run(ctx, mirror, "config", "remote.origin.url", r.Remote); err != nil {
+	} else if err := g.setConfig(ctx, mirror, "remote.origin.url", r.Remote); err != nil {
 		return err
 	}
 	// Kept up to date on every refresh: a mirror made before a line was added gets it too.
