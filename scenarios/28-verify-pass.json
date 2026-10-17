@@ -119,7 +119,7 @@
           "stage": "build",
           "run": 1,
           "file": "brief.md",
-          "text": "the runner runs this repo's verify steps itself \\(outside your sandbox\\), before it pushes: unit tests; mobile shots; web screenshots; a failure comes back to you in `\\.loop/review/verify\\.md`\\."
+          "text": "the runner runs this repo's verify steps itself \\(outside your sandbox\\), before it pushes: unit tests; mobile shots; web screenshots; a failure comes back to you in `\\.loop/review/verify\\.md`, which is all there is of it \\(the harness it ran on is the user's; do not look for it\\)\\."
         }
       ],
       "absent": [
