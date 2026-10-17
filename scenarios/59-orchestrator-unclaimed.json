@@ -13,7 +13,7 @@
     {"do": "clock", "advance": "2h"},
     {"do": "runner", "claims": "orchestrator"},
     {"do": "runner_idle"},
-    {"do": "expect", "stage": {"a": "build", "#3": "triage"}, "repo": {"#3": "alexberardi/jarvis-loop"},
+    {"do": "expect", "stage": {"a": "build", "#3": "triage"}, "repo": {"#3": "sandbox/jarvis-loop"},
      "events": [{"kind": "orchestrate_claimed", "count": 1},
                 {"item": "#3", "kind": "created", "actor": "orchestrator",
                  "data": {"priority": "^P1$", "title": "^Ready items are not claimed: no runner offers emulator$"}, "count": 1},

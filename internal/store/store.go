@@ -65,6 +65,7 @@ type Store struct {
 
 	reposMu sync.RWMutex
 	repos   []string
+	aliases map[string]string // lower-case alias -> slug (loopd's --repos-file)
 	rules   []pipeline.HoldRule // the built-in hold rules; nil: pipeline.DefaultHoldRules
 	// loopRepo is the loop's own repo (SetLoopRepo): a merge to it starts an orchestrate turn.
 	loopRepo string
@@ -106,6 +107,54 @@ func (s *Store) Repos() []string {
 	s.reposMu.RLock()
 	defer s.reposMu.RUnlock()
 	return append([]string(nil), s.repos...)
+}
+
+// SetAliases sets the repo aliases (alias -> slug, loopd's --repos-file) a new item's repo may
+// name.
+func (s *Store) SetAliases(aliases map[string]string) {
+	s.reposMu.Lock()
+	defer s.reposMu.Unlock()
+	s.aliases = map[string]string{}
+	for a, slug := range aliases {
+		s.aliases[normRepo(a)] = slug
+	}
+}
+
+func normRepo(name string) string { return strings.Join(strings.Fields(strings.ToLower(name)), " ") }
+
+// ResolveRepo gives the configured slug a new item's repo names: the slug itself, an alias, or
+// the name part of one configured slug (loop add --repo jarvis-server), case-insensitively. An
+// empty repo stays empty (routing picks it), and so does any name while no repos are configured.
+// Anything else is refused.
+func (s *Store) ResolveRepo(name string) (string, error) {
+	s.reposMu.RLock()
+	defer s.reposMu.RUnlock()
+	n := normRepo(name)
+	if n == "" || len(s.repos) == 0 {
+		return strings.TrimSpace(name), nil
+	}
+	for _, slug := range s.repos {
+		if strings.ToLower(slug) == n {
+			return slug, nil
+		}
+	}
+	if slug, ok := s.aliases[n]; ok {
+		return slug, nil
+	}
+	var found []string
+	for _, slug := range s.repos {
+		if _, short, ok := strings.Cut(slug, "/"); ok && strings.ToLower(short) == n {
+			found = append(found, slug)
+		}
+	}
+	switch len(found) {
+	case 1:
+		return found[0], nil
+	case 0:
+		return "", errf(pipeline.CodeInvalidField, "repo %q is not one loopd is configured with (%s)", strings.TrimSpace(name), strings.Join(s.repos, ", "))
+	default:
+		return "", errf(pipeline.CodeInvalidField, "repo %q names %s: give the owner/name", strings.TrimSpace(name), strings.Join(found, " and "))
+	}
 }
 
 // Subscribe registers fn to receive every event after the transaction that wrote it commits, in
@@ -439,6 +488,11 @@ type NewItem struct {
 
 // AddItem adds an item at triage.
 func (s *Store) AddItem(ctx context.Context, actor string, n NewItem) (pipeline.Item, error) {
+	repo, err := s.ResolveRepo(n.Repo)
+	if err != nil {
+		return pipeline.Item{}, err
+	}
+	n.Repo = repo
 	it, err := pipeline.NewItem(n.Title, n.Ask, n.Repo, n.Priority, n.Source, s.clock.Now())
 	if err != nil {
 		return it, err

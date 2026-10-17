@@ -112,6 +112,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	}
 	defer st.Close()
 	st.SetRepos(repos)
+	st.SetAliases(aliases)
 
 	boardCfg := web.BoardConfig{SlackWorkspace: *slackWorkspace, Clock: clock.Real{}}
 	srv := &http.Server{

@@ -834,10 +834,12 @@ func TestShutdownSavesWorkWithoutReporting(t *testing.T) {
 
 func TestUnknownRepoFails(t *testing.T) {
 	g := newRig(t, fakeclaude.Good)
-	g.r.Cfg.Repos = map[string]RepoConfig{"other": g.r.Cfg.Repos["demo"]}
+	other := g.r.Cfg.Repos["demo"]
+	other.Slug = "alex/other" // not alex/demo, whose name part would match
+	g.r.Cfg.Repos = map[string]RepoConfig{"other": other}
 	id := g.toBuild("Wrong repo")
 	g.runOnce()
-	if q := g.item(id).Item.Question; !strings.Contains(q, `no repo "demo"`) {
+	if q := g.item(id).Item.Question; !strings.Contains(q, `no repo "alex/demo"`) {
 		t.Fatalf("%q", q)
 	}
 }

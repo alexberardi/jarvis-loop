@@ -446,7 +446,8 @@ func (c *Config) normalize() error {
 }
 
 // Repo finds a repo by its config key or by its slug (loopd keeps the PR's owner/name on the
-// item once a PR exists), or by one of its aliases.
+// item once a PR exists), by one of its aliases, or by the name part of its slug (an item added
+// with a bare --repo jarvis-server) when no other repo has that name.
 func (c *Config) Repo(name string) (string, RepoConfig, bool) {
 	if r, ok := c.Repos[name]; ok {
 		return name, r, true
@@ -463,6 +464,18 @@ func (c *Config) Repo(name string) (string, RepoConfig, bool) {
 					return k, r, true
 				}
 			}
+		}
+		found := ""
+		for k, r := range c.Repos {
+			if _, short, ok := strings.Cut(r.Slug, "/"); ok && strings.ToLower(short) == name {
+				if found != "" {
+					return "", RepoConfig{}, false // two owners' repos share the name: map order would pick one
+				}
+				found = k
+			}
+		}
+		if found != "" {
+			return found, c.Repos[found], true
 		}
 	}
 	return "", RepoConfig{}, false

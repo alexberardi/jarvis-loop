@@ -47,6 +47,9 @@ type Step struct {
 	Via      string `json:"via,omitempty"` // "cli" (default) or "slack"
 	// After: the aliases of the items it depends on (CLI: depends_on; Slack: "after #1, #2")
 	After []string `json:"after,omitempty"`
+	// RepoAs: the CLI's --repo as typed (default the demo repo's config key); with Refused, the
+	// add must be refused (a regexp on the error) and adds no item
+	RepoAs string `json:"repo_as,omitempty"`
 	// triage: what the item needs from a runner (its resources, comma-separated)
 	Resources string `json:"resources,omitempty"`
 	// hand_claim: what the hand runner offers when it claims (comma-separated)
@@ -392,7 +395,7 @@ func Play(sc *Scenario, s *Stack) Result {
 
 func describeStep(st Step) string {
 	parts := []string{st.Do}
-	for _, kv := range [][2]string{{"item", st.Item}, {"as", st.As}, {"text", st.Text}, {"button", st.Button},
+	for _, kv := range [][2]string{{"item", st.Item}, {"repo_as", st.RepoAs}, {"as", st.As}, {"text", st.Text}, {"button", st.Button},
 		{"play", st.Play}, {"advance", st.Advance}, {"outcome", st.Outcome}, {"claims", st.Claims},
 		{"plan", st.Plan}, {"doc", st.Doc}} {
 		if kv[1] != "" {
@@ -859,8 +862,22 @@ func (p *player) add(st Step) error {
 	}
 	switch st.Via {
 	case "", "cli":
+		repo := RepoKey
+		if st.RepoAs != "" {
+			repo = st.RepoAs
+		}
 		var it pipeline.Item
-		if err := p.s.user.do("POST", "/items", store.NewItem{Title: st.Title, Ask: st.Title, Repo: RepoKey, Priority: st.Priority, DependsOn: after}, &it); err != nil {
+		err := p.s.user.do("POST", "/items", store.NewItem{Title: st.Title, Ask: st.Title, Repo: repo, Priority: st.Priority, DependsOn: after}, &it)
+		if st.Refused != "" {
+			if err == nil {
+				return fmt.Errorf("add --repo %s: not refused, want /%s/", repo, st.Refused)
+			}
+			if re, rerr := regexp.Compile(st.Refused); rerr != nil || !re.MatchString(err.Error()) {
+				return fmt.Errorf("add --repo %s: refused with %q, want /%s/", repo, err, st.Refused)
+			}
+			return nil
+		}
+		if err != nil {
 			return err
 		}
 		p.items[st.Item] = itemRef{id: it.ID, title: it.Title}

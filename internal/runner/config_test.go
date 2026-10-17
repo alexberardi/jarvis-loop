@@ -163,3 +163,24 @@ func TestConfigHarness(t *testing.T) {
 		}
 	}
 }
+
+// An item added with a repo's bare name (--repo jarvis-server) resolves by the name part of the
+// slug, whatever the config key; a name two owners share resolves to neither.
+func TestRepoByBareName(t *testing.T) {
+	c := &Config{Repos: map[string]RepoConfig{
+		"alexberardi-jarvis-server": {Slug: "alexberardi/jarvis-server"},
+		"mine":                      {Slug: "alexberardi/fork"},
+		"theirs":                    {Slug: "someone/fork"},
+	}}
+	for _, name := range []string{"jarvis-server", "Jarvis-Server", " jarvis-server "} {
+		if key, _, ok := c.Repo(name); !ok || key != "alexberardi-jarvis-server" {
+			t.Errorf("%q: %q %v", name, key, ok)
+		}
+	}
+	if key, _, ok := c.Repo("fork"); ok {
+		t.Errorf("an ambiguous name resolved to %q", key)
+	}
+	if key, _, ok := c.Repo("someone/fork"); !ok || key != "theirs" {
+		t.Errorf("slug: %q %v", key, ok)
+	}
+}
