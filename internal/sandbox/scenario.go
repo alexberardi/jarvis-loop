@@ -52,7 +52,8 @@ type Step struct {
 	// RepoAs: the CLI's --repo as typed (default the demo repo's config key); with Refused, the
 	// add must be refused (a regexp on the error) and adds no item
 	RepoAs string `json:"repo_as,omitempty"`
-	// triage: what the item needs from a runner (its resources, comma-separated)
+	// triage: what the item needs from a runner (its resources, comma-separated); resources: what
+	// the user sets them to (loop resources), "none" for none
 	Resources string `json:"resources,omitempty"`
 	// hand_claim: what the hand runner offers when it claims (comma-separated), and the only
 	// resources it takes (only_resources, as a Mac runner's); with Via "runner_listener" it claims
@@ -773,6 +774,13 @@ func (p *player) step(st Step) error {
 			return err
 		}
 		return s.Advance(d)
+	case "resources":
+		// The user's loop resources: replace what the item needs from a runner.
+		r, err := p.ref(st.Item)
+		if err != nil {
+			return err
+		}
+		return s.user.do("POST", fmt.Sprintf("/items/%d/resources", r.id), map[string]any{"resources": strings.Split(st.Resources, ",")}, nil)
 	case "control":
 		patch := map[string]any{}
 		if st.ActiveAgents != nil {

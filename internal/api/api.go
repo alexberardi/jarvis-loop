@@ -95,6 +95,10 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /items/{id}/hold", user, s.hold)
 	route("POST /items/{id}/rebuild", both, s.rebuild)
 	route("POST /items/{id}/drop", user, s.drop)
+	route("POST /items/{id}/edit", user, s.edit)
+	route("POST /items/{id}/link", user, s.link)
+	route("POST /items/{id}/unlink", user, s.unlink)
+	route("POST /items/{id}/resources", user, s.setResources)
 	route("POST /items/{id}/qa", user, s.setQA)
 	route("POST /items/{id}/verified", user, s.verified)
 	route("POST /items/{id}/reopen", user, s.reopen)
@@ -780,6 +784,87 @@ func (s *server) drop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, err := s.st.Drop(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Words)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// edit fixes an item's title or ask before build starts (store.Edit).
+func (s *server) edit(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Title *string `json:"title"`
+		Ask   *string `json:"ask"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.Edit(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Title, body.Ask)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// link makes an item wait for more items (store.Link).
+func (s *server) link(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		After []int64 `json:"after"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.Link(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.After)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// unlink stops an item waiting for one other (store.Unlink).
+func (s *server) unlink(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		After int64 `json:"after"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.Unlink(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.After)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// setResources replaces an item's resources after triage (store.SetResources); an empty list is none.
+func (s *server) setResources(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Resources []string `json:"resources"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.SetResources(r.Context(), PrincipalFrom(r.Context()).Actor(), id, strings.Join(body.Resources, ","))
 	if err != nil {
 		s.fail(w, err)
 		return
