@@ -144,3 +144,17 @@ every live lease, whichever runner holds it, so the Macs' agents come out of the
 dev box's. The `gpu` and `emulator` limits are not per runner either; the Macs offer neither, so
 that does not matter here. To allow one Mac item at a time across both Macs, set a `macos` limit
 of 1 in loopd's control (`PUT /control` with `{"limits": {"macos": 1}}`, a user token).
+
+**The last slot is held for Mac work while a Mac item can run**
+([decision](../decisions/2026-10-18-slot-hold.md)). loopd refuses a claim the last free agent slot
+when (a) a runner whose `only_resources` has `macos` claimed or sent a heartbeat within two of its
+poll intervals (`poll_seconds`, sent with each claim; 30 s when it did not say), (b) an item needing
+`macos` is claimable now by that runner (in one of its own `stages`, waiting, its dependencies
+done, not leased, the `macos` limit allows it: a `macos` item in triage or land holds nothing for a
+Mac that takes build and review) and (c) the claim would not take a `macos` item. When any of them is false, the
+last slot goes to whoever asks. Each such resource (`macos` now, `ios` later) holds at most one
+slot. The board's **Runners** panel lists the runners seen today and says when a slot is held, for
+what and for which item. So the dev box no longer needs a slot fewer than `active_agents` to leave
+the Mac room: set its `slots` to `active_agents` (6 under `active_agents` 6). A Mac runner that is
+busy with its own `slots` still counts as around (its heartbeats), so with no `macos` limit a second
+Mac item can hold a slot that Mac cannot use yet; the `macos` limit of 1 above avoids that.

@@ -22,7 +22,8 @@ func (s *Store) Verified(ctx context.Context, actor string, id int64, words stri
 
 // Reopen is the user's check of a qa item failing: in one transaction it files a new P2 item with
 // the words as its ask, linked by reopen_of, and moves the qa item to done (event reopened, with
-// the new item's id). It returns both.
+// the new item's id), and flags the open items that depend on it (dependency_reopened). It returns
+// both.
 func (s *Store) Reopen(ctx context.Context, actor string, id int64, words string) (old, filed pipeline.Item, err error) {
 	err = s.tx(ctx, func(tx *sql.Tx) error {
 		it, err := loadItem(tx, id)
@@ -48,6 +49,9 @@ func (s *Store) Reopen(ctx context.Context, actor string, id int64, words string
 		tr.Data["reopen_item"] = n.ID
 		old, filed = tr.Item, n
 		if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
+			return err
+		}
+		if err := s.dependencyReopened(tx, id, n.ID, tr.Data["words"].(string)); err != nil {
 			return err
 		}
 		return s.planItemSettled(tx, tr.Item)

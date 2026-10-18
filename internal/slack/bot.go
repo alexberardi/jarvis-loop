@@ -550,6 +550,11 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 			Approver, ref(id, it.Title), Escape(e.To), int(pipeline.RunnerSeenWindow.Hours()), b.field(strings.Join(listOf(e.Data, "missing"), " + "), 200, id))
 		return Message{Text: text}, true
 	}
+	if e.Kind == store.KindDependencyReopened {
+		// docs/decisions/2026-10-18-deps-at-merge.md: a dependency met at merge failed its check later.
+		return Message{Text: fmt.Sprintf("This depends on #%v, which was reopened: %s (the fix is #%v). The work here goes on; check whether it needs a change.",
+			e.Data["dependency"], b.field(str(e.Data, "words"), 300, id), e.Data["reopen_item"])}, true
+	}
 	if e.Kind == store.KindServable {
 		return Message{Text: fmt.Sprintf("A runner offers %s now; it can claim this from the %s queue.", b.field(strings.Join(listOf(e.Data, "missing"), " + "), 200, id), Escape(e.To))}, true
 	}

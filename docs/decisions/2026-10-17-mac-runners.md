@@ -48,7 +48,9 @@ offered `macos` (#92 made it visible). The user OK'd two Macs on the LAN, the Ma
   `<runner name>-<random>`, so a build on `mbp` is never reviewed by the same agent.
 - **Limits stay global.** `active_agents` and the stage and resource limits count every live lease
   whichever runner holds it, so the Macs share the dev box's budget. `gpu` and `emulator` are not
-  per runner either; the Macs offer neither. A `macos` limit of 1 keeps one Mac item at a time.
+  per runner either; the Macs offer neither. A `macos` limit of 1 keeps one Mac item at a time. Since
+  2026-10-18 the last free slot is held for a Mac item that can run
+  ([2026-10-18-slot-hold](2026-10-18-slot-hold.md)).
 
 ## Not done
 
