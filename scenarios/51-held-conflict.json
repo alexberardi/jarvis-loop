@@ -6,7 +6,7 @@
     {"do": "add", "item": "a", "via": "slack", "title": "Change the stage rules", "text": "jarvis-loop: change the stage rules"},
     {"do": "expect", "repo": {"a": "sandbox/jarvis-loop"}},
     {"do": "triage", "item": "a"},
-    {"do": "script", "item": "a", "play": "good", "file": "internal/pipeline/rules.go"},
+    {"do": "script", "item": "a", "play": "good", "file": "internal/pipeline/approve.go"},
     {"do": "runner", "claims": "a"},
     {"do": "runner_idle"},
     {"do": "ci", "item": "a", "checks": {"check": "pass"}},
@@ -19,7 +19,7 @@
     {"do": "runner", "claims": "none"},
     {"do": "runner_idle"},
     {"do": "expect", "stage": {"a": "held"}, "no_events": [{"item": "a", "kind": "rebuild"}]},
-    {"do": "push", "slug": "sandbox/jarvis-loop", "branch": "main", "file": "internal/pipeline/rules.go", "text": "main's own version of the rules\n"},
+    {"do": "push", "slug": "sandbox/jarvis-loop", "branch": "main", "file": "internal/pipeline/approve.go", "text": "main's own version of the rules\n"},
     {"do": "runner", "claims": "a"},
     {"do": "runner_idle"}
   ],

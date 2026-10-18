@@ -2,13 +2,20 @@ package api
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/http"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
+
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
+	"github.com/alexberardi/jarvis-loop/internal/store"
 )
 
 // Principal kinds.
@@ -117,4 +124,79 @@ func (t *Tokens) Lookup(tok string) (Principal, bool) {
 		}
 	}
 	return found, ok == 1
+}
+
+type ctxKey struct{}
+
+// PrincipalFrom returns the authenticated principal of a request.
+func PrincipalFrom(ctx context.Context) Principal {
+	p, _ := ctx.Value(ctxKey{}).(Principal)
+	return p
+}
+
+// CodeRunnersOnly refuses a token that is not a runner's on the remote runners' listener.
+const CodeRunnersOnly = "runners_only"
+
+// NewRunners is the API for remote runners only: what loopd's LAN listener (--runner-addr)
+// serves, so the main API, the status page and the board stay on their own listeners. A token of
+// any other kind (user, board, orchestrator) is refused on every route before routing, which also
+// rules out acting for the user; a runner token then meets New's routes and rules.
+func NewRunners(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
+	s := &server{st: st, tokens: tokens, log: log}
+	mux := s.routes()
+	return Logged(log, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := tokens.Lookup(BearerToken(r))
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="loopd"`)
+			writeErr(w, http.StatusUnauthorized, "unauthorized", "a valid bearer token is required")
+			return
+		}
+		if p.Kind != KindRunner {
+			SetActor(w, p)
+			writeErr(w, http.StatusForbidden, CodeRunnersOnly, "this listener is for runners: "+article(p.Kind)+" "+p.Kind+" token is refused here")
+			return
+		}
+		mux.ServeHTTP(w, r)
+	}))
+}
+
+// BearerToken extracts the token of an "Authorization: Bearer" header.
+func BearerToken(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	if len(h) > 7 && strings.EqualFold(h[:7], "bearer ") {
+		return strings.TrimSpace(h[7:])
+	}
+	return ""
+}
+
+func (s *server) auth(pattern string, kinds []string, next http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := s.tokens.Lookup(BearerToken(r))
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="loopd"`)
+			writeErr(w, http.StatusUnauthorized, "unauthorized", "a valid bearer token is required")
+			return
+		}
+		SetActor(w, p)
+		onBehalf := r.Header.Get(OnBehalfHeader)
+		if onBehalf == "" && !slices.Contains(kinds, p.Kind) {
+			s.fail(w, s.refusedRoute(r, p, pattern, &pipeline.Error{Code: CodeForbidden, Message: article(p.Kind) + " " + p.Kind + " token cannot do this"}))
+			return
+		}
+		// Expiry is evaluated on every request, so a read never shows a dead lease as live.
+		if err := s.st.Sweep(r.Context()); err != nil {
+			s.fail(w, err)
+			return
+		}
+		ctx := r.Context()
+		if onBehalf != "" {
+			np, nctx, err := s.actForUser(ctx, r, p, pattern, onBehalf)
+			if err != nil {
+				s.fail(w, err)
+				return
+			}
+			p, ctx = np, nctx
+		}
+		next(w, r.WithContext(context.WithValue(ctx, ctxKey{}, p)))
+	})
 }
