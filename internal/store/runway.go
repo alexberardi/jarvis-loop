@@ -42,17 +42,12 @@ type RunwayReport struct {
 
 // Runway is the runway now.
 func (s *Store) Runway(ctx context.Context) (RunwayReport, error) {
-	var out RunwayReport
-	err := s.tx(ctx, func(tx *sql.Tx) error {
-		var err error
-		out, _, err = s.runway(tx)
-		return err
-	})
+	out, _, err := s.runway(s.r)
 	return out, err
 }
 
 // runway computes the report, and whether the loop runs at all (not stopped, some agents).
-func (s *Store) runway(tx *sql.Tx) (RunwayReport, bool, error) {
+func (s *Store) runway(tx querier) (RunwayReport, bool, error) {
 	var out RunwayReport
 	ctl, err := s.loadControl(tx)
 	if err != nil {
@@ -135,7 +130,7 @@ func (s *Store) runway(tx *sql.Tx) (RunwayReport, bool, error) {
 
 // stageDurations is each work stage's median run time over its recent runs that finished (the
 // result advanced or queued the item); a stage with none is missing.
-func stageDurations(tx *sql.Tx) (map[pipeline.Stage]time.Duration, error) {
+func stageDurations(tx querier) (map[pipeline.Stage]time.Duration, error) {
 	out := map[pipeline.Stage]time.Duration{}
 	for _, st := range []pipeline.Stage{pipeline.Triage, pipeline.Build, pipeline.Review, pipeline.Land} {
 		rows, err := tx.Query(`SELECT ended_at - claimed_at FROM leases WHERE stage = ? AND end_reason IN ('advanced','queued')

@@ -32,6 +32,9 @@
 <body>
 <h1>Jarvis Loop</h1>
 <p class="sub">{{.Total}} items ·{{if .PlanCount}} {{.PlanCount}} open plans ·{{end}} {{stamp .Now}} · refreshes every 30 s (working now: every 5 s) · {{if .ShowClosed}}<a href="/board">hide closed</a>{{else}}<a href="/board?closed=1">show closed</a>{{end}}</p>
+{{- with .Runway}}
+<p class="sub runway">{{if .Low}}<strong>Runway low:</strong>{{else}}Runway:{{end}} about {{printf "%.1f" .Hours}} agent-hours of work without you ({{.Runnable}} runnable){{with .Unblockers}} · frees the most:{{range $i, $u := .}}{{if $i}},{{end}} {{$u.Action}} <a href="/items/{{$u.ItemID}}">#{{$u.ItemID}}</a> → {{$u.Frees}}{{end}}{{end}}</p>
+{{- end}}
 {{- range .Freezes}}
 <div class="frozen" role="alert"><strong>Main is red in {{.Repo}}</strong>{{with .Jobs}} (failing: {{join . ", "}}){{end}}: frozen since {{stamp .Since}}. Nothing else in it moves stages until main is green; <a href="/items/{{.ItemID}}">#{{.ItemID}} {{.ItemTitle}}</a> goes first.{{if .Queued}} {{.Queued}} finished run(s) wait to apply.{{end}} Lift by hand: <code>loop unfreeze {{.Repo}}</code></div>
 {{- end}}
