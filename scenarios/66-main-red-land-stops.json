@@ -1,0 +1,50 @@
+{
+  "name": "main-red-land-stops",
+  "about": "#197: b's land run waits for its PR's CI when main goes red on a's merge (still red after a re-run). At its next pass of the gates the land run sees the freeze and stops before it can merge: loopd ends its lease (land_frozen) and b waits in land; with b's CI green, the runner still claims nothing. Once the user lifts the freeze, b lands as usual.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "add", "item": "b", "title": "Tidy the digest footer"},
+    {"do": "triage", "item": "b"},
+    {"do": "ci", "main": {"build": "pending", "test": "pending"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "expect", "stage": {"a": "done"}, "leased": {"a": false}},
+    {"do": "runner", "claims": "b"},
+    {"do": "wait", "stage": {"b": "review"}, "leased": {"b": false}},
+    {"do": "runner", "claims": "b"},
+    {"do": "wait", "stage": {"b": "land"}, "leased": {"b": false}},
+    {"do": "ci", "item": "b", "checks": {"check": "pending"}},
+    {"do": "runner", "claims": "b"},
+    {"do": "expect", "stage": {"b": "land"}, "leased": {"b": true}},
+
+    {"do": "ci", "main": {"build": "pass", "test": "fail"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "clock", "advance": "30s"},
+    {"do": "wait", "events": [{"kind": "frozen", "data": {"repo": "^sandbox/demo$"}, "count": 1}]},
+    {"do": "ci", "item": "b", "checks": {"check": "pass"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "wait", "stage": {"b": "land"}, "leased": {"b": false},
+     "events": [{"item": "b", "kind": "land_frozen", "actor": "loopd", "data": {"repo": "^sandbox/demo$", "fix_item": "^3$"}, "count": 1}]},
+    {"do": "runner_idle"},
+    {"do": "expect", "remote": {"main": "a"}, "no_events": [{"item": "b", "kind": "advanced", "outcome": "merged"}]},
+    {"do": "runner", "claims": "none"},
+
+    {"do": "ci", "main": {"build": "pass", "test": "pass"}},
+    {"do": "unfreeze"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done", "b": "done"},
+    "remote": {"main": "b"},
+    "messages": [
+      {"thread": "b", "text": "^Land stopped before merging: main is red in sandbox/demo \\(#3 main red in sandbox/demo: test first\\)\\. Waits in land until main is green\\.$"}
+    ]
+  }
+}

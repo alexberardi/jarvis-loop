@@ -1,0 +1,35 @@
+{
+  "name": "main-red-flake",
+  "about": "#197: main's CI fails on a's merge, the runner re-runs the failed job once and it passes: a flake. main_ci is green (naming the re-run job); no P1, no freeze, nothing in #loop, and the next item in the repo is claimed as usual.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"build": "pending", "test": "pending"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "expect", "stage": {"a": "done"}, "leased": {"a": false}},
+    {"do": "add", "item": "b", "title": "Tidy the digest footer"},
+    {"do": "triage", "item": "b"},
+    {"do": "ci", "main": {"build": "pass", "test": "fail"}, "rerun": {"test": "pass"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "clock", "advance": "30s"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done", "b": "review"},
+    "events": [
+      {"item": "a", "kind": "main_ci", "actor": "runner", "data": {"result": "^green$", "rerun": "^\\[\"test\"\\]$"}, "count": 1}
+    ],
+    "no_events": [{"kind": "frozen"}, {"kind": "created", "actor": "runner"}],
+    "messages": [
+      {"thread": "a", "text": "^main green on `[0-9a-f]{7}`\\.$"}
+    ]
+  }
+}

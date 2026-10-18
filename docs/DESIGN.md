@@ -85,11 +85,12 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | `POST /items/{id}/ask`, `/answer` | put an item in needs-you with a question; record the answer |
 | `POST /items/{id}/approve`, `/hold`, `/rebuild` | the decision on a held merge; `/rebuild` (the user, or a runner for a held PR that turned conflicting) sends it back to build with notes; *since 2026-10-17* the user's also takes a needs-you item whose question came after triage ([decision](decisions/2026-10-17-needs-you-rebuild.md)) |
 | `POST /items/{id}/drop` | the user closes an item they won't land, from any open stage; the runner then closes its PR |
+| `POST /items/{id}/edit`, `/link`, `/unlink`, `/resources` | *since 2026-10-18*, the user's corrections to a filed item, each an event with what it replaced: the title and ask before build starts, the items it waits for, the resources after triage ([decision](decisions/2026-10-18-item-corrections.md)) |
 | `POST /items/{id}/qa`, `/verified`, `/reopen` | the QA lane: mark an item for the user's check before it lands; the check passed (qa → done) or failed (qa → done, and a new P2 item with the words) |
 | `GET`, `PUT /control` | the active-agents number, stop and resume |
 | `GET /board`, `/board/items/{id}`, `/board/items/{id}/evidence/{n}` | the swim-lane web board (HTML, read-only), also on the optional LAN listener `--board-addr`, which serves nothing else ([decision](decisions/2026-10-15-board.md)) |
 
-The `loop` CLI wraps the same API: `loop add`, `loop status`, `loop show`, `loop answer`, `loop agents <n>`.
+The `loop` CLI wraps the same API: `loop add` (`--json` or `-q` for scripts), `loop status`, `loop show`, `loop answer`, `loop edit`, `loop link`/`unlink`, `loop resources`, `loop rebuild`, `loop agents <n>`; its flags go anywhere on the line.
 
 ## Runners
 
@@ -161,7 +162,7 @@ Claude Code gives a runner no reading of plan usage (`/usage` is interactive onl
 | Slack | a pinned **Active agents** message in `#loop-digest` with a 0–6 dropdown and − / + buttons (Slack has no slider), and `/loop agents <n>` |
 | loopd's page (LAN) | a slider |
 
-**Stop:** running agents stop at their next heartbeat (within a minute), their work is saved as a WIP branch, and each item returns to its queue. **Resume** clears it.
+**Stop:** running agents stop at their next heartbeat (within a minute), their work is saved as a WIP branch, and each item returns to its queue; a Claude build resumes its session on the next claim on the same runner ([decision](decisions/2026-10-18-build-resume.md)). **Resume** clears it.
 
 **Automatic:** when an agent run ends with a usage-limit or rate-limit error, `loopd` sets the active-agents number to 0, posts the error with its reset time in `#loop-digest` with an @mention, and does not raise it again on its own.
 
@@ -186,7 +187,7 @@ A PR merges when it passes three gates, in every repo (the user's rule, 2026-10-
 The script then:
 
 1. If `main` moved and the PR no longer merges, merges `main` in, pushes, and waits for all three gates again. A conflict outside `docs/` sends the item back to build.
-2. Squash-merges, and watches `main`'s CI on the merge commit. Red files a P1 item linked to this one and @mentions the user.
+2. Squash-merges, and watches `main`'s CI on the merge commit. Red files a P1 item linked to this one and @mentions the user. Red (still red after one re-run of the failed jobs) also freezes the repo until `main` is green: nothing else in it moves stages, runs already going finish and their results wait, and the P1 goes first ([decision](decisions/2026-10-18-main-red-freeze.md)).
 
 **As built (phase 6, 2026-10-15):** the script is the runner's `land` stage, plain code with no agent: it holds the GitHub login, loopd still holds none. Every pass re-derives the gates from GitHub and git (the PR, review approval for its current head, the changed paths, CI, the harness evidence, the hold list, mergeability); it merges only with `--match-head-commit` (never `--auto` or `--admin`), checks the hold rules itself before merging, resolves conflicts only under `docs/` (git's union merge) and sends any new head back to review. Hold rules are per repo: jarvis-loop's own list holds changes to who may approve or merge, token handling and the landing gates, so the loop never lands a change to itself without the user. Details: `docs/decisions/2026-10-15-land.md`.
 

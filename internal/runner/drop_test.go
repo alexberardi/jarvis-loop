@@ -146,6 +146,21 @@ type fakeLand struct {
 	runs     []WorkflowRun
 	logs     map[int64]string
 	logCalls []int64
+	reruns   []int64
+	// commits, when set, are the runs by commit instead (none for a commit not in it); rerunErr
+	// refuses every re-run.
+	commits  map[string][]WorkflowRun
+	rerunErr error
+}
+
+func (f *fakeLand) RerunFailed(_ context.Context, _ string, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.rerunErr != nil {
+		return f.rerunErr
+	}
+	f.reruns = append(f.reruns, id)
+	return nil
 }
 
 func (f *fakeLand) LandView(_ context.Context, slug string, pr int) (LandPR, error) {
@@ -163,9 +178,12 @@ func (f *fakeLand) Merge(_ context.Context, slug string, pr int, head string) er
 	return nil
 }
 
-func (f *fakeLand) CommitRuns(context.Context, string, string) ([]WorkflowRun, error) {
+func (f *fakeLand) CommitRuns(_ context.Context, _ string, sha string) ([]WorkflowRun, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.commits != nil {
+		return f.commits[sha], nil
+	}
 	return f.runs, nil
 }
 

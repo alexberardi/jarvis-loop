@@ -56,6 +56,11 @@ type GitHub struct {
 	checks   map[string]map[string]string
 	mainCI   map[string]string
 	mainCIAt map[string]map[string]string
+	// mainRerun is how a main job goes once re-run (gh run rerun --failed); reran the jobs re-run
+	// on a commit of main ("slug@sha" -> job), and Reruns how many re-runs the runner asked for.
+	mainRerun map[string]string
+	reran     map[string]map[string]bool
+	reruns    int
 	// mainHead is where each repo's main should be: where it started, then each merge or
 	// scripted push. Anything else moving main is a failure.
 	mainHead map[string]string
@@ -74,7 +79,7 @@ var (
 
 // NewGitHub returns a fake over these remotes (owner/name -> bare repo).
 func NewGitHub(repos map[string]string) *GitHub {
-	g := &GitHub{next: 101, repos: repos, checks: map[string]map[string]string{}, mainCI: map[string]string{}, mainCIAt: map[string]map[string]string{}, mainHead: map[string]string{}, runIDs: 9000,
+	g := &GitHub{next: 101, repos: repos, checks: map[string]map[string]string{}, mainCI: map[string]string{}, mainCIAt: map[string]map[string]string{}, mainRerun: map[string]string{}, reran: map[string]map[string]bool{}, mainHead: map[string]string{}, runIDs: 9000,
 		runs: map[int64]fakeRun{}}
 	for slug := range repos {
 		g.mainHead[slug] = g.RemoteHead(slug, "main")
@@ -315,6 +320,44 @@ func (g *GitHub) SetMainCIAt(slug, sha string, runs map[string]string) {
 	g.mainCIAt[slug+"@"+sha] = m
 }
 
+// SetMainRerun sets how main's jobs go once re-run (name -> pass, fail, pending); a job not named
+// goes as it went the first time.
+func (g *GitHub) SetMainRerun(runs map[string]string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.mainRerun = map[string]string{}
+	for k, v := range runs {
+		g.mainRerun[k] = v
+	}
+}
+
+// RerunFailed answers gh run rerun --failed on a run of main the fake has shown.
+func (g *GitHub) RerunFailed(_ context.Context, slug string, id int64) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	r, ok := g.runs[id]
+	if !ok || r.slug != slug || r.sha == "" {
+		return fmt.Errorf("could not find any workflow run with ID %d", id)
+	}
+	if !r.failed {
+		return fmt.Errorf("run %d has no failed jobs to re-run", id)
+	}
+	k := slug + "@" + r.sha
+	if g.reran[k] == nil {
+		g.reran[k] = map[string]bool{}
+	}
+	g.reran[k][r.job] = true
+	g.reruns++
+	return nil
+}
+
+// Reruns is how many re-runs of main's failed jobs the runner asked for.
+func (g *GitHub) Reruns() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.reruns
+}
+
 // MainHead is where a repo's main should be.
 func (g *GitHub) MainHead(slug string) string {
 	g.mu.Lock()
@@ -445,8 +488,14 @@ func (g *GitHub) CommitRuns(_ context.Context, slug, sha string) ([]runner.Workf
 	for i, n := range names {
 		id := int64(g.runIDs + i)
 		r := runner.WorkflowRun{ID: id, Name: n, Workflow: n, URL: fmt.Sprintf("https://github.com/%s/actions/runs/%d", slug, id)}
-		g.runs[id] = fakeRun{slug: slug, job: n, failed: ci[n] == "fail"}
-		switch ci[n] {
+		res := ci[n]
+		if g.reran[slug+"@"+sha][n] {
+			if v, ok := g.mainRerun[n]; ok {
+				res = v
+			}
+		}
+		g.runs[id] = fakeRun{slug: slug, sha: sha, job: n, failed: res == "fail"}
+		switch res {
 		case "pass":
 			r.Status, r.Conclusion = "completed", "success"
 		case "fail":
