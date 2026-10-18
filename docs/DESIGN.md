@@ -186,7 +186,7 @@ A PR merges when it passes three gates, in every repo (the user's rule, 2026-10-
 The script then:
 
 1. If `main` moved and the PR no longer merges, merges `main` in, pushes, and waits for all three gates again. A conflict outside `docs/` sends the item back to build.
-2. Squash-merges, and watches `main`'s CI on the merge commit. Red files a P1 item linked to this one and @mentions the user.
+2. Squash-merges, and watches `main`'s CI on the merge commit. Red files a P1 item linked to this one and @mentions the user. Red (still red after one re-run of the failed jobs) also freezes the repo until `main` is green: nothing else in it moves stages, runs already going finish and their results wait, and the P1 goes first ([decision](decisions/2026-10-18-main-red-freeze.md)).
 
 **As built (phase 6, 2026-10-15):** the script is the runner's `land` stage, plain code with no agent: it holds the GitHub login, loopd still holds none. Every pass re-derives the gates from GitHub and git (the PR, review approval for its current head, the changed paths, CI, the harness evidence, the hold list, mergeability); it merges only with `--match-head-commit` (never `--auto` or `--admin`), checks the hold rules itself before merging, resolves conflicts only under `docs/` (git's union merge) and sends any new head back to review. Hold rules are per repo: jarvis-loop's own list holds changes to who may approve or merge, token handling and the landing gates, so the loop never lands a change to itself without the user. Details: `docs/decisions/2026-10-15-land.md`.
 

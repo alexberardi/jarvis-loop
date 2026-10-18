@@ -84,8 +84,9 @@ a forbidden message), with a readable failure. The fake Slack's injection and re
 
 ## Scenario format (as built)
 
-A scenario file is `{"name", "about", ["stages"], "steps": [...], "expect": {...}}`; `stages` are
-the stages the runner claims (default triage, build and review, as a real runner). Items are named by an
+A scenario file is `{"name", "about", ["stages"], ["slots"], "steps": [...], "expect": {...}}`; `stages` are
+the stages the runner claims (default triage, build and review, as a real runner); `slots` its agent
+slots (default 1; 2 let one run go on while another starts). Items are named by an
 alias (`"a"`) given when added; ids are the stack's own. An item the loop filed itself (a red
 main's P1) is named by its id: `"#2"`. Unknown fields are refused, so a typo
 cannot silently check nothing. Steps (`"do"`):
@@ -101,7 +102,7 @@ cannot silently check nothing. Steps (`"do"`):
 | `runner` [`claims`: alias\|`none`] | the runner polls once: closes the PRs of dropped items and reports deploys (as `Run` does each poll), then claims (and works in the background) or finds nothing. A plan's alias: it must claim that plan's next turn (a scenario whose `stages` include `plan`) |
 | `deploy` `build` (`base`\|`main`) | the runner restarts on a loop build: jarvis-loop's main where the stack started, or its main now; it reports `deployed` for the qa items awaiting a deploy whose merge that build contains (the sandbox's jarvis-loop has `qa_after_deploy`) |
 | `agent_running` `item` or `plan` | wait until the item's agent is mid-run (a hanging fake), or the plan's is waiting (`wait`) |
-| `release` `plan` | let the plan's waiting fake agent finish its turn |
+| `release` `plan` or `item` | let the plan's waiting fake agent finish its turn, or the item's run that plays `wait_release` (reports `hanging`, then plays `good` once released) |
 | `runner_idle` | wait until no run is working |
 | `clock` `advance` (`"2m"`, `"45m"`) | move the fake clock, in 30-second steps |
 | `reply` / `mention` `item`, `as` (`approver`\|`other`), `text` | a thread reply / mention in the item's thread |
@@ -109,7 +110,8 @@ cannot silently check nothing. Steps (`"do"`):
 | `submit` `as`, [`text`] | `as` submits the newest modal their press opened (the Rebuild form), with `text` as its note (default: the note it opened with); recorded as kind `submit`. Waits for the modal to open |
 | `command` `text`, `as`, [`answer` regexp] | `/loop <text>`; the ephemeral answer must match |
 | `control` `active_agents`, `max_run_minutes`, `stopped` | `PUT /control` as the CLI |
-| `ci` [`item`, `checks`: {name: `pass`\|`fail`\|`pending`\|`cancel`\|`skip`}], [`main`: {name: `pass`\|`fail`\|`pending`}] | the CI checks on the item's PR head now (a new head has none), and how the workflow runs on main's merge commits go (phase 6). With `main_head: true`, `main` is how they went on main's current head only (merged or pushed; it wins over the runs for every commit) |
+| `unfreeze` [`slug`] | `loop unfreeze` (`POST /unfreeze`) for the demo repo (or `slug`): lift the freeze of a red main by hand |
+| `ci` [`item`, `checks`: {name: `pass`\|`fail`\|`pending`\|`cancel`\|`skip`}], [`main`: {name: `pass`\|`fail`\|`pending`}] | the CI checks on the item's PR head now (a new head has none), and how the workflow runs on main's merge commits go (phase 6). With `main_head: true`, `main` is how they went on main's current head only (merged or pushed; it wins over the runs for every commit). `rerun`: {name: `pass`\|`fail`\|`pending`} is how a main job goes once the runner re-runs its failed jobs (a job not named goes as it went the first time) |
 | `push` `item` or `branch` (`main`), `file`, `text` | someone else's commit on the item's branch, or on demo's main |
 | `github` [`refuse_merges`: n], [`item` + `merge_by_hand`], [`item` + `close_by_hand`] | GitHub refuses the next n merges; the item's PR is merged (or closed) on GitHub outside the loop |
 | `plan` `plan` (alias), `title`, [`priority`], [`text`] | start a plan (`POST /plans`, repos `sandbox/demo`) |
