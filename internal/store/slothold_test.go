@@ -82,3 +82,53 @@ func TestClaimHoldsTheLastSlotForMacWork(t *testing.T) {
 		t.Fatalf("devbox after the Mac went quiet: %+v", c)
 	}
 }
+
+// Land runs no agent (#210): with every agent slot busy, an approved item is still claimed for land,
+// and its land lease takes no agent slot.
+func TestClaimLandsWhenAgentSlotsAreFull(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	a := add(t, s, "approved", "P2")
+	step := func(agent string, out pipeline.Outcome, f map[string]string, paths []string, ev bool) {
+		t.Helper()
+		c := claim(t, s, agent)
+		if c == nil || c.Item.ID != a.ID {
+			t.Fatalf("claim for %s: %+v", out, c)
+		}
+		if ev {
+			evidence(t, s, a.ID)
+		}
+		if _, err := s.Advance(ctx, runner, a.ID, out, f, paths); err != nil {
+			t.Fatalf("%s: %v", out, err)
+		}
+	}
+	step("triager", pipeline.Reproduced, map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": ""}, nil, true)
+	step("builder", pipeline.PROpened, map[string]string{"repo": "o/r", "pr": "7", "branch": "loop/1-x", "head_sha": shaA}, []string{"M x.go"}, true)
+	step("reviewer", pipeline.Approved, map[string]string{"summary": "ok", "head_sha": shaA}, nil, false)
+
+	one := 1
+	if _, err := s.SetControl(ctx, user, ControlPatch{ActiveAgents: &one}); err != nil {
+		t.Fatal(err)
+	}
+	b := add(t, s, "busy", "P1")
+	agentReq := pipeline.ClaimRequest{Runner: runner, Agent: "agent-1", Stages: []pipeline.Stage{pipeline.Triage, pipeline.Build, pipeline.Review}}
+	if c, err := s.Claim(ctx, runner, agentReq); err != nil || c == nil || c.Item.ID != b.ID {
+		t.Fatalf("agent claim: %+v %v", c, err)
+	}
+	landReq := pipeline.ClaimRequest{Runner: runner, Agent: "lander", Stages: []pipeline.Stage{pipeline.Land}}
+	if c, err := s.Claim(ctx, runner, landReq); err != nil || c == nil || c.Item.ID != a.ID {
+		t.Fatalf("land claim with the agent slot full: %+v %v", c, err)
+	}
+	c3 := add(t, s, "next", "P3")
+	if c, err := s.Claim(ctx, runner, agentReq); err != nil || c != nil {
+		t.Fatalf("agent claim over the cap: %+v %v", c, err)
+	}
+	// b's agent finishes; the land lease is still live, and the slot is free.
+	evidence(t, s, b.ID)
+	if _, err := s.Advance(ctx, runner, b.ID, pipeline.Reproduced, map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": ""}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := s.Claim(ctx, runner, agentReq); err != nil || c == nil || c.Item.ID == a.ID {
+		t.Fatalf("agent claim next to a land lease: %+v %v (want b or #%d)", c, err, c3.ID)
+	}
+}

@@ -137,7 +137,8 @@ type Work struct {
 
 // ChooseWork picks an item (Choose), a queued plan turn or the queued orchestrate turn (orch, nil
 // when there is none to start). Turns share the active-agents limit with items (live includes the
-// running turns); a plan turn's priority is its plan's, and it beats an item of the same priority:
+// running turns; land leases take no agent slot, and a land item is claimed when the agent slots are
+// full or held); a plan turn's priority is its plan's, and it beats an item of the same priority:
 // the user is in the conversation. The orchestrate turn beats everything (it gets the next free
 // slot), one at a time. The fix of a frozen repo (frozen) beats even that: it may take a slot
 // over the active-agents number. holds are the slots held (SlotHolds): when they are all the free
@@ -148,11 +149,14 @@ func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease,
 			return Work{Item: &it}, true
 		}
 	}
-	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
+	if c.Stopped || c.ActiveAgents <= 0 {
 		return Work{}, false
 	}
+	if AgentLeases(live) >= c.ActiveAgents {
+		return chooseLand(c, items, deps, live, req, frozen)
+	}
 	w, ok := chooseWork(c, items, deps, live, turns, orch, req, frozen)
-	if len(holds) == 0 || c.ActiveAgents-len(live) > len(holds) || (ok && serves(w, holds)) {
+	if len(holds) == 0 || c.ActiveAgents-AgentLeases(live) > len(holds) || (ok && (serves(w, holds) || w.Item != nil && w.Item.Stage == Land)) {
 		return w, ok
 	}
 	// The slots left are held: only held work, if this runner can take some.
@@ -170,7 +174,35 @@ func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease,
 			}
 		}
 	}
+	// Land takes no slot, held or not.
+	if w, ok := chooseLand(c, items, deps, live, req, frozen); ok {
+		return w, true
+	}
 	return Work{Held: HeldReason(holds)}, false
+}
+
+// AgentLeases is how many of live take an agent slot: all but land's, which runs no agent
+// (docs/decisions/2026-10-18-land-takes-no-agent-slot.md).
+func AgentLeases(live []LiveLease) int {
+	n := 0
+	for _, l := range live {
+		if l.Stage != Land {
+			n++
+		}
+	}
+	return n
+}
+
+// chooseLand is the item for land alone, when no agent slot is free for anything else.
+func chooseLand(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req ClaimRequest, frozen Frozen) (Work, bool) {
+	if !req.wants(WorkItem) {
+		return Work{}, false
+	}
+	it, ok := choose(c, items, deps, live, req, func(it Item) bool { return it.Stage == Land && !frozen.Blocks(it) }, true)
+	if !ok {
+		return Work{}, false
+	}
+	return Work{Item: &it}, true
 }
 
 func chooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest, frozen Frozen) (Work, bool) {
@@ -221,11 +253,12 @@ func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 	if it, ok := chooseFix(c, items, deps, live, req, frozen); ok {
 		return it, true
 	}
-	// 1. Control.
-	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
+	// 1. Control. Land runs no agent: it takes no agent slot, and gets one when all are busy.
+	if c.Stopped || c.ActiveAgents <= 0 {
 		return Item{}, false
 	}
-	return choose(c, items, deps, live, req, func(it Item) bool { return !frozen.Blocks(it) }, true)
+	full := AgentLeases(live) >= c.ActiveAgents
+	return choose(c, items, deps, live, req, func(it Item) bool { return !frozen.Blocks(it) && (!full || it.Stage == Land) }, true)
 }
 
 // chooseFix is the main-red item of a frozen repo, when it waits and this runner may take it: it
