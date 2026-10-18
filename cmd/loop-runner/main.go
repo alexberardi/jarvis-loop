@@ -58,7 +58,7 @@ func run(args []string) error {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	r := &runner.Runner{
-		Cfg: cfg, Client: &runner.Client{Base: cfg.LoopdURL, Token: cfg.Token, PollSeconds: cfg.PollSeconds, Stages: cfg.Stages}, Clock: runner.RealClock{}, Log: log,
+		Cfg: cfg, Client: &runner.Client{Base: cfg.LoopdURL, Token: cfg.Token}, Clock: runner.RealClock{}, Log: log,
 	}
 	// The runner, not the agent, pushes the item's branch and opens its PR, with the user's own
 	// git and gh credentials (docs/decisions/2026-10-15-runner-pushes.md). gh runs in a directory

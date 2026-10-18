@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -132,6 +133,34 @@ func TestReloadRefusesABadFile(t *testing.T) {
 	g.writeConfig(p, func(c *Config) { c.Slots = 3 })
 	if err := g.r.Reload(); err != nil || g.r.Config().Slots != 3 {
 		t.Fatalf("a good file after bad ones: %v, slots %d", err, g.r.Config().Slots)
+	}
+}
+
+// A claim after a reload tells loopd the reloaded stages and poll interval (its slot holds read
+// them), not the ones the runner started with.
+func TestReloadedStagesGoWithTheNextClaim(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	p := g.configFile(nil)
+	seen := func() pipeline.RunnerSeen {
+		t.Helper()
+		if _, err := g.r.claimAndRunIn(g.ctx, g.ctx, []string{StageBuild}); err != nil {
+			t.Fatal(err)
+		}
+		panel, err := g.st.Runners(g.ctx)
+		if err != nil || len(panel.Runners) != 1 {
+			t.Fatalf("runners %+v (%v)", panel.Runners, err)
+		}
+		return panel.Runners[0]
+	}
+	if r := seen(); r.PollSeconds != 30 || !slices.Equal(r.Stages, []pipeline.Stage{pipeline.Stage(StageBuild)}) {
+		t.Fatalf("before the reload: poll %d, stages %v", r.PollSeconds, r.Stages)
+	}
+	g.writeConfig(p, func(c *Config) { c.PollSeconds = 10; c.Stages = []string{StageTriage, StageBuild} })
+	if err := g.r.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if r := seen(); r.PollSeconds != 10 || !slices.Equal(r.Stages, []pipeline.Stage{pipeline.Stage(StageBuild), pipeline.Stage(StageTriage)}) {
+		t.Fatalf("after the reload: poll %d, stages %v; want 10, [build triage]", r.PollSeconds, r.Stages)
 	}
 }
 

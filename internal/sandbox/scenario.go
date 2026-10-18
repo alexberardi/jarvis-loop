@@ -18,6 +18,7 @@ import (
 
 	"github.com/alexberardi/jarvis-loop/internal/api"
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
+	"github.com/alexberardi/jarvis-loop/internal/runner"
 	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/slackfake"
 	"github.com/alexberardi/jarvis-loop/internal/store"
@@ -488,13 +489,13 @@ func (p *player) step(st Step) error {
 		default:
 			return fmt.Errorf("hand_claim via %q: want runner_listener or nothing", st.Via)
 		}
+		cfg := &runner.Config{Capabilities: caps, OnlyResources: only}
 		stages := []string{"build"}
 		if st.RunnerStages != "" {
-			c := *hand
-			c.Stages = strings.Split(st.RunnerStages, ",")
-			hand, stages = &c, c.Stages
+			cfg.Stages = strings.Split(st.RunnerStages, ",")
+			stages = cfg.Stages
 		}
-		cl, err := hand.ClaimOnly(p.ctx, "hand-builder", caps, only, stages)
+		cl, err := hand.ClaimFor(p.ctx, "hand-builder", cfg, stages)
 		if err != nil {
 			return err
 		}

@@ -388,7 +388,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 	}
 	// The runner pushes the item's branch to the scratch remote with git, as it would to GitHub,
 	// and opens the PR through the fake (the runner's PR client), with its PR check on.
-	s.Runner = &runner.Runner{Cfg: rcfg, Client: &runner.Client{Base: s.LoopdURL, Token: runnerTok, PollSeconds: rcfg.PollSeconds, Stages: rcfg.Stages}, Clock: rclk,
+	s.Runner = &runner.Runner{Cfg: rcfg, Client: &runner.Client{Base: s.LoopdURL, Token: runnerTok}, Clock: rclk,
 		Log: log.With("component", "runner"), Env: agentEnv(s.scripts, opts.Bin.Env), PRs: s.GitHub,
 		VerifyPR: s.GitHub.Verify, Land: s.GitHub, Close: s.GitHub, HeartbeatEvery: 60 * time.Second}
 	s.user = &apiClient{base: s.LoopdURL, token: userTok}

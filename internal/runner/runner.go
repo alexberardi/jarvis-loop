@@ -262,7 +262,7 @@ func (r *Runner) claimAndRunIn(claimCtx, ctx context.Context, stages []string) (
 	}
 	cfg := r.Config()
 	agent := cfg.Name + "-" + randHex(4)
-	cl, err := r.Client.ClaimOnly(claimCtx, agent, cfg.Capabilities, cfg.OnlyResources, stages)
+	cl, err := r.Client.ClaimFor(claimCtx, agent, cfg, stages)
 	if err != nil || cl == nil {
 		return false, err
 	}
