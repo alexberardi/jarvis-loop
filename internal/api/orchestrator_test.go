@@ -328,8 +328,8 @@ func TestOrchestratorSlackRoutes(t *testing.T) {
 	e.refused(orchTok, "GET", "/orchestrator/messages?since=x", nil, 400, "bad_request")
 
 	var ev store.Event
-	e.do(orchTok, "POST", "/orchestrator/replies", map[string]any{"channel": "D1", "thread_ts": "1.1", "text": "nothing is stuck"}, 201, &ev)
-	if ev.Kind != store.KindOrchReply || ev.Data["text"] != "nothing is stuck" {
+	e.do(orchTok, "POST", "/orchestrator/replies", map[string]any{"channel": "D1", "thread_ts": "1.1", "text": "nothing is stuck", "reason": "you asked"}, 201, &ev)
+	if ev.Kind != store.KindOrchReply || ev.Data["text"] != "nothing is stuck" || ev.Data["reason"] != "you asked" {
 		t.Fatalf("reply %+v", ev)
 	}
 	e.do(orchTok, "POST", "/orchestrator/replies", map[string]any{"channel": slack.ChannelLoop, "thread_ts": "1.1", "text": "ok"}, 201, nil)

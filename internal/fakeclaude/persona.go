@@ -69,7 +69,12 @@ type pItem struct {
 }
 
 type pTrigger struct {
-	Reason string `json:"reason"`
+	Reason   string `json:"reason"`
+	Text     string `json:"text"`
+	Channel  string `json:"channel"`
+	TS       string `json:"ts"`
+	ThreadTS string `json:"thread_ts"`
+	Approver bool   `json:"approver"`
 }
 
 type pSnapshot struct {
@@ -283,6 +288,22 @@ func personaActions(turn string, raw []byte) []any {
 			act("note", "text", fmt.Sprintf("turn %s: P1 ticket for `%s` (%s)", turn, sig, strings.Join(refs, ", ")), "reason", "filed a process ticket"))
 	}
 
+	// Messages to it: one reply each, in the message's thread (the skill's "Messages to you").
+	if snap.Turn != nil {
+		for _, tr := range snap.Turn.Triggers {
+			if tr.Reason != "message" || tr.Channel == "" {
+				continue
+			}
+			text, more := personaReply(tr, snap.Items)
+			actions = append(actions, more...)
+			thread := tr.ThreadTS
+			if thread == "" {
+				thread = tr.TS
+			}
+			actions = append(actions, act("reply", "channel", tr.Channel, "thread_ts", thread, "text", text, "reason", "you asked: "+clipLine(tr.Text, 80)))
+		}
+	}
+
 	// Ready but unclaimed: in a work stage for an hour, waiting on nothing, and no runner offers
 	// what it needs.
 	work := map[string]bool{"triage": true, "build": true, "review": true, "land": true}
@@ -314,4 +335,43 @@ func personaActions(turn string, raw []byte) []any {
 			act("note", "text", fmt.Sprintf("turn %s: #%d unclaimed for want of %s; P1 ticket filed", turn, it.ID, need), "reason", "filed a process ticket"))
 	}
 	return actions
+}
+
+var (
+	approveQ = regexp.MustCompile(`(?i)\bapprove #(\d+)`)
+	dropQ    = regexp.MustCompile(`(?i)\bdrop #(\d+)`)
+)
+
+// personaReply answers a message from the snapshot, and the actions it takes for it: only the
+// approver's words make it act, and an approval is the approver's button (ask_approval posts it).
+func personaReply(tr pTrigger, items []pItem) (string, []any) {
+	if m := approveQ.FindStringSubmatch(tr.Text); m != nil {
+		if !tr.Approver {
+			return "Only the approver can have me do that.", nil
+		}
+		id, _ := strconv.ParseInt(m[1], 10, 64)
+		return fmt.Sprintf("Approvals are yours: I posted #%d's approval message again in its thread, with the button.", id),
+			[]any{act("ask_approval", "item_id", id, "reason", "you asked me to approve #"+m[1])}
+	}
+	if m := dropQ.FindStringSubmatch(tr.Text); m != nil {
+		if !tr.Approver {
+			return "Only the approver can have me do that.", nil
+		}
+		return fmt.Sprintf("Dropping is yours: I recommend it if #%s is stale; use Drop on its message.", m[1]), nil
+	}
+	var stuck []string
+	for _, it := range items {
+		switch {
+		case it.Stage == "needs_you":
+			stuck = append(stuck, fmt.Sprintf("#%d needs you: %s", it.ID, clipLine(it.Question, 80)))
+		case it.Stage == "held":
+			stuck = append(stuck, fmt.Sprintf("#%d waits on your approval", it.ID))
+		case len(it.WaitingOn) > 0:
+			stuck = append(stuck, fmt.Sprintf("#%d waits on #%d", it.ID, it.WaitingOn[0]))
+		}
+	}
+	if len(stuck) == 0 {
+		return "Nothing is stuck.", nil
+	}
+	return "Stuck: " + strings.Join(stuck, "; ") + ".", nil
 }
