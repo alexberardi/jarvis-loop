@@ -46,12 +46,17 @@ panel (`/board/flow`, linked from the board's header) and the API the same numbe
   idle for a runner that was off part of the window (loopd does not record when a runner came up);
   the loop-wide share (busy ÷ active agents × window) is on the tile.
 - **Killed runs** are the leases (and plan-turn leases) that ended `expired`, `overtime`,
-  `stopped` or `dropped` in the window; their whole run time is the lost agent-minutes.
+  `stopped`, `dropped` or `frozen` (a land run stopped before its merge because its repo froze) in
+  the window; their whole run time is the lost agent-minutes. A run that ended `queued` (its
+  advance waits for the unfreeze) kept its work and is not killed.
 - **Features** are the plans with an open item, or an item that moved in the window: items by
   stage and done/total. Items carry no feature tags on main yet (#198); when they do, the panel
   groups by tag as well.
-- **Frozen repo** is not a wait reason yet: repo freeze on a red main (#197) is not on main. It
-  belongs in `itemBlocks` when it lands, so the claim and the panel get it together.
+- **Frozen repo** (#197, 2026-10-18-main-red-freeze.md): an item of a repo whose main is red waits
+  `frozen repo`, after its own blockers and before the loop's. The repo's fix is exempt, as the
+  claim's `chooseFix` takes it: it waits only for a stop, 0 active agents or a resource limit, not
+  for a free slot or its stage's limit (`itemBlocks` takes the same `stageLimits` switch as the
+  claim's `choose`).
 
 ## Speed
 

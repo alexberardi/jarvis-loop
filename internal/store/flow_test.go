@@ -198,6 +198,38 @@ func TestFlow(t *testing.T) {
 	}
 }
 
+// A frozen repo's items wait on the freeze, its fix does not; a land run the freeze stopped lost
+// its work, a run whose advance was queued did not.
+func TestFlowFrozenRepo(t *testing.T) {
+	s, clk := open(t)
+	f := flowFixture{t, s}
+	clk.Advance(30 * time.Hour)
+	f.item(1, "build", 25, 0, "")
+	f.item(2, "build", 25, 0, "")
+	f.item(3, "land", 25, 0, "")
+	f.item(4, "build", 25, 0, "")
+	f.exec(`UPDATE items SET repo = 'o/r' WHERE id IN (1, 2, 3)`)
+	f.exec(`INSERT INTO repo_freezes (repo, item_id, since, red_since) VALUES ('o/r', 1, ?, ?)`, h(26), h(26))
+	f.lease("L1", 3, "land", "devbox", 27, 27.5, "frozen")
+	f.lease("L2", 2, "build", "devbox", 26, 27, "queued")
+
+	got, err := s.Flow(context.Background(), "24h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWait := []FlowWait{
+		{Reason: "frozen repo", Count: 2, Items: []int64{2, 3}},
+		{Reason: "ready", Count: 2, Items: []int64{1, 4}},
+	}
+	if !reflect.DeepEqual(got.Waiting, wantWait) {
+		t.Errorf("waiting:\n got %+v\nwant %+v", got.Waiting, wantWait)
+	}
+	wantKilled := []FlowKilled{{Reason: "frozen", Runs: 1, LostMinutes: 30}}
+	if !reflect.DeepEqual(got.Killed, wantKilled) || got.LostMinutes != 30 {
+		t.Errorf("killed (%v min): %+v", got.LostMinutes, got.Killed)
+	}
+}
+
 func TestBounceText(t *testing.T) {
 	long := strings.Repeat("x", 150)
 	for in, want := range map[string]string{

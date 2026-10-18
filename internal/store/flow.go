@@ -39,7 +39,7 @@ func ParseFlowWindow(w string) (time.Duration, error) {
 var FlowStages = []pipeline.Stage{pipeline.Triage, pipeline.Build, pipeline.Review, pipeline.Land, pipeline.QA, pipeline.NeedsYou, pipeline.Held}
 
 // killedReasons are the lease ends that lose the run's work.
-var killedReasons = []string{"expired", "overtime", "stopped", "dropped"}
+var killedReasons = []string{"expired", "overtime", "stopped", "dropped", "frozen"}
 
 // bounceStage is the stage each send-back outcome is counted against: review's bounce, the
 // runner's verify (after a build), land's back to build (red CI, a conflict) or back to review.
@@ -83,7 +83,7 @@ type Flow struct {
 	ActiveAgents int          `json:"active_agents"`
 	BusyMinutes  float64      `json:"busy_minutes"`
 
-	// Killed is the runs that ended without a result (expired, overtime, stopped, dropped) and
+	// Killed is the runs that ended without a result (expired, overtime, stopped, dropped, frozen) and
 	// the agent-minutes they used, all lost.
 	Killed      []FlowKilled `json:"killed"`
 	KilledRuns  int          `json:"killed_runs"`
@@ -535,10 +535,14 @@ func (f *Flow) waiting(tx *sql.Tx, ctl pipeline.Control) error {
 	if err != nil {
 		return err
 	}
+	frozen, err := frozenRepos(tx)
+	if err != nil {
+		return err
+	}
 	slices.SortFunc(items, func(a, b pipeline.Item) int { return int(a.ID - b.ID) })
 	by := map[string]*FlowWait{}
 	for _, it := range items {
-		why := pipeline.WaitReason(ctl, it, deps, live, flagged[it.ID])
+		why := pipeline.WaitReason(ctl, it, deps, live, flagged[it.ID], frozen)
 		if why == "" {
 			continue
 		}

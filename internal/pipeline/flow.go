@@ -19,6 +19,7 @@ const (
 	WaitNoRunner = "no runner for a resource"
 	WaitStopped  = "stopped"
 	WaitNoSlot   = "no free slot"
+	WaitFrozen   = "frozen repo"
 	// WaitReady: nothing holds it; it goes to the next runner that asks for its stage.
 	WaitReady = "ready"
 )
@@ -72,10 +73,12 @@ func itemBlocks(c Control, it Item, deps map[int64]Stage, inUse map[string]int, 
 
 // WaitReason is why it waits right now ("" when it does not: claimed, done or closed). deps are the
 // stages of the items it depends on, live the running leases (turns included, as Claim counts
-// them), unservable the resources no runner offers it (Unservable, nil when none). An item's own
-// blockers (dependencies, no runner) come before the loop's (stopped, no free slot): once the
-// loop frees up it would still wait for them. The limits come last: they change with every run.
-func WaitReason(c Control, it Item, deps map[int64]Stage, live []LiveLease, unservable []string) string {
+// them), unservable the resources no runner offers it (Unservable, nil when none), frozen the
+// repos whose main is red. An item's own blockers (dependencies, no runner) come before its repo's
+// (frozen) and the loop's (stopped, no free slot): once those free up it would still wait for
+// them. The limits come last: they change with every run. A frozen repo's fix waits only for a
+// stop or 0 active agents and the resource limits, as chooseFix takes it.
+func WaitReason(c Control, it Item, deps map[int64]Stage, live []LiveLease, unservable []string, frozen Frozen) string {
 	switch it.Stage {
 	case NeedsYou:
 		return WaitNeedsYou
@@ -94,10 +97,14 @@ func WaitReason(c Control, it Item, deps map[int64]Stage, live []LiveLease, unse
 	if len(unservable) > 0 {
 		return WaitNoRunner
 	}
-	if r := loopBlocks(c, live); r != "" {
+	if frozen.Blocks(it) {
+		return WaitFrozen
+	}
+	fix := frozen.Fixes(it)
+	if r := loopBlocks(c, live); r != "" && !(fix && r == WaitNoSlot && c.ActiveAgents > 0) {
 		return r
 	}
-	if r := itemBlocks(c, it, deps, inUse, true); r != "" {
+	if r := itemBlocks(c, it, deps, inUse, !fix); r != "" {
 		return r
 	}
 	return WaitReady
