@@ -126,7 +126,9 @@ func TestFlow(t *testing.T) {
 		t.Errorf("per hour: %+v", got.PerHour)
 	}
 	hr := func(x int64) int64 { return x * 3600 }
-	dist := func(n int, med, p90 int64) pipeline.Dist { return pipeline.Dist{Count: n, MedianSeconds: med, P90Seconds: p90} }
+	dist := func(n int, med, p90 int64) pipeline.Dist {
+		return pipeline.Dist{Count: n, MedianSeconds: med, P90Seconds: p90}
+	}
 	if want := dist(2, hr(9), hr(10)); got.ToMerge != want {
 		t.Errorf("to merge %+v, want %+v", got.ToMerge, want)
 	}
