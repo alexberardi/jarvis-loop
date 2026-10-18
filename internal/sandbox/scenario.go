@@ -18,6 +18,7 @@ import (
 
 	"github.com/alexberardi/jarvis-loop/internal/api"
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
+	"github.com/alexberardi/jarvis-loop/internal/runner"
 	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/slackfake"
 	"github.com/alexberardi/jarvis-loop/internal/store"
@@ -31,6 +32,9 @@ type Scenario struct {
 	// Stages are the stages the sandbox's runner claims (default: triage, build and review). A
 	// scenario that does triage or review by hand while the runner builds names ["build"].
 	Stages []string `json:"stages,omitempty"`
+	// ExtraRepo: the fake GitHub has a fourth repo (sandbox/extra) that loopd and the runner
+	// learn of only from a reload_loopd and a reload_runner step.
+	ExtraRepo bool `json:"extra_repo,omitempty"`
 	// Slots are the runner's agent slots (default 1): two let a run go on while another starts.
 	Slots int     `json:"slots,omitempty"`
 	Steps []Step  `json:"steps"`
@@ -139,6 +143,15 @@ type Step struct {
 	Refused     string   `json:"refused,omitempty"`
 	Pieces      []string `json:"pieces,omitempty"`
 
+	// reload_runner: the runner's config file is rewritten and reloaded, as on SIGHUP: Slots sets
+	// its slots, AddRepo "extra" adds the ExtraRepo remote's repo, Invalid writes a truncated
+	// file; with Refused the reload must be refused (a regexp on the error). reload_loopd: Text is
+	// loopd's new --repos-file (added to its --repos), read again as on SIGHUP. drain: the runner
+	// drains, as on SIGUSR1. release with Item: the item's "wait" build goes on.
+	Slots   int    `json:"slots,omitempty"`
+	AddRepo string `json:"add_repo,omitempty"`
+	Invalid bool   `json:"invalid,omitempty"`
+
 	// orchestrator: the orchestrator's token calls loopd: Action is "METHOD /path" ({item} is the
 	// item's id), Body its JSON (a value "{head}" is the item's head sha, "{id}" its id,
 	// "{last_channel}" and "{last_ts}" those of the last message sent the @orchestrator app). With As, it acts on a
@@ -189,6 +202,9 @@ type Expect struct {
 	// BoardOrchestrator: a regexp the board's Orchestrator panel must match ("" when the board
 	// has none: "^$").
 	BoardOrchestrator string `json:"board_orchestrator,omitempty"`
+	// BoardRunners: a regexp the board's runner notices (draining runners) must match, all of
+	// them together ("^$" when there are none).
+	BoardRunners string `json:"board_runners,omitempty"`
 	// Plans: alias -> the plan as loopd has it; DependsOn: item alias -> the aliases of the items
 	// it depends on, exactly.
 	Plans     map[string]PlanMatch `json:"plans,omitempty"`
@@ -424,6 +440,23 @@ func describeStep(st Step) string {
 	return strings.Join(parts, " ")
 }
 
+// refusedAs checks err against a step's Refused: nil when it must succeed, a regexp the error
+// must match otherwise.
+func refusedAs(refused string, err error) error {
+	if refused == "" {
+		return err
+	}
+	if err == nil {
+		return fmt.Errorf("not refused, want an error matching %q", refused)
+	}
+	if ok, rerr := matches(refused, err.Error()); rerr != nil {
+		return rerr
+	} else if !ok {
+		return fmt.Errorf("refused with %q, want %q", err, refused)
+	}
+	return nil
+}
+
 func (p *player) step(st Step) error {
 	s := p.s
 	switch st.Do {
@@ -459,13 +492,13 @@ func (p *player) step(st Step) error {
 		default:
 			return fmt.Errorf("hand_claim via %q: want runner_listener or nothing", st.Via)
 		}
+		cfg := &runner.Config{Capabilities: caps, OnlyResources: only}
 		stages := []string{"build"}
 		if st.RunnerStages != "" {
-			c := *hand
-			c.Stages = strings.Split(st.RunnerStages, ",")
-			hand, stages = &c, c.Stages
+			cfg.Stages = strings.Split(st.RunnerStages, ",")
+			stages = cfg.Stages
 		}
-		cl, err := hand.ClaimOnly(p.ctx, "hand-builder", caps, only, stages)
+		cl, err := hand.ClaimFor(p.ctx, "hand-builder", cfg, stages)
 		if err != nil {
 			return err
 		}
@@ -576,7 +609,7 @@ func (p *player) step(st Step) error {
 		}
 		return eventually(30*time.Second, func() error {
 			for _, x := range s.AgentState(r.id) {
-				if x == "hanging" {
+				if x == "hanging" || x == "waiting" {
 					return nil
 				}
 			}
@@ -584,6 +617,12 @@ func (p *player) step(st Step) error {
 		})
 	case "runner_idle":
 		return s.WaitRuns(60 * time.Second)
+	case "reload_runner":
+		return refusedAs(st.Refused, s.ReloadRunner(st.Slots, st.AddRepo, st.Invalid))
+	case "reload_loopd":
+		return refusedAs(st.Refused, s.ReloadLoopd(st.Text))
+	case "drain":
+		return s.Runner.Drain(s.ctx)
 	case "review":
 		r, err := p.ref(st.Item)
 		if err != nil {

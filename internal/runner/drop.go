@@ -58,7 +58,7 @@ func (r *Runner) CloseDropped(ctx context.Context) error {
 		return err
 	}
 	for _, row := range rows {
-		_, repo, ok := r.Cfg.Repo(row.Repo)
+		_, repo, ok := r.Config().Repo(row.Repo)
 		if !ok || row.PR <= 0 {
 			continue // another runner's repo
 		}
@@ -99,7 +99,7 @@ func (r *Runner) closeDroppedLoop(ctx context.Context) {
 		if err := r.CloseDropped(ctx); err != nil {
 			r.Log.Warn("close dropped PRs", "err", err)
 		}
-		t := r.Clock.NewTimer(time.Duration(r.Cfg.PollSeconds) * time.Second)
+		t := r.Clock.NewTimer(time.Duration(r.Config().PollSeconds) * time.Second)
 		select {
 		case <-ctx.Done():
 		case <-t.C():

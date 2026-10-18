@@ -168,6 +168,11 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, err)
 		return
 	}
+	draining, err := p.st.RunnerStates(r.Context())
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
 	fz, err := p.st.Freezes(r.Context())
 	if err != nil {
 		p.fail(w, err)
@@ -180,6 +185,7 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 	}
 	now := p.cfg.Clock.Now()
 	v := boardView(items, plans, now, r.URL.Query().Get("closed") == "1", p.cfg.SlackWorkspace)
+	v.Draining = draining
 	v.Freezes = fz
 	v.Working = workingView(work, now, 0)
 	v.Orch = orchView(orch, items)
@@ -394,6 +400,8 @@ func workingView(work []store.Working, now time.Time, item int64) workingSection
 }
 
 type boardData struct {
+	// Draining are the runners that claim nothing new before a restart (loop-runner drain).
+	Draining []store.RunnerState
 	// Freezes are the repos frozen while their main is red: a red banner each.
 	Freezes    []store.Freeze
 	Working    workingSection

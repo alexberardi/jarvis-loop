@@ -209,7 +209,7 @@ type OrchTurnResult struct {
 // orchClient is loopd with the orchestrator's token: the actions go through it, never the
 // runner's own token.
 func (r *Runner) orchClient() *Client {
-	return &Client{Base: r.Client.Base, Token: r.Cfg.OrchestratorToken, HTTP: r.Client.HTTP}
+	return &Client{Base: r.Client.Base, Token: r.Config().OrchestratorToken, HTTP: r.Client.HTTP}
 }
 
 // OrchStatic is the first prompt of each day's session: the orchestrator's skill (who it is, its
@@ -309,15 +309,15 @@ func (r *Runner) orchestrateTurn(ctx context.Context, cl *Claim, agent string) {
 	}
 	t := *cl.Orch
 	log = log.With("orchestrate", t.ID)
-	ru := &run{stage: StageOrchestrate, lease: cl.Lease.ID, agent: agent, started: r.Clock.Now(), orch: &t, resume: t.Resume}
-	ru.wt = filepath.Join(r.Cfg.WorkRoot, "orchestrator")
+	ru := &run{stage: StageOrchestrate, lease: cl.Lease.ID, agent: agent, cfg: r.Config(), started: r.Clock.Now(), orch: &t, resume: t.Resume}
+	ru.wt = filepath.Join(ru.cfg.WorkRoot, "orchestrator")
 	ru.scratch = filepath.Join(ru.wt, ".loop", "scratch")
-	ru.dir = uniqueRunDir(filepath.Join(r.Cfg.WorkRoot, "runs", fmt.Sprintf("O%d-orchestrate-%s", t.ID, ru.started.Format("20060102T150405Z"))))
-	ru.settings = filepath.Join(r.Cfg.WorkRoot, "settings", "orchestrate.json")
+	ru.dir = uniqueRunDir(filepath.Join(ru.cfg.WorkRoot, "runs", fmt.Sprintf("O%d-orchestrate-%s", t.ID, ru.started.Format("20060102T150405Z"))))
+	ru.settings = filepath.Join(ru.cfg.WorkRoot, "settings", "orchestrate.json")
 	ru.sandbox = "orchestrator"
-	ru.maxRun = time.Duration(r.Cfg.PlanTurnMinutes) * time.Minute
+	ru.maxRun = time.Duration(ru.cfg.PlanTurnMinutes) * time.Minute
 	ru.done = ctx.Done()
-	if r.Cfg.OrchestratorToken == "" {
+	if ru.cfg.OrchestratorToken == "" {
 		r.sendOrch(cleanupCtx, ru, OrchTurnResult{Error: "this runner has no orchestrator_token"}, log)
 		return
 	}
@@ -489,8 +489,8 @@ func (r *Runner) prepareOrch(ctx context.Context, ru *run, refused string) (stri
 	home := Home()
 	gc := guard.Config{
 		Worktree: out, Scratch: ru.scratch, Home: home,
-		Protected: r.Cfg.Protected(), Secrets: r.Cfg.Secrets(), Words: []string{r.Cfg.UserEmulator},
-		LoopdAddrs: r.Cfg.LoopdAddrs(), ReadOnly: true,
+		Protected: r.cfgOf(ru).Protected(), Secrets: r.cfgOf(ru).Secrets(), Words: []string{r.cfgOf(ru).UserEmulator},
+		LoopdAddrs: r.cfgOf(ru).LoopdAddrs(), ReadOnly: true,
 		Report: filepath.Join(ru.dir, "refusals.jsonl"), Armed: filepath.Join(ru.dir, "armed"),
 	}
 	b, _ := json.MarshalIndent(gc, "", "  ")
@@ -505,8 +505,8 @@ func (r *Runner) prepareOrch(ctx context.Context, ru *run, refused string) (stri
 	if err := writeAtomic(ru.settings, settings); err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(r.Cfg.Guard); err != nil {
-		return "", fmt.Errorf("the guard binary %s: %w", r.Cfg.Guard, err)
+	if _, err := os.Stat(r.cfgOf(ru).Guard); err != nil {
+		return "", fmt.Errorf("the guard binary %s: %w", r.cfgOf(ru).Guard, err)
 	}
 	argv, _ := json.Marshal(r.agentCommand(ru).Args[1:])
 	if err := os.WriteFile(filepath.Join(ru.dir, "argv.json"), argv, 0o600); err != nil {
