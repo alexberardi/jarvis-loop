@@ -149,7 +149,7 @@ Slack is the user's whole interface: add work, answer questions and approve merg
 | set priority | words when adding, or the dropdown on the item's first message |
 | see the board | `/loop status`; `/loop show <id>` for one item; on the LAN, the web board at `/board` (a "Working now" card per running agent, refreshed every 5 s; columns per stage, read-only, refreshes every 30 s) |
 | turn spending up or down | the pinned **Active agents** message, `/loop agents <n>`, `/loop stop` |
-| catch up | a digest every 4 hours in `#loop-digest`: merged, held, failing, new, waiting for your check (qa), estimated spend |
+| catch up | a standup at 09:00 in `#loop-digest` (the orchestrator's: merged, in flight, waiting and on what, needs you, what it did, its spend); a digest every 4 hours with the counts, main's CI and estimated spend |
 
 **What never goes to Slack** (a third party): full logs, model-call transcripts, sandbox credentials, tokens, and host names from `HOSTS.local.md`. The bot posts summaries, PR links and small evidence (a cropped screenshot, one failing scenario line); everything else is a link to `loopd` that works only on the LAN, or through the tunnel later.
 

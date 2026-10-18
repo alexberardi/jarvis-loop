@@ -31,7 +31,10 @@
     {"do": "runner_idle"},
     {"do": "expect", "stage": {"a": "needs_you"},
      "messages": [
-       {"thread": "a", "from": "orchestrator", "text": "^Stuck: #1 needs you: Should the timer round up or down\\?; #2 waits on your approval\\.$"},
+       {"thread": "a", "from": "orchestrator", "text": "^Stuck: #1 needs you: Should the timer round up or down\\?; #2 waits on your approval\\.$"}
+     ]},
+    {"do": "expect",
+     "messages": [
        {"channel": "DORCHESTRATORU0SANDBOXOTHER", "from": "orchestrator", "text": "^Only the approver can have me do that\\.$"}
      ],
      "events": [{"kind": "orchestrator.reply", "count": 2},
@@ -41,8 +44,9 @@
     {"do": "runner", "claims": "orchestrator"},
     {"do": "runner_idle"},
     {"do": "expect", "stage": {"b": "held"},
+     "messages": [{"thread": "b", "from": "orchestrator", "text": "^Approvals are yours: I posted #2's approval message again in its thread, with the button\\.$"}]},
+    {"do": "expect",
      "messages": [
-       {"thread": "b", "from": "orchestrator", "text": "^Approvals are yours: I posted #2's approval message again in its thread, with the button\\.$"},
        {"thread": "b", "from": "bot", "text": "^Orchestrator: approvals are yours, so here is its approval message again — you asked me to approve #2", "buttons": ["Approve merge", "Keep holding", "Drop"]}
      ],
      "events": [{"item": "b", "kind": "orchestrator.approval_asked", "actor": "orchestrator", "count": 1}],

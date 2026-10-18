@@ -68,6 +68,8 @@ type Bot struct {
 	planHeaders map[int64]string
 	digestTS    time.Time // the boundary the failures below are for
 	digestNG    int       // failed attempts to post that digest
+	standupTS   time.Time // the 09:00 the failures below are for
+	standupNG   int       // failed attempts to post that standup
 	self        string    // the loop bot's own user id, once toOrchestrator has needed it
 }
 
@@ -157,10 +159,12 @@ func (b *Bot) Drain(ctx context.Context) {
 	}
 }
 
-// Tick applies reply approvals whose window has passed and posts the digest when one is due.
+// Tick applies reply approvals whose window has passed and posts the digest and the standup when
+// one is due.
 func (b *Bot) Tick(ctx context.Context) {
 	b.applyDue(ctx)
 	b.digest(ctx)
+	b.standup(ctx)
 }
 
 // ---- Slack calls with bounded retries ----
