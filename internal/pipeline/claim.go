@@ -29,7 +29,7 @@ func DefaultControl() Control {
 	return Control{
 		ActiveAgents:  4,
 		MaxRunMinutes: 45,
-		Limits:        map[string]int{"gpu": 2, "voice": 1, "emulator": 1, "triage": 1, "review": 2, "land": 1},
+		Limits:        map[string]int{"gpu": 2, "voice": 1, "emulator": 1, "triage": 1, "review": 2, "land": 3},
 		HoldRules:     DefaultHoldRules(),
 
 		OrchTurnsPerDay: DefaultOrchTurnsPerDay,

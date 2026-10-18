@@ -45,7 +45,8 @@ jobs:
       - name: test (race)
         env:
           CGO_ENABLED: "1"
-        run: go test -race ./...
+        # Under the job's cap, so a hung test prints its goroutines instead of the job being cut off.
+        run: go test -race -timeout 12m ./...
       - name: build (CGO off)
         env:
           CGO_ENABLED: "0"
