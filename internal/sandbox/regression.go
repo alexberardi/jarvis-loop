@@ -17,8 +17,9 @@ import (
 // screenshot), so the runner's whole path runs: checkout, the fence, the report, the uploads.
 
 // E2EOutcomes are the stand-in's plays: fail (one pass, one failure with its screenshot), pass
-// (two passes), no_report (it exits 2 before writing one).
-var E2EOutcomes = []string{"fail", "pass", "no_report"}
+// (two passes), suite_error (two passes, but a second suite did not run), no_report (it exits 2
+// before writing one).
+var E2EOutcomes = []string{"fail", "pass", "suite_error", "no_report"}
 
 // e2eRun is the stand-in's scripts/e2e run id.
 const e2eRun = "20261015-130000-sbx001"
@@ -35,7 +36,7 @@ func e2eScript(outcome string) (string, error) {
      "status": "failed", "duration_ms": 1900, "error": "Error: expect(locator).toHaveText(expected)\nExpected: \"Wrong password\"\nReceived: \"Welcome back\"",
      "screenshots": ["web/artifacts/login-2/test-failed-1.png"], "trace": "web/artifacts/login-2/trace.zip", "console_errors": []}
   ]`
-	case "pass":
+	case "pass", "suite_error":
 		verdict, exit = "passed", "0"
 		tests = `[
     {"suite": "web", "id": "inbox-1", "title": "inbox.spec.ts › deleting from the detail page removes the item", "file": "tests/inbox.spec.ts",
@@ -48,6 +49,11 @@ func e2eScript(outcome string) (string, error) {
 			"echo \"e2e: args: $*\"\necho 'e2e: the sandbox did not come up (scripts/sandbox up exited 1)' >&2\nexit 2\n", nil
 	default:
 		return "", fmt.Errorf("e2e outcome %q: use %s", outcome, strings.Join(E2EOutcomes, ", "))
+	}
+	suites := `"web": {"status": "` + verdict + `", "exit_code": ` + exit + `, "error": null, "duration_ms": 2500}`
+	if outcome == "suite_error" {
+		verdict, exit = "error", "1"
+		suites += `, "mobile": {"status": "error", "exit_code": null, "error": "the emulator did not boot (adb wait-for-device timed out)", "duration_ms": 0}`
 	}
 	return `#!/usr/bin/env bash
 # The sandbox's stand-in for jarvis-server's scripts/e2e: a canned report.json (schema 1) and
@@ -62,7 +68,7 @@ cat > "$out/report.json" <<'JSON'
   "schema": 1, "run": "` + e2eRun + `", "status": "` + verdict + `",
   "started_at": "2026-10-15T09:00:00-04:00", "finished_at": "2026-10-15T09:02:00-04:00",
   "sandbox": "loop-reg", "filter": null, "git": {"sha": "", "branch": "HEAD", "dirty": false},
-  "suites": {"web": {"status": "` + verdict + `", "exit_code": ` + exit + `, "error": null, "duration_ms": 2500}},
+  "suites": {` + suites + `},
   "tests": ` + tests + `
 }
 JSON

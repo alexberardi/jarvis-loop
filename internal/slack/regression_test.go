@@ -148,3 +148,39 @@ func TestRegressionReportCouldNotRun(t *testing.T) {
 		t.Fatalf("report %+v", posts)
 	}
 }
+
+// A run with many failures shows the first MaxReportFailures and a line for the rest: Slack
+// refuses a message of more than 50 blocks, and the report would never be posted.
+func TestRegressionReportCapsTheFailures(t *testing.T) {
+	e := newBotEnv(t)
+	if _, err := e.st.QueueRegression(e.ctx, "user:alex", "web", "board"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := e.st.Claim(e.ctx, "devbox", pipeline.ClaimRequest{Runner: "devbox", Agent: "a", Kinds: []string{pipeline.WorkRegression}})
+	if err != nil || c == nil || c.Reg == nil {
+		t.Fatal(c, err)
+	}
+	const n = 60
+	tests := []store.RegressionReportTest{{Suite: "web", Title: "inbox › deletes", Status: "passed"}}
+	for i := range n {
+		tests = append(tests, store.RegressionReportTest{Suite: "web", Title: fmt.Sprintf("page %d › loads", i), Status: "failed", Error: "timeout"})
+	}
+	if _, err := e.st.RegressionResult(e.ctx, "devbox", c.Reg.ID, store.RegressionReport{Tests: tests}); err != nil {
+		t.Fatal(err)
+	}
+	posts := only(t, e.calls(), "chat.postMessage")
+	if len(posts) != 1 {
+		t.Fatalf("posts %+v", posts)
+	}
+	blocks := blocksOf(posts[0])
+	if len(blocks) != 1+MaxReportFailures+1 {
+		t.Fatalf("%d blocks, want %d", len(blocks), 1+MaxReportFailures+1)
+	}
+	last := fmt.Sprint(blocks[len(blocks)-1])
+	if want := fmt.Sprintf("…and %d more failures in the full report.", n-MaxReportFailures); !strings.Contains(last, want) {
+		t.Fatalf("last block %s, want %q", last, want)
+	}
+	if !strings.Contains(fmt.Sprint(blocks[MaxReportFailures]), fmt.Sprintf("page %d › loads", MaxReportFailures-1)) {
+		t.Fatalf("block %d: %v", MaxReportFailures, blocks[MaxReportFailures])
+	}
+}

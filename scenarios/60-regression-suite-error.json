@@ -1,0 +1,20 @@
+{
+  "name": "regression-suite-error",
+  "about": "A regression run where every test that ran passed but a suite did not run (docs/decisions/2026-10-18-regression-trigger.md): the demo repo's scripts/e2e reports two web passes and a mobile suite with status error (its emulator did not boot). The run is failed, not passed: #loop gets one red message with the suite's error line, and there is nothing to file.",
+  "stages": ["triage", "build", "review", "regression"],
+  "steps": [
+    {"do": "e2e", "outcome": "suite_error"},
+    {"do": "regression", "as": "approver", "text": "regression web"},
+    {"do": "runner", "claims": "regression"},
+    {"do": "runner_idle"},
+    {"do": "expect",
+     "events": [{"kind": "regression_done", "count": 1, "data": {"status": "^failed$", "error": "suite mobile: the emulator did not boot"}}],
+     "messages": [{"channel": "loop", "from": "bot", "text": "(?s)^\\*Regression R1 \\(web\\) :red_circle: failed\\*: 2 passed, 0 failed, 0 skipped · jarvis-server `[0-9a-f]{7}` · full report: /board/regressions/1 on loopd\\n.*suite mobile: the emulator did not boot \\(adb wait-for-device timed out\\)"}],
+     "no_messages": [{"channel": "loop", "from": "bot", "text": ":large_green_circle:"}, {"channel": "loop", "from": "bot", "buttons": ["File it"]}]}
+  ],
+  "expect": {
+    "events": [{"kind": "regression_queued", "count": 1}],
+    "no_events": [{"kind": "created"}],
+    "agent_runs": {}
+  }
+}

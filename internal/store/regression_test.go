@@ -202,6 +202,31 @@ func TestRegressionResult(t *testing.T) {
 	}
 }
 
+// A suite that did not run fails the run even when every test that did run passed: otherwise a
+// mobile suite that never started would be reported green.
+func TestRegressionSuiteErrorFailsTheRun(t *testing.T) {
+	s, _ := open(t)
+	var done []Event
+	s.Subscribe(func(e Event) {
+		if e.Kind == KindRegDone {
+			done = append(done, e)
+		}
+	})
+	r := queueReg(t, s, "all")
+	claimReg(t, s, "emulator")
+	got, err := s.RegressionResult(context.Background(), runner, r.ID, RegressionReport{Error: "mobile: the emulator did not boot",
+		Tests: []RegressionReportTest{{Suite: "web", Title: "Login", Status: "passed"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != RegFailed || got.Passed != 1 || got.Failed != 0 || got.Error != "mobile: the emulator did not boot" {
+		t.Fatalf("result %+v", got)
+	}
+	if len(done) != 1 || done[0].Data["status"] != RegFailed {
+		t.Fatalf("done events %+v", done)
+	}
+}
+
 func TestRegressionNoReportIsAnError(t *testing.T) {
 	s, _ := open(t)
 	r := queueReg(t, s, "web")
@@ -277,5 +302,22 @@ func TestFileRegressionFailureDeduplicates(t *testing.T) {
 	fresh, existing, err := s.FileRegressionFailure(ctx, "slack:U1", r2.ID, 2)
 	if err != nil || existing || fresh.ID == it.ID {
 		t.Fatalf("after the item closed: %v existing %v item %d", err, existing, fresh.ID)
+	}
+}
+
+// A run's events change no item, so they leave the orchestrator's sweep fingerprint alone: a run
+// must not start an orchestrate turn.
+func TestRegressionEventsLeaveTheOrchFingerprint(t *testing.T) {
+	s, _ := open(t)
+	add(t, s, "x", "P3")
+	before, err := orchFingerprint(s.r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := queueReg(t, s, "web")
+	claimReg(t, s)
+	reportRun(t, s, r.ID)
+	if after, err := orchFingerprint(s.r); err != nil || after != before {
+		t.Fatalf("fingerprint %s → %s (%v)", before, after, err)
 	}
 }
