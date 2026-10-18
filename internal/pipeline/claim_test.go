@@ -199,7 +199,7 @@ func TestSlotHold(t *testing.T) {
 			[]RunnerSeen{{Name: "both", Capabilities: []string{"macos", "gpu"}, LastSeen: t0}}, devbox, nil, 1},
 		{"(b) the macos item is in land and the Mac takes build and review", two, []Item{plain, waiting(2, Land, "P4", 0, "macos")}, oneLive, []RunnerSeen{macBR, devboxSeen}, devbox, nil, 1},
 		{"(b) the macos item is in land and the Mac takes every stage", two, []Item{plain, waiting(2, Land, "P4", 0, "macos")}, oneLive, []RunnerSeen{mbp, devboxSeen}, devbox, nil, 1},
-		{"(c) landing a macos item is not the held work", two, []Item{macItem, waiting(3, Land, "P1", 0, "macos")}, oneLive, []RunnerSeen{mbp, devboxSeen}, devbox, []string{"macos"}, 0},
+		{"(c) the dev box lands a macos item past the held slot", two, []Item{macItem, waiting(3, Land, "P1", 0, "macos")}, oneLive, []RunnerSeen{mbp, devboxSeen}, devbox, []string{"macos"}, 3},
 		{"(b) the macos item is in triage and the Mac takes build and review", two, []Item{plain, waiting(2, Triage, "P4", 0, "macos")}, oneLive, []RunnerSeen{macBR, devboxSeen}, devbox, nil, 1},
 		{"(b) the macos item is in one of the Mac's stages", two, []Item{plain, macItem}, oneLive, []RunnerSeen{macBR, devboxSeen}, devbox, []string{"macos"}, 0},
 		{"(b) no macos item", two, []Item{plain}, oneLive, []RunnerSeen{mbp}, devbox, nil, 1},
