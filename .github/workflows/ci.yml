@@ -57,3 +57,23 @@ jobs:
           name: loop-sandbox-run
           path: .sandbox/ci/runs/latest/*/transcript.md
           if-no-files-found: ignore
+  # The Mac runners' fence (sandbox-exec, docs/decisions/2026-10-17-mac-runners.md) on real macOS.
+  fence-macos:
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: sandbox-exec
+        run: /usr/bin/sandbox-exec -p '(version 1)(allow default)' true
+      - name: fence tests
+        env:
+          CGO_ENABLED: "0"
+        run: go test ./internal/runner/ -run 'TestFence|TestSBPL|TestDefaultVerify'
+      - name: build loop-runner (darwin/arm64)
+        env:
+          CGO_ENABLED: "0"
+        run: go build ./cmd/loop-runner

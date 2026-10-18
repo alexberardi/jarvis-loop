@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -51,12 +52,12 @@ func (g *rig) fakeHome() string {
 }
 
 // Setup and verify run the agent's code outside the agent's sandbox, so the runner fences them
-// with bubblewrap: the credential files are masked, secrets are not in the environment, git has
+// with bubblewrap (sandbox-exec on macOS): the credential files are masked, secrets are not in the environment, git has
 // no credential helper, and loopback still works (the harness, the emulator and the LLM tap).
 func TestFenceHidesSecrets(t *testing.T) {
 	g := newRig(t, fakeclaude.Good)
 	if err := g.r.ProbeFence(); err != nil {
-		t.Fatalf("bubblewrap cannot run here (the runner needs it): %v", err)
+		t.Fatalf("%s cannot run here (the runner needs it): %v", fenceName, err)
 	}
 	g.fakeHome()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "LOOPBACK-OK") }))
@@ -138,17 +139,18 @@ func TestFencedEnv(t *testing.T) {
 	}
 }
 
-// Without a working bubblewrap, setup and verify never run unfenced: the item goes to the user
+// Without a working fence (bubblewrap, or sandbox-exec on macOS), setup and verify never run unfenced: the item goes to the user
 // with the reason, and nothing is pushed.
 func TestFenceFailsClosed(t *testing.T) {
 	g := newRig(t, fakeclaude.Good)
 	g.r.Cfg.Bwrap = filepath.Join(t.TempDir(), "no-bwrap")
+	g.r.Cfg.SandboxExec = g.r.Cfg.Bwrap
 	marker := filepath.Join(t.TempDir(), "ran")
 	g.verifyRepo(VerifyStep{Name: "unit tests", Run: "touch " + marker})
 	id := g.toBuild("Add a feature")
 	g.runOnce()
 	d := g.item(id)
-	if d.Item.Stage != pipeline.NeedsYou || !strings.Contains(d.Item.Question, "bubblewrap") || !strings.Contains(d.Item.Question, "verify") {
+	if d.Item.Stage != pipeline.NeedsYou || !strings.Contains(d.Item.Question, fenceName) || !strings.Contains(d.Item.Question, "verify") {
 		t.Fatalf("%s %q", d.Item.Stage, d.Item.Question)
 	}
 	if _, err := os.Stat(marker); err == nil {
@@ -160,12 +162,13 @@ func TestFenceFailsClosed(t *testing.T) {
 
 	g2 := newRig(t, fakeclaude.Good)
 	g2.r.Cfg.Bwrap = filepath.Join(t.TempDir(), "no-bwrap")
+	g2.r.Cfg.SandboxExec = g2.r.Cfg.Bwrap
 	rc := g2.r.Cfg.Repos["demo"]
 	rc.Setup = []string{"touch " + marker}
 	g2.r.Cfg.Repos["demo"] = rc
 	id = g2.toBuild("Add a feature")
 	g2.runOnce()
-	if d := g2.item(id); d.Item.Stage != pipeline.NeedsYou || !strings.Contains(d.Item.Question, "bubblewrap") {
+	if d := g2.item(id); d.Item.Stage != pipeline.NeedsYou || !strings.Contains(d.Item.Question, fenceName) {
 		t.Fatalf("setup: %s %q", d.Item.Stage, d.Item.Question)
 	}
 	if _, err := os.Stat(marker); err == nil {
@@ -202,11 +205,11 @@ func TestDefaultVerifyMask(t *testing.T) {
 // Inside the fence HOME is read-only but for a writable allowlist: fenced code cannot plant
 // anything that later runs unfenced (shell rc files, user services, autostart, ~/.local/bin,
 // Claude Code's settings and hooks, git templates), but can write its working dir, the allowed
-// caches and a private /tmp.
+// caches and a private /tmp (TMPDIR on macOS, where /tmp is read-only).
 func TestFenceHomeIsReadOnly(t *testing.T) {
 	g := newRig(t, fakeclaude.Good)
 	if err := g.r.ProbeFence(); err != nil {
-		t.Fatalf("bubblewrap cannot run here (the runner needs it): %v", err)
+		t.Fatalf("%s cannot run here (the runner needs it): %v", fenceName, err)
 	}
 	home := g.fakeHome()
 	for _, d := range []string{".config/systemd/user", ".local/bin", ".claude", ".config/autostart", ".config/mise", ".git-templates/hooks",
@@ -218,7 +221,7 @@ func TestFenceHomeIsReadOnly(t *testing.T) {
 	tries := []string{"~/.bashrc", "~/.profile", "~/.config/systemd/user/x.service", "~/.config/autostart/x.desktop", "~/.local/bin/x",
 		"~/.claude/settings.json", "~/.config/mise/config.toml", "~/.git-templates/hooks/pre-commit", "$LOOP_MIRROR/config",
 		"$LOOP_MIRROR/hooks/post-checkout", "./in-worktree.txt", "~/.cache/jarvis-harness/model.bin", "~/.android/adbkey",
-		"$LOOP_EVIDENCE_DIR/shot.png", "/tmp/fence-private-" + filepath.Base(home), "$GOCACHE/x", "$GOMODCACHE/x", "$npm_config_cache/x"}
+		"$LOOP_EVIDENCE_DIR/shot.png", "/tmp/fence-private-" + filepath.Base(home), "$TMPDIR/x", "$GOCACHE/x", "$GOMODCACHE/x", "$npm_config_cache/x"}
 	var script strings.Builder
 	for _, p := range tries {
 		fmt.Fprintf(&script, "if (echo pwned >> %s) 2>/dev/null; then echo 'wrote %s'; else echo 'denied %s'; fi\n", p, p, p)
@@ -233,7 +236,8 @@ func TestFenceHomeIsReadOnly(t *testing.T) {
 	out := g.read(filepath.Join(g.lastRun(id, StageBuild), "verify", "verify-1-writes", "output.log"))
 	for i, p := range tries {
 		want := "denied "
-		if i >= 10 {
+		// macOS has no private /tmp: it is read-only there, and TMPDIR is the private one.
+		if i >= 10 && !(runtime.GOOS == "darwin" && strings.HasPrefix(p, "/tmp/")) {
 			want = "wrote "
 		}
 		if !strings.Contains(out, want+p+"\n") {
