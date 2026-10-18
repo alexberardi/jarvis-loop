@@ -17,9 +17,9 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # On a 2-vCPU runner the race suite takes about 7 minutes and the scenarios 2 more, so 10 cut
-    # the job off mid-run with no failure in its log (#213).
-    timeout-minutes: 20
+    # The race tests plus the scenarios take about 9 minutes; at 10, a slow runner cancelled most PR
+    # runs and every one came back to the loop as a CI failure (#212).
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

@@ -43,4 +43,4 @@ on this branch unchanged, with their own decisions:
 - `scenarios/72-land-past-six-builds.json`: six hanging P1 builds take all six agent slots, then the
   dev box claims three approved items for land (one needing `macos`), they wait on CI side by side
   and squash-merge; a seventh build waits. With one land lane it fails at the second land claim.
-- #209's and #210's scenarios, renumbered: `70-land-macos-item.json`, `71-land-past-full-agent-slots.json`.
+- #209's and #210's scenarios, as merged on main: `68-land-macos-item.json`, `69-land-past-full-agent-slots.json`.

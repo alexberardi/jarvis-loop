@@ -1,0 +1,31 @@
+{
+  "name": "trust-verify-only",
+  "about": "Item #203: the approver OKs a trusted-file commit, and the build agent would commit again on any run (as on #144 and #142). After the OK the runner does not run the agent: it runs verify on the OK'd commit itself, with the result the refused build left, opens the PR on that head and the item goes to review. There is no second refusal and no second OK.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "shoot dark mode too", "text": "[mobile] shoot dark mode too"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "trusted_change_eager", "file": "tools/shoot"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "failed", "actor": "runner", "data": {"trust_sha": "^[0-9a-f]{40}$"}}]},
+    {"do": "press", "item": "a", "as": "approver", "button": "trust"},
+    {"do": "expect", "stage": {"a": "build"}, "events": [{"item": "a", "kind": "trusted", "actor": "approver"}]},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review"},
+     "events": [
+       {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "data": {"trust_used": "^[0-9a-f]{40}$"}},
+       {"item": "a", "kind": "advanced", "outcome": "failed", "data": {"trust_sha": "^[0-9a-f]{40}$"}, "count": 1},
+       {"item": "a", "kind": "trusted", "count": 1}
+     ]}
+  ],
+  "expect": {
+    "stage": {"a": "review"},
+    "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
+    "messages": [
+      {"thread": "a", "text": "opened, head `[0-9a-f]{7}` → review\\.(?s:.*)trusted files changed"}
+    ]
+  }
+}

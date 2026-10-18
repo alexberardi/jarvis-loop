@@ -25,7 +25,7 @@ What still applies to land: `/loop stop`, `active_agents` 0 (the usage-limit sto
 "no agents"), the land limit (3 since #213), the resource limits, a frozen repo, and the dependencies.
 
 Tests: `TestLandTakesNoAgentSlot` (pipeline), `TestClaimLandsWhenAgentSlotsAreFull` (store), and
-`scenarios/71-land-past-full-agent-slots.json`: `active_agents` 1, a hanging P1 build in the one
+`scenarios/69-land-past-full-agent-slots.json`: `active_agents` 1, a hanging P1 build in the one
 slot, and an approved item still lands next to it.
 
 ## Not covered
