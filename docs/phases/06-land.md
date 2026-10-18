@@ -130,6 +130,8 @@ gates, or the land script would merge changes to itself.
     in this phase so the rule can be narrow (*as built: `internal/slack/approve*.go`*)
   - *as built, added:* `tokens`: `internal/slack/env.go`, `internal/runner/config.go`,
     `internal/runner/client.go`
+  - *2026-10-18 (#204): narrowed to the files themselves, see
+    `docs/decisions/2026-10-18-narrow-loop-holds.md`.*
   - `guard`: `internal/guard/**`, `cmd/loop-guard/**`, `internal/runner/settings.go`
   - `ci`: `.github/workflows/**`
   - `deleted-test`: `**/*_test.go` (D, R); `scenario-removed`: `scenarios/**` (D, R)

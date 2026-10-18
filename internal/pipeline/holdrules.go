@@ -35,14 +35,25 @@ const (
 
 // DefaultHoldRules are each repo's CLAUDE.md hold list as path rules. jarvis-server: auth and
 // access, signing and the update helper, CI checks, and weakened tests or contract checks.
-// jarvis-loop: who may approve or merge (the stage rules and approvals, loopd's API auth, the Slack
-// approver check, the store that keeps approvals and hold rules, loopd's start-up wiring), token handling, the landing gates, the agents' guard, CI, and weakened tests or
-// scenarios. The mobile apps, the docs, the installer and the packages: release and store config,
+// jarvis-loop: who may approve or merge (the outcome-to-stage table, review approval, the merge
+// gate and the user's approvals, in their own files), loopd's API auth and acting for the user,
+// the Slack approver check, the hold rules and their persistence, token handling, the landing
+// gates, the agents' guard and sandbox, CI, and weakened tests or scenarios; the rest of
+// internal/pipeline, internal/api, internal/store and cmd/loopd lands on review and CI
+// (docs/decisions/2026-10-18-narrow-loop-holds.md). The mobile apps, the docs, the installer and the packages: release and store config,
 // native code, auth and pairing, deploy and hosting, secret generation, package manifests and
 // install scripts, CI, and deleted tests (docs/phases/06b-all-repos.md).
 func DefaultHoldRules() []HoldRule {
-	out := append(serverRules(), loopRules()...)
-	out = append(out, trustedFileRules()...)
+	return defaultHoldRules(loopRules(), true)
+}
+
+// defaultHoldRules is the default list with jarvis-loop's rules loop, and the trusted-file rules
+// when trusted (an earlier loopd shipped it without them).
+func defaultHoldRules(loop []HoldRule, trusted bool) []HoldRule {
+	out := append(serverRules(), loop...)
+	if trusted {
+		out = append(out, trustedFileRules()...)
+	}
 	for _, repo := range []string{NodeMobileRepo, RecipesRepo} {
 		out = append(out, mobileRules(repo)...)
 	}
@@ -68,7 +79,40 @@ func serverRules() []HoldRule {
 	}
 }
 
+// loopRules are jarvis-loop's: the files that implement who may approve or merge, API auth and
+// tokens, the hold rules, the guard and the landing gates, not the packages they sit in.
 func loopRules() []HoldRule {
+	l := LoopRepo
+	return []HoldRule{
+		{Name: "approval", Glob: "internal/pipeline/approve.go", Repo: l},
+		{Name: "approval", Glob: "internal/pipeline/trust.go", Repo: l},
+		{Name: "approval", Glob: "internal/api/approve.go", Repo: l},
+		{Name: "approval", Glob: "internal/store/approve.go", Repo: l},
+		{Name: "hold-rules", Glob: "internal/pipeline/holdrules.go", Repo: l},
+		{Name: "hold-rules", Glob: "internal/store/control.go", Repo: l},
+		{Name: "land", Glob: "internal/runner/land*.go", Repo: l},
+		{Name: "land", Glob: "internal/runner/pr.go", Repo: l},
+		{Name: "land", Glob: "internal/runner/git.go", Repo: l},
+		{Name: "api-auth", Glob: "internal/api/auth.go", Repo: l},
+		{Name: "api-auth", Glob: "internal/api/onbehalf.go", Repo: l},
+		{Name: "api-auth", Glob: "internal/store/approver.go", Repo: l},
+		{Name: "api-auth", Glob: "cmd/loopd/main.go", Repo: l},
+		{Name: "slack-approver", Glob: "internal/slack/approve*.go", Repo: l},
+		{Name: "tokens", Glob: "internal/slack/env.go", Repo: l},
+		{Name: "tokens", Glob: "internal/runner/config.go", Repo: l},
+		{Name: "tokens", Glob: "internal/runner/client_auth.go", Repo: l},
+		{Name: "guard", Glob: "internal/guard/**", Repo: l},
+		{Name: "guard", Glob: "cmd/loop-guard/**", Repo: l},
+		{Name: "guard", Glob: "internal/runner/settings.go", Repo: l},
+		{Name: "ci", Glob: ".github/workflows/**", Repo: l},
+		{Name: "deleted-test", Glob: "**/*_test.go", Statuses: []string{"D", "R"}, Repo: l},
+		{Name: "scenario-removed", Glob: "scenarios/**", Statuses: []string{"D", "R"}, Repo: l},
+	}
+}
+
+// loopRulesV1 are jarvis-loop's rules as phase 6 shipped them, until #204: frozen, never edited,
+// so a database carrying a copy of a list built on them is still recognised (IsBuiltInHoldRuleSet).
+func loopRulesV1() []HoldRule {
 	l := LoopRepo
 	return []HoldRule{
 		{Name: "approval", Glob: "internal/pipeline/**", Repo: l},
@@ -197,15 +241,27 @@ func packageRules(r string) []HoldRule {
 	}, pyTestRules(r)...)
 }
 
+// EarlierDefaultHoldRules are the built-in lists earlier loopds shipped: jarvis-server's alone
+// before phase 6, then with jarvis-loop's, then every repo's (phase 6b), then with the trusted
+// files, until #204 narrowed jarvis-loop's.
+func EarlierDefaultHoldRules() [][]HoldRule {
+	return [][]HoldRule{
+		serverRules(),
+		append(serverRules(), loopRulesV1()...),
+		defaultHoldRules(loopRulesV1(), false),
+		defaultHoldRules(loopRulesV1(), true),
+	}
+}
+
 // IsBuiltInHoldRuleSet reports whether rules are, as a set, a built-in default list: today's, or
-// one an earlier loopd shipped (jarvis-server's alone before phase 6, then with jarvis-loop's).
+// one an earlier loopd shipped (EarlierDefaultHoldRules).
 // Any control change used to write the built-in list out as if the user had set it, which froze
 // it; loopd recognises such a copy and goes back to the live defaults.
 func IsBuiltInHoldRuleSet(rules []HoldRule) bool {
 	if len(rules) == 0 {
 		return false
 	}
-	for _, set := range [][]HoldRule{DefaultHoldRules(), serverRules(), append(serverRules(), loopRules()...)} {
+	for _, set := range append(EarlierDefaultHoldRules(), DefaultHoldRules()) {
 		if sameRuleSet(rules, set) {
 			return true
 		}
