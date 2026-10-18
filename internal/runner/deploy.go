@@ -54,7 +54,7 @@ func (r *Runner) ReportDeployed(ctx context.Context) error {
 		return err
 	}
 	for _, row := range rows {
-		key, repo, ok := r.Cfg.Repo(row.Repo)
+		key, repo, ok := r.Config().Repo(row.Repo)
 		if !ok || !repo.QAAfterDeploy {
 			continue
 		}
@@ -116,7 +116,7 @@ func (r *Runner) reportDeployedLoop(ctx context.Context) {
 		if err := r.ReportDeployed(ctx); err != nil {
 			r.Log.Warn("report deployed", "err", err)
 		}
-		t := r.Clock.NewTimer(time.Duration(r.Cfg.PollSeconds) * time.Second)
+		t := r.Clock.NewTimer(time.Duration(r.Config().PollSeconds) * time.Second)
 		select {
 		case <-ctx.Done():
 		case <-t.C():

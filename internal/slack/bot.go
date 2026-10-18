@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"regexp"
 	"strconv"
@@ -57,6 +58,8 @@ type Config struct {
 type Bot struct {
 	c      Config
 	events chan store.Event
+
+	reposMu sync.RWMutex // guards c.Repos and c.Aliases, which SetRepos replaces (loopd's SIGHUP)
 
 	mu      sync.Mutex
 	pending map[string]*pendingApproval // by id
@@ -1150,9 +1153,24 @@ func (b *Bot) onMention(ctx context.Context, m slackEvent) {
 	}
 }
 
+// SetRepos replaces the repos and aliases /loop add and plans recognise (loopd reloading
+// --repos-file).
+func (b *Bot) SetRepos(repos []string, aliases map[string]string) {
+	b.reposMu.Lock()
+	defer b.reposMu.Unlock()
+	b.c.Repos, b.c.Aliases = append([]string(nil), repos...), maps.Clone(aliases)
+}
+
+// parseRepo is ParseRepo with the configured repos and aliases.
+func (b *Bot) parseRepo(text string) (string, string) {
+	b.reposMu.RLock()
+	defer b.reposMu.RUnlock()
+	return ParseRepo(text, b.c.Repos, b.c.Aliases)
+}
+
 func (b *Bot) add(ctx context.Context, user, text string) (pipeline.Item, error) {
 	after, rest := ParseAfter(text)
-	repo, rest := ParseRepo(rest, b.c.Repos, b.c.Aliases)
+	repo, rest := b.parseRepo(rest)
 	pri, title := ParsePriority(rest)
 	if title == "" {
 		return pipeline.Item{}, &pipeline.Error{Code: pipeline.CodeMissingField, Message: "Say what to add."}
