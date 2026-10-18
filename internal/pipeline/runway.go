@@ -8,7 +8,7 @@ import (
 
 // Runway (#205): how much work the loop can do without the user, and what of the user's would free
 // the most. Runnable work is the items in a work stage (triage, build, review, land), claimed or
-// not, whose dependencies are merged or will be by other runnable work; an unclaimed item no runner
+// not, whose dependencies are merged or will be by other runnable work not on the hold list; an unclaimed item no runner
 // can serve is not. The rest waits on the user: held items, needs_you (a question or a trusted-file
 // OK), and whatever depends on them. A qa item does not block: dependencies are met at merge
 // (DependencyMet).
@@ -23,6 +23,9 @@ type RunwayNode struct {
 	Unservable bool
 	// Trust: a needs_you item waiting on the approver's trusted-file OK.
 	Trust bool
+	// Hold: on the hold list (risk hold) with no approval for its current head. Its own work stages
+	// are runnable, but it stops at land for the user, so it does not meet a dependency.
+	Hold bool
 }
 
 // What the user does to unblock an item.
@@ -64,7 +67,8 @@ var DefaultStageDurations = map[Stage]time.Duration{
 var runwayStages = []Stage{Triage, Build, Review, Land}
 
 // ComputeRunway is the runway of items (every item a dependency names should be in it; one missing
-// counts as not merged). durations is each work stage's recent run time; a stage missing from it
+// counts as not merged); a held-risk item in flight (Hold) is runnable itself but meets no
+// dependency until it merges. durations is each work stage's recent run time; a stage missing from it
 // takes DefaultStageDurations'.
 func ComputeRunway(items map[int64]RunwayNode, durations map[Stage]time.Duration) Runway {
 	var r Runway
@@ -102,7 +106,8 @@ func ComputeRunway(items map[int64]RunwayNode, durations map[Stage]time.Duration
 	return r
 }
 
-// runnableSet is the runnable items, with item unblocked (0: none) counted as back at work: grown
+// runnableSet is the runnable items, with item unblocked (0: none) counted as back at work (and
+// approved, so it meets its dependents' dependency): grown
 // until nothing more joins, so a cycle never does.
 func runnableSet(items map[int64]RunwayNode, unblocked int64) map[int64]bool {
 	in := map[int64]bool{}
@@ -114,7 +119,8 @@ func runnableSet(items map[int64]RunwayNode, unblocked int64) map[int64]bool {
 			}
 			ready := true
 			for _, d := range n.DependsOn {
-				if dn, ok := items[d]; !in[d] && (!ok || !DependencyMet(dn.Stage)) {
+				dn, ok := items[d]
+				if !ok || !DependencyMet(dn.Stage) && (!in[d] || dn.Hold && d != unblocked) {
 					ready = false
 					break
 				}

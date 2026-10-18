@@ -46,8 +46,8 @@ func TestRunwayWarningNamesWhatFreesTheMost(t *testing.T) {
 		t.Fatalf("stage %s after Approve on the warning, want land", st)
 	}
 	for _, c := range e.calls() {
-		if c.Method == "chat.update" && c.Body["ts"] == "1700000000.999999" {
-			t.Fatalf("the warning was replaced: %s", allText(c))
+		if c.Method == "chat.update" && (c.Body["ts"] == "1700000000.999999" || c.Body["ts"] == nil || c.Body["ts"] == "") {
+			t.Fatalf("the warning was replaced (or an update with no ts sent): %v %s", c.Body["ts"], allText(c))
 		}
 	}
 }

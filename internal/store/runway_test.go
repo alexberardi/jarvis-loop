@@ -35,6 +35,9 @@ func heldChains(t *testing.T, s *Store) pipeline.Item {
 	ctx := context.Background()
 	held := add(t, s, "held", "P2")
 	setStage(t, s, held.ID, pipeline.Held)
+	if _, err := s.w.Exec(`UPDATE items SET risk = ? WHERE id = ?`, pipeline.RiskHold, held.ID); err != nil {
+		t.Fatal(err)
+	}
 	for range 3 {
 		it := add(t, s, "behind", "P2")
 		setStage(t, s, it.ID, pipeline.Build)
@@ -75,14 +78,17 @@ func TestRunwayWarnsOncePerDrySpell(t *testing.T) {
 		t.Fatalf("hours = %v, want 0", evs[0].Data["hours"])
 	}
 
-	// It recovers (the merge goes on to land: 3 builds' worth of work), then runs dry again.
-	setStage(t, s, held.ID, pipeline.Land)
+	// It recovers (approved, the merge goes on to land: 3 builds' worth of work), then runs dry again.
+	if _, err := s.Approve(ctx, user, held.ID, shaA, "approve"); err != nil {
+		t.Fatal(err)
+	}
 	s.OrchTick(ctx)
 	clk.Advance(time.Minute)
 	if rep, err := s.Runway(ctx); err != nil || rep.Hours < 3 {
 		t.Fatalf("runway = %+v, %v; want at least 3 h", rep, err)
 	}
 	setStage(t, s, held.ID, pipeline.Held)
+	clk.Advance(pipeline.RunwayAwayAfter) // the approval was the user's
 	s.OrchTick(ctx)
 	if evs := runwayEvents(t, s); len(evs) != 2 {
 		t.Fatalf("%d warnings after a second dry spell, want 2", len(evs))
@@ -201,5 +207,36 @@ func TestStageDurationsAreRecentMedians(t *testing.T) {
 	}
 	if d, ok := got[pipeline.Build]; ok {
 		t.Fatalf("build = %v from 2 runs, want none (the default)", d)
+	}
+}
+
+// An item triaged risk hold is runway itself, but its dependents are not: it stops at land for the
+// user.
+func TestRunwayHeldRiskDependencyFreesNothing(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	x := add(t, s, "risky", "P2")
+	claim(t, s, "t")
+	evidence(t, s, x.ID)
+	if _, err := s.Advance(ctx, runner, x.ID, pipeline.Reproduced, map[string]string{"area": "a", "size": "S", "risk": "hold", "resources": ""}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := s.GetItem(ctx, x.ID); d.Item.Stage != pipeline.Build || d.Item.Risk != pipeline.RiskHold {
+		t.Fatalf("after triage: stage %s risk %q", d.Item.Stage, d.Item.Risk)
+	}
+	for range 2 {
+		it := add(t, s, "behind", "P2")
+		setStage(t, s, it.ID, pipeline.Build)
+		if _, err := s.Link(ctx, user, it.ID, []int64{x.ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rep, err := s.Runway(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The risky item's build+review+land at the defaults: 70 minutes.
+	if rep.Runnable != 1 || rep.Hours != 1.2 {
+		t.Fatalf("runway = %+v; want the risky item only, 1.2 h", rep)
 	}
 }

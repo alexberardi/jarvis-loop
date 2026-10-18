@@ -107,7 +107,8 @@ func (s *Store) runway(tx querier) (RunwayReport, bool, error) {
 	sha := map[int64]string{}
 	for _, it := range open {
 		nodes[it.ID] = pipeline.RunwayNode{Stage: it.Stage, Claimed: claimed[it.ID], DependsOn: it.DependsOn, Priority: it.Priority,
-			Unservable: len(flagged[it.ID]) > 0 && !claimed[it.ID], Trust: it.Trust != nil && it.Trust.By == "" && it.Stage == pipeline.NeedsYou}
+			Unservable: len(flagged[it.ID]) > 0 && !claimed[it.ID], Trust: it.Trust != nil && it.Trust.By == "" && it.Stage == pipeline.NeedsYou,
+			Hold: it.Risk == pipeline.RiskHold && (it.Approval == nil || it.Approval.HeadSHA != it.HeadSHA)}
 		switch {
 		case it.Stage == pipeline.Held:
 			sha[it.ID] = it.HeadSHA

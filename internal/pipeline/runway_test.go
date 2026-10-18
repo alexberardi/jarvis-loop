@@ -10,7 +10,7 @@ var testDurations = map[Stage]time.Duration{Triage: 10 * time.Minute, Build: tim
 
 func TestRunwayEveryChainWaitsOnOneHeldItem(t *testing.T) {
 	items := map[int64]RunwayNode{
-		1: {Stage: Held, Priority: "P2"},
+		1: {Stage: Held, Hold: true, Priority: "P2"},
 		2: {Stage: Build, DependsOn: []int64{1}, Priority: "P2"},
 		3: {Stage: Build, DependsOn: []int64{1}, Priority: "P2"},
 		4: {Stage: Triage, DependsOn: []int64{2}, Priority: "P2"},
@@ -135,5 +135,28 @@ func TestRunwayWarnState(t *testing.T) {
 		if send != c.send || keep != c.keep {
 			t.Errorf("%s: RunwayWarn = %v, %v; want %v, %v", c.name, send, keep, c.send, c.keep)
 		}
+	}
+}
+
+// A dependency in review with risk hold does not make its dependent runnable: it stops at land for
+// the user. Its own stages still count; the dependent is not counted in Hours.
+func TestRunwayHeldRiskDependencyDoesNotFreeDependents(t *testing.T) {
+	items := map[int64]RunwayNode{
+		1: {Stage: Review, Hold: true, Priority: "P2"},
+		2: {Stage: Build, DependsOn: []int64{1}, Priority: "P2"},
+		3: {Stage: Build, DependsOn: []int64{1}, Priority: "P2"},
+	}
+	r := ComputeRunway(items, testDurations)
+	if want := []int64{1}; !slices.Equal(r.Runnable, want) {
+		t.Fatalf("runnable = %v, want %v", r.Runnable, want)
+	}
+	// The review's review+land: 0.5 h.
+	if r.Hours < 0.49 || r.Hours > 0.51 {
+		t.Fatalf("hours = %.2f, want 0.5", r.Hours)
+	}
+	// Approved for its head (Hold false), it frees both.
+	items[1] = RunwayNode{Stage: Review, Priority: "P2"}
+	if r := ComputeRunway(items, testDurations); len(r.Runnable) != 3 {
+		t.Fatalf("runnable = %v, want all 3", r.Runnable)
 	}
 }
