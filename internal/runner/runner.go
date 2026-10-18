@@ -188,7 +188,7 @@ func (r *Runner) ClaimAndRunIn(ctx context.Context, stages []string) (bool, erro
 		stages = []string{StageLand}
 	}
 	agent := r.Cfg.Name + "-" + randHex(4)
-	cl, err := r.Client.ClaimOnly(ctx, agent, r.Cfg.Capabilities, r.Cfg.OnlyResources, stages)
+	cl, err := r.Client.ClaimSlots(ctx, agent, r.Cfg.Capabilities, r.Cfg.OnlyResources, stages, r.Cfg.Slots)
 	if err != nil || cl == nil {
 		return false, err
 	}

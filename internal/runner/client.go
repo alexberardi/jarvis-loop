@@ -136,9 +136,18 @@ func (c *Client) Claim(ctx context.Context, agent string, caps, stages []string)
 
 // ClaimOnly is Claim for items that need one of only (none: any item caps can serve).
 func (c *Client) ClaimOnly(ctx context.Context, agent string, caps, only, stages []string) (*Claim, error) {
+	return c.ClaimSlots(ctx, agent, caps, only, stages, 0)
+}
+
+// ClaimSlots is ClaimOnly from a runner that works slots runs at once, which loopd records for the
+// flow panel's idle capacity (0: not sent).
+func (c *Client) ClaimSlots(ctx context.Context, agent string, caps, only, stages []string, slots int) (*Claim, error) {
 	body := map[string]any{"agent": agent, "capabilities": caps, "stages": stages}
 	if len(only) > 0 {
 		body["only_resources"] = only
+	}
+	if slots > 0 {
+		body["slots"] = slots
 	}
 	turnKinds := map[string]string{StagePlan: pipeline.WorkPlan, StageOrchestrate: pipeline.WorkOrchestrate}
 	if slices.ContainsFunc(stages, func(s string) bool { return turnKinds[s] != "" }) {

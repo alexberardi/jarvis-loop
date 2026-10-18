@@ -107,6 +107,7 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /plans/{id}/drop", user, s.dropPlan)
 	route("POST /plans/{id}/turns/{turn}/result", runner, s.planTurnResult)
 	route("GET /control", reads, s.getControl)
+	route("GET /flow", reads, s.flow)
 	route("PUT /control", user, s.putControl)
 	// The orchestrator's own actions (orchestrator.go).
 	route("POST /orchestrator/items", orch, s.orchAdd)
@@ -402,6 +403,8 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		Stages        []string `json:"stages"`
 		// Kinds: item, plan (plan turns), orchestrate; empty is items only.
 		Kinds []string `json:"kinds"`
+		// Slots: how many runs the runner works at once, for the flow panel (0: not said).
+		Slots int `json:"slots"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -411,6 +414,10 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kinds may be item, plan and orchestrate, got " + strconv.Quote(k)})
 			return
 		}
+	}
+	if body.Slots < 0 || body.Slots > maxSlots {
+		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "slots must be 0 to " + strconv.Itoa(maxSlots)})
+		return
 	}
 	p := PrincipalFrom(r.Context())
 	var stages []pipeline.Stage
@@ -446,7 +453,7 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, Stages: stages, Kinds: body.Kinds})
+	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, Stages: stages, Kinds: body.Kinds, Slots: body.Slots})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -827,6 +834,23 @@ func (s *server) reopen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"item": it, "filed": filed})
+}
+
+// maxSlots bounds a runner's reported slots.
+const maxSlots = 64
+
+// flow is the flow panel's numbers (store.Flow) for ?window= (default 24h).
+func (s *server) flow(w http.ResponseWriter, r *http.Request) {
+	window := r.URL.Query().Get("window")
+	if window == "" {
+		window = store.DefaultFlowWindow
+	}
+	f, err := s.st.Flow(r.Context(), window)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
 }
 
 func (s *server) getControl(w http.ResponseWriter, r *http.Request) {
