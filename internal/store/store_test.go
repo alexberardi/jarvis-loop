@@ -60,6 +60,12 @@ func add(t *testing.T, s *Store, title, pri string) pipeline.Item {
 func TestMigrationsFromEmptyAndReopen(t *testing.T) {
 	dir := t.TempDir()
 	clk := clock.NewFake(t0)
+	// Each migration has its own number, 1 to n: two files with one number apply only the first.
+	for i, name := range migrationFiles(t) {
+		if want := fmt.Sprintf("%04d_", i+1); !strings.HasPrefix(name, want) {
+			t.Fatalf("migration %s: want the prefix %s (numbers must be unique and in order)", name, want)
+		}
+	}
 	s, err := Open(dir, clk)
 	if err != nil {
 		t.Fatal(err)
