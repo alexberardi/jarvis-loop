@@ -1,0 +1,38 @@
+{
+  "name": "proof-command-then-you",
+  "about": "QA proofs (docs/decisions/2026-10-18-qa-proofs.md), the command kind passing, with a manual check left. The build's proof: a command (the merge commit is on main: the runner runs it fenced in a fresh checkout of main, with LOOP_MERGE_SHA) and a manual check. At merge the thread says the loop checks the command itself, then the user looks. The runner's proof pass runs the command; it passes, so only the user's check is left: the thread gets the ask, mentioning the approver with what to look at and the Verified / Reopen buttons. Verified moves it to done.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Pairing code size"},
+    {"do": "command", "as": "approver", "text": "qa 1"},
+    {"do": "script", "item": "a", "proof": [
+      {"kind": "command", "run": "git cat-file -e \"$LOOP_MERGE_SHA^{commit}\" && git merge-base --is-ancestor \"$LOOP_MERGE_SHA\" HEAD && echo \"main has $LOOP_MERGE_SHA\""},
+      {"kind": "manual", "look": "the pairing code on a phone: readable at arm's length"}]},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "qa"},
+     "messages": [{"thread": "a", "from": "bot", "text": "#1 Pairing code size: Merged — the loop checks it itself: command: `git cat-file -e .*`\\. <https://github.com/sandbox/demo/pull/101\\|sandbox/demo#101> merged as `[0-9a-f]{7}`; watching main's CI\\.\\nThen your check: look at the pairing code on a phone: readable at arm's length\\.\\nIt is verified when every automatic check passes", "buttons": ["Verified", "Reopen"]}]},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "qa"},
+     "events": [{"item": "a", "kind": "proof_checked", "actor": "runner", "data": {"status": "^manual$", "changed": "^true$"}, "count": 1}],
+     "messages": [{"thread": "a", "from": "bot", "text": "<@U0C9AFPAMD4> #1 Pairing code size: Proof passed — waiting for your check: look at the pairing code on a phone: readable at arm's length\\. Every automatic check passed\\.\\nPress Verified when it works", "buttons": ["Verified", "Reopen"]}],
+     "board": {"a": {"column": "QA", "card": "needs you</span>[\\s\\S]*look at the pairing code on a phone", "page": "<span class=\"label\">passed</span> command: `git cat-file[^<]*`<pre>exit 0 after 0s: main has [0-9a-f]{40}"}}},
+    {"do": "clock", "advance": "1h"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "events": [{"item": "a", "kind": "proof_checked", "count": 1}]},
+    {"do": "press", "item": "a", "button": "qa_verified", "as": "approver"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "events": [{"item": "a", "kind": "verified", "actor": "approver", "count": 1}],
+    "no_events": [{"item": "a", "kind": "refused"}, {"item": "a", "kind": "verified", "actor": "loop (proof)"}],
+    "messages": [{"thread": "a", "from": "bot", "text": "^Verified by you\\. Done\\.$"}]
+  }
+}
