@@ -25,7 +25,7 @@ func (r *Runner) CheckHeld(ctx context.Context) error {
 		return err
 	}
 	for _, row := range rows {
-		_, repo, ok := r.Cfg.Repo(row.Repo)
+		_, repo, ok := r.Config().Repo(row.Repo)
 		if !ok || row.PR <= 0 {
 			continue
 		}
@@ -54,11 +54,14 @@ func (r *Runner) CheckHeld(ctx context.Context) error {
 	return nil
 }
 
-// heldWatchLoop runs CheckHeld every land poll until ctx ends.
+// heldWatchLoop runs CheckHeld every land poll until ctx ends, while land is in the stages (a
+// reload may add or remove it).
 func (r *Runner) heldWatchLoop(ctx context.Context) {
 	for ctx.Err() == nil {
-		if err := r.CheckHeld(ctx); err != nil {
-			r.Log.Warn("check held PRs", "err", err)
+		if _, land := r.Lanes(); land != nil {
+			if err := r.CheckHeld(ctx); err != nil {
+				r.Log.Warn("check held PRs", "err", err)
+			}
 		}
 		t := r.Clock.NewTimer(LandPollEvery)
 		select {

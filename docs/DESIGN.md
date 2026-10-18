@@ -132,6 +132,12 @@ asks the runner, through a spool in the agent's own worktree (checked by the run
 same fence, next to a keeper fence that holds the running sandbox until the agent ends. Details:
 `docs/decisions/2026-10-16-harness-broker.md`.
 
+**Config and updates without lost work (2026-10-18):** SIGHUP (`loop-runner reload`) reloads the
+runner's config for the next claim while live runs keep theirs; a bad file is refused. A binary
+update drains first (`loop-runner drain`): no new claims, the board shows the runner draining, and it
+exits once its runs end for its service to restart it. loopd reloads `--repos-file` on SIGHUP.
+Details: `docs/decisions/2026-10-18-runner-reload-drain.md`.
+
 **Cleanup** is the runner's, not the agent's: when a lease ends for any reason it removes that item's worktree, takes down its sandbox and stops its emulator. It never touches anything it did not start, so a stray process from another session is reported, not killed.
 
 ## Slack
@@ -165,6 +171,8 @@ Claude Code gives a runner no reading of plan usage (`/usage` is interactive onl
 | loopd's page (LAN) | a slider |
 
 **Stop:** running agents stop at their next heartbeat (within a minute), their work is saved as a WIP branch, and each item returns to its queue; a Claude build resumes its session on the next claim on the same runner ([decision](decisions/2026-10-18-build-resume.md)). **Resume** clears it.
+
+**A run that ends with no result** (exit 0, no `.loop/result.json`, as one waiting on a background command does) resumes its session once in the same claim, with a short note; the briefs say to run every check in the foreground ([decision](decisions/2026-10-18-no-result-resume.md)).
 
 **Automatic:** when an agent run ends with a usage-limit or rate-limit error, `loopd` sets the active-agents number to 0, posts the error with its reset time in `#loop-digest` with an @mention, and does not raise it again on its own.
 
