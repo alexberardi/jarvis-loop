@@ -78,19 +78,7 @@ func (c *Client) AddItem(ctx context.Context, n NewItem) (int64, error) {
 }
 
 func (c *Client) do(ctx context.Context, method, path, contentType string, body io.Reader, out any) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.Base, "/")+path, body)
-	if err != nil {
-		return 0, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	hc := c.HTTP
-	if hc == nil {
-		hc = &http.Client{Timeout: 2 * time.Minute}
-	}
-	resp, err := hc.Do(req)
+	resp, err := c.send(ctx, method, path, contentType, body)
 	if err != nil {
 		return 0, err
 	}
@@ -438,16 +426,7 @@ func (c *Client) Rebuild(ctx context.Context, id int64, notes string) error {
 
 // DownloadEvidence saves evidence file n of an item to dst (at most MaxEvidenceBytes).
 func (c *Client) DownloadEvidence(ctx context.Context, id int64, n int, dst string) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(c.Base, "/")+fmt.Sprintf("/items/%d/evidence/%d", id, n), nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	hc := c.HTTP
-	if hc == nil {
-		hc = &http.Client{Timeout: 2 * time.Minute}
-	}
-	resp, err := hc.Do(req)
+	resp, err := c.send(ctx, "GET", fmt.Sprintf("/items/%d/evidence/%d", id, n), "", nil)
 	if err != nil {
 		return err
 	}

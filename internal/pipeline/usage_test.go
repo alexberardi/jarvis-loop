@@ -349,7 +349,7 @@ func TestChooseWorkPacedFrozen(t *testing.T) {
 	}{
 		{"slow: the fix, over the cap", Pace{Level: PaceSlow, Agents: 2}, full, 9},
 		{"paused, slots free: land, not the fix", Pace{Level: PacePaused}, nil, 3},
-		{"paused, every slot taken: nothing", Pace{Level: PacePaused}, full, 0},
+		{"paused, every slot taken: land, which takes no slot (#210)", Pace{Level: PacePaused}, full, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w, ok := ChooseWorkPaced(DefaultControl(), tc.pace, []Item{fix, other, land}, nil, tc.live, nil, nil, nil, req, frozen)
@@ -389,7 +389,8 @@ func TestChooseWorkPacedHeldSlot(t *testing.T) {
 }
 
 // A slot is held only for work the pace lets run: paused, the last slot is not kept for a Mac
-// claude build, so a land claim goes on; not paused, the hold stands as before.
+// claude build, so the dev box's P4 build goes on with qwen; not paused, the hold stands as before.
+// (Land passes a held slot anyway: it takes no agent slot, #210.)
 func TestSlotHoldsPaced(t *testing.T) {
 	two := DefaultControl()
 	two.ActiveAgents = 2
@@ -397,35 +398,35 @@ func TestSlotHoldsPaced(t *testing.T) {
 	mbp := RunnerSeen{Name: "mbp", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}, PollSeconds: 30, LastSeen: t0.Add(-10 * time.Second)}
 	mac := sized(waiting(2, Build, "P4", 0, "macos"), "S", "")
 	bigMac := sized(waiting(4, Build, "P2", 0, "macos"), "L", "")
-	land := waiting(3, Land, "P2", time.Hour)
-	devbox := ClaimRequest{Runner: "devbox", Agent: "devbox-1", Kinds: []string{WorkItem}}
+	qwenBuild := sized(waiting(3, Build, "P4", time.Hour), "S", "")
+	devbox := ClaimRequest{Runner: "devbox", Agent: "devbox-1", Kinds: []string{WorkItem}, Builders: []string{BuilderQwen}}
 	paused := Pace{Level: PacePaused}
-	for _, items := range [][]Item{{mac, land}, {bigMac, land}} {
+	for _, items := range [][]Item{{mac, qwenBuild}, {bigMac, qwenBuild}} {
 		holds := SlotHolds(two, paused, items, nil, live, []RunnerSeen{mbp}, nil, t0)
 		if len(holds) != 0 {
 			t.Fatalf("paused, #%d waiting: holds %+v, want none", items[0].ID, holds)
 		}
 		w, ok := ChooseWorkPaced(two, paused, items, nil, live, nil, nil, holds, devbox, nil)
-		if !ok || w.Item == nil || w.Item.ID != 3 {
-			t.Fatalf("paused, #%d waiting: devbox got %+v, %v; want the land #3", items[0].ID, w, ok)
+		if !ok || w.Item == nil || w.Item.ID != 3 || !w.RouteQwen {
+			t.Fatalf("paused, #%d waiting: devbox got %+v, %v; want #3 with qwen", items[0].ID, w, ok)
 		}
 	}
 	// Slow with room for one more claude run: a P1 or size S Mac build holds the slot, a P2 L does not.
 	slow := Pace{Level: PaceSlow, Agents: 2}
-	if h := SlotHolds(two, slow, []Item{bigMac, land}, nil, live, []RunnerSeen{mbp}, nil, t0); len(h) != 0 {
+	if h := SlotHolds(two, slow, []Item{bigMac, qwenBuild}, nil, live, []RunnerSeen{mbp}, nil, t0); len(h) != 0 {
 		t.Fatalf("slow, P2 L Mac build: holds %+v, want none", h)
 	}
 	p1Mac := sized(waiting(5, Build, "P1", 0, "macos"), "L", "")
-	if h := SlotHolds(two, slow, []Item{p1Mac, land}, nil, live, []RunnerSeen{mbp}, nil, t0); len(h) != 1 || h[0].ItemID != 5 {
+	if h := SlotHolds(two, slow, []Item{p1Mac, qwenBuild}, nil, live, []RunnerSeen{mbp}, nil, t0); len(h) != 1 || h[0].ItemID != 5 {
 		t.Fatalf("slow, P1 Mac build: holds %+v, want #5 held", h)
 	}
 	// Not paced: the hold stands, and the devbox gets nothing.
 	normal := Pace{Agents: 2}
-	holds := SlotHolds(two, normal, []Item{mac, land}, nil, live, []RunnerSeen{mbp}, nil, t0)
+	holds := SlotHolds(two, normal, []Item{mac, qwenBuild}, nil, live, []RunnerSeen{mbp}, nil, t0)
 	if len(holds) != 1 || holds[0].ItemID != 2 {
 		t.Fatalf("normal: holds %+v, want #2 held", holds)
 	}
-	if w, ok := ChooseWorkPaced(two, normal, []Item{mac, land}, nil, live, nil, nil, holds, devbox, nil); ok || w.Held != "slot held for macos work" {
+	if w, ok := ChooseWorkPaced(two, normal, []Item{mac, qwenBuild}, nil, live, nil, nil, holds, devbox, nil); ok || w.Held != "slot held for macos work" {
 		t.Fatalf("normal: devbox got %+v, %v; want the slot held", w, ok)
 	}
 }

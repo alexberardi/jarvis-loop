@@ -444,11 +444,11 @@ func TestBackToBuildRecomputesRisk(t *testing.T) {
 // The rules applied are the item's repo's: pr_opened uses the repo it reports (the item may not
 // have had one), every other outcome the item's.
 func TestHoldRulesFollowTheItemsRepo(t *testing.T) {
-	loopPaths := []string{"M internal/pipeline/pipeline.go"}
+	loopPaths := []string{"M internal/pipeline/approve.go"}
 	a := prOpened(sha2, loopPaths, map[string]string{"repo": LoopRepo})
 	tr, err := ApplyAdvance(item(Build), a, t0)
 	wantCode(t, err, "")
-	if tr.Item.Risk != RiskHold || !strings.Contains(tr.Item.HoldReason, "approval: M internal/pipeline/pipeline.go") {
+	if tr.Item.Risk != RiskHold || !strings.Contains(tr.Item.HoldReason, "approval: M internal/pipeline/approve.go") {
 		t.Fatalf("jarvis-loop pr_opened: %q %q", tr.Item.Risk, tr.Item.HoldReason)
 	}
 	tr, err = ApplyAdvance(item(Build), prOpened(sha2, loopPaths, map[string]string{"repo": ServerRepo}), t0)

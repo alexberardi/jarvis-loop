@@ -1,6 +1,6 @@
 {
   "name": "slot-not-held-while-paused",
-  "about": "#199 with #192: with active_agents 2 and one slot taken, the last slot is held for the Mac's macos build. Then claude's 5h budget is reached and claude claims pause: the Mac's build is claude's, so nothing is held for it, and the dev box's runner lands the reviewed item (land is a script and goes on while paused). The Mac claims nothing until the window is over, then takes its build (docs/decisions/2026-10-18-usage-awareness.md, 'A held slot').",
+  "about": "#199 with #192 and #210: with active_agents 2 and one slot taken, the last slot is held for the Mac's macos build. Land takes no agent slot, so the reviewed item lands anyway, but a P4 size S build on the dev box waits for the held slot. Then claude's 5h budget is reached and claude claims pause: the Mac's build is claude's, so nothing is held for it, and the dev box's runner takes the P4 build with qwen. The Mac claims nothing until the window is over, then takes its build (docs/decisions/2026-10-18-usage-awareness.md, 'A held slot').",
   "stages": ["build", "review", "land"],
   "steps": [
     {"do": "add", "item": "a", "title": "Fix the digest wording"},
@@ -23,19 +23,25 @@
     {"do": "control", "stopped": true},
     {"do": "hand_claim", "via": "runner_listener", "capabilities": "macos", "only": "macos", "claims": "none"},
     {"do": "control", "stopped": false},
-    {"do": "runner", "claims": "none"},
-
-    {"do": "control", "budgets": {"claude": {"per_5h": 1000}}},
     {"do": "runner", "claims": "a"},
     {"do": "runner_idle"},
     {"do": "expect", "stage": {"a": "done"}},
+    {"do": "add", "item": "q", "title": "Reword the digest footer", "priority": "P4"},
+    {"do": "triage", "item": "q", "size": "S"},
+    {"do": "control", "stopped": true},
+    {"do": "hand_claim", "via": "runner_listener", "capabilities": "macos", "only": "macos", "claims": "none"},
+    {"do": "control", "stopped": false},
+    {"do": "runner", "claims": "none"},
+
+    {"do": "control", "budgets": {"claude": {"per_5h": 1000}}},
+    {"do": "runner", "claims": "q"},
     {"do": "hand_claim", "via": "runner_listener", "capabilities": "macos", "only": "macos", "claims": "none"},
 
     {"do": "clock", "advance": "6h"},
     {"do": "hand_claim", "via": "runner_listener", "item": "mac", "capabilities": "macos", "only": "macos"}
   ],
   "expect": {
-    "stage": {"a": "done", "mac": "build"},
+    "stage": {"a": "done", "q": "review", "mac": "build"},
     "pr": {"a": {"state": "MERGED", "merge_calls": 1}},
     "events": [
       {"item": "a", "kind": "advanced", "outcome": "merged", "actor": "runner", "count": 1},
