@@ -348,7 +348,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f.result("Asked a question.")
 		return 0
 	case UsageLimit:
-		f.emit(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "rejected", "resetsAt": 1792000000}})
+		f.emit(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "rejected", "resetsAt": 1792079100}})
 		f.emit(map[string]any{"type": "assistant", "error": "rate_limit", "message": map[string]any{"content": []any{
 			map[string]any{"type": "text", "text": "You've hit your session limit · resets 3:45pm"}}}})
 		f.emit(map[string]any{"type": "result", "subtype": "success", "is_error": true, "num_turns": 1, "duration_ms": 900,

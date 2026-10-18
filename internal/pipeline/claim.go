@@ -18,6 +18,8 @@ type Control struct {
 	HoldRules     []HoldRule     `json:"hold_rules"`
 	// OrchTurnsPerDay caps the orchestrate turns started in a day (0: none).
 	OrchTurnsPerDay int `json:"orchestrator_turns_per_day"`
+	// Budgets are the usage budgets per provider (usage.go).
+	Budgets map[string]Budget `json:"budgets"`
 }
 
 // LimitKeys are the resources and stages that can carry a limit. Build has none: it is bounded
@@ -31,6 +33,7 @@ func DefaultControl() Control {
 		MaxRunMinutes: 45,
 		Limits:        map[string]int{"gpu": 2, "voice": 1, "emulator": 1, "triage": 1, "review": 2, "land": 1},
 		HoldRules:     DefaultHoldRules(),
+		Budgets:       DefaultBudgets(),
 
 		OrchTurnsPerDay: DefaultOrchTurnsPerDay,
 	}
@@ -58,6 +61,14 @@ func (c Control) Validate() error {
 			return errf(CodeInvalidField, "limit %s must be 0 or more", k)
 		}
 	}
+	for k, b := range c.Budgets {
+		if !slices.Contains(BudgetProviders, k) {
+			return errf(CodeInvalidField, "no budget for %q (have %s)", k, strings.Join(BudgetProviders, ", "))
+		}
+		if err := b.Validate(); err != nil {
+			return err
+		}
+	}
 	// A name may repeat within a repo for several globs (jarvis-loop's "land" rule covers three
 	// files), but the same (repo, name, glob) twice is a mistake.
 	seen := map[[3]string]bool{}
@@ -79,6 +90,8 @@ type LiveLease struct {
 	ItemID    int64
 	Stage     Stage
 	Resources []string
+	// Claude: the run is claude's (everything but land and qwen builds), for the paced number.
+	Claude bool
 }
 
 // ClaimRequest is a runner asking for work.
@@ -94,6 +107,9 @@ type ClaimRequest struct {
 	// Kinds is the work the runner takes: WorkItem, WorkPlan (plan turns), WorkOrchestrate.
 	// Empty: items only, so a runner that predates plans never gets a turn.
 	Kinds []string
+	// Builders are the other builders the runner can run (BuilderQwen when it has a qwen block):
+	// a paced claim may route a P3–P5 build to one (usage.go).
+	Builders []string `json:"builders,omitempty"`
 }
 
 // The kinds of work a claim may return.
@@ -125,6 +141,8 @@ type Work struct {
 	Item *Item
 	Turn *TurnCandidate
 	Orch *OrchCandidate
+	// RouteQwen: build the item with qwen this run (a paced claim, ChooseWorkPaced).
+	RouteQwen bool
 }
 
 // ChooseWork picks an item (Choose), a queued plan turn or the queued orchestrate turn (orch, nil
@@ -133,21 +151,49 @@ type Work struct {
 // the user is in the conversation. The orchestrate turn beats everything (it gets the next free
 // slot), one at a time.
 func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest) (Work, bool) {
+	return ChooseWorkPaced(c, Pace{Level: PaceNormal, Agents: c.ActiveAgents}, items, deps, live, turns, orch, req)
+}
+
+// ChooseWorkPaced is ChooseWork under a claude pace (PaceFor). Slow: claude's runs at once are at
+// most pace.Agents (live counts the Claude leases), and claude takes only P1 and size S items,
+// triage (short, and an item has no size before it) and P1 plan turns; paused: claude takes nothing. Either way land and qwen builds go on, and a P3–P5
+// build of size S or M with no builder set goes to qwen this run when the runner has it
+// (Work.RouteQwen). The active-agents number caps everything as before.
+func ChooseWorkPaced(c Control, pace Pace, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest) (Work, bool) {
 	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
 		return Work{}, false
 	}
-	if orch != nil && req.wants(WorkOrchestrate) && !slices.ContainsFunc(live, func(l LiveLease) bool { return l.Stage == OrchestrateStage }) {
+	claudeLive := 0
+	for _, l := range live {
+		if l.Claude {
+			claudeLive++
+		}
+	}
+	claudeOK := pace.Level == PaceNormal || pace.Level == PaceSlow && claudeLive < pace.Agents
+	if orch != nil && claudeOK && req.wants(WorkOrchestrate) && !slices.ContainsFunc(live, func(l LiveLease) bool { return l.Stage == OrchestrateStage }) {
 		return Work{Orch: orch}, true
+	}
+	route := func(it Item) bool {
+		return pace.Level != PaceNormal && routable(it) && slices.Contains(req.Builders, BuilderQwen)
+	}
+	eligible := func(it Item) bool {
+		if !UsesClaude(it) || route(it) {
+			return true
+		}
+		return claudeOK && (pace.Level == PaceNormal || it.Priority == "P1" || it.Size == "S" || it.Stage == Triage)
 	}
 	var it Item
 	okItem := false
 	if req.wants(WorkItem) {
-		it, okItem = Choose(c, items, deps, live, req)
+		it, okItem = choose(c, items, deps, live, req, eligible)
 	}
 	var best *TurnCandidate
-	if req.wants(WorkPlan) {
+	if req.wants(WorkPlan) && claudeOK {
 		for i := range turns {
 			t := &turns[i]
+			if pace.Level != PaceNormal && t.Priority != "P1" {
+				continue
+			}
 			if best == nil || turnBefore(*t, *best) {
 				best = t
 			}
@@ -157,9 +203,22 @@ func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease,
 	case best != nil && (!okItem || PriorityRank(best.Priority) <= PriorityRank(it.Priority)):
 		return Work{Turn: best}, true
 	case okItem:
-		return Work{Item: &it}, true
+		return Work{Item: &it, RouteQwen: route(it)}, true
 	}
 	return Work{}, false
+}
+
+// UsesClaude reports whether an item's next run is claude's: every stage but land, and a build
+// unless the item's builder is qwen.
+func UsesClaude(it Item) bool {
+	return it.Stage != Land && !(it.Stage == Build && it.Builder == BuilderQwen)
+}
+
+// routable: a build a paced claim may send to qwen: P3–P5, size S or M (it fits Qwen's context and
+// pace), and no builder set (a plan's "builder: claude" or a qwen item's fallback to claude stays).
+func routable(it Item) bool {
+	return it.Stage == Build && it.Builder == "" && PriorityRank(it.Priority) >= 3 && PriorityRank(it.Priority) <= 5 &&
+		(it.Size == "S" || it.Size == "M")
 }
 
 func turnBefore(a, b TurnCandidate) bool {
@@ -178,6 +237,11 @@ var stageOrder = map[Stage]int{Land: 0, Review: 1, Build: 2, Triage: 3}
 // candidates (callers pass the waiting items; anything claimed or not in a work stage is skipped
 // here too); deps are the stages of the items they depend on; live are the leases still running.
 func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req ClaimRequest) (Item, bool) {
+	return choose(c, items, deps, live, req, nil)
+}
+
+// choose is Choose with one more filter (nil: none).
+func choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req ClaimRequest, eligible func(Item) bool) (Item, bool) {
 	// 1. Control.
 	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
 		return Item{}, false
@@ -202,6 +266,9 @@ func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 		// 2. Eligible: waiting, in a work stage, resources ⊆ capabilities (and, with OnlyResources,
 		// needing one of them).
 		if !it.Stage.IsWork() || claimed[it.ID] {
+			continue
+		}
+		if eligible != nil && !eligible(*it) {
 			continue
 		}
 		if len(req.Stages) > 0 && !slices.Contains(req.Stages, it.Stage) {

@@ -885,20 +885,17 @@ func TestUsageLimitIsAnnouncedInTheDigestChannel(t *testing.T) {
 		t.Fatalf("digest-channel posts %+v", digest)
 	}
 	txt := allText(digest[0])
-	for _, want := range []string{"<@" + Approver + ">", "Usage limit", "session limit", "resets 3:45pm", fmt.Sprintf("#%d", id), "0"} {
+	for _, want := range []string{"<@" + Approver + ">", "Usage limit", "session limit", "resets 3:45pm", fmt.Sprintf("#%d", id),
+		"Claude claims paused until", "qwen builds and landing go on"} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("usage-limit post lacks %q: %s", want, txt)
 		}
 	}
-	st, _ := e.st.SlackState(e.ctx)
-	var shown bool
+	// The active-agents number is the user's: the control message is not touched.
 	for _, u := range only(t, cs, "chat.update") {
-		if u.Body["ts"] == st.ControlTS && strings.Contains(allText(u), "Active agents: 0 of 6") {
-			shown = true
+		if strings.Contains(allText(u), "Active agents: 0 of 6") {
+			t.Fatalf("the control message went to 0: %+v", u.Body)
 		}
-	}
-	if !shown {
-		t.Fatalf("the control message does not show 0: %+v", only(t, cs, "chat.update"))
 	}
 	// Other control changes are not announced.
 	two := 2
@@ -1348,5 +1345,28 @@ func TestAddAfter(t *testing.T) {
 	}
 	if out := e.command(Approver, "add more after #1"); !strings.Contains(out, "#1 is closed") {
 		t.Fatalf("closed dependency %q", out)
+	}
+}
+
+func TestPaceMessages(t *testing.T) {
+	e := newBotEnv(t)
+	ev := func(d map[string]any) (string, bool) {
+		m, ok := e.b.paceMessage(e.ctx, store.Event{Kind: store.KindUsagePace, Data: d})
+		return m.Text, ok
+	}
+	slow := map[string]any{"level": float64(pipeline.PaceSlow), "from_level": float64(0), "agents": float64(3), "active_agents": float64(4),
+		"window": "5h", "percent": float64(87), "forecast": "2026-10-15T19:10:00Z"}
+	if txt, ok := ev(slow); !ok || txt != "Pacing claude: the 5h window is at 87% of its budget (at this rate it runs out at Thu 15:10).\nClaude runs at once: 3 of 4; P1 and size S items first; P3–P5 builds of size S or M go to qwen." {
+		t.Errorf("slow: %q", txt)
+	}
+	budget := map[string]any{"level": float64(pipeline.PacePaused), "window": "week", "percent": float64(100)}
+	if txt, _ := ev(budget); txt != "<@"+Approver+"> Claude budget reached: the week is at 100% of its budget.\nClaude claims paused until the window frees up; qwen builds and landing go on, and running agents finish their stage." {
+		t.Errorf("budget: %q", txt)
+	}
+	if txt, ok := ev(map[string]any{"level": float64(0), "from_level": float64(pipeline.PaceSlow)}); !ok || txt != "Claude claims back to normal." {
+		t.Errorf("normal: %q %v", txt, ok)
+	}
+	if _, ok := ev(map[string]any{"level": float64(0), "from_level": float64(0)}); ok {
+		t.Error("a normal pace after a normal one posted")
 	}
 }

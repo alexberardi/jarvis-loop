@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -625,9 +626,11 @@ type Lease struct {
 	EndReason string         `json:"end_reason,omitempty"`
 	// Activity is what the run is doing, from its latest heartbeat (nil: none sent, or ended).
 	Activity *pipeline.Activity `json:"activity,omitempty"`
+	// Builder is the run's builder when it is not claude's (qwen: the item's, or a paced claim's route).
+	Builder string `json:"builder,omitempty"`
 }
 
-const leaseCols = `id, item_id, stage, runner, agent, resources, claimed_at, expires_at, note, ended_at, end_reason, activity`
+const leaseCols = `id, item_id, stage, runner, agent, resources, claimed_at, expires_at, note, ended_at, end_reason, activity, builder`
 
 func scanLease(row scanner) (Lease, error) {
 	var (
@@ -637,7 +640,7 @@ func scanLease(row scanner) (Lease, error) {
 		ended            sql.NullInt64
 		activity         string
 	)
-	if err := row.Scan(&l.ID, &l.ItemID, &stage, &l.Runner, &l.Agent, &resources, &claimed, &expires, &l.Note, &ended, &l.EndReason, &activity); err != nil {
+	if err := row.Scan(&l.ID, &l.ItemID, &stage, &l.Runner, &l.Agent, &resources, &claimed, &expires, &l.Note, &ended, &l.EndReason, &activity, &l.Builder); err != nil {
 		return l, err
 	}
 	l.Activity = parseActivity(activity)
@@ -796,15 +799,23 @@ func (s *Store) loadControl(q interface {
 }) (pipeline.Control, error) {
 	var c pipeline.Control
 	var stopped int
-	var limits, rules string
-	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules, orchestrator_turns_per_day FROM control WHERE id = 1`).
-		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules, &c.OrchTurnsPerDay)
+	var limits, rules, budgets string
+	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules, orchestrator_turns_per_day, budgets FROM control WHERE id = 1`).
+		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules, &c.OrchTurnsPerDay, &budgets)
 	if err != nil {
 		return c, err
 	}
 	c.Stopped = stopped != 0
 	if err := json.Unmarshal([]byte(limits), &c.Limits); err != nil {
 		return c, err
+	}
+	// '': the defaults (what got us limited last time); a budget the user set is stored.
+	c.Budgets = pipeline.DefaultBudgets()
+	if budgets != "" {
+		c.Budgets = map[string]pipeline.Budget{}
+		if err := json.Unmarshal([]byte(budgets), &c.Budgets); err != nil {
+			return c, err
+		}
 	}
 	if rules == "" {
 		c.HoldRules = s.DefaultHoldRules()
@@ -836,8 +847,15 @@ func saveControl(tx *sql.Tx, c pipeline.Control, builtInRules bool) error {
 	if c.Stopped {
 		stopped = 1
 	}
-	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=?, orchestrator_turns_per_day=? WHERE id = 1`,
-		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules), c.OrchTurnsPerDay)
+	budgets, err := json.Marshal(c.Budgets)
+	if err != nil {
+		return err
+	}
+	if maps.EqualFunc(c.Budgets, pipeline.DefaultBudgets(), func(a, b pipeline.Budget) bool { return a == b }) {
+		budgets = nil
+	}
+	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=?, orchestrator_turns_per_day=?, budgets=? WHERE id = 1`,
+		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules), c.OrchTurnsPerDay, string(budgets))
 	return err
 }
 
@@ -881,6 +899,8 @@ type ControlPatch struct {
 	HoldRules     *[]pipeline.HoldRule `json:"hold_rules"`
 	// OrchTurnsPerDay is the orchestrator's daily cap of turns.
 	OrchTurnsPerDay *int `json:"orchestrator_turns_per_day"`
+	// Budgets replace the budget of each provider they name (usage.go).
+	Budgets map[string]pipeline.Budget `json:"budgets"`
 }
 
 // SetControl applies a patch to the control row and records it.
@@ -910,6 +930,13 @@ func (s *Store) SetControl(ctx context.Context, actor string, p ControlPatch) (p
 		}
 		for k, v := range p.Limits {
 			c.Limits[k] = v
+		}
+		if p.Budgets != nil {
+			c.Budgets = maps.Clone(old.Budgets)
+			if c.Budgets == nil {
+				c.Budgets = map[string]pipeline.Budget{}
+			}
+			maps.Copy(c.Budgets, p.Budgets)
 		}
 		builtIn, err := builtInRules(tx)
 		if err != nil {
@@ -983,21 +1010,26 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		}
 		snap := make([]pipeline.LiveLease, len(live))
 		for i, l := range live {
-			snap[i] = pipeline.LiveLease{ItemID: l.ItemID, Stage: l.Stage, Resources: l.Resources}
+			snap[i] = pipeline.LiveLease{ItemID: l.ItemID, Stage: l.Stage, Resources: l.Resources,
+				Claude: l.Stage != pipeline.Land && l.Builder != pipeline.BuilderQwen}
 		}
 		turnLeases, err := livePlanLeases(tx)
 		if err != nil {
 			return err
 		}
 		for range turnLeases {
-			snap = append(snap, pipeline.LiveLease{Stage: pipeline.PlanTurnStage})
+			snap = append(snap, pipeline.LiveLease{Stage: pipeline.PlanTurnStage, Claude: true})
 		}
 		running, err := orchTurnWith(tx, OrchRunning)
 		if err != nil {
 			return err
 		}
 		if running != nil {
-			snap = append(snap, pipeline.LiveLease{Stage: pipeline.OrchestrateStage})
+			snap = append(snap, pipeline.LiveLease{Stage: pipeline.OrchestrateStage, Claude: true})
+		}
+		pace, err := s.pace(tx, ctl, now, nil)
+		if err != nil {
+			return err
 		}
 		waiting, err := waitingItems(tx)
 		if err != nil {
@@ -1017,7 +1049,7 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 				return err
 			}
 		}
-		w, ok := pipeline.ChooseWork(ctl, waiting, deps, snap, turns, orch, req)
+		w, ok := pipeline.ChooseWorkPaced(ctl, pace, waiting, deps, snap, turns, orch, req)
 		if !ok {
 			return nil
 		}
@@ -1034,15 +1066,26 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		if err != nil {
 			return err
 		}
+		builder := it.Builder
+		if w.RouteQwen {
+			// This run only: the item's builder stays unset, so it builds with claude again once
+			// the pace is back to normal.
+			it.Builder, builder = pipeline.BuilderQwen, pipeline.BuilderQwen
+		}
 		l := Lease{ID: id, ItemID: it.ID, Stage: it.Stage, Runner: runnerName, Agent: req.Agent,
-			Resources: it.Resources, ClaimedAt: now, ExpiresAt: now.Add(LeaseTTL)}
-		if _, err := tx.Exec(`INSERT INTO leases (id, item_id, stage, runner, agent, resources, claimed_at, expires_at) VALUES (?,?,?,?,?,?,?,?)`,
-			l.ID, l.ItemID, string(l.Stage), l.Runner, l.Agent, strings.Join(l.Resources, ","), now.UnixNano(), l.ExpiresAt.UnixNano()); err != nil {
+			Resources: it.Resources, ClaimedAt: now, ExpiresAt: now.Add(LeaseTTL), Builder: builder}
+		if _, err := tx.Exec(`INSERT INTO leases (id, item_id, stage, runner, agent, resources, claimed_at, expires_at, builder) VALUES (?,?,?,?,?,?,?,?,?)`,
+			l.ID, l.ItemID, string(l.Stage), l.Runner, l.Agent, strings.Join(l.Resources, ","), now.UnixNano(), l.ExpiresAt.UnixNano(), builder); err != nil {
 			return err
 		}
 		out = &Claim{Kind: pipeline.WorkItem, Item: it, Stage: it.Stage, Lease: l}
+		data := map[string]any{"runner": runnerName, "agent": req.Agent, "lease": l.ID}
+		if w.RouteQwen {
+			data["routed"] = pipeline.BuilderQwen
+			data["pace"] = pace.Describe(usageZone())
+		}
 		return s.event(tx, Event{ItemID: it.ID, Actor: "runner:" + runnerName, Kind: "claimed", From: string(it.Stage), To: string(it.Stage),
-			Data: map[string]any{"runner": runnerName, "agent": req.Agent, "lease": l.ID}})
+			Data: data})
 	})
 	return out, err
 }
@@ -1312,6 +1355,25 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 			return err
 		}
 		tr.Data["lease"] = l.ID
+		// The usage ledger, then a limit hit: claude claims pause until its reset.
+		if u, ok := usageRunFrom(id, string(l.Stage), fields, now); ok {
+			if err := insertUsageRun(tx, u); err != nil {
+				return err
+			}
+		}
+		var hit *pipeline.UsageHit
+		if tr.UsagePause {
+			h, err := recordHit(tx, ctl, id, fields, now)
+			if err != nil {
+				return err
+			}
+			hit = &h
+			until := h.ResetAt
+			if until.IsZero() {
+				until = now.Add(pipeline.UnknownResetPause)
+			}
+			tr.Data["paused_until"] = until.Format(time.RFC3339)
+		}
 		if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
 			return err
 		}
@@ -1332,22 +1394,9 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 		if err := s.planItemSettled(tx, tr.Item); err != nil {
 			return err
 		}
-		if tr.ActiveAgentsZero {
-			ctl, err := s.loadControl(tx)
-			if err != nil {
-				return err
-			}
-			before := ctl
-			ctl.ActiveAgents = 0
-			builtIn, err := builtInRules(tx)
-			if err != nil {
-				return err
-			}
-			if err := saveControl(tx, ctl, builtIn); err != nil {
-				return err
-			}
-			if err := s.event(tx, Event{Actor: "loopd", Kind: "control", Data: map[string]any{
-				"from": before, "to": ctl, "reason": "usage_limit", "item": id, "error": fields["error"], "reset": fields["reset"]}}); err != nil {
+		if hit != nil {
+			if _, err := s.pace(tx, ctl, now, map[string]any{"item": id, "error": fields["error"], "reset": fields["reset"],
+				"limit_window": hit.Window, "burn": hit.Burn}); err != nil {
 				return err
 			}
 		}

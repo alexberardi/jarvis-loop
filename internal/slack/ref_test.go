@@ -6,6 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 	"github.com/alexberardi/jarvis-loop/internal/store"
 )
 
@@ -67,7 +68,8 @@ func TestPingsNameTheItem(t *testing.T) {
 	t.Run("usage limit", func(t *testing.T) {
 		e := newBotEnv(t)
 		id := e.add(pantry)
-		m := e.b.usageLimitMessage(e.ctx, store.Event{Kind: "control", Data: map[string]any{"item": float64(id), "error": "limit"}})
+		m, _ := e.b.paceMessage(e.ctx, store.Event{Kind: store.KindUsagePace, Data: map[string]any{"level": float64(pipeline.PacePaused), "hit": true,
+			"item": float64(id), "error": "limit"}})
 		if !strings.HasPrefix(m.Text, fmt.Sprintf("<@%s> Usage limit hit on #%d Fix the pantry list &lt;script&gt;: limit", Approver, id)) {
 			t.Errorf("usage limit %q", m.Text)
 		}

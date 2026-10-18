@@ -19,6 +19,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
 const usage = `usage: loop <command> [args]
@@ -38,6 +40,10 @@ const usage = `usage: loop <command> [args]
   priority <id> <P1-P5>
   agents [<0-6>]
   stop | resume
+  usage                       claude's 5h window and week, the pace, the days, the costliest items
+  budget [claude] [--per-5h N] [--per-week N] [--pace-at PCT]
+                              N: tokens (2M, 500k), a percent of what got us limited last time
+                              (80%), or off; pacing starts at --pace-at percent (default 85)
 
   for moving items by hand, as a runner:
   claim [--runner R] --agent A [--cap gpu,voice,...]
@@ -170,6 +176,8 @@ var commands = map[string]command{
 	"reopen":    {2, 2, nil, cmdReopen},
 	"priority":  {2, 2, nil, cmdPriority},
 	"agents":    {0, 1, nil, cmdAgents},
+	"usage":     {0, 0, nil, cmdUsage},
+	"budget":    {0, 1, []string{"per-5h", "per-week", "pace-at"}, cmdBudget},
 	"stop":      {0, 0, nil, cmdStop(true)},
 	"resume":    {0, 0, nil, cmdStop(false)},
 	"claim":     {0, 0, []string{"runner", "agent", "cap"}, cmdClaim},
@@ -684,6 +692,156 @@ func cmdAgents(c *client, pos []string, _ map[string][]string) error {
 		return usageError("agents takes a number from 0 to 6")
 	}
 	return c.setControl(map[string]any{"active_agents": n})
+}
+
+// cmdBudget sets (or, with no flags, shows) a provider's usage budget.
+func cmdBudget(c *client, pos []string, f map[string][]string) error {
+	provider := pipeline.ProviderClaude
+	if len(pos) > 0 {
+		provider = pos[0]
+	}
+	var ctl struct {
+		Budgets map[string]pipeline.Budget `json:"budgets"`
+	}
+	if _, err := c.json("GET", "/control", nil, &ctl); err != nil {
+		return err
+	}
+	b := ctl.Budgets[provider]
+	window := func(flag string, tokens *int64, pct *int) error {
+		v := last(f, flag)
+		if v == "" {
+			return nil
+		}
+		*tokens, *pct = 0, 0
+		switch {
+		case v == "off" || v == "0":
+		case strings.HasSuffix(v, "%"):
+			n, err := strconv.Atoi(strings.TrimSuffix(v, "%"))
+			if err != nil {
+				return usageError("--" + flag + " " + v + ": a percent is 1% to 100%")
+			}
+			*pct = n
+		default:
+			n, err := pipeline.ParseTokens(v)
+			if err != nil {
+				return usageError("--" + flag + " " + v + ": tokens (2M, 500k), a percent (80%) or off")
+			}
+			*tokens = n
+		}
+		return nil
+	}
+	if err := window("per-5h", &b.Per5h, &b.Per5hPct); err != nil {
+		return err
+	}
+	if err := window("per-week", &b.PerWeek, &b.PerWeekPct); err != nil {
+		return err
+	}
+	if v := last(f, "pace-at"); v != "" {
+		n, err := strconv.Atoi(strings.TrimSuffix(v, "%"))
+		if err != nil {
+			return usageError("--pace-at takes a percent (85)")
+		}
+		b.PaceAt = n
+	}
+	if len(f) > 0 {
+		if _, err := c.json("PUT", "/control", map[string]any{"budgets": map[string]pipeline.Budget{provider: b}}, &ctl); err != nil {
+			return err
+		}
+		b = ctl.Budgets[provider]
+	}
+	fmt.Fprintf(c.out, "%s budget: %s\n", provider, pipeline.DescribeBudget(b))
+	return nil
+}
+
+// usageReport is the part of GET /usage the CLI prints.
+type usageReport struct {
+	Claude   pipeline.UsageState `json:"claude"`
+	Pace     pipeline.Pace       `json:"pace"`
+	Budget   pipeline.Budget     `json:"budget"`
+	Forecast *time.Time          `json:"forecast"`
+	Days     []struct {
+		Key      string  `json:"key"`
+		Provider string  `json:"provider"`
+		Burn     int64   `json:"burn"`
+		Tokens   int64   `json:"tokens"`
+		CostUSD  float64 `json:"cost_usd"`
+		Runs     int     `json:"runs"`
+	} `json:"days"`
+	Items []struct {
+		ItemID  int64   `json:"item_id"`
+		Title   string  `json:"title"`
+		Burn    int64   `json:"burn"`
+		CostUSD float64 `json:"cost_usd"`
+		Runs    int     `json:"runs"`
+	} `json:"items"`
+	Hits []pipeline.UsageHit `json:"hits"`
+}
+
+func cmdUsage(c *client, _ []string, _ map[string][]string) error {
+	var u usageReport
+	if _, err := c.json("GET", "/usage", nil, &u); err != nil {
+		return err
+	}
+	for _, l := range usageLines(u, time.Local) {
+		fmt.Fprintln(c.out, l)
+	}
+	return nil
+}
+
+// usageLines are `loop usage`'s lines. Burn is claude's weighted tokens (cache reads count a
+// tenth, output five times: docs/decisions/2026-10-18-usage-awareness.md).
+func usageLines(u usageReport, loc *time.Location) []string {
+	st := u.Claude
+	of := func(burn, limit int64) string {
+		if limit <= 0 {
+			return pipeline.FormatTokens(burn) + " (no limit known yet)"
+		}
+		return fmt.Sprintf("%s of %s (%d%%)", pipeline.FormatTokens(burn), pipeline.FormatTokens(limit), burn*100/limit)
+	}
+	hm := func(t time.Time) string { return t.In(loc).Format("Mon 15:04") }
+	var out []string
+	if st.WindowStart.IsZero() {
+		out = append(out, "claude 5h window: none open (the next run opens one)")
+	} else {
+		l := fmt.Sprintf("claude 5h window: %s, %s–%s", of(st.Burn5h, st.Limit5h), hm(st.WindowStart), st.WindowEnd.In(loc).Format("15:04"))
+		if u.Forecast != nil {
+			l += " · at this rate it runs out at " + u.Forecast.In(loc).Format("15:04")
+		}
+		out = append(out, l)
+	}
+	week := "rolling 7 days"
+	if !st.WeekEnd.IsZero() {
+		week = "resets " + hm(st.WeekEnd)
+	}
+	out = append(out, fmt.Sprintf("claude week: %s, %s", of(st.BurnWeek, st.LimitWeek), week))
+	out = append(out, "pace: "+u.Pace.Describe(loc), "budget: "+pipeline.DescribeBudget(u.Budget))
+	if len(u.Days) > 0 {
+		out = append(out, "days:")
+		for _, d := range u.Days {
+			l := fmt.Sprintf("  %s  %-6s %7s tokens", d.Key, d.Provider, pipeline.FormatTokens(d.Tokens))
+			if d.Provider == pipeline.ProviderClaude {
+				l += fmt.Sprintf("  burn %s  $%.2f", pipeline.FormatTokens(d.Burn), d.CostUSD)
+			}
+			out = append(out, l+fmt.Sprintf("  %d runs", d.Runs))
+		}
+	}
+	if len(u.Items) > 0 {
+		out = append(out, "costliest items (7 days):")
+		for _, it := range u.Items {
+			out = append(out, fmt.Sprintf("  #%d %s  burn %s  $%.2f  %d runs", it.ItemID, it.Title, pipeline.FormatTokens(it.Burn), it.CostUSD, it.Runs))
+		}
+	}
+	for i, h := range u.Hits {
+		if i == 0 {
+			out = append(out, "limits hit:")
+		}
+		l := fmt.Sprintf("  %s %s limit at burn %s", hm(h.At), h.Window, pipeline.FormatTokens(h.Burn))
+		if !h.ResetAt.IsZero() {
+			l += ", reset " + hm(h.ResetAt)
+		}
+		out = append(out, l)
+	}
+	return out
 }
 
 func cmdStop(stop bool) func(*client, []string, map[string][]string) error {

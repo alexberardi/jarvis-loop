@@ -1,0 +1,146 @@
+{
+  "name": "usage-pacing",
+  "about": "Pacing before a limit, never mid-run (docs/decisions/2026-10-18-usage-awareness.md): with a 5h budget of 60k (burn: weighted tokens), one claude build takes the window to 89%. Claims slow down: #loop-digest says so, a P4 size M build goes to qwen for its run (the sandbox runner has a qwen block), and the P2 size M build and the P5 size M review wait. Once the window is over, claude claims are back to normal and the P2 builds with claude.",
+  "steps": [
+    {
+      "do": "control",
+      "budgets": {
+        "claude": {
+          "per_5h": 60000
+        }
+      }
+    },
+    {
+      "do": "add",
+      "item": "a",
+      "title": "First filler",
+      "priority": "P5"
+    },
+    {
+      "do": "triage",
+      "item": "a",
+      "size": "M"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "add",
+      "item": "b",
+      "title": "Wanted soon",
+      "priority": "P2"
+    },
+    {
+      "do": "add",
+      "item": "c",
+      "title": "Can wait",
+      "priority": "P4"
+    },
+    {
+      "do": "triage",
+      "item": "b",
+      "size": "M"
+    },
+    {
+      "do": "triage",
+      "item": "c",
+      "size": "M"
+    },
+    {
+      "do": "runner",
+      "claims": "c"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "messages": [
+        {
+          "channel": "digest",
+          "from": "bot",
+          "text": "^Pacing claude: the 5h window is at 89% of its budget( \\(at this rate it runs out at [^)]+\\))?\\.\\nClaude runs at once: 3 of 4; P1 and size S items first; P3–P5 builds of size S or M go to qwen\\.$"
+        }
+      ]
+    },
+    {
+      "do": "runner",
+      "claims": "none"
+    },
+    {
+      "do": "clock",
+      "advance": "6h"
+    },
+    {
+      "do": "runner",
+      "claims": "b"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "messages": [
+        {
+          "channel": "digest",
+          "from": "bot",
+          "text": "^Claude claims back to normal\\.$"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "review",
+      "b": "review",
+      "c": "review"
+    },
+    "control": {
+      "active_agents": 4
+    },
+    "events": [
+      {
+        "item": "c",
+        "kind": "claimed",
+        "data": {
+          "routed": "^qwen$"
+        }
+      },
+      {
+        "item": "c",
+        "kind": "advanced",
+        "data": {
+          "builder": "^qwen$"
+        }
+      },
+      {
+        "kind": "usage_pace",
+        "actor": "loopd",
+        "data": {
+          "about": "^pacing: the 5h window is at 89% of its budget; 3 at once$"
+        }
+      }
+    ],
+    "messages": [
+      {
+        "thread": "c",
+        "text": "^Claimed for build, with qwen this run \\(pacing: the 5h window is at 89% of its budget; 3 at once\\)\\.$"
+      },
+      {
+        "thread": "b",
+        "text": "^Claimed for build\\.$"
+      }
+    ],
+    "no_messages": [
+      {
+        "channel": "digest",
+        "text": "Usage limit hit"
+      }
+    ],
+    "prs": 3
+  }
+}
