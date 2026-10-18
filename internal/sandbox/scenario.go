@@ -85,7 +85,8 @@ type Step struct {
 	Outcome string `json:"outcome,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	// Slack: who acts ("approver" or "other"), what they type, which button or menu, which
-	// message ("control" for the active-agents message; otherwise the item's thread)
+	// message ("control" for the active-agents message, "loop" for a top-level message in #loop;
+	// otherwise the item's thread)
 	As      string `json:"as,omitempty"`
 	Text    string `json:"text,omitempty"`
 	Button  string `json:"button,omitempty"`
@@ -1145,7 +1146,7 @@ func (p *player) press(st Step) error {
 	err = eventually(within, func() error {
 		var thread string
 		switch {
-		case st.Message == "control":
+		case st.Message == "control" || st.Message == "loop":
 			thread = ""
 		case st.Plan != "":
 			id, err := p.planRef(st.Plan)
@@ -1162,7 +1163,7 @@ func (p *player) press(st Step) error {
 			}
 			thread = p.s.Thread(r.id)
 		default:
-			return errors.New("press needs item, plan or message: control")
+			return errors.New("press needs item, plan or message: control or loop")
 		}
 		msgs := p.s.Slack.Messages()
 		for i := len(msgs) - 1; i >= 0; i-- {
@@ -1177,7 +1178,8 @@ func (p *player) press(st Step) error {
 					continue
 				}
 			}
-			if st.Message == "control" && m.TS == p.s.ControlTS() || thread != "" && (m.TS == thread || m.ThreadTS == thread) {
+			loop := st.Message == "loop" && m.Channel == slack.ChannelLoop && m.ThreadTS == "" && m.TS != p.s.ControlTS()
+			if st.Message == "control" && m.TS == p.s.ControlTS() || loop || thread != "" && (m.TS == thread || m.ThreadTS == thread) {
 				target = m
 				return nil
 			}

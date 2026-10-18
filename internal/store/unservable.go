@@ -39,8 +39,9 @@ func runnersSeen(tx *sql.Tx) ([]pipeline.RunnerSeen, error) {
 
 // checkUnservable flags each item in an agent stage (land needs no resources, pipeline.Item.Needs)
 // whose resources no runner seen lately offers (an unservable event, once per missing set) and
-// clears the flag of the others (servable, when a runner offers them now). It runs on every claim (a runner's capabilities may have changed), on every advance (triage sets the
-// resources) and once a minute (a runner may have gone quiet).
+// clears the flag of the others (servable, when a runner offers them now). It runs on every claim
+// (a runner's capabilities may have changed), on every advance (triage sets the resources) and
+// once a minute (a runner may have gone quiet).
 func (s *Store) checkUnservable(tx *sql.Tx, now time.Time) error {
 	runners, err := runnersSeen(tx)
 	if err != nil {
