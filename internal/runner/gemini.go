@@ -241,7 +241,7 @@ func agyFailure(stdout, stderr []byte) string {
 // agyCommand is the agy command for a call in the review's worktree: under the fence (the
 // worktree read-only, agy's home writable) unless gemini.fence is false.
 func (r *Runner) agyCommand(ru *run, args []string) (*exec.Cmd, error) {
-	g := r.Cfg.Gemini
+	g := ru.cfg.Gemini
 	bin := g.Agy
 	if !strings.Contains(bin, "/") {
 		p, err := exec.LookPath(bin)
@@ -285,7 +285,7 @@ func (r *Runner) runAgy(ctx context.Context, ru *run, prompt string, limit time.
 	if err := os.WriteFile(schema, []byte(FindingsSchema), 0o644); err != nil {
 		return done(agyResult{Reason: AgyNoStart})
 	}
-	cmd, err := r.agyCommand(ru, AgyArgs(prompt, r.Cfg.Gemini.Model, schema))
+	cmd, err := r.agyCommand(ru, AgyArgs(prompt, ru.cfg.Gemini.Model, schema))
 	if err != nil {
 		r.Log.Warn("gemini: agy cannot start", "item", ru.item.ID, "err", err)
 		return done(agyResult{Reason: AgyNoStart})

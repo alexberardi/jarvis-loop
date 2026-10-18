@@ -22,12 +22,6 @@ type Client struct {
 	Base  string
 	Token string
 	HTTP  *http.Client
-	// PollSeconds goes with each claim: loopd holds a slot for a Mac runner's work only while
-	// the runner has asked within two of its poll intervals.
-	PollSeconds int
-	// Stages are the runner's configured stages, sent (the work ones) with each claim from
-	// either lane: loopd holds a slot only for work the runner would take in them.
-	Stages []string
 }
 
 // APIError is a loopd error answer.
@@ -84,19 +78,7 @@ func (c *Client) AddItem(ctx context.Context, n NewItem) (int64, error) {
 }
 
 func (c *Client) do(ctx context.Context, method, path, contentType string, body io.Reader, out any) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.Base, "/")+path, body)
-	if err != nil {
-		return 0, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	hc := c.HTTP
-	if hc == nil {
-		hc = &http.Client{Timeout: 2 * time.Minute}
-	}
-	resp, err := hc.Do(req)
+	resp, err := c.send(ctx, method, path, contentType, body)
 	if err != nil {
 		return 0, err
 	}
@@ -137,20 +119,28 @@ func (c *Client) json(ctx context.Context, method, path string, in, out any) (in
 // are not item stages: they ask for plan or orchestrate turns too (kinds), and alone, for those
 // only.
 func (c *Client) Claim(ctx context.Context, agent string, caps, stages []string) (*Claim, error) {
-	return c.ClaimOnly(ctx, agent, caps, nil, stages)
+	return c.claim(ctx, agent, caps, nil, stages, 0, nil)
 }
 
-// ClaimOnly is Claim for items that need one of only (none: any item caps can serve).
-func (c *Client) ClaimOnly(ctx context.Context, agent string, caps, only, stages []string) (*Claim, error) {
+// ClaimFor is the runner's claim in stages under cfg, the config of this claim (a reload
+// replaces it): its capabilities and only_resources, and, for loopd's slot holds, its poll
+// interval (it holds a slot for a Mac runner's work only while the runner has asked within two
+// of them) and its configured stages (the work ones, from either lane: it holds a slot only for
+// work the runner would take in them).
+func (c *Client) ClaimFor(ctx context.Context, agent string, cfg *Config, stages []string) (*Claim, error) {
+	return c.claim(ctx, agent, cfg.Capabilities, cfg.OnlyResources, stages, cfg.PollSeconds, cfg.Stages)
+}
+
+func (c *Client) claim(ctx context.Context, agent string, caps, only, stages []string, pollSeconds int, cfgStages []string) (*Claim, error) {
 	body := map[string]any{"agent": agent, "capabilities": caps, "stages": stages}
 	if len(only) > 0 {
 		body["only_resources"] = only
 	}
-	if c.PollSeconds > 0 {
-		body["poll_seconds"] = c.PollSeconds
+	if pollSeconds > 0 {
+		body["poll_seconds"] = pollSeconds
 	}
 	var runnerStages []string
-	for _, st := range c.Stages {
+	for _, st := range cfgStages {
 		if pipeline.Stage(st).IsWork() {
 			runnerStages = append(runnerStages, st)
 		}
@@ -262,6 +252,12 @@ func (c *Client) Heartbeat(ctx context.Context, lease, note string, act *pipelin
 		return false, err
 	}
 	return out.Stop, nil
+}
+
+// SetState tells loopd the runner's state: RunnerDraining, or "" (working; a claim says so too).
+func (c *Client) SetState(ctx context.Context, state string) error {
+	_, err := c.json(ctx, "POST", "/runners/self/state", map[string]any{"state": state}, nil)
+	return err
 }
 
 // Advance finishes the stage with an outcome.
@@ -420,16 +416,7 @@ func (c *Client) Rebuild(ctx context.Context, id int64, notes string) error {
 
 // DownloadEvidence saves evidence file n of an item to dst (at most MaxEvidenceBytes).
 func (c *Client) DownloadEvidence(ctx context.Context, id int64, n int, dst string) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(c.Base, "/")+fmt.Sprintf("/items/%d/evidence/%d", id, n), nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	hc := c.HTTP
-	if hc == nil {
-		hc = &http.Client{Timeout: 2 * time.Minute}
-	}
-	resp, err := hc.Do(req)
+	resp, err := c.send(ctx, "GET", fmt.Sprintf("/items/%d/evidence/%d", id, n), "", nil)
 	if err != nil {
 		return err
 	}

@@ -301,7 +301,7 @@ func SecondOpinionNotes(so SecondOpinion) string {
 // secondOpinion runs the second opinion on an approved review: agy, then (with findings) the
 // adjudication turn, then the comment, the evidence and the event. Nothing in it fails the item.
 func (r *Runner) secondOpinion(ctx context.Context, ru *run, review Result) SecondOpinion {
-	g := r.Cfg.Gemini
+	g := ru.cfg.Gemini
 	it := ru.item
 	log := r.Log.With("item", it.ID)
 	so := SecondOpinion{Model: g.Model, HeadSHA: it.HeadSHA, Blocking: g.Blocking, Findings: []Finding{}}

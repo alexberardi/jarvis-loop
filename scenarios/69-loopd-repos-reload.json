@@ -1,0 +1,18 @@
+{
+  "name": "loopd-repos-reload",
+  "about": "loopd reads --repos-file again on SIGHUP (#189), with no restart: before the reload `/loop add pantry: ...` sets no repo and the CLI's --repo pantry is refused. An invalid file is refused and the repos stay (the mobile alias still resolves). After a valid one that adds sandbox/extra with the alias pantry, the Slack add and the CLI both resolve it.",
+  "extra_repo": true,
+  "steps": [
+    {"do": "add", "item": "before", "via": "slack", "title": "A pantry list", "text": "pantry: a pantry list"},
+    {"do": "add", "item": "refused", "title": "A pantry list", "repo_as": "pantry", "refused": "pantry"},
+    {"do": "reload_loopd", "text": "sandbox/extra pantry\n", "refused": "not an owner/name slug"},
+    {"do": "add", "item": "mobile", "title": "Fix the pairing screen", "repo_as": "mobile"},
+    {"do": "reload_loopd", "text": "sandbox/extra: pantry\nsandbox/jarvis-node-mobile: mobile, node app\n"},
+    {"do": "add", "item": "slack", "via": "slack", "title": "A pantry list", "text": "pantry: a pantry list"},
+    {"do": "add", "item": "cli", "title": "Pantry sync", "repo_as": "pantry"}
+  ],
+  "expect": {
+    "repo": {"before": "", "mobile": "sandbox/jarvis-node-mobile", "slack": "sandbox/extra", "cli": "sandbox/extra"},
+    "stage": {"before": "triage", "slack": "triage", "cli": "triage"}
+  }
+}
