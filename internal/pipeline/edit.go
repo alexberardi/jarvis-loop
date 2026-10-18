@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Event kinds of the user's corrections to an item (loop edit, unlink, resources). Each records
@@ -97,7 +98,11 @@ func FeatureSlug(name string) string {
 	})
 	s := strings.Join(words, "-")
 	if len(s) > MaxFeatureLen {
-		s = strings.TrimRight(s[:MaxFeatureLen], "-")
+		cut := MaxFeatureLen
+		for !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = strings.TrimRight(s[:cut], "-")
 	}
 	return s
 }

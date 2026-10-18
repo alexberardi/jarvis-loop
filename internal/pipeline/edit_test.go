@@ -98,13 +98,14 @@ func TestApplyResources(t *testing.T) {
 
 func TestFeatureSlug(t *testing.T) {
 	cases := map[string]string{
-		"e2e":                     "e2e",
-		" Smallest Blocks ":       "smallest-blocks",
-		"smallest-blocks":         "smallest-blocks",
-		"Pantry: scan & stock v2": "pantry-scan-stock-v2",
-		"  ":                      "",
-		"!!":                      "",
-		strings.Repeat("ab ", 40): strings.TrimSuffix(strings.Repeat("ab-", 16), "-"),
+		"e2e":                         "e2e",
+		" Smallest Blocks ":           "smallest-blocks",
+		"smallest-blocks":             "smallest-blocks",
+		"Pantry: scan & stock v2":     "pantry-scan-stock-v2",
+		"  ":                          "",
+		"!!":                          "",
+		strings.Repeat("ab ", 40):     strings.TrimSuffix(strings.Repeat("ab-", 16), "-"),
+		"a" + strings.Repeat("é", 30): "a" + strings.Repeat("é", 23), // cut on a rune boundary, not at byte 48
 	}
 	for in, want := range cases {
 		if got := FeatureSlug(in); got != want {
