@@ -188,4 +188,18 @@ func TestStageDurationsAreRecentMedians(t *testing.T) {
 	if _, ok := got[pipeline.Review]; ok {
 		t.Fatalf("review = %v, want none (no runs)", got[pipeline.Review])
 	}
+	// Two runs are too few to go by.
+	if _, err := s.w.Exec(`DELETE FROM leases WHERE id = 'la'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.tx(context.Background(), func(tx *sql.Tx) error {
+		var err error
+		got, err = stageDurations(tx)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if d, ok := got[pipeline.Build]; ok {
+		t.Fatalf("build = %v from 2 runs, want none (the default)", d)
+	}
 }

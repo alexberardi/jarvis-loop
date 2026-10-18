@@ -1,0 +1,31 @@
+{
+  "name": "runway-plenty",
+  "about": "The runway warning (#205) stays quiet with work to do: a is held and b waits on it, but c, d and e need nobody (about 4 agent-hours of triage-to-land). An hour without the user posts no warning.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Shorten the session timeout"},
+    {"do": "add", "item": "b", "title": "Session timeout setting", "after": ["a"]},
+    {"do": "add", "item": "c", "title": "Status page polish"},
+    {"do": "add", "item": "d", "title": "Status page dark mode"},
+    {"do": "add", "item": "e", "title": "Status page favicon"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "good", "file": "internal/modules/auth/session.go"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "held"}},
+    {"do": "clock", "advance": "31m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "30m"},
+    {"do": "runner", "claims": "none"}
+  ],
+  "expect": {
+    "stage": {"a": "held", "b": "triage", "c": "triage"},
+    "events": [{"kind": "runway_low", "count": 0}]
+  }
+}

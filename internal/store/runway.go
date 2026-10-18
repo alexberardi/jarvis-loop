@@ -21,8 +21,12 @@ const KindRunwayLow = "runway_low"
 // MaxRunwayUnblockers caps the unblockers a warning names.
 const MaxRunwayUnblockers = 5
 
-// runwayRecentRuns is how many recent runs of a stage its duration is the median of.
-const runwayRecentRuns = 20
+// runwayRecentRuns is how many recent runs of a stage its duration is the median of; with fewer
+// than runwayMinRuns the stage keeps pipeline.DefaultStageDurations'.
+const (
+	runwayRecentRuns = 20
+	runwayMinRuns    = 3
+)
 
 // RunwayUnblocker is an unblocker with what its button needs: the commit an approval or a
 // trusted-file OK is for.
@@ -129,7 +133,7 @@ func (s *Store) runway(tx querier) (RunwayReport, bool, error) {
 }
 
 // stageDurations is each work stage's median run time over its recent runs that finished (the
-// result advanced or queued the item); a stage with none is missing.
+// result advanced or queued the item); a stage with fewer than runwayMinRuns is missing.
 func stageDurations(tx querier) (map[pipeline.Stage]time.Duration, error) {
 	out := map[pipeline.Stage]time.Duration{}
 	for _, st := range []pipeline.Stage{pipeline.Triage, pipeline.Build, pipeline.Review, pipeline.Land} {
@@ -151,7 +155,7 @@ func stageDurations(tx querier) (map[pipeline.Stage]time.Duration, error) {
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
-		if len(ds) > 0 {
+		if len(ds) >= runwayMinRuns {
 			slices.Sort(ds)
 			out[st] = time.Duration(ds[len(ds)/2])
 		}

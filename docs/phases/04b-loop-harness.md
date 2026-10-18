@@ -107,7 +107,7 @@ cannot silently check nothing. Steps (`"do"`):
 | `runner_idle` | wait until no run is working |
 | `clock` `advance` (`"2m"`, `"45m"`) | move the fake clock, in 30-second steps |
 | `reply` / `mention` `item`, `as` (`approver`\|`other`), `text` | a thread reply / mention in the item's thread |
-| `press` / `choose` `item`, `plan` or `message: control`, `button` (action_id), [`value`], [`text` regexp], `as` | press a button / pick a menu option on the newest message that has it (in the item's or plan's thread), and whose text matches `text` when given. A press carries a `trigger_id`; a modal the bot opens with it (`views.open`) is recorded as a message of kind `modal` to the presser, in the thread |
+| `press` / `choose` `item`, `plan`, `message: control` or `message: loop` (a top-level #loop message), `button` (action_id), [`value`], [`text` regexp], `as` | press a button / pick a menu option on the newest message that has it (in the item's or plan's thread), and whose text matches `text` when given. A press carries a `trigger_id`; a modal the bot opens with it (`views.open`) is recorded as a message of kind `modal` to the presser, in the thread |
 | `submit` `as`, [`text`] | `as` submits the newest modal their press opened (the Rebuild form), with `text` as its note (default: the note it opened with); recorded as kind `submit`. Waits for the modal to open |
 | `command` `text`, `as`, [`answer` regexp] | `/loop <text>`; the ephemeral answer must match |
 | `control` `active_agents`, `max_run_minutes`, `stopped` | `PUT /control` as the CLI |
