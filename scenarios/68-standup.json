@@ -17,9 +17,12 @@
     {"do": "add", "item": "c", "title": "Kasa scenes", "after": ["b"]},
     {"do": "expect", "stage": {"a": "needs_you", "b": "build", "c": "triage"}},
 
-    {"do": "clock", "advance": "23h58m"},
+    {"do": "clock", "advance": "3h"},
     {"do": "expect",
-     "messages": [{"channel": "digest", "from": "bot", "text": "^\\*Loop digest\\* · Thu Oct 15 08:00 [^\\n]*\\n\\nneeds you 1 · new 3\\n"}],
+     "messages": [{"channel": "digest", "from": "bot", "text": "^\\*Loop digest\\* · Thu Oct 15 08:00–12:00 \\(New York\\)\\n\\nneeds you 1 · new 3\\n"}]},
+
+    {"do": "clock", "advance": "20h58m"},
+    {"do": "expect",
      "no_messages": [{"channel": "digest", "text": "^\\*Standup\\*"}, {"channel": "digest", "text": "Kitchen timer|Kasa"}],
      "events": [{"kind": "standup", "data": {"posted": "^false$"}, "count": 1}]},
 
