@@ -284,8 +284,8 @@ func personaActions(turn string, raw []byte) []any {
 	}
 
 	// Ready but unclaimed: in a work stage for an hour, waiting on nothing, and no runner offers
-	// what it needs.
-	work := map[string]bool{"triage": true, "build": true, "review": true, "land": true}
+	// what it needs (land needs none of its resources).
+	work := map[string]bool{"triage": true, "build": true, "review": true}
 	for _, it := range snap.Items {
 		if !work[it.Stage] || it.Leased || len(it.WaitingOn) > 0 || it.AgeInStage < 3600 || len(it.Resources) == 0 {
 			continue
