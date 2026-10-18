@@ -1,9 +1,10 @@
 {
   "name": "main-red-freeze",
-  "about": "#197: main goes red after a's merge and stays red after one re-run of the failed job. loopd files the P1 (#4) and freezes sandbox/demo, announced in #loop. b's build was already running: it finishes (its PR is opened) but its advance waits, b staying in build. c waits in build and is never claimed while frozen; the P1 goes first through every stage, on the second slot while b's build holds the first. While main's CI runs on the P1's merge, the runner claims nothing (c is frozen). Main is green on it: the freeze lifts, b's queued advance applies (b to review) and c moves again.",
+  "about": "#197: main is green before a's merge, then goes red after it (the P1 names the commit before it the last green) and stays red after one re-run of the failed job. loopd files the P1 (#4) and freezes sandbox/demo, announced in #loop. b's build was already running: it finishes (its PR is opened) but its advance waits, b staying in build. c waits in build and is never claimed while frozen; the P1 goes first through every stage, on the second slot while b's build holds the first. While main's CI runs on the P1's merge, the runner claims nothing (c is frozen). Main is green on it: the freeze lifts, b's queued advance applies (b to review) and c moves again.",
   "stages": ["triage", "build", "review", "land"],
   "slots": 2,
   "steps": [
+    {"do": "ci", "main": {"build": "pass", "test": "pass"}, "main_head": true},
     {"do": "add", "item": "a", "title": "Fix the digest wording"},
     {"do": "triage", "item": "a"},
     {"do": "ci", "main": {"build": "pending", "test": "pending"}},
@@ -26,7 +27,7 @@
     {"do": "ci", "main": {"build": "pass", "test": "fail"}},
     {"do": "clock", "advance": "30s"},
     {"do": "clock", "advance": "30s"},
-    {"do": "wait", "events": [{"item": "a", "kind": "main_ci", "actor": "runner", "data": {"result": "^red$", "p1_item": "^4$", "rerun": "^\\[\"test\"\\]$"}, "count": 1},
+    {"do": "wait", "events": [{"item": "a", "kind": "main_ci", "actor": "runner", "data": {"result": "^red$", "p1_item": "^4$", "rerun": "^\\[\"test\"\\]$", "last_green": "^[0-9a-f]{40}$"}, "count": 1},
       {"kind": "frozen", "actor": "loopd", "data": {"repo": "^sandbox/demo$", "item": "^4$", "jobs": "^\\[\"test\"\\]$"}, "count": 1}]},
 
     {"do": "runner", "claims": "#4"},
@@ -58,6 +59,7 @@
   "expect": {
     "stage": {"a": "done", "#4": "done", "c": "build"},
     "remote": {"main": "#4"},
+    "run_files": [{"item": "#4", "stage": "triage", "file": "brief.md", "text": "Last green: [0-9a-f]{40}\\.", "no_text": "Last green: unknown"}],
     "events": [
       {"kind": "created", "actor": "runner", "data": {"title": "^main red in sandbox/demo: test$", "priority": "^P1$", "source": "^finding$"}, "count": 1},
       {"item": "b", "kind": "advanced", "outcome": "approved", "count": 1}
