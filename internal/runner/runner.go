@@ -105,9 +105,9 @@ func (r *Runner) Paused() string {
 // Run works items until ctx ends: agent work in up to Cfg.Slots parallel slots, and land, which
 // runs no agent, in up to Cfg.LandSlots lanes of their own next to them (loopd's land limit caps
 // the total), so an approved item never waits for an agent slot, nor for another item's CI
-// (docs/decisions/2026-10-16-land-lane.md, docs/decisions/2026-10-18-land-never-waits.md). A Reload
-// re-sizes the lanes (slots, land slots, stages); after Drain, Run claims nothing and returns once its runs end. Only
-// the end of ctx ends the runs themselves.
+// (docs/decisions/2026-10-16-land-lane.md, docs/decisions/2026-10-18-land-never-waits.md). A
+// Reload re-sizes the lanes (slots, land slots, stages); after Drain, Run claims nothing and
+// returns once its runs end. Only the end of ctx ends the runs themselves.
 func (r *Runner) Run(ctx context.Context) error {
 	r.ctl()
 	claimCtx, stopClaims := context.WithCancel(ctx)
