@@ -64,7 +64,7 @@ func (s *Store) ProofChecked(ctx context.Context, runnerName string, id int64, d
 		actor := "runner:" + runnerName
 		switch tr.Kind {
 		case "reopened":
-			_, _, err := s.reopenTx(tx, pipeline.ActorProof, it, tr, tr.Data["words"].(string))
+			_, _, err := s.reopenTx(tx, pipeline.ActorProof, it, tr)
 			out = transitionEvent(id, pipeline.ActorProof, tr)
 			return err
 		case "verified":

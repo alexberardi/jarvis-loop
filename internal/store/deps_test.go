@@ -141,7 +141,7 @@ func TestReopenFlagsDependents(t *testing.T) {
 	if _, err := s.Drop(ctx, user, dropped.ID, ""); err != nil {
 		t.Fatal(err)
 	}
-	_, n, err := s.Reopen(ctx, user, a.ID, "the code is still small")
+	_, n, err := s.Reopen(ctx, user, a.ID, "  the code is still small\n")
 	if err != nil {
 		t.Fatal(err)
 	}

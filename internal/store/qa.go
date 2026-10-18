@@ -34,7 +34,7 @@ func (s *Store) Reopen(ctx context.Context, actor string, id int64, words string
 		if err != nil {
 			return err
 		}
-		old, filed, err = s.reopenTx(tx, actor, it, tr, words)
+		old, filed, err = s.reopenTx(tx, actor, it, tr)
 		return err
 	})
 	if err != nil {
@@ -44,8 +44,9 @@ func (s *Store) Reopen(ctx context.Context, actor string, id int64, words string
 }
 
 // reopenTx stores a reopen transition of it (the user's or a failed proof's): it files the new P2
-// item with the words, and records the event with the new item's id.
-func (s *Store) reopenTx(tx *sql.Tx, actor string, it pipeline.Item, tr pipeline.Transition, words string) (old, filed pipeline.Item, err error) {
+// item with the transition's (trimmed) words, and records the event with the new item's id.
+func (s *Store) reopenTx(tx *sql.Tx, actor string, it pipeline.Item, tr pipeline.Transition) (old, filed pipeline.Item, err error) {
+	words := tr.Data["words"].(string)
 	now := s.clock.Now()
 	n, err := pipeline.NewReopen(it, words, now)
 	if err != nil {
