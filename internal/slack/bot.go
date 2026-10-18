@@ -597,6 +597,38 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 			parts = append(parts, "Title: "+b.field(str(t, "to"), 300, id))
 		}
 		text = strings.Join(parts, "; ") + fmt.Sprintf(" (%s).", by)
+	case pipeline.KindEdited:
+		var parts []string
+		if t, ok := e.Data["title"].(map[string]any); ok {
+			parts = append(parts, "Title: "+b.field(str(t, "to"), 300, id))
+		}
+		if _, ok := e.Data["ask"].(map[string]any); ok {
+			if len(parts) == 0 {
+				parts = append(parts, "The ask changed")
+			} else {
+				parts = append(parts, "the ask changed")
+			}
+		}
+		text = strings.Join(parts, "; ") + fmt.Sprintf(" (%s).", by)
+	case store.KindLinked:
+		var refs []string
+		for _, x := range listOf(e.Data, "after") {
+			if n, err := strconv.ParseInt(x, 10, 64); err == nil {
+				refs = append(refs, b.refID(ctx, n))
+			}
+		}
+		text = fmt.Sprintf("Now waits on %s (%s).", strings.Join(refs, ", "), by)
+	case pipeline.KindUnlinked:
+		after, _ := e.Data["after"].(float64)
+		text = fmt.Sprintf("No longer waits on %s (%s).", b.refID(ctx, int64(after)), by)
+	case pipeline.KindResources:
+		list := func(k string) string {
+			if l := listOf(e.Data, k); len(l) > 0 {
+				return Escape(strings.Join(l, ", "))
+			}
+			return "none"
+		}
+		text = fmt.Sprintf("Resources %s → %s (%s).", list("from"), list("to"), by)
 	case "refused":
 		text = fmt.Sprintf("Refused %s from %s: %s", Escape(str(e.Data, "action")), by, f("message", 300))
 	case "guard_refused":

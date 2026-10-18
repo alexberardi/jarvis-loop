@@ -763,13 +763,20 @@ func (s *Store) Rebuild(ctx context.Context, actor string, id int64, notes strin
 }
 
 func (s *Store) human(ctx context.Context, actor string, id int64, action string, rule func(pipeline.Item) (pipeline.Transition, error)) (pipeline.Item, error) {
+	return s.humanTx(ctx, actor, id, action, func(_ *sql.Tx, it pipeline.Item) (pipeline.Transition, error) { return rule(it) }, nil)
+}
+
+// humanTx is human with the transaction: rule may read other items, and then runs after the
+// event is recorded (nil for nothing).
+func (s *Store) humanTx(ctx context.Context, actor string, id int64, action string,
+	rule func(*sql.Tx, pipeline.Item) (pipeline.Transition, error), then func(*sql.Tx) error) (pipeline.Item, error) {
 	var out pipeline.Item
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		it, err := loadItem(tx, id)
 		if err != nil {
 			return err
 		}
-		tr, err := rule(it)
+		tr, err := rule(tx, it)
 		if err != nil {
 			return err
 		}
@@ -780,6 +787,11 @@ func (s *Store) human(ctx context.Context, actor string, id int64, action string
 		out = tr.Item
 		if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
 			return err
+		}
+		if then != nil {
+			if err := then(tx); err != nil {
+				return err
+			}
 		}
 		return s.planItemSettled(tx, tr.Item)
 	})

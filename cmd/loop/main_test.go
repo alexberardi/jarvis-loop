@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http/httptest"
@@ -261,5 +262,173 @@ func TestCLIAfter(t *testing.T) {
 	}
 	if code, _, errs := c.run(userTok, "add", "d", "--after", "x"); code != 2 || !strings.Contains(errs, "not an item id") {
 		t.Fatalf("bad --after: %d %q", code, errs)
+	}
+}
+
+func testLoopd(t *testing.T) cli {
+	t.Helper()
+	st, err := store.Open(t.TempDir(), clock.NewFake(time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	toks, _ := api.ParseTokens(strings.NewReader(userTok + "\tuser\talex\n" + runnerTok + "\trunner\tdevbox\n"))
+	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler)))
+	t.Cleanup(srv.Close)
+	return cli{t: t, url: srv.URL}
+}
+
+// evidenceFile is a file to attach where an advance needs evidence.
+func evidenceFile(t *testing.T) string {
+	t.Helper()
+	ev := filepath.Join(t.TempDir(), "run.log")
+	if err := os.WriteFile(ev, []byte("ok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return ev
+}
+
+func TestCLIFlagsAnywhere(t *testing.T) {
+	c := testLoopd(t)
+	if out := c.ok(userTok, "add", "after the title", "--priority", "P2", "--ask", "x"); !strings.Contains(out, "added #1 after the title (P2)") {
+		t.Fatalf("flags after the title: %q", out)
+	}
+	if out := c.ok(userTok, "add", "--repo", "jarvis-server", "quiet one", "-q"); out != "2\n" {
+		t.Fatalf("add -q: %q", out)
+	}
+	if out := c.ok(userTok, "add", "--quiet", "quiet two"); out != "3\n" {
+		t.Fatalf("add --quiet: %q", out)
+	}
+	out := c.ok(userTok, "add", "as json", "--json", "--priority", "P4")
+	var it item
+	if err := json.Unmarshal([]byte(out), &it); err != nil || it.ID != 4 || it.Priority != "P4" || !strings.HasSuffix(out, "}\n") {
+		t.Fatalf("add --json: %q %v", out, err)
+	}
+	for _, x := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"add", "t", "-p", "P2"}, "unknown flag -p (flags are --long"},
+		{[]string{"add", "title", "with", "spaces"}, `add takes 1 argument, got 3 ("title" "with" "spaces"): quote text with spaces`},
+		{[]string{"add", "t", "--json=yes"}, "--json takes no value"},
+		{[]string{"add", "t", "--json", "-q"}, "--json or --quiet, not both"},
+		{[]string{"show", "1", "-q"}, "unknown flag -q"},
+		{[]string{"rebuild", "1"}, "rebuild needs notes"},
+		{[]string{"link", "1"}, "link needs --after"},
+		{[]string{"edit", "1"}, "edit needs --title or --ask"},
+	} {
+		code, _, errs := c.run(userTok, x.args...)
+		if code != 2 || !strings.Contains(errs, x.want) {
+			t.Errorf("loop %s: %d %q, want %q", strings.Join(x.args, " "), code, errs, x.want)
+		}
+	}
+	// Text that starts with a dash goes after --.
+	if out := c.ok(userTok, "add", "-q", "--", "-v is broken"); out != "5\n" {
+		t.Fatalf("add -- -v: %q", out)
+	}
+}
+
+func TestCLIEditLinkResources(t *testing.T) {
+	c := testLoopd(t)
+	c.ok(userTok, "add", "wrong tittle", "--repo", "jarvis-server")
+	c.ok(userTok, "add", "b")
+	c.ok(userTok, "add", "c")
+
+	// Edit, before build.
+	if out := c.ok(userTok, "edit", "1", "--title", "right title", "--ask", "the real ask"); !strings.Contains(out, "#1 edited: right title") {
+		t.Fatalf("edit: %q", out)
+	}
+	out := c.ok(userTok, "show", "1")
+	if !strings.Contains(out, "#1 right title") || !strings.Contains(out, "ask:      the real ask") || !strings.Contains(out, "edited") || !strings.Contains(out, `"from":"wrong tittle"`) {
+		t.Fatalf("show after edit: %q", out)
+	}
+
+	// Link and unlink.
+	if out := c.ok(userTok, "link", "3", "--after", "1,#2"); !strings.Contains(out, "#3 waits on #1, #2") {
+		t.Fatalf("link: %q", out)
+	}
+	if out := c.ok(userTok, "show", "3"); !strings.Contains(out, "blocked:  waiting on #1, #2") {
+		t.Fatalf("show after link: %q", out)
+	}
+	for _, x := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"link", "3", "--after", "3"}, "cannot wait for itself"},
+		{[]string{"link", "1", "--after", "3"}, "invalid_field"}, // a cycle
+		{[]string{"link", "3", "--after", "9"}, "no item #9"},
+		{[]string{"unlink", "3", "9"}, "#3 does not wait for #9"},
+	} {
+		code, _, errs := c.run(userTok, x.args...)
+		if code != 1 || !strings.Contains(errs, x.want) {
+			t.Errorf("loop %s: %d %q, want %q", strings.Join(x.args, " "), code, errs, x.want)
+		}
+	}
+	if out := c.ok(userTok, "unlink", "3", "1"); !strings.Contains(out, "#3 waits on #2") {
+		t.Fatalf("unlink: %q", out)
+	}
+	if out := c.ok(userTok, "unlink", "#3", "#2"); !strings.Contains(out, "#3 waits on nothing") {
+		t.Fatalf("unlink the last: %q", out)
+	}
+
+	// The user's token only.
+	for _, args := range [][]string{{"edit", "1", "--ask", "x"}, {"link", "3", "--after", "1"}, {"unlink", "3", "1"}, {"resources", "1", "voice"}} {
+		if code, _, errs := c.run(runnerTok, args...); code != 1 || !strings.Contains(errs, "forbidden") {
+			t.Errorf("loop %s with a runner token: %d %q", strings.Join(args, " "), code, errs)
+		}
+	}
+
+	// Resources, after triage; the title and ask no longer change.
+	if code, _, errs := c.run(userTok, "resources", "1", "voice"); code != 1 || !strings.Contains(errs, "wrong_stage") {
+		t.Fatalf("resources in triage: %d %q", code, errs)
+	}
+	c.ok(runnerTok, "claim", "--agent", "triager")
+	c.ok(runnerTok, "advance", "1", "reproduced", "--field", "area=a", "--field", "size=S", "--field", "risk=normal", "--field", "resources=macos", "--evidence", evidenceFile(t))
+	if code, _, errs := c.run(userTok, "edit", "1", "--ask", "late"); code != 1 || !strings.Contains(errs, "before build starts") {
+		t.Fatalf("edit in build: %d %q", code, errs)
+	}
+	if code, _, errs := c.run(userTok, "resources", "1", "macos,pi"); code != 1 || !strings.Contains(errs, `unknown resource "pi"`) {
+		t.Fatalf("unknown resource: %d %q", code, errs)
+	}
+	if out := c.ok(userTok, "resources", "1", "voice,gpu"); !strings.Contains(out, "#1 needs gpu, voice") {
+		t.Fatalf("resources: %q", out)
+	}
+	if out := c.ok(userTok, "show", "1"); !strings.Contains(out, "resources [gpu,voice]") || !strings.Contains(out, `from=["macos"]`) {
+		t.Fatalf("show after resources: %q", out)
+	}
+	if out := c.ok(userTok, "resources", "1", "none"); !strings.Contains(out, "#1 needs no resources") {
+		t.Fatalf("resources none: %q", out)
+	}
+}
+
+func TestCLIRebuild(t *testing.T) {
+	c := testLoopd(t)
+	c.ok(userTok, "add", "x", "--repo", "jarvis-server")
+	c.ok(runnerTok, "claim", "--agent", "triager")
+	ev := evidenceFile(t)
+	c.ok(runnerTok, "advance", "1", "reproduced", "--field", "area=a", "--field", "size=S", "--field", "risk=normal", "--field", "resources=", "--evidence", ev)
+
+	// needs_you, on the build's question.
+	c.ok(runnerTok, "claim", "--agent", "builder")
+	c.ok(runnerTok, "advance", "1", "question", "--field", "question=which port?")
+	if out := c.ok(userTok, "rebuild", "1", "--notes", "use 7781"); !strings.Contains(out, "#1 → build") {
+		t.Fatalf("rebuild from needs_you: %q", out)
+	}
+
+	// held, with the notes as an argument.
+	c.ok(runnerTok, "claim", "--agent", "builder")
+	c.ok(runnerTok, "advance", "1", "pr_opened", "--field", "repo=jarvis-server", "--field", "pr=7", "--field", "branch=b", "--field", "head_sha="+sha, "--path", "M x.go", "--evidence", ev)
+	c.ok(runnerTok, "claim", "--agent", "reviewer")
+	c.ok(runnerTok, "advance", "1", "approved", "--field", "summary=ok", "--field", "head_sha="+sha)
+	c.ok(runnerTok, "claim", "--agent", "lander")
+	c.ok(runnerTok, "advance", "1", "hold", "--field", "reason=r", "--field", "head_sha="+sha, "--path", "M x.go")
+	if out := c.ok(userTok, "rebuild", "1", "rebase it on main"); !strings.Contains(out, "#1 → build") {
+		t.Fatalf("rebuild from held: %q", out)
+	}
+	if out := c.ok(userTok, "show", "1"); !strings.Contains(out, `notes="rebase it on main"`) || !strings.Contains(out, `notes="use 7781"`) {
+		t.Fatalf("show after rebuilds: %q", out)
+	}
+	if code, _, errs := c.run(userTok, "rebuild", "1", "again"); code != 1 || !strings.Contains(errs, "wrong_stage") {
+		t.Fatalf("rebuild in build: %d %q", code, errs)
 	}
 }

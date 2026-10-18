@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,7 +25,8 @@ import (
 const usage = `usage: loop <command> [args]
 
   add "<title>" [--ask TEXT] [--repo REPO] [--priority P1-P5] [--source SRC] [--after 12,13]
-                              REPO: owner/name, the bare name or an alias; loopd stores the slug
+      [--json | -q]           REPO: owner/name, the bare name or an alias; loopd stores the slug
+                              --json prints the item as JSON, -q (--quiet) only its number
   status [--stage STAGE] [--priority P]
   show <id>
   answer <id> "<text>"
@@ -36,6 +38,11 @@ const usage = `usage: loop <command> [args]
   verified <id> [--words TEXT]
   reopen <id> "<what is wrong>"
   priority <id> <P1-P5>
+  edit <id> [--title TEXT] [--ask TEXT]   before build starts (in triage or on its question)
+  link <id> --after 12,13     make it wait for those items too
+  unlink <id> <after id>      stop it waiting for that item
+  resources <id> <macos,voice,...|none>   after triage; applies from the next claim
+  rebuild <id> "<notes>" | --notes TEXT   send a held or needs_you item back to build
   agents [<0-6>]
   stop | resume
 
@@ -46,6 +53,9 @@ const usage = `usage: loop <command> [args]
           [--path "M internal/x.go" ...] [--paths-file FILE]
       pr_opened, merged and hold need the PR's changed paths: --path per file, or
       --paths-file with the output of git diff --name-status main...HEAD
+
+flags go anywhere on the line, as --name value or --name=value; text that starts with - goes
+after --.
 
 environment: LOOP_URL (default http://127.0.0.1:7780), LOOP_TOKEN (required)
 `
@@ -91,7 +101,7 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	}
 	pos, flags, err := parseArgs(args[1:], cmd.flags)
 	if err == nil && (len(pos) < cmd.minArgs || len(pos) > cmd.maxArgs) {
-		err = usageError(fmt.Sprintf("%s takes %d to %d arguments", args[0], cmd.minArgs, cmd.maxArgs))
+		err = argCountError(args[0], cmd.minArgs, cmd.maxArgs, pos)
 	}
 	if err == nil {
 		err = cmd.run(c, pos, flags)
@@ -107,8 +117,34 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	return 0
 }
 
+func argCountError(name string, min, max int, pos []string) error {
+	want := fmt.Sprintf("%d to %d arguments", min, max)
+	switch {
+	case min == max && min == 1:
+		want = "1 argument"
+	case min == max:
+		want = fmt.Sprintf("%d arguments", min)
+	}
+	msg := fmt.Sprintf("%s takes %s, got %d", name, want, len(pos))
+	if len(pos) > max {
+		quoted := make([]string, len(pos))
+		for i, p := range pos {
+			quoted[i] = strconv.Quote(p)
+		}
+		msg += " (" + strings.Join(quoted, " ") + "): quote text with spaces"
+	}
+	return usageError(msg)
+}
+
+// boolFlags take no value: given, they read "true".
+var boolFlags = map[string]bool{"json": true, "quiet": true}
+
+// shortFlags are the one-letter spellings of long flags.
+var shortFlags = map[string]string{"q": "quiet"}
+
 // parseArgs separates positionals from --flags (anywhere on the line, as --k v or --k=v).
-// allowed lists the flags a command takes; all take a value and may repeat.
+// allowed lists the flags a command takes; all but boolFlags take a value and may repeat. A
+// single-dash word is a short flag or refused, so a mistyped flag never becomes a positional.
 func parseArgs(args []string, allowed []string) ([]string, map[string][]string, error) {
 	var pos []string
 	flags := map[string][]string{}
@@ -118,17 +154,30 @@ func parseArgs(args []string, allowed []string) ([]string, map[string][]string, 
 			pos = append(pos, args[i+1:]...)
 			break
 		}
-		if !strings.HasPrefix(a, "--") {
+		var name, val string
+		var hasVal bool
+		switch {
+		case strings.HasPrefix(a, "--"):
+			name, val, hasVal = strings.Cut(a[2:], "=")
+		case len(a) > 1 && a[0] == '-' && (a[1] < '0' || a[1] > '9'):
+			long, ok := shortFlags[a[1:]]
+			if !ok || !slices.Contains(allowed, long) {
+				return nil, nil, usageError("unknown flag " + a + " (flags are --long; put text that starts with - after --)")
+			}
+			name = long
+		default:
 			pos = append(pos, a)
 			continue
 		}
-		name, val, hasVal := strings.Cut(a[2:], "=")
-		known := false
-		for _, f := range allowed {
-			known = known || f == name
-		}
-		if !known {
+		if !slices.Contains(allowed, name) {
 			return nil, nil, usageError("unknown flag --" + name)
+		}
+		if boolFlags[name] {
+			if hasVal {
+				return nil, nil, usageError("--" + name + " takes no value")
+			}
+			flags[name] = []string{"true"}
+			continue
 		}
 		if !hasVal {
 			if i+1 >= len(args) {
@@ -157,7 +206,7 @@ type command struct {
 }
 
 var commands = map[string]command{
-	"add":       {1, 1, []string{"ask", "repo", "priority", "source", "after"}, cmdAdd},
+	"add":       {1, 1, []string{"ask", "repo", "priority", "source", "after", "json", "quiet"}, cmdAdd},
 	"status":    {0, 0, []string{"stage", "priority"}, cmdStatus},
 	"show":      {1, 1, nil, cmdShow},
 	"answer":    {2, 2, nil, cmdAnswer},
@@ -169,6 +218,11 @@ var commands = map[string]command{
 	"verified":  {1, 1, []string{"words"}, cmdVerified},
 	"reopen":    {2, 2, nil, cmdReopen},
 	"priority":  {2, 2, nil, cmdPriority},
+	"edit":      {1, 1, []string{"title", "ask"}, cmdEdit},
+	"link":      {1, 1, []string{"after"}, cmdLink},
+	"unlink":    {2, 2, nil, cmdUnlink},
+	"resources": {2, 2, nil, cmdResources},
+	"rebuild":   {1, 2, []string{"notes"}, cmdRebuild},
 	"agents":    {0, 1, nil, cmdAgents},
 	"stop":      {0, 0, nil, cmdStop(true)},
 	"resume":    {0, 0, nil, cmdStop(false)},
@@ -298,25 +352,50 @@ func (c *client) moved(it item) {
 
 // ---- commands ----
 
-func cmdAdd(c *client, pos []string, f map[string][]string) error {
+// afterIDs reads --after: comma lists of item ids, the flag repeatable.
+func afterIDs(f map[string][]string) ([]int64, error) {
 	var after []int64
 	for _, a := range f["after"] {
 		for _, s := range strings.Split(a, ",") {
 			id, err := itemID(strings.TrimSpace(s))
 			if err != nil {
-				return err
+				return nil, err
 			}
 			n, _ := strconv.ParseInt(id, 10, 64)
 			after = append(after, n)
 		}
 	}
-	var it item
-	_, err := c.json("POST", "/items", map[string]any{
-		"title": pos[0], "ask": last(f, "ask"), "repo": last(f, "repo"), "priority": last(f, "priority"), "source": last(f, "source"),
-		"depends_on": after,
-	}, &it)
+	return after, nil
+}
+
+func cmdAdd(c *client, pos []string, f map[string][]string) error {
+	asJSON, quiet := last(f, "json") != "", last(f, "quiet") != ""
+	if asJSON && quiet {
+		return usageError("add prints --json or --quiet, not both")
+	}
+	after, err := afterIDs(f)
 	if err != nil {
 		return err
+	}
+	var raw json.RawMessage
+	_, err = c.json("POST", "/items", map[string]any{
+		"title": pos[0], "ask": last(f, "ask"), "repo": last(f, "repo"), "priority": last(f, "priority"), "source": last(f, "source"),
+		"depends_on": after,
+	}, &raw)
+	if err != nil {
+		return err
+	}
+	var it item
+	if err := json.Unmarshal(raw, &it); err != nil {
+		return fmt.Errorf("decode answer: %w", err)
+	}
+	switch {
+	case asJSON:
+		fmt.Fprintf(c.out, "%s\n", raw)
+		return nil
+	case quiet:
+		fmt.Fprintln(c.out, it.ID)
+		return nil
 	}
 	line := fmt.Sprintf("added #%d %s (%s)", it.ID, it.Title, it.Priority)
 	if len(it.DependsOn) > 0 {
@@ -659,6 +738,114 @@ func cmdPriority(c *client, pos []string, _ map[string][]string) error {
 		return err
 	}
 	fmt.Fprintf(c.out, "#%d is %s\n", it.ID, it.Priority)
+	return nil
+}
+
+func cmdEdit(c *client, pos []string, f map[string][]string) error {
+	id, err := itemID(pos[0])
+	if err != nil {
+		return err
+	}
+	body := map[string]string{}
+	for _, k := range []string{"title", "ask"} {
+		if _, ok := f[k]; ok {
+			body[k] = last(f, k)
+		}
+	}
+	if len(body) == 0 {
+		return usageError("edit needs --title or --ask")
+	}
+	var it item
+	if _, err := c.json("POST", "/items/"+id+"/edit", body, &it); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "#%d edited: %s\n", it.ID, it.Title)
+	return nil
+}
+
+func (c *client) waits(it item) {
+	if len(it.DependsOn) == 0 {
+		fmt.Fprintf(c.out, "#%d waits on nothing\n", it.ID)
+		return
+	}
+	fmt.Fprintf(c.out, "#%d waits on %s\n", it.ID, ids(it.DependsOn))
+}
+
+func cmdLink(c *client, pos []string, f map[string][]string) error {
+	id, err := itemID(pos[0])
+	if err != nil {
+		return err
+	}
+	after, err := afterIDs(f)
+	if err != nil {
+		return err
+	}
+	if len(after) == 0 {
+		return usageError("link needs --after, the items to wait for")
+	}
+	var it item
+	if _, err := c.json("POST", "/items/"+id+"/link", map[string]any{"after": after}, &it); err != nil {
+		return err
+	}
+	c.waits(it)
+	return nil
+}
+
+func cmdUnlink(c *client, pos []string, _ map[string][]string) error {
+	id, err := itemID(pos[0])
+	if err != nil {
+		return err
+	}
+	dep, err := itemID(pos[1])
+	if err != nil {
+		return err
+	}
+	n, _ := strconv.ParseInt(dep, 10, 64)
+	var it item
+	if _, err := c.json("POST", "/items/"+id+"/unlink", map[string]any{"after": n}, &it); err != nil {
+		return err
+	}
+	c.waits(it)
+	return nil
+}
+
+func cmdResources(c *client, pos []string, _ map[string][]string) error {
+	id, err := itemID(pos[0])
+	if err != nil {
+		return err
+	}
+	var it item
+	if _, err := c.json("POST", "/items/"+id+"/resources", map[string]any{"resources": strings.Split(pos[1], ",")}, &it); err != nil {
+		return err
+	}
+	if len(it.Resources) == 0 {
+		fmt.Fprintf(c.out, "#%d needs no resources\n", it.ID)
+	} else {
+		fmt.Fprintf(c.out, "#%d needs %s\n", it.ID, strings.Join(it.Resources, ", "))
+	}
+	return nil
+}
+
+func cmdRebuild(c *client, pos []string, f map[string][]string) error {
+	id, err := itemID(pos[0])
+	if err != nil {
+		return err
+	}
+	notes := last(f, "notes")
+	if len(pos) == 2 {
+		if notes != "" {
+			return usageError("rebuild takes the notes once: as an argument or --notes")
+		}
+		notes = pos[1]
+	}
+	if strings.TrimSpace(notes) == "" {
+		return usageError("rebuild needs notes: what the builder should do")
+	}
+	var it item
+	if _, err := c.json("POST", "/items/"+id+"/rebuild", map[string]string{"notes": notes}, &it); err != nil {
+		return err
+	}
+	c.moved(it)
 	return nil
 }
 
