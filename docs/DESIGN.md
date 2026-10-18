@@ -107,6 +107,8 @@ A runner is a small daemon on a machine that can do the work. It polls `loopd` c
 
 A runner that takes only some resources (a Mac's `only_resources: [macos]`) gets the last free agent slot held for it while it has polled lately and one of its items can run now; otherwise the last slot goes to whoever asks ([2026-10-18](decisions/2026-10-18-slot-hold.md)).
 
+An item's resources gate its agent stages (triage, build, review) only: land (CI, merge, hold) needs none of them, so any runner that takes land lands it, past the resource limits ([2026-10-18](decisions/2026-10-18-land-needs-no-resources.md)).
+
 **The brief every agent gets** (one skill per stage in this repo, sharing a preamble) carries the rules 2026-10-13/14 taught:
 
 - Work only in your own worktree and sandbox name; never touch the user's checkouts, the user's emulator (`emulator-5554`) or processes you did not start.

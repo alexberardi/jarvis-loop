@@ -60,6 +60,15 @@ func TestChoose(t *testing.T) {
 			ClaimRequest{Runner: "mbp", Agent: "mbp-1", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}}, 0},
 		{"only: one of several", ctl, []Item{waiting(1, Review, "P3", 0, "gpu", "macos")}, nil,
 			ClaimRequest{Runner: "r", Agent: "a", Capabilities: []string{"macos", "gpu"}, OnlyResources: []string{"macos"}}, 1},
+		// Land (CI, merge, hold) needs none of the item's resources (#209): any runner that takes land
+		// lands it, past the resource limits; a Mac runner (only_resources) takes no land.
+		{"land: the dev box lands a macos item", ctl, []Item{waiting(1, Land, "P1", 0, "macos")}, nil, allCaps, 1},
+		{"land: past the resource limits", ctl, []Item{waiting(1, Land, "P1", 0, "voice")},
+			[]LiveLease{{ItemID: 8, Stage: Build, Resources: []string{"voice"}}}, allCaps, 1},
+		{"land: still its stage limit", ctl, []Item{waiting(1, Land, "P1", 0, "macos")}, []LiveLease{{ItemID: 8, Stage: Land}}, allCaps, 0},
+		{"land: build of a macos item still needs macos", ctl, []Item{waiting(1, Build, "P1", 0, "macos"), waiting(2, Review, "P1", 0, "macos")}, nil, allCaps, 0},
+		{"land: only_resources takes no land", ctl, []Item{waiting(1, Land, "P1", 0, "macos")}, nil,
+			ClaimRequest{Runner: "mbp", Agent: "mbp-1", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}}, 0},
 		{"already claimed is skipped", ctl, []Item{waiting(1, Build, "P1", 0), waiting(2, Build, "P2", 0)}, []LiveLease{{ItemID: 1, Stage: Build}}, allCaps, 2},
 
 		// 3. per-resource limits
@@ -189,6 +198,8 @@ func TestSlotHold(t *testing.T) {
 		{"(a) a runner without only_resources holds nothing", two, []Item{plain, macItem}, oneLive,
 			[]RunnerSeen{{Name: "both", Capabilities: []string{"macos", "gpu"}, LastSeen: t0}}, devbox, nil, 1},
 		{"(b) the macos item is in land and the Mac takes build and review", two, []Item{plain, waiting(2, Land, "P4", 0, "macos")}, oneLive, []RunnerSeen{macBR, devboxSeen}, devbox, nil, 1},
+		{"(b) the macos item is in land and the Mac takes every stage", two, []Item{plain, waiting(2, Land, "P4", 0, "macos")}, oneLive, []RunnerSeen{mbp, devboxSeen}, devbox, nil, 1},
+		{"(c) landing a macos item is not the held work", two, []Item{macItem, waiting(3, Land, "P1", 0, "macos")}, oneLive, []RunnerSeen{mbp, devboxSeen}, devbox, []string{"macos"}, 0},
 		{"(b) the macos item is in triage and the Mac takes build and review", two, []Item{plain, waiting(2, Triage, "P4", 0, "macos")}, oneLive, []RunnerSeen{macBR, devboxSeen}, devbox, nil, 1},
 		{"(b) the macos item is in one of the Mac's stages", two, []Item{plain, macItem}, oneLive, []RunnerSeen{macBR, devboxSeen}, devbox, []string{"macos"}, 0},
 		{"(b) no macos item", two, []Item{plain}, oneLive, []RunnerSeen{mbp}, devbox, nil, 1},

@@ -1,0 +1,36 @@
+{
+  "name": "land-macos-item",
+  "about": "#209: land needs none of an item's resources. An item that needs macos (set once review approved it, as the Mac built and reviewed it) waits in land with no Mac runner around; the dev box's runner, which has no macos, claims it, waits for CI and squash-merges it, and loopd never flags it unservable.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Mac server app progress window"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pending"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"}},
+    {"do": "resources", "item": "a", "resources": "macos"},
+    {"do": "runner", "claims": "a"},
+    {"do": "expect", "stage": {"a": "land"}, "leased": {"a": true}},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "leased": {"a": false},
+    "agent_runs": {"build": 1, "review": 1, "land": 0},
+    "pr": {"a": {"number": 101, "state": "MERGED", "merge_calls": 1}},
+    "events": [
+      {"item": "a", "kind": "resources", "data": {"to": "macos"}, "count": 1},
+      {"item": "a", "kind": "claimed", "actor": "runner", "count": 3},
+      {"item": "a", "kind": "advanced", "outcome": "merged", "actor": "runner", "count": 1}
+    ],
+    "no_events": [
+      {"item": "a", "kind": "unservable"}
+    ]
+  }
+}

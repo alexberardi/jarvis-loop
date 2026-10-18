@@ -77,6 +77,9 @@ machines: no NFS or synced work root, no copied runner config.
      with `capabilities [macos]` and stages build/review would claim any build or review item
      that needs no resources.
    - No `land` stage, no orchestrator token: landing and the orchestrator stay on the dev box.
+     Land needs none of an item's resources, so the dev box lands `macos` items too, and a landing
+     `macos` item does not count against the `macos` limit
+     ([decision](../decisions/2026-10-18-land-needs-no-resources.md)).
    - `work_root` is the Mac's own disk. Do not point it at a shared folder.
 6. **The fence.** Setup, prepare, cleanup and verify commands run under `sandbox-exec` (built into
    macOS, `/usr/bin/sandbox-exec`) instead of bubblewrap: HOME read-only but for the worktree, the
