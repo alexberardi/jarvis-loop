@@ -180,16 +180,23 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			f.mode = args[i]
 		}
 	}
+	f.cwd, _ = os.Getwd()
 	scenario := os.Getenv("FAKE_CLAUDE_SCENARIO")
 	if scenario == "" {
 		scenario = Good
 	}
-	f.cwd, _ = os.Getwd()
 	brief, _ := io.ReadAll(stdin)
-	branch := find("Branch: `([^`]+)`", brief)
-	base := find("base branch `([^`]+)`", brief)
-	item := find(`Item: #(\d+)`, brief)
-	stage := find(`(?m)^- Stage: (\w+)$`, brief)
+	meta := brief
+	if resume != "" && find(`Item: #(\d+)`, brief) == "" && find(`(?m)^- (Persona|Orchestrate): `, brief) == "" {
+		// A resumed build's prompt is a note alone (the session has the brief): the brief's
+		// fields come from the copy in the worktree, as the real claude remembers them.
+		full, _ := os.ReadFile(filepath.Join(f.cwd, ".loop", "brief.md"))
+		meta = append(full, brief...)
+	}
+	branch := find("Branch: `([^`]+)`", meta)
+	base := find("base branch `([^`]+)`", meta)
+	item := find(`Item: #(\d+)`, meta)
+	stage := find(`(?m)^- Stage: (\w+)$`, meta)
 	if persona := find(`(?m)^- Persona: (\w+)$`, brief); persona != "" {
 		// A plan turn: the plan stands in for the item, the persona for the stage.
 		item, stage = "P"+find(`(?m)^- Plan: P(\d+):`, brief), persona
@@ -252,8 +259,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		mode = "default"
 	}
 	// Sessions: an item run's is named after its scenario; a plan turn starts a session of its own
-	// (one per plan and persona) or resumes one, which, as claude's, must have been made in the
-	// same working directory.
+	// (one per plan and persona). Any run resumes one (an interrupted build, a plan turn), which,
+	// as claude's, must have been made in the same working directory.
 	f.session = "fake-session-" + scenario
 	if strings.HasPrefix(item, "P") {
 		f.session = "fake-session-" + item + "-" + stage
@@ -276,7 +283,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 1
 		}
 		f.session = resume
-	} else if strings.HasPrefix(item, "P") || orchTurn != "" || f.oc {
+	} else {
 		saveSession(sessions, f.session, f.cwd)
 	}
 	if f.oc {
