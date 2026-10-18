@@ -293,7 +293,7 @@ func TestChooseWorkPaced(t *testing.T) {
 			[]LiveLease{{ItemID: 5}, {ItemID: 6}, {ItemID: 7}, {ItemID: 8}}, nil, nil, req, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			w, ok := ChooseWorkPaced(ctl, tc.pace, tc.items, nil, tc.live, tc.turns, tc.orch, tc.req)
+			w, ok := ChooseWorkPaced(ctl, tc.pace, tc.items, nil, tc.live, tc.turns, tc.orch, tc.req, nil)
 			var got int64
 			switch {
 			case !ok:
@@ -327,5 +327,39 @@ func TestTokensFormatAndParse(t *testing.T) {
 	}
 	if got := DescribeBudget(Budget{Per5h: 2_000_000, PerWeekPct: 80}); got != "per 5h 2.0M · per week 80% of the last limit · pacing from 85%" {
 		t.Errorf("DescribeBudget = %q", got)
+	}
+}
+
+// A frozen repo's fix goes first, but under the pace like any item: paused, claude does not build
+// it; slow, it is a P1 and goes, even with every slot taken.
+func TestChooseWorkPacedFrozen(t *testing.T) {
+	fix := sized(waiting(9, Build, "P1", 0), "M", "")
+	fix.Repo = "o/a"
+	other := sized(waiting(2, Build, "P1", time.Hour), "S", "")
+	other.Repo = "o/a"
+	land := waiting(3, Land, "P5", 0)
+	frozen := Frozen{"o/a": 9}
+	req := ClaimRequest{Runner: "r", Agent: "a", Kinds: []string{WorkItem}}
+	full := []LiveLease{{ItemID: 5}, {ItemID: 6}, {ItemID: 7}, {ItemID: 8}}
+	for _, tc := range []struct {
+		name string
+		pace Pace
+		live []LiveLease
+		want int64
+	}{
+		{"slow: the fix, over the cap", Pace{Level: PaceSlow, Agents: 2}, full, 9},
+		{"paused, slots free: land, not the fix", Pace{Level: PacePaused}, nil, 3},
+		{"paused, every slot taken: nothing", Pace{Level: PacePaused}, full, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, ok := ChooseWorkPaced(DefaultControl(), tc.pace, []Item{fix, other, land}, nil, tc.live, nil, nil, req, frozen)
+			var got int64
+			if ok && w.Item != nil {
+				got = w.Item.ID
+			}
+			if got != tc.want {
+				t.Fatalf("got %d, want %d", got, tc.want)
+			}
+		})
 	}
 }

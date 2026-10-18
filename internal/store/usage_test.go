@@ -205,7 +205,7 @@ func TestUsageBackfillFromEvents(t *testing.T) {
 	s, _ := open(t)
 	it := add(t, s, "x", "")
 	triageWith(t, s, it, claudeRun(1234))
-	body, err := os.ReadFile("migrations/0019_usage.sql")
+	body, err := os.ReadFile("migrations/0020_usage.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,5 +226,44 @@ func TestUsageBackfillFromEvents(t *testing.T) {
 	r := runs[0]
 	if r.Provider != "claude" || r.Input != 1234 || r.CostUSD != 0.5 || r.Stage != "triage" || !r.Started.Equal(r.At.Add(-10*time.Minute)) {
 		t.Fatalf("backfilled run %+v", r)
+	}
+}
+
+// A run in a repo whose main went red burned its tokens when it finished: the ledger has it then,
+// though its advance waits for the thaw, and once only after the thaw.
+func TestUsageLedgerOfAQueuedAdvance(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	culprit := merged(t, s)
+	it := addIn(t, s, "in the repo", culprit.Repo, "P2")
+	if c := claimed(t, s, "t1"); c == nil || c.Item.ID != it.ID {
+		t.Fatalf("claim %+v", c)
+	}
+	if _, err := s.MainCI(ctx, runner, culprit.ID, redData()); err != nil {
+		t.Fatal(err)
+	}
+	evidence(t, s, it.ID)
+	if got, err := s.Advance(ctx, runner, it.ID, pipeline.Reproduced, claudeRun(1000), nil); err != nil || got.Stage != pipeline.Triage {
+		t.Fatalf("queued advance: %+v %v", got, err)
+	}
+	runs := func() []pipeline.UsageRun {
+		t.Helper()
+		r, err := usageRuns(s.r, "", t0.Add(-time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	if r := runs(); len(r) != 1 || r[0].ItemID != it.ID || r[0].Burn() != 1000 {
+		t.Fatalf("ledger while frozen: %+v", r)
+	}
+	if _, err := s.Unfreeze(ctx, user, culprit.Repo); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := s.GetItem(ctx, it.ID); d.Item.Stage != pipeline.Build {
+		t.Fatalf("after the thaw: %s", d.Item.Stage)
+	}
+	if r := runs(); len(r) != 1 {
+		t.Fatalf("ledger after the thaw: %d runs", len(r))
 	}
 }

@@ -102,7 +102,7 @@ func TestChoose(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := Choose(tc.ctl, tc.items, nil, tc.live, tc.req)
+			got, ok := Choose(tc.ctl, tc.items, nil, tc.live, tc.req, nil)
 			if tc.want == 0 {
 				if ok {
 					t.Fatalf("want nothing, got item %d", got.ID)

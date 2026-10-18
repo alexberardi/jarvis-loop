@@ -169,8 +169,14 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, err)
 		return
 	}
+	fz, err := p.st.Freezes(r.Context())
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
 	now := p.cfg.Clock.Now()
 	v := boardView(items, plans, now, r.URL.Query().Get("closed") == "1", p.cfg.SlackWorkspace)
+	v.Freezes = fz
 	v.Working = workingView(work, now, 0)
 	v.Orch = orchView(orch, items)
 	if u, err := p.st.Usage(r.Context()); err == nil {
@@ -388,6 +394,8 @@ func workingView(work []store.Working, now time.Time, item int64) workingSection
 }
 
 type boardData struct {
+	// Freezes are the repos frozen while their main is red: a red banner each.
+	Freezes    []store.Freeze
 	Working    workingSection
 	Orch       orchSection
 	Usage      usageSection
@@ -721,7 +729,7 @@ var templateFS embed.FS
 //go:embed templates/live.js
 var liveJS []byte
 
-var funcs = template.FuncMap{"age": age, "size": size, "stamp": stamp, "tokens": pipeline.FormatTokens, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot}
+var funcs = template.FuncMap{"join": strings.Join, "age": age, "size": size, "stamp": stamp, "tokens": pipeline.FormatTokens, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot}
 
 var (
 	boardTmpl   = template.Must(template.New("board.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/board.tmpl", "templates/style.tmpl", "templates/working.tmpl"))

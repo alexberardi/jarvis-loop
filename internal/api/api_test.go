@@ -1081,3 +1081,17 @@ func TestTrust(t *testing.T) {
 		t.Fatalf("after trust: %+v", d.Item)
 	}
 }
+
+// Only the user lifts a freeze; the list is readable by all; lifting one that is not there is a
+// conflict.
+func TestUnfreezeIsTheUsers(t *testing.T) {
+	e := newEnv(t)
+	var fz []map[string]any
+	e.do(runnerTok, "GET", "/freezes", nil, 200, &fz)
+	if len(fz) != 0 {
+		t.Fatalf("freezes %+v", fz)
+	}
+	e.refused(runnerTok, "POST", "/unfreeze", map[string]string{"repo": "o/r"}, 403, CodeForbidden)
+	e.refused(orchTok, "POST", "/unfreeze", map[string]string{"repo": "o/r"}, 403, CodeForbidden)
+	e.refused(userTok, "POST", "/unfreeze", map[string]string{"repo": "o/r"}, 409, store.CodeNotFrozen)
+}

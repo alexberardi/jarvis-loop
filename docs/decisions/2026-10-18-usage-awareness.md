@@ -13,7 +13,7 @@ active-agents number to 0 and never raising it again.
   `rate_limit_status` (`allowed`, `allowed_warning`, `rejected`), `rate_limit_type`
   (`five_hour`, `seven_day…`), `rate_limit_resets_at`, `rate_limit_utilization`. Tested on a recorded
   stream (`internal/runner/testdata/usage_stream.jsonl`).
-- loopd writes one row per run into `usage_runs` (migration 0019: item, stage, provider, model,
+- loopd writes one row per run into `usage_runs` (migration 0020: item, stage, provider, model,
   tokens, cost, the run's start and end, the warning). The migration backfills the rows from the
   runs recorded before it, from their events.
 - `usage_hits` records every limit a run hit: the window (from `rateLimitType`, else the text:
@@ -72,6 +72,10 @@ agents are never touched.
   (the item's or routed) and land (a script) go on. A reset the CLI did not give, or gave in a form
   we cannot read or in the past, pauses for an hour: the next run then either works or hits the
   limit again at once, which costs nothing.
+- **A frozen repo's main-red fix** (2026-10-18-main-red-freeze.md) still goes first and may take a
+  slot over the active-agents number, but under the pace like any item: it is a P1, so it goes
+  while slow; while paused claude does not build it (a fix with `builder: qwen` still goes). A run
+  in a frozen repo is in the ledger when it finishes, though its advance waits for the thaw.
 - Every change of level (and of the number at once while slow) is a `usage_pace` event (no item),
   recorded at the claim that saw it or at the limit hit; the Slack bot posts it in `#loop-digest`:
   the hit with an @mention, the reset and "paused until"; the budget reached; pacing with the

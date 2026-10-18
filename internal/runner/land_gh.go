@@ -51,3 +51,13 @@ func (g GH) FailedLog(ctx context.Context, slug string, runID int64) (string, er
 	}
 	return g.run(ctx, "run", "view", strconv.FormatInt(runID, 10), "--repo", slug, "--log-failed")
 }
+
+// RerunFailed re-runs a run's failed jobs (gh run rerun --failed): main's CI gets one re-run
+// before a red main freezes the repo, to rule out a flake.
+func (g GH) RerunFailed(ctx context.Context, slug string, runID int64) error {
+	if runID <= 0 {
+		return fmt.Errorf("not a run id: %d", runID)
+	}
+	_, err := g.run(ctx, "run", "rerun", strconv.FormatInt(runID, 10), "--repo", slug, "--failed")
+	return err
+}

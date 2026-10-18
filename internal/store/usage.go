@@ -18,11 +18,6 @@ import (
 // the budget), back to normal.
 const KindUsagePace = "usage_pace"
 
-type querier interface {
-	Query(string, ...any) (*sql.Rows, error)
-	QueryRow(string, ...any) *sql.Row
-}
-
 // usageZone is where the CLI's reset texts ("resets 3:45pm") and the days are read: the user's.
 func usageZone() *time.Location {
 	loc, err := time.LoadLocation(OrchDayZone)
