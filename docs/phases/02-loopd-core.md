@@ -87,7 +87,7 @@ snapshot so they are table-testable:
    (triage items have no resources yet → any runner).
 3. **Per-resource limits** (from control, defaults `gpu 2, voice 1, emulator 1`): an item needing a
    resource at its limit (counting live leases) is skipped.
-4. **Per-stage limits** (defaults `triage 1, review 2, land 1`; build is limited only by 1).
+4. **Per-stage limits** (defaults `triage 1, review 2, land 3` (land 1 until #213); build is limited only by 1).
 5. **Review independence** (above).
 6. **Order:** priority (P1 first), then stage (land, review, build, triage: finish work in flight
    before starting new), then oldest `created_at`, then id.

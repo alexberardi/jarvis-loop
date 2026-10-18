@@ -22,7 +22,7 @@ Land runs no agent, so in loopd's claim rules (`pipeline.ChooseWork`, `Choose`, 
   only `land` holds nothing), since landing a Mac item needs no agent slot.
 
 What still applies to land: `/loop stop`, `active_agents` 0 (the usage-limit stop and the user's
-"no agents"), the land limit (1), the resource limits, a frozen repo, and the dependencies.
+"no agents"), the land limit (3 since #213), the resource limits, a frozen repo, and the dependencies.
 
 Tests: `TestLandTakesNoAgentSlot` (pipeline), `TestClaimLandsWhenAgentSlotsAreFull` (store), and
 `scenarios/71-land-past-full-agent-slots.json`: `active_agents` 1, a hanging P1 build in the one
@@ -31,4 +31,5 @@ slot, and an approved item still lands next to it.
 ## Not covered
 
 Land is still one item at a time (`limits.land` 1), and one land run can wait up to `land_ci_wait`
-for CI, so a long queue drains slowly. That is throughput, not the stall.
+for CI, so a long queue drains slowly. That is throughput, not the stall. (#213 raised the limit to
+3 with as many runner land lanes: [2026-10-18-land-never-waits.md](2026-10-18-land-never-waits.md).)

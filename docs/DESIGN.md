@@ -101,6 +101,7 @@ A runner is a small daemon on a machine that can do the work. It polls `loopd` c
 | Resource | Limit | Why |
 | --- | --- | --- |
 | agents in total | the active-agents number (0–6, default 4); land runs no agent and takes no slot | the user's throttle (Usage control) |
+| land | 3 at a time, in each runner's `land_slots` lanes (default 3) | land mostly waits on CI; one at a time drained the queue one CI run at a time ([2026-10-18](decisions/2026-10-18-land-never-waits.md)) |
 | `gpu` (the shared live model) | 2 | the installed engine has one slot; the house comes first |
 | `voice` (CPU whisper) | 1 | about 2.4 s of CPU per utterance at 8 threads |
 | `emulator` | 1 | a headless emulator plus a release build is heavy |
