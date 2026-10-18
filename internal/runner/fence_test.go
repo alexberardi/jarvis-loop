@@ -222,8 +222,23 @@ func TestFenceHomeIsReadOnly(t *testing.T) {
 		"~/.claude/settings.json", "~/.config/mise/config.toml", "~/.git-templates/hooks/pre-commit", "$LOOP_MIRROR/config",
 		"$LOOP_MIRROR/hooks/post-checkout", "./in-worktree.txt", "~/.cache/jarvis-harness/model.bin", "~/.android/adbkey",
 		"$LOOP_EVIDENCE_DIR/shot.png", "/tmp/fence-private-" + filepath.Base(home), "$TMPDIR/x", "$GOCACHE/x", "$GOMODCACHE/x", "$npm_config_cache/x"}
+	// Homebrew's bin (on macos-14 runners, owned by the runner's user) is read-only under the fence.
+	brew := ""
+	if runtime.GOOS == "darwin" {
+		if fi, err := os.Stat("/opt/homebrew/bin"); err == nil && fi.IsDir() {
+			brew = "/opt/homebrew/bin/fence-pwned-" + filepath.Base(home)
+			t.Cleanup(func() { os.Remove(brew) })
+			if err := os.WriteFile(brew, nil, 0o600); err != nil {
+				t.Logf("%s is not writable even without the fence: not tried (%v)", brew, err)
+				brew = ""
+			}
+		}
+	}
 	var script strings.Builder
-	for _, p := range tries {
+	for _, p := range append(tries, brew) {
+		if p == "" {
+			continue
+		}
 		fmt.Fprintf(&script, "if (echo pwned >> %s) 2>/dev/null; then echo 'wrote %s'; else echo 'denied %s'; fi\n", p, p, p)
 	}
 	script.WriteString("git status --short >/dev/null && echo 'git status ok'\n")
@@ -242,6 +257,14 @@ func TestFenceHomeIsReadOnly(t *testing.T) {
 		}
 		if !strings.Contains(out, want+p+"\n") {
 			t.Errorf("want %s%s:\n%s", want, p, out)
+		}
+	}
+	if brew != "" && !strings.Contains(out, "denied "+brew+"\n") {
+		t.Errorf("want denied %s:\n%s", brew, out)
+	}
+	if runtime.GOOS == "darwin" {
+		if left, _ := filepath.Glob(filepath.Join(g.r.Cfg.WorkRoot, "fence-tmp", "t*")); len(left) > 0 {
+			t.Errorf("the private TMPDIRs were not removed: %v", left)
 		}
 	}
 	if !strings.Contains(out, "git status ok") {

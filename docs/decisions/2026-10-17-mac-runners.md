@@ -21,13 +21,19 @@ offered `macos` (#92 made it visible). The user OK'd two Macs on the LAN, the Ma
 - **The macOS fence is sandbox-exec**, chosen by GOOS (`fence_bwrap.go` for `!darwin`,
   `fence_darwin.go`), with the same probe-or-refuse rule and the same masks. The profile
   (`sbplProfile`, built without a build tag so Linux CI tests it too): allow default (the host's
-  filesystem and the network, as under bubblewrap); refuse writes under HOME, the work root and
-  `/tmp`; allow them again under the worktree, its git admin dir, the fence caches,
-  `verify_writable` and a private TMPDIR (`<work_root>/fence-tmp/t*`, cleared at the runner's
-  start); refuse them again on the worktree's git plumbing and the read-only paths; the masks
+  filesystem and the network, as under bubblewrap); refuse writes under HOME, the work root,
+  `/tmp` and Homebrew's prefixes (`/opt/homebrew`, `/usr/local`, when they exist); allow them again
+  under the worktree, its git admin dir, the fence caches, `verify_writable` and a private TMPDIR
+  (`<work_root>/fence-tmp/t*`, removed when the command ends by a shell outside the fence; what a
+  kill leaves is cleared at the runner's start); refuse them again on the worktree's git plumbing and the read-only paths; the masks
   (`DefaultVerifyMask`, `verify_mask`, the runner's config) can be neither read nor written. Paths
   are resolved (sandbox-exec matches real paths: `/tmp` is `/private/tmp`) and escaped as SBPL
   strings, so a path cannot add rules.
+  - Homebrew's prefix belongs to the user who installed it (on Linux `/usr/local` is root's), and
+    the runner's launchd PATH puts `/opt/homebrew/bin` before `/usr/bin`: a fenced command that
+    could write there could replace `gh` or `git` for the runner's next unfenced call, which holds
+    the keychain login. It is the hole `~/.local/bin` and mise are read-only for on Linux
+    (2026-10-15-all-repos.md). `TestFenceHomeIsReadOnly` tries `/opt/homebrew/bin` on macos-14.
   - macOS keeps gh's and claude's logins in the keychain, which the file masks do not cover
     (`security find-generic-password` asks securityd). The profile refuses the
     `com.apple.SecurityServer` service, and `Library/Keychains` is masked.

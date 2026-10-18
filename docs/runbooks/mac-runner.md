@@ -80,7 +80,8 @@ machines: no NFS or synced work root, no copied runner config.
    - `work_root` is the Mac's own disk. Do not point it at a shared folder.
 6. **The fence.** Setup, prepare, cleanup and verify commands run under `sandbox-exec` (built into
    macOS, `/usr/bin/sandbox-exec`) instead of bubblewrap: HOME read-only but for the worktree, the
-   runner's fence caches and `verify_writable`; the credential paths unreadable; the keychain's
+   runner's fence caches and `verify_writable`; Homebrew's prefix
+   (`/opt/homebrew`) read-only too; the credential paths unreadable; the keychain's
    service refused; a private `TMPDIR`; `/tmp` read-only (macOS has no private `/tmp`); network
    allowed. The runner probes it at start and refuses to run setup or verify without it. Tools
    that write elsewhere in HOME (Xcode's `~/Library/Developer/Xcode/DerivedData`,
