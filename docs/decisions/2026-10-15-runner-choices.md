@@ -40,6 +40,9 @@ each spelling of loopd's address, `WebFetch`, `WebSearch`, `mcp__*`, `Read` of e
 create|view|checks|list|comment`, `scripts/check`, `scripts/sandbox`, `scripts/fetch-sherpa-libs.sh`,
 `mkdir`, `ls`, `Edit(./**)`.
 
+- **The test Pi (2026-10-18):** an item that needs the `pi` resource gets a shell on the test
+  Pi through the harness broker, with ssh run by the runner; the agent's own `ssh`, `scp` and `sftp`
+  stay denied ([2026-10-18-pi-device.md](2026-10-18-pi-device.md)).
 - **Extra over the spec:** WebFetch/WebSearch and MCP tools are denied (exfiltration paths outside
   the sandbox's network proxy); `gh auth` (prints the token), `gh secret`, `gh workflow` are denied.
   Easy to loosen if an item needs the web.

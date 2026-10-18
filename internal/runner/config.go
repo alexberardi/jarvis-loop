@@ -7,6 +7,7 @@ package runner
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -56,6 +57,8 @@ type Config struct {
 	// LoopdTokens and LoopdData are protected and secret when set (loopd on the same machine).
 	LoopdTokens string `json:"loopd_tokens_file,omitempty"`
 	LoopdData   string `json:"loopd_data_dir,omitempty"`
+	// Pi is the test Pi items that need the "pi" resource get (pi.go); "pi" must be a capability.
+	Pi *PiConfig `json:"pi,omitempty"`
 	// UserEmulator is the user's own emulator serial, which no command may name.
 	UserEmulator string `json:"user_emulator"`
 	// AllowedDomains extends the sandbox's network allowlist.
@@ -333,6 +336,13 @@ func (c *Config) normalize() error {
 			return err
 		}
 	}
+	if c.Pi != nil {
+		if err := c.Pi.normalize(c.Capabilities); err != nil {
+			return err
+		}
+	} else if slices.Contains(c.Capabilities, ResourcePi) {
+		return errors.New(`config: capability "pi" needs a "pi" block (host, user, key, known_hosts, restore)`)
+	}
 	if c.VerifyMask == nil {
 		c.VerifyMask = DefaultVerifyMask(Home())
 	}
@@ -530,7 +540,11 @@ func (c *Config) ownSecrets() []string {
 	if c.Qwen != nil {
 		creds = c.Qwen.CredentialsFile
 	}
-	for _, p := range []string{c.path, c.LoopdTokens, c.LoopdData, creds} {
+	piKey, piKnown := "", ""
+	if c.Pi != nil {
+		piKey, piKnown = c.Pi.Key, c.Pi.KnownHosts
+	}
+	for _, p := range []string{c.path, c.LoopdTokens, c.LoopdData, creds, piKey, piKnown} {
 		if p != "" {
 			out = append(out, p)
 		}

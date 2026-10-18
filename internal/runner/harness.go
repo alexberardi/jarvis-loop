@@ -44,6 +44,8 @@ type harnessBroker struct {
 	r    *Runner
 	mu   sync.Mutex
 	sess []*harnessSession
+	// piHolder is the item using the test Pi (pi.go), 0 when it is free.
+	piHolder int64
 }
 
 type harnessSession struct {
@@ -53,8 +55,13 @@ type harnessSession struct {
 	wt     string
 	logDir string
 	cfg    HarnessConfig
-	env    []string
-	guard  *guard.Config // the run's guard (its hook's config): every run command passes it first
+	// repoHarness: the repo has a harness (up, run, down); a session may also exist only for the
+	// test Pi (pi is non-nil: the item needs it and the runner has one).
+	repoHarness bool
+	pi          *PiConfig
+	piUsed      bool // the session took the Pi: it is put back when the session ends
+	env         []string
+	guard       *guard.Config // the run's guard (its hook's config): every run command passes it first
 	// spool and logs are opened before the agent starts, so a symlink it puts in .loop later
 	// cannot send the runner's writes out of the worktree.
 	spool *os.Root
@@ -130,10 +137,10 @@ func (r *Runner) CloseHarness() {
 	}
 }
 
-// startHarness opens a session for a build or review run of a repo with a harness: a fresh
-// spool, and .loop/harness.json; nil when the repo has none.
+// startHarness opens a session for a build or review run of a repo with a harness, or of an
+// item that needs the test Pi: a fresh spool, and .loop/harness.json; nil when neither.
 func (r *Runner) startHarness(ru *run) (*harnessSession, error) {
-	if !ru.hasHarness() {
+	if !r.agentHarness(ru) {
 		return nil, nil
 	}
 	if _, err := os.Stat(r.Cfg.LoopHarness); err != nil {
@@ -155,11 +162,17 @@ func (r *Runner) startHarness(ru *run) (*harnessSession, error) {
 		wt = p
 	}
 	s := &harnessSession{b: r.broker(), token: hex.EncodeToString(tok), item: ru.item.ID, wt: wt,
-		logDir: filepath.Join(ru.scratch, "harness"), cfg: *ru.repo.Harness, fences: map[*fenceProc]bool{},
+		logDir: filepath.Join(ru.scratch, "harness"), fences: map[*fenceProc]bool{},
 		guard: gc, quit: make(chan struct{}),
 		env: append(r.agentEnv(), "LOOP_ITEM="+strconv.FormatInt(ru.item.ID, 10), "LOOP_WORKTREE="+ru.wt,
 			"LOOP_EVIDENCE_DIR="+filepath.Join(ru.wt, ".loop", "evidence"), "LOOP_SANDBOX="+ru.sandbox,
 			"LOOP_REPO="+ru.repo.Slug, "LOOP_BASE="+ru.repo.Base, "LOOP_MIRROR="+ru.mirror)}
+	if ru.hasHarness() {
+		s.cfg, s.repoHarness = *ru.repo.Harness, true
+	}
+	if r.hasPi(ru) {
+		s.pi = r.Cfg.Pi
+	}
 	spool := filepath.Join(wt, harness.SpoolRel)
 	if err := os.RemoveAll(spool); err != nil {
 		return nil, err
@@ -246,6 +259,9 @@ func (s *harnessSession) end(ctx context.Context) {
 		if err != nil || code != 0 {
 			b.r.Log.Warn("harness down at run end", "item", s.item, "exit", code, "err", err)
 		}
+	}
+	if s.pi != nil {
+		s.releasePi()
 	}
 	s.spool.Close()
 	s.logs.Close()
@@ -363,6 +379,34 @@ func (s *harnessSession) serve(id string, req harness.Request, out io.Writer) (i
 		}
 	}()
 	switch req.Op {
+	case harness.OpPi, harness.OpPiPut, harness.OpPiGet:
+		if s.pi == nil {
+			return 0, errors.New("this run has no test Pi (only an item that needs the \"pi\" resource, on a runner with one)")
+		}
+		s.op.Lock()
+		defer s.op.Unlock()
+		switch req.Op {
+		case harness.OpPi:
+			// The guard as the hook would apply it to the client's command line: a request written
+			// to the spool directly must not name what a command may not (the user's emulator, a
+			// protected path). The command itself runs on the Pi, so local rules (sudo) do not.
+			line := "loop-harness pi " + shellQuote(req.Cmd)
+			if d := s.guard.Check(guard.Input{Event: "PreToolUse", ToolName: "Bash", ToolInput: map[string]any{"command": line}, Cwd: s.wt}); d.Deny {
+				s.guard.Record("loop-harness pi", d, time.Now())
+				return 0, errors.New(d.Reason)
+			}
+			return s.piRun(req.Cmd, out, gone)
+		case harness.OpPiPut:
+			return s.piPut(req.Src, req.Dst, out, gone)
+		default:
+			return s.piGet(req.Src, req.Dst, out, gone)
+		}
+	case harness.OpUp, harness.OpRun, harness.OpDown:
+		if !s.repoHarness {
+			return 0, errors.New("this repo has no harness; this run has only the test Pi (pi, pi-put, pi-get)")
+		}
+	}
+	switch req.Op {
 	case harness.OpStatus:
 		return s.status(out)
 	case harness.OpUp:
@@ -380,7 +424,7 @@ func (s *harnessSession) serve(id string, req harness.Request, out io.Writer) (i
 	case harness.OpDown:
 		return s.down(out, gone)
 	}
-	return 0, fmt.Errorf("unknown op %q (up, run, down, status)", req.Op)
+	return 0, fmt.Errorf("unknown op %q (up, run, down, status, pi, pi-put, pi-get)", req.Op)
 }
 
 var errSessionEnded = errors.New("the harness session ended (the run is over)")

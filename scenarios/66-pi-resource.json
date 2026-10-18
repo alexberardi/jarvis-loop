@@ -1,0 +1,26 @@
+{
+  "name": "pi-resource",
+  "about": "2026-10-18 (the test Pi, docs/decisions/2026-10-18-pi-device.md): items that need the \"pi\" resource go only to a runner with the pi capability, one at a time (loopd's pi limit is 1); the dev box, without it, builds the item that needs nothing. (Each item's first hand claim is its triage.)",
+  "stages": ["build"],
+  "steps": [
+    {"do": "add", "item": "pi1", "title": "Pi node: the HAT on the Go node", "priority": "P2"},
+    {"do": "triage", "item": "pi1", "resources": "pi"},
+    {"do": "add", "item": "pi2", "title": "Pi node: barge-in", "priority": "P2"},
+    {"do": "triage", "item": "pi2", "resources": "pi"},
+    {"do": "add", "item": "plain", "title": "Fix a typo in the README", "priority": "P3"},
+    {"do": "triage", "item": "plain"},
+
+    {"do": "hand_claim", "item": "pi1", "capabilities": "pi", "only": "pi"},
+    {"do": "hand_claim", "capabilities": "pi", "only": "pi", "claims": "none"},
+    {"do": "runner", "claims": "plain"}
+  ],
+  "expect": {
+    "stage": {"pi1": "build", "pi2": "build", "plain": "review"},
+    "events": [
+      {"item": "pi1", "kind": "claimed", "actor": "runner:hand", "count": 2},
+      {"item": "pi2", "kind": "claimed", "actor": "runner:hand", "count": 1},
+      {"item": "plain", "kind": "claimed", "actor": "runner:sandbox", "count": 1}
+    ],
+    "agent_runs": {"build": 1}
+  }
+}

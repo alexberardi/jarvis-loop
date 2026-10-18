@@ -13,7 +13,8 @@ import (
 // Main is the loop-harness command (cmd/loop-harness; the runner's tests run it too).
 func Main(args []string) int {
 	usage := func() int {
-		fmt.Fprintln(os.Stderr, "usage: loop-harness up | run '<command>' | down | status")
+		fmt.Fprintln(os.Stderr, "usage: loop-harness up | run '<command>' | down | status\n"+
+			"       loop-harness pi '<command>' | pi-put <file> <path on the Pi> | pi-get <path on the Pi> <file>")
 		return 2
 	}
 	if len(args) == 0 {
@@ -36,6 +37,16 @@ func Main(args []string) int {
 			return usage()
 		}
 		req.Cmd = strings.Join(args[1:], " ")
+	case OpPi:
+		if len(args) < 2 {
+			return usage()
+		}
+		req.Cmd = strings.Join(args[1:], " ")
+	case OpPiPut, OpPiGet:
+		if len(args) != 3 {
+			return usage()
+		}
+		req.Src, req.Dst = args[1], args[2]
 	default:
 		return usage()
 	}
