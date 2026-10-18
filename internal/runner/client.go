@@ -323,6 +323,14 @@ type Detail struct {
 	Item     Item           `json:"item"`
 	Events   []EventInfo    `json:"events"`
 	Evidence []EvidenceInfo `json:"evidence"`
+	// Frozen is set while main is red in the item's repo.
+	Frozen *Freeze `json:"frozen,omitempty"`
+}
+
+// Freeze is loopd's freeze of a repo whose main is red: ItemID is its fix, the one item that moves.
+type Freeze struct {
+	Repo   string `json:"repo"`
+	ItemID int64  `json:"item_id"`
 }
 
 // Detail reads one item with its events and evidence.

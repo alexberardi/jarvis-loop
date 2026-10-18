@@ -280,8 +280,16 @@ func TestBoardGolden(t *testing.T) {
 	for _, closed := range []bool{false, true} {
 		var b bytes.Buffer
 		v := boardView(goldenItems(), goldenPlans(), now, closed, "https://jarvis.slack.com/")
+		if !closed {
+			// main red in one repo: the banner names it, its fix and what waits.
+			v.Freezes = []store.Freeze{{Repo: "alexberardi/jarvis-server", ItemID: 40, ItemTitle: "main red in alexberardi/jarvis-server: ci <race>",
+				Since: now.Add(-time.Hour), Jobs: []string{"ci", "race"}, Queued: 2}}
+		}
 		if err := boardTmpl.Execute(&b, v); err != nil {
 			t.Fatal(err)
+		}
+		if !closed && !strings.Contains(b.String(), `<div class="frozen" role="alert"><strong>Main is red in alexberardi/jarvis-server</strong> (failing: ci, race)`) {
+			t.Error("no red banner for the frozen repo")
 		}
 		name := "board_open.golden.html"
 		if closed {

@@ -1,0 +1,47 @@
+{
+  "name": "main-red-unfreeze",
+  "about": "#197: after a merges, b's PR fails CI and land sends b back to build; then main's CI on a's merge is red, still red after a re-run: the repo freezes and the runner claims nothing (b is frozen, the P1 waits in intake: this runner does no triage). The user lifts the freeze by hand (loop unfreeze sandbox/demo): b's CI failed while main was red, so it goes back to build with \"main was red; rebase and re-run\", and its next build is claimed with that note in its brief.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "add", "item": "b", "title": "Tidy the digest footer"},
+    {"do": "triage", "item": "b"},
+    {"do": "ci", "main": {"build": "pending", "test": "pending"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "expect", "stage": {"a": "done"}, "leased": {"a": false}},
+    {"do": "runner", "claims": "b"},
+    {"do": "wait", "stage": {"b": "review"}, "leased": {"b": false}},
+    {"do": "runner", "claims": "b"},
+    {"do": "wait", "stage": {"b": "land"}, "leased": {"b": false}},
+    {"do": "ci", "item": "b", "checks": {"check": "fail"}},
+    {"do": "runner", "claims": "b"},
+    {"do": "wait", "stage": {"b": "build"}, "leased": {"b": false}},
+
+    {"do": "ci", "main": {"build": "pass", "test": "fail"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "clock", "advance": "30s"},
+    {"do": "wait", "events": [{"kind": "frozen", "data": {"repo": "^sandbox/demo$", "item": "^3$"}, "count": 1}]},
+    {"do": "runner", "claims": "none"},
+
+    {"do": "unfreeze"},
+    {"do": "expect", "stage": {"b": "build"},
+     "events": [{"kind": "unfrozen", "actor": "user", "data": {"reason": "^lifted by hand$", "rebuilt": "^\\[2\\]$"}, "count": 1},
+       {"item": "b", "kind": "rebuild", "actor": "loopd", "data": {"notes": "^main was red; rebase and re-run$"}, "count": 1}]},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"b": "review"},
+    "run_files": [{"item": "b", "stage": "build", "file": "brief.md", "text": "- CI failed on PR #102 while `main` was red; `main` is green now\\. Merge `main` into this branch .*loopd's note is in `\\.loop/review/held\\.md`\\.\\n"}],
+    "messages": [
+      {"thread": "b", "text": "^Back to build: main was red; rebase and re-run \\(CI failed on this PR while main was red; main is green now\\)\\.$"},
+      {"channel": "loop", "text": "^:large_green_circle: \\*sandbox/demo unfrozen\\* \\(lifted by hand\\)\\. CI failed on these while main was red, so they go back to build to rebase and re-run: #2 Tidy the digest footer\\.$"}
+    ]
+  }
+}

@@ -224,6 +224,10 @@ func (b *Bot) handleEvent(ctx context.Context, e store.Event) {
 		return
 	}
 	if e.ItemID == 0 {
+		if e.Kind == store.KindFrozen || e.Kind == store.KindUnfrozen {
+			b.post(ctx, "freeze", b.freezeMessage(ctx, e))
+			return
+		}
 		if e.Kind == "control" {
 			if err := b.updateControl(ctx); err != nil {
 				b.c.Log.Error("slack: control message", "err", err.Error())
@@ -551,6 +555,9 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	if e.Kind == store.KindServable {
 		return Message{Text: fmt.Sprintf("A runner offers %s now; it can claim this from the %s queue.", b.field(strings.Join(listOf(e.Data, "missing"), " + "), 200, id), Escape(e.To))}, true
 	}
+	if line := b.freezeLine(ctx, e, id); line != "" {
+		return Message{Text: line}, true
+	}
 	if strings.HasPrefix(e.Actor, orchestratorPrefix) {
 		return Message{Text: b.orchestratorLine(ctx, e)}, true
 	}
@@ -588,7 +595,9 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	case "held":
 		text = fmt.Sprintf("Kept holding (%s).", by)
 	case "rebuild":
-		if strings.HasPrefix(e.Actor, "runner:") {
+		if e.Data["main_red"] == true {
+			text = "Back to build: " + f("notes", 400) + " (CI failed on this PR while main was red; main is green now)."
+		} else if strings.HasPrefix(e.Actor, "runner:") {
 			text = "Back to build: " + f("notes", 400)
 		} else {
 			text = fmt.Sprintf("Sent back to build by %s: '%s'.", by, f("notes", 600))
