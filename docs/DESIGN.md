@@ -132,6 +132,12 @@ asks the runner, through a spool in the agent's own worktree (checked by the run
 same fence, next to a keeper fence that holds the running sandbox until the agent ends. Details:
 `docs/decisions/2026-10-16-harness-broker.md`.
 
+**Config and updates without lost work (2026-10-18):** SIGHUP (`loop-runner reload`) reloads the
+runner's config for the next claim while live runs keep theirs; a bad file is refused. A binary
+update drains first (`loop-runner drain`): no new claims, the board shows the runner draining, and it
+exits once its runs end for its service to restart it. loopd reloads `--repos-file` on SIGHUP.
+Details: `docs/decisions/2026-10-18-runner-reload-drain.md`.
+
 **Cleanup** is the runner's, not the agent's: when a lease ends for any reason it removes that item's worktree, takes down its sandbox and stops its emulator. It never touches anything it did not start, so a stray process from another session is reported, not killed.
 
 ## Slack
@@ -166,6 +172,8 @@ Claude Code gives a runner no reading of plan usage (`/usage` is interactive onl
 
 **Stop:** running agents stop at their next heartbeat (within a minute), their work is saved as a WIP branch, and each item returns to its queue; a Claude build resumes its session on the next claim on the same runner ([decision](decisions/2026-10-18-build-resume.md)). **Resume** clears it.
 
+**A run that ends with no result** (exit 0, no `.loop/result.json`, as one waiting on a background command does) resumes its session once in the same claim, with a short note; the briefs say to run every check in the foreground ([decision](decisions/2026-10-18-no-result-resume.md)).
+
 **Automatic:** when an agent run ends with a usage-limit or rate-limit error, `loopd` sets the active-agents number to 0, posts the error with its reset time in `#loop-digest` with an @mention, and does not raise it again on its own.
 
 **Advisory, not enforced:** every digest shows the loop's estimated spend today (from each run's tokens and `total_cost_usd`) against about 1/7 of a week, learned when the weekly limit is hit and whenever the user posts `/loop usage 42%` from `/usage`. It tells the user when to turn the number down; it never changes it. The loop only sees its own spend, not interactive sessions.
@@ -191,7 +199,7 @@ The script then:
 1. If `main` moved and the PR no longer merges, merges `main` in, pushes, and waits for all three gates again. A conflict outside `docs/` sends the item back to build.
 2. Squash-merges, and watches `main`'s CI on the merge commit. Red files a P1 item linked to this one and @mentions the user. Red (still red after one re-run of the failed jobs) also freezes the repo until `main` is green: nothing else in it moves stages, runs already going finish and their results wait, and the P1 goes first ([decision](decisions/2026-10-18-main-red-freeze.md)).
 
-**As built (phase 6, 2026-10-15):** the script is the runner's `land` stage, plain code with no agent: it holds the GitHub login, loopd still holds none. Every pass re-derives the gates from GitHub and git (the PR, review approval for its current head, the changed paths, CI, the harness evidence, the hold list, mergeability); it merges only with `--match-head-commit` (never `--auto` or `--admin`), checks the hold rules itself before merging, resolves conflicts only under `docs/` (git's union merge) and sends any new head back to review. Hold rules are per repo: jarvis-loop's own list holds changes to who may approve or merge, token handling and the landing gates, so the loop never lands a change to itself without the user. Details: `docs/decisions/2026-10-15-land.md`.
+**As built (phase 6, 2026-10-15):** the script is the runner's `land` stage, plain code with no agent: it holds the GitHub login, loopd still holds none. Every pass re-derives the gates from GitHub and git (the PR, review approval for its current head, the changed paths, CI, the harness evidence, the hold list, mergeability); it merges only with `--match-head-commit` (never `--auto` or `--admin`), checks the hold rules itself before merging, resolves conflicts only under `docs/` (git's union merge) and sends any new head back to review. Hold rules are per repo: jarvis-loop's own list holds changes to who may approve or merge, API auth, token handling, the hold rules, the guard and the landing gates, so the loop never lands such a change to itself without the user. *Since 2026-10-18 (#204)* it names those files rather than whole packages: a reviewed, green loop PR to the rest of `internal/pipeline`, `internal/api`, `internal/store` or `cmd/loopd` lands on its own ([decision](decisions/2026-10-18-narrow-loop-holds.md)). Details: `docs/decisions/2026-10-15-land.md`.
 
 **Hold list (it stays):** jarvis-server's `CLAUDE.md` also holds PRs that change auth or access, update signing or the helper, or prod, that weaken a test or CI check, or that are marked "needs review". They still need the three gates, and then the user's approval, by button or in plain words in the item's thread ("yea, removing that old test is fine"):
 

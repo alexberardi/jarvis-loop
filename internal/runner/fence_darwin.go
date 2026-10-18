@@ -12,10 +12,10 @@ import (
 const fenceName = "sandbox-exec"
 
 func (r *Runner) fenceBinary() string {
-	if r.Cfg.SandboxExec == "" {
+	if r.Config().SandboxExec == "" {
 		return DefaultSandboxExec
 	}
-	return r.Cfg.SandboxExec
+	return r.Config().SandboxExec
 }
 
 // brewPrefixes are Homebrew's prefixes (Apple Silicon's, Intel's). The user who installed Homebrew
@@ -30,7 +30,7 @@ var brewPrefixes = []string{"/opt/homebrew", "/usr/local"}
 // Visible needs nothing (nothing is hidden behind a private /tmp).
 func (r *Runner) fenceCommand(f fenceSpec) (*exec.Cmd, error) {
 	dir, o := f.dir, f.o
-	tmpRoot := filepath.Join(r.Cfg.WorkRoot, "fence-tmp")
+	tmpRoot := filepath.Join(r.Config().WorkRoot, "fence-tmp")
 	if err := os.MkdirAll(tmpRoot, 0o700); err != nil {
 		return nil, err
 	}
@@ -39,7 +39,7 @@ func (r *Runner) fenceCommand(f fenceSpec) (*exec.Cmd, error) {
 		return nil, err
 	}
 	var s sbplSpec
-	for _, p := range []string{f.home, r.Cfg.WorkRoot, "/tmp", "/private/tmp"} {
+	for _, p := range []string{f.home, r.Config().WorkRoot, "/tmp", "/private/tmp"} {
 		s.ReadOnly = append(s.ReadOnly, realPath(p))
 	}
 	for _, p := range brewPrefixes {
@@ -49,7 +49,7 @@ func (r *Runner) fenceCommand(f fenceSpec) (*exec.Cmd, error) {
 	}
 	admin := gitAdminDir(dir)
 	writable := append([]string{dir, f.cacheRoot, tmp}, o.Writable...)
-	writable = append(append(writable, r.Cfg.VerifyWritable...), admin)
+	writable = append(append(writable, r.Config().VerifyWritable...), admin)
 	for _, p := range writable {
 		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
 			s.Writable = append(s.Writable, realPath(p))
@@ -60,7 +60,7 @@ func (r *Runner) fenceCommand(f fenceSpec) (*exec.Cmd, error) {
 			s.Protected = append(s.Protected, realPath(p))
 		}
 	}
-	for _, p := range r.Cfg.VerifyMask {
+	for _, p := range r.Config().VerifyMask {
 		if _, err := os.Stat(p); err == nil {
 			s.Masked = append(s.Masked, realPath(p))
 		}

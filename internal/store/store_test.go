@@ -742,20 +742,16 @@ func TestControlChangeKeepsLiveDefaultRules(t *testing.T) {
 // fix above) goes back to the live defaults when loopd opens it; anything else is the user's and
 // stays.
 func TestOpenResetsACopyOfBuiltInRules(t *testing.T) {
-	var phase6 []pipeline.HoldRule
-	for _, r := range pipeline.DefaultHoldRules() {
-		if r.Name == "trusted-file" {
-			continue // added after phase 6b: no earlier loopd wrote them out
-		}
-		if r.Repo == pipeline.ServerRepo || r.Repo == pipeline.LoopRepo {
-			phase6 = append(phase6, r)
-		}
-	}
+	earlier := pipeline.EarlierDefaultHoldRules()
+	phase6 := earlier[1] // jarvis-server's and jarvis-loop's
+	// The full default list before #204 narrowed jarvis-loop's rules
+	// (docs/decisions/2026-10-18-narrow-loop-holds.md).
+	before204 := earlier[len(earlier)-1]
 	custom := append(append([]pipeline.HoldRule(nil), phase6...), pipeline.HoldRule{Name: "mine", Glob: "x/**", Repo: pipeline.LoopRepo})
 	for name, c := range map[string]struct {
 		rules []pipeline.HoldRule
 		reset bool
-	}{"phase 6 copy": {phase6, true}, "custom": {custom, false}} {
+	}{"phase 6 copy": {phase6, true}, "before #204 copy": {before204, true}, "custom": {custom, false}} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			clk := clock.NewFake(t0)

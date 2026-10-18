@@ -20,9 +20,12 @@ linked at its top; when the design changes, update both.
 - **Merging (since rollout phase 6, 2026-10-15):** the loop lands its own PRs. Work through the
   loop (`loop add`, Slack) rather than merging by hand: the land stage merges once review approved
   the head, CI passed on it and the build's evidence is in the PR, and holds for the user when
-  `loopd`'s hold rules match (`pipeline.DefaultHoldRules`: approvals and stage rules, the store,
-  loopd's wiring, API auth, the Slack approver check, tokens, the land script, the guard, CI, removed
-  tests or scenarios). A held PR merges after the user's approval in its Slack thread. A PR made by
+  `loopd`'s hold rules match (`pipeline.DefaultHoldRules`: the files for who may approve or merge,
+  the hold rules and the control row, API auth and acting for the user, the Slack approver check,
+  tokens, the land script, the trusted files, the guard and sandbox, CI, removed tests or scenarios;
+  the rest of `internal/pipeline`, `internal/api` and `internal/store` lands on review and CI, so
+  keep approval, auth and token code in its own held files:
+  [decision](docs/decisions/2026-10-18-narrow-loop-holds.md)). A held PR merges after the user's approval in its Slack thread. A PR made by
   hand outside the loop: squash-merge your own once every CI check passed (wait explicitly; never
   `gh pr merge --auto`), then check main's CI, and hold for the user under the same rules or when it
   touches the prod box. Never edit the hold rules to get a PR through; that change is itself held.

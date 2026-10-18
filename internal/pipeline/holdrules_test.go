@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -217,20 +218,25 @@ func TestJarvisLoopHoldRules(t *testing.T) {
 		t.Fatalf("item #2's paths are held: %v", m)
 	}
 	cases := []struct{ line, rule string }{
-		{"M internal/pipeline/pipeline.go", "approval"},
-		{"A internal/pipeline/approve.go", "approval"},
+		{"M internal/pipeline/approve.go", "approval"},
+		{"M internal/pipeline/trust.go", "approval"},
+		{"M internal/api/approve.go", "approval"},
+		{"M internal/store/approve.go", "approval"},
+		{"M internal/pipeline/holdrules.go", "hold-rules"},
+		{"M internal/store/control.go", "hold-rules"},
 		{"M internal/runner/land.go", "land"},
 		{"M internal/runner/land_gh.go", "land"},
 		{"M internal/runner/pr.go", "land"},
 		{"M internal/runner/git.go", "land"},
 		{"M internal/api/auth.go", "api-auth"},
-		{"M internal/store/store.go", "store"},
-		{"A internal/store/migrations/0005_x.sql", "store"},
-		{"M cmd/loopd/main.go", "loopd-wiring"},
+		{"M internal/api/onbehalf.go", "api-auth"},
+		{"M internal/store/approver.go", "api-auth"},
+		{"M cmd/loopd/main.go", "api-auth"},
 		{"M internal/slack/approve.go", "slack-approver"},
+		{"M internal/slack/approve_trust.go", "slack-approver"},
 		{"M internal/slack/env.go", "tokens"},
 		{"M internal/runner/config.go", "tokens"},
-		{"M internal/runner/client.go", "tokens"},
+		{"M internal/runner/client_auth.go", "tokens"},
 		{"M internal/guard/guard.go", "guard"},
 		{"M cmd/loop-guard/main.go", "guard"},
 		{"M internal/runner/settings.go", "guard"},
@@ -252,7 +258,9 @@ func TestJarvisLoopHoldRules(t *testing.T) {
 		}
 	}
 	for _, line := range []string{"M internal/slack/bot.go", "M internal/runner/runner.go", "M internal/runner/stages.go",
-		"A scenarios/16-auto-land.json", "M internal/slack/text_test.go", "M docs/DESIGN.md"} {
+		"A scenarios/16-auto-land.json", "M internal/slack/text_test.go", "M docs/DESIGN.md",
+		"M internal/pipeline/pipeline.go", "M internal/api/api.go", "M internal/store/store.go",
+		"A internal/store/migrations/0021_x.sql", "M internal/runner/client.go", "A cmd/loopd/x.go"} {
 		if m := held(LoopRepo, line); len(m) != 0 {
 			t.Errorf("%q in jarvis-loop is held: %v", line, m)
 		}
@@ -434,33 +442,191 @@ func TestAllReposHoldRules(t *testing.T) {
 // Rules a store saved as a copy of an earlier built-in set (any control change used to write
 // them out) are recognised, so loopd can go back to the live defaults.
 func TestIsBuiltInHoldRuleSet(t *testing.T) {
-	var server, phase6 []HoldRule
-	for _, r := range DefaultHoldRules() {
-		if r.Name == "trusted-file" {
-			continue // added after phase 6b: no earlier loopd wrote them out
-		}
-		if r.Repo == ServerRepo {
-			server = append(server, r)
-		}
-		if r.Repo == ServerRepo || r.Repo == LoopRepo {
-			phase6 = append(phase6, r)
-		}
-	}
+	server := serverRules()
+	phase6 := append(serverRules(), loopRulesV1()...)
 	reversed := append([]HoldRule(nil), phase6...)
 	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
 		reversed[i], reversed[j] = reversed[j], reversed[i]
 	}
-	for name, rules := range map[string][]HoldRule{"server only": server, "phase 6": phase6, "reordered": reversed, "today's": DefaultHoldRules()} {
+	// Before #204 jarvis-loop's list held all of internal/pipeline, internal/api, internal/store
+	// and cmd/loopd: a database carrying that default list moves to the new one.
+	before204 := defaultHoldRules(loopRulesV1(), true)
+	phase6b := defaultHoldRules(loopRulesV1(), false)
+	for name, rules := range map[string][]HoldRule{"server only": server, "phase 6": phase6, "reordered": reversed,
+		"phase 6b": phase6b, "before #204": before204, "today's": DefaultHoldRules()} {
 		if !IsBuiltInHoldRuleSet(rules) {
 			t.Errorf("%s: not recognised as a built-in set", name)
 		}
 	}
+	if sameRuleSet(before204, DefaultHoldRules()) {
+		t.Fatal("today's default list is still the one before #204")
+	}
 	changed := append([]HoldRule(nil), phase6...)
 	changed[0].Glob = "elsewhere/**"
 	for name, rules := range map[string][]HoldRule{"empty": nil, "one removed": phase6[1:], "one changed": changed,
-		"one added": append(append([]HoldRule(nil), phase6...), HoldRule{Name: "x", Glob: "x/**", Repo: LoopRepo})} {
+		"one added":                append(append([]HoldRule(nil), phase6...), HoldRule{Name: "x", Glob: "x/**", Repo: LoopRepo}),
+		"before #204, one removed": before204[1:]} {
 		if IsBuiltInHoldRuleSet(rules) {
 			t.Errorf("%s: taken for a built-in set", name)
+		}
+	}
+	// The frozen list is the one loopd shipped: these globs are what it held.
+	var globs []string
+	for _, r := range loopRulesV1() {
+		globs = append(globs, r.Glob)
+	}
+	for _, g := range []string{"internal/pipeline/**", "internal/api/**", "internal/store/**", "cmd/loopd/**", "internal/runner/client.go"} {
+		if !slices.Contains(globs, g) {
+			t.Errorf("loopRulesV1 lacks %s", g)
+		}
+	}
+}
+
+// Narrowed in #204 (docs/decisions/2026-10-18-narrow-loop-holds.md): the loop's recent PRs, which
+// all held on the broad internal/pipeline, internal/api, internal/store and cmd/loopd globs, land
+// without a hold once review and CI pass. Each is the PR's full changed-path list.
+func TestRecentLoopPRsAreNotHeld(t *testing.T) {
+	for name, lines := range map[string][]string{
+		"#193 deps at merge (PR #67)": {
+			"A docs/decisions/2026-10-18-deps-at-merge.md",
+			"M docs/phases/07-planning.md",
+			"M docs/phases/08-orchestrator.md",
+			"M internal/pipeline/claim.go",
+			"M internal/pipeline/deps.go",
+			"M internal/pipeline/deps_test.go",
+			"M internal/pipeline/pipeline.go",
+			"M internal/runner/testdata/brief_engineering.golden.md",
+			"M internal/slack/bot.go",
+			"M internal/slack/bot_test.go",
+			"M internal/store/board.go",
+			"M internal/store/deps.go",
+			"M internal/store/deps_test.go",
+			"M internal/store/orchsnap.go",
+			"M internal/store/orchturn.go",
+			"M internal/store/qa.go",
+			"A internal/store/reopened.go",
+			"M internal/web/board_test.go",
+			"M internal/web/templates/board.tmpl",
+			"M internal/web/testdata/board_closed.golden.html",
+			"M internal/web/testdata/board_open.golden.html",
+			"M internal/web/testdata/board_orchestrator.golden.html",
+			"M internal/web/testdata/board_working.golden.html",
+			"A scenarios/66-deps-at-merge.json",
+			"M skills/engineering/SKILL.md",
+		},
+		"#201 flow panel (PR #71)": {
+			"A docs/decisions/2026-10-18-flow-panel.md",
+			"M docs/phases/02-loopd-core.md",
+			"M internal/api/api.go",
+			"A internal/api/flow_test.go",
+			"M internal/pipeline/claim.go",
+			"A internal/pipeline/flow.go",
+			"A internal/pipeline/flow_test.go",
+			"M internal/runner/client.go",
+			"M internal/runner/runner.go",
+			"M internal/runner/runner_test.go",
+			"M internal/sandbox/check.go",
+			"A internal/sandbox/flow.go",
+			"M internal/sandbox/scenario.go",
+			"A internal/store/flow.go",
+			"A internal/store/flow_test.go",
+			"A internal/store/migrations/0020_flow.sql",
+			"M internal/store/store.go",
+			"M internal/web/board.go",
+			"A internal/web/flow.go",
+			"A internal/web/flow_test.go",
+			"M internal/web/templates/board.tmpl",
+			"A internal/web/templates/flow.tmpl",
+			"M internal/web/testdata/board_closed.golden.html",
+			"M internal/web/testdata/board_open.golden.html",
+			"M internal/web/testdata/board_orchestrator.golden.html",
+			"M internal/web/testdata/board_working.golden.html",
+			"A internal/web/testdata/flow.golden.html",
+			"A scenarios/66-flow-panel.json",
+		},
+		"#202 loop CLI (PR #72)": {
+			"M cmd/loop/main.go",
+			"M cmd/loop/main_test.go",
+			"M docs/DESIGN.md",
+			"A docs/decisions/2026-10-18-item-corrections.md",
+			"M docs/phases/04b-loop-harness.md",
+			"M internal/api/api.go",
+			"A internal/pipeline/edit.go",
+			"A internal/pipeline/edit_test.go",
+			"M internal/sandbox/scenario.go",
+			"M internal/slack/bot.go",
+			"A internal/slack/corrections_test.go",
+			"A internal/store/edit.go",
+			"A internal/store/edit_test.go",
+			"M internal/store/orchestrator.go",
+			"M internal/store/store.go",
+			"A scenarios/66-resources-fix.json",
+		},
+		"#192 slot hold for Mac work (PR #63)": {
+			"M cmd/loop-runner/main.go",
+			"M docs/DESIGN.md",
+			"M docs/decisions/2026-10-17-mac-runners.md",
+			"A docs/decisions/2026-10-18-slot-hold.md",
+			"M docs/runbooks/mac-runner.md",
+			"M internal/api/api.go",
+			"M internal/api/runners_test.go",
+			"M internal/pipeline/claim.go",
+			"M internal/pipeline/claim_test.go",
+			"M internal/pipeline/freeze_test.go",
+			"M internal/pipeline/orchturn_test.go",
+			"M internal/pipeline/plans_test.go",
+			"A internal/pipeline/slothold.go",
+			"M internal/pipeline/unservable.go",
+			"M internal/runner/client.go",
+			"M internal/sandbox/scenario.go",
+			"M internal/sandbox/stack.go",
+			"A internal/store/migrations/0020_runner_only.sql",
+			"A internal/store/slothold_test.go",
+			"M internal/store/store.go",
+			"M internal/store/unservable.go",
+			"M internal/web/board.go",
+			"M internal/web/board_test.go",
+			"M internal/web/templates/board.tmpl",
+			"A internal/web/testdata/board_runners.golden.html",
+			"A scenarios/66-slot-held-for-mac.json",
+			"A scenarios/67-slot-not-held-outside-mac-stages.json",
+		},
+	} {
+		paths, err := ParseChangedPaths(lines)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m := MatchHoldRules(DefaultHoldRules(), LoopRepo, paths); len(m) != 0 {
+			t.Errorf("%s is held: %v", name, m)
+		}
+	}
+}
+
+// A change to who may approve or merge, API auth, tokens, the guard, the gates or the hold rules
+// still holds, among ordinary files.
+func TestLoopApprovalAuthTokenGuardChangesStillHold(t *testing.T) {
+	ordinary := []string{"M internal/pipeline/pipeline.go", "M internal/api/api.go", "M internal/store/store.go", "M docs/DESIGN.md"}
+	for _, c := range []struct{ line, rule string }{
+		{"M internal/pipeline/approve.go", "approval"},
+		{"M internal/pipeline/holdrules.go", "hold-rules"},
+		{"M internal/api/auth.go", "api-auth"},
+		{"M internal/store/control.go", "hold-rules"},
+		{"M internal/slack/approve.go", "slack-approver"},
+		{"M internal/runner/client_auth.go", "tokens"},
+		{"M internal/guard/guard.go", "guard"},
+		{"M internal/runner/land.go", "land"},
+		{"M internal/runner/verify.go", "trusted-file"},
+		{"M .github/workflows/ci.yml", "ci"},
+		{"D internal/store/store_test.go", "deleted-test"},
+		{"R scenarios/x.json scenarios/y.json", "scenario-removed"},
+	} {
+		paths, err := ParseChangedPaths(append([]string{c.line}, ordinary...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := MatchHoldRules(DefaultHoldRules(), LoopRepo, paths)
+		if len(m) != 1 || m[0].Rule != c.rule {
+			t.Errorf("%q among ordinary files matched %v, want only rule %q", c.line, m, c.rule)
 		}
 	}
 }

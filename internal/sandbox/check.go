@@ -265,6 +265,9 @@ func (p *player) problems(e Expect, negatives bool) []string {
 	if e.Flow != nil {
 		out = append(out, p.flowProblems(*e.Flow)...)
 	}
+	if e.BoardRunners != "" {
+		out = append(out, p.runnersProblems(e.BoardRunners)...)
+	}
 	for _, rel := range e.Absent {
 		if _, err := os.Lstat(filepath.Join(p.s.Dir, rel)); err == nil {
 			add("%s exists, want it absent", rel)

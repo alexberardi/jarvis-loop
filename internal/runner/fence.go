@@ -129,7 +129,7 @@ const fencedGitConfig = "[user]\n\tname = jarvis-loop verify\n\temail = jarvis-l
 // without it. It first clears what killed fenced commands left in the runner's fence-tmp.
 func (r *Runner) ProbeFence() error {
 	r.fenceOnce.Do(func() {
-		os.RemoveAll(filepath.Join(r.Cfg.WorkRoot, "fence-tmp"))
+		os.RemoveAll(filepath.Join(r.Config().WorkRoot, "fence-tmp"))
 		cmd, err := r.fenced(Home(), "true", nil, nil)
 		if err == nil {
 			if out, e := cmd.CombinedOutput(); e != nil {
@@ -171,14 +171,14 @@ func (r *Runner) fencedWith(dir, script string, env []string, o fenceOpts) (*exe
 	if _, err := os.Stat(r.fenceBinary()); err != nil {
 		return nil, err
 	}
-	gc := filepath.Join(r.Cfg.WorkRoot, "fenced.gitconfig")
+	gc := filepath.Join(r.Config().WorkRoot, "fenced.gitconfig")
 	if b, err := os.ReadFile(gc); err != nil || string(b) != fencedGitConfig {
 		if err := writeAtomic(gc, []byte(fencedGitConfig)); err != nil {
 			return nil, err
 		}
 	}
 	env = fencedEnv(env, gc)
-	cacheRoot := filepath.Join(r.Cfg.WorkRoot, "fence-cache")
+	cacheRoot := filepath.Join(r.Config().WorkRoot, "fence-cache")
 	for _, c := range fenceCaches {
 		p := filepath.Join(cacheRoot, c[1])
 		if err := os.MkdirAll(p, 0o700); err != nil {
