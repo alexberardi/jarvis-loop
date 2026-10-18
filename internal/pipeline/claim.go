@@ -18,6 +18,9 @@ type Control struct {
 	HoldRules     []HoldRule     `json:"hold_rules"`
 	// OrchTurnsPerDay caps the orchestrate turns started in a day (0: none).
 	OrchTurnsPerDay int `json:"orchestrator_turns_per_day"`
+	// RunwayWarnHours is the runway (agent-hours) below which loopd warns the user when away (0:
+	// off; pipeline/runway.go).
+	RunwayWarnHours int `json:"runway_warn_hours"`
 }
 
 // LimitKeys are the resources and stages that can carry a limit. Build has none: it is bounded
@@ -33,6 +36,7 @@ func DefaultControl() Control {
 		HoldRules:     DefaultHoldRules(),
 
 		OrchTurnsPerDay: DefaultOrchTurnsPerDay,
+		RunwayWarnHours: DefaultRunwayWarnHours,
 	}
 }
 
@@ -49,6 +53,9 @@ func (c Control) Validate() error {
 	}
 	if c.OrchTurnsPerDay < 0 || c.OrchTurnsPerDay > MaxOrchTurnsPerDay {
 		return errf(CodeInvalidField, "orchestrator_turns_per_day must be 0 to %d", MaxOrchTurnsPerDay)
+	}
+	if c.RunwayWarnHours < 0 || c.RunwayWarnHours > MaxRunwayWarnHours {
+		return errf(CodeInvalidField, "runway_warn_hours must be 0 to %d", MaxRunwayWarnHours)
 	}
 	for k, v := range c.Limits {
 		if !slices.Contains(LimitKeys, k) {
