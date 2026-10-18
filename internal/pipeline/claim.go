@@ -133,7 +133,7 @@ type Work struct {
 // the user is in the conversation. The orchestrate turn beats everything (it gets the next free
 // slot), one at a time.
 func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest) (Work, bool) {
-	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
+	if loopBlocks(c, live) != "" {
 		return Work{}, false
 	}
 	if orch != nil && req.wants(WorkOrchestrate) && !slices.ContainsFunc(live, func(l LiveLease) bool { return l.Stage == OrchestrateStage }) {
@@ -179,22 +179,10 @@ var stageOrder = map[Stage]int{Land: 0, Review: 1, Build: 2, Triage: 3}
 // here too); deps are the stages of the items they depend on; live are the leases still running.
 func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req ClaimRequest) (Item, bool) {
 	// 1. Control.
-	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
+	if loopBlocks(c, live) != "" {
 		return Item{}, false
 	}
-	claimed := map[int64]bool{}
-	inUse := map[string]int{}
-	for _, l := range live {
-		claimed[l.ItemID] = true
-		inUse[string(l.Stage)]++
-		for _, r := range l.Resources {
-			inUse[r]++
-		}
-	}
-	atLimit := func(key string) bool {
-		limit, ok := c.Limits[key]
-		return ok && inUse[key] >= limit
-	}
+	claimed, inUse := usage(live)
 
 	var best *Item
 	for i := range items {
@@ -213,16 +201,9 @@ func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 		if len(req.OnlyResources) > 0 && !slices.ContainsFunc(it.Resources, func(r string) bool { return slices.Contains(req.OnlyResources, r) }) {
 			continue
 		}
-		// Dependencies: every item it depends on is done.
-		if len(WaitingOn(*it, deps)) > 0 {
-			continue
-		}
-		// 3. Per-resource limits.
-		if slices.ContainsFunc(it.Resources, atLimit) {
-			continue
-		}
-		// 4. Per-stage limits.
-		if atLimit(string(it.Stage)) {
+		// Dependencies: every item it depends on is done. 3. Per-resource limits. 4. Per-stage
+		// limits. (itemBlocks, which the flow panel's WaitReason shares.)
+		if itemBlocks(c, *it, deps, inUse) != "" {
 			continue
 		}
 		// 5. Review independence.
