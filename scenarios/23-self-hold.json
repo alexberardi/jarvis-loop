@@ -1,12 +1,12 @@
 {
   "name": "self-hold",
-  "about": "jarvis-loop's own hold rules: a jarvis-loop PR that changes the stage rules (internal/pipeline/) is held by land even though review approved and CI passed, so the land script never merges a change to who may approve or merge without the user.",
+  "about": "jarvis-loop's own hold rules: a jarvis-loop PR that changes who may approve or merge (internal/pipeline/approve.go) is held by land even though review approved and CI passed, so the land script never merges a change to who may approve or merge without the user.",
   "stages": ["build", "review", "land"],
   "steps": [
     {"do": "add", "item": "a", "via": "slack", "title": "Change the stage rules", "text": "jarvis-loop: change the stage rules"},
     {"do": "expect", "repo": {"a": "sandbox/jarvis-loop"}},
     {"do": "triage", "item": "a"},
-    {"do": "script", "item": "a", "play": "good", "file": "internal/pipeline/rules.go"},
+    {"do": "script", "item": "a", "play": "good", "file": "internal/pipeline/approve.go"},
     {"do": "runner", "claims": "a"},
     {"do": "runner_idle"},
     {"do": "ci", "item": "a", "checks": {"check": "pass"}},
@@ -21,10 +21,10 @@
     "pr": {"a": {"repo": "sandbox/jarvis-loop", "state": "OPEN", "merge_calls": 0}},
     "events": [
       {"item": "a", "kind": "advanced", "outcome": "pr_opened", "data": {"hold_matches": "\"rule\":\"approval\""}, "count": 1},
-      {"item": "a", "kind": "advanced", "outcome": "hold", "actor": "runner", "data": {"changed_paths": "internal/pipeline/rules\\.go"}, "count": 1}
+      {"item": "a", "kind": "advanced", "outcome": "hold", "actor": "runner", "data": {"changed_paths": "internal/pipeline/approve\\.go"}, "count": 1}
     ],
     "messages": [
-      {"thread": "a", "text": "is held for your approval: .*sandbox/jarvis-loop#101.*\\nWhy: approval: A internal/pipeline/rules\\.go; land: on the hold list", "buttons": ["Approve merge", "Keep holding"]}
+      {"thread": "a", "text": "is held for your approval: .*sandbox/jarvis-loop#101.*\\nWhy: approval: A internal/pipeline/approve\\.go; land: on the hold list", "buttons": ["Approve merge", "Keep holding"]}
     ]
   }
 }

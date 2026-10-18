@@ -129,14 +129,6 @@ func errf(code, format string, args ...any) *Error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, args...)}
 }
 
-// Approval is the user's approval of a held merge, bound to the commit they saw.
-type Approval struct {
-	By      string    `json:"by"`
-	Words   string    `json:"words"`
-	HeadSHA string    `json:"head_sha"`
-	At      time.Time `json:"at"`
-}
-
 // Item is one unit of work.
 type Item struct {
 	ID           int64     `json:"id"`
@@ -287,13 +279,7 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		return Transition{}, errf(CodeWrongStage, "%s is not a work stage", from)
 	}
 	f := fields(a.Fields)
-	allowed := map[Outcome][]Stage{
-		Reproduced: {Triage}, Routed: {Triage}, NotReproducible: {Triage}, Question: {Triage, Build},
-		PROpened: {Build}, VerifyFailed: {Build}, Approved: {Review}, Bounce: {Review},
-		Merged: {Land}, Hold: {Land}, BackToBuild: {Land}, BackToReview: {Land},
-		UsageLimit: {Triage, Build, Review, Land}, Failed: {Triage, Build, Review, Land},
-	}
-	stages, known := allowed[a.Outcome]
+	stages, known := outcomeStages[a.Outcome]
 	if !known {
 		return Transition{}, errf(CodeUnknownOutcome, "unknown outcome %q", a.Outcome)
 	}
@@ -454,12 +440,12 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 			return Transition{}, err
 		}
 		var extra []string
-		switch strings.TrimSpace(a.Fields["needs_review"]) {
-		case "", "false":
-		case "true":
+		nr, err := needsReview(f)
+		if err != nil {
+			return Transition{}, err
+		}
+		if nr {
 			extra = append(extra, "marked needs review")
-		default:
-			return Transition{}, errf(CodeInvalidField, "needs_review must be true or false")
 		}
 		if err := needEvidence(); err != nil {
 			return Transition{}, err
@@ -473,10 +459,7 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 			it.Proof = p
 		}
 		raiseRisk(&it, holdReasons(paths, extra...))
-		if it.Approval != nil && it.Approval.HeadSHA != sha {
-			it.Approval = nil // an approval is for the commit the user saw
-			data["approval_voided"] = true
-		}
+		voidApproval(&it, data, sha)
 		it.Repo, it.PR, it.Branch, it.HeadSHA = repo, pr, branch, sha
 		it.BuilderAgent = a.Agent
 		if it.CIRedSHA != "" && it.CIRedSHA == sha {
@@ -498,24 +481,8 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if err != nil {
 			return Transition{}, err
 		}
-		sha, err := f.sha("head_sha")
-		if err != nil {
+		if err := reviewApproves(&it, a, f); err != nil {
 			return Transition{}, err
-		}
-		if sha != it.HeadSHA {
-			return Transition{}, errf(CodeSHAMismatch, "reviewed %s but the PR head is %s", sha, it.HeadSHA)
-		}
-		if a.Agent != "" && a.Agent == it.BuilderAgent {
-			return Transition{}, errf(CodeSameAgent, "the builder cannot approve its own work")
-		}
-		// The reviewer holds what a path rule cannot see: a curl | sh pin edited in a docs page, a
-		// new secret used in a package.
-		switch strings.TrimSpace(a.Fields["needs_review"]) {
-		case "", "false":
-		case "true":
-			raiseRisk(&it, []string{"review: marked needs review"})
-		default:
-			return Transition{}, errf(CodeInvalidField, "needs_review must be true or false")
 		}
 		qa, err := f.needsQA()
 		if err != nil {
@@ -564,11 +531,8 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if err != nil {
 			return Transition{}, err
 		}
-		// Risk is recomputed on what was actually merged; the approval must be for that head.
-		raiseRisk(&it, holdReasons(paths))
-		if it.Risk == RiskHold && (it.Approval == nil || it.Approval.HeadSHA != head) {
-			return Transition{}, errf(CodeApprovalRequired, "on the hold list (%s): merged head %s needs the user's approval for that commit",
-				it.HoldReason, head)
+		if err := checkMerge(&it, head, holdReasons(paths)); err != nil {
+			return Transition{}, err
 		}
 		it.HeadSHA = head
 		it.MergeSHA = sha
@@ -595,10 +559,7 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 			return Transition{}, err
 		}
 		// The held message must show the commit the user would approve.
-		if it.Approval != nil && it.Approval.HeadSHA != head {
-			it.Approval = nil
-			data["approval_voided"] = true
-		}
+		voidApproval(&it, data, head)
 		it.HeadSHA = head
 		raiseRisk(&it, holdReasons(paths, "land: "+reason))
 		it.Stage = Held
@@ -646,10 +607,7 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if err != nil {
 			return Transition{}, err
 		}
-		if it.Approval != nil && it.Approval.HeadSHA != head {
-			it.Approval = nil // an approval is for the commit the user saw
-			data["approval_voided"] = true
-		}
+		voidApproval(&it, data, head)
 		it.HeadSHA = head
 		raiseRisk(&it, holdReasons(paths))
 		it.Stage = Review
@@ -733,33 +691,6 @@ func ApplyAnswer(it Item, text string) (Transition, error) {
 	data := map[string]any{"question": it.Question, "answer": text}
 	it.Stage, it.ReturnStage, it.Question = ret, "", ""
 	return Transition{Item: it, From: NeedsYou, To: ret, Kind: "answered", Data: data}, nil
-}
-
-// ApplyApprove records the user's approval of a held merge for the head they saw.
-func ApplyApprove(it Item, by, headSHA, words string, now time.Time) (Transition, error) {
-	if it.Stage != Held {
-		return Transition{}, errf(CodeWrongStage, "item is %s, not held", it.Stage)
-	}
-	headSHA = strings.TrimSpace(headSHA)
-	if headSHA == "" {
-		return Transition{}, errf(CodeMissingField, "head_sha is required")
-	}
-	if headSHA != it.HeadSHA {
-		return Transition{}, errf(CodeSHAMismatch, "approval is for %s but the PR head is now %s", headSHA, it.HeadSHA)
-	}
-	it.Approval = &Approval{By: by, Words: words, HeadSHA: headSHA, At: now}
-	it.Stage = Land
-	it.UpdatedAt = now
-	return Transition{Item: it, From: Held, To: Land, Kind: "approved",
-		Data: map[string]any{"by": by, "words": words, "head_sha": headSHA}}, nil
-}
-
-// ApplyHold records the user keeping a held merge held.
-func ApplyHold(it Item, words string) (Transition, error) {
-	if it.Stage != Held {
-		return Transition{}, errf(CodeWrongStage, "item is %s, not held", it.Stage)
-	}
-	return Transition{Item: it, From: Held, To: Held, Kind: "held", Data: map[string]any{"words": words}}, nil
 }
 
 // ApplyRebuild sends a held or needs_you item back to build with notes for the builder: the
