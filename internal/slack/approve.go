@@ -266,9 +266,10 @@ func (b *Bot) approveButton(ctx context.Context, channel, msgTS, user string, it
 	_, err := b.c.Store.Approve(ctx, actorPrefix+user, itemID, sha, "Approve merge")
 	var pe *pipeline.Error
 	switch {
-	case err == nil:
+	case err == nil && msgTS != "":
 		b.update(ctx, "held message", Message{Channel: channel, TS: msgTS,
 			Text: fmt.Sprintf("%s: approved by you for `%s` (button).", b.refID(ctx, itemID), short(sha))})
+	case err == nil:
 	case errors.As(err, &pe) && pe.Code == pipeline.CodeSHAMismatch:
 		d, _ := b.c.Store.GetItem(ctx, itemID)
 		_, ts, _ := b.c.Store.SlackThread(ctx, itemID)

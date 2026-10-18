@@ -172,12 +172,15 @@ func (s *Store) loopRepoSlug() string {
 	return s.loopRepo
 }
 
-func (s *Store) orchDay(t time.Time) string {
+func (s *Store) orchDay(t time.Time) string { return pipeline.OrchDay(t, s.orchLoc()) }
+
+// orchLoc is OrchDayZone's location (UTC when the zone database lacks it).
+func (s *Store) orchLoc() *time.Location {
 	loc, err := time.LoadLocation(OrchDayZone)
 	if err != nil {
-		loc = time.UTC
+		return time.UTC
 	}
-	return pipeline.OrchDay(t, loc)
+	return loc
 }
 
 // queueOrch adds a trigger to the queued turn, queueing one when there is none (a turn that is
@@ -489,13 +492,16 @@ func (s *Store) OrchDue(ctx context.Context, at time.Time) error {
 	})
 }
 
-// OrchTick runs the orchestrator's timed triggers: items idle past their stage's limit, a wait
-// that ended, and the 15-minute sweep (a turn only when the board changed since the last one).
+// OrchTick runs the orchestrator's timed triggers: items idle past their stage's limit, the
+// runway warning (runwayCheck), a wait that ended, and the 15-minute sweep (a turn only when the board changed since the last one).
 // Sweep calls it at most once a minute of the store's clock.
 func (s *Store) OrchTick(ctx context.Context) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		now := s.clock.Now()
 		if err := s.orchIdle(tx, now); err != nil {
+			return err
+		}
+		if err := s.runwayCheck(tx, now); err != nil {
 			return err
 		}
 		var lastSweep, dueAt int64
