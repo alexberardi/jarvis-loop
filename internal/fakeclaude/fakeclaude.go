@@ -10,6 +10,9 @@
 // progress ("started", "hanging") to <dir>/<item id>.state, so the harness knows when a hanging
 // agent is really running. These files are the harness's plumbing, not tool calls.
 //
+// Called as `agy ...`, or through a link named agy, it is the fake Antigravity CLI instead
+// (package fakeagy).
+//
 // Called as `run ...` it is a stand-in for `opencode run --format json` instead (the runner's
 // qwen builder): it reads the provider from $OPENCODE_CONFIG, makes one chat request through it
 // (the runner's proxy, which must answer 200), resumes a session it started with -s (in the same
@@ -30,6 +33,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/alexberardi/jarvis-loop/internal/fakeagy"
 )
 
 // Scenarios.
@@ -130,6 +135,10 @@ const (
 	// OrchPersona plays the orchestrator's skill as rules on the snapshot (persona.go): retries
 	// and failure signatures, the answer kinds, escalations with a recommendation, P1 tickets.
 	OrchPersona = "persona"
+
+	// Adjudication plays (the runner's Claude turn on Gemini's findings, stage adjudicate).
+	Agree    = "agree"    // agree with every finding
+	Disagree = "disagree" // disagree with every finding
 )
 
 var stagePlays = map[string][]string{
@@ -138,6 +147,7 @@ var stagePlays = map[string][]string{
 	// Plan personas.
 	"product":     {PlanBrief, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
 	"engineering": {PlanBlueprint, BackToBrief, PlanCycle, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
+	"adjudicate":  {Agree, Disagree, Hang, UsageLimit, Exit3},
 	"orchestrate": {OrchReact, OrchNote, OrchAgentsUp, OrchInvalid, OrchInvalidOnce, OrchPersona, Hang, UsageLimit, Exit3},
 }
 
@@ -165,6 +175,12 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	f := &fake{out: stdout, runHooks: true}
 	if len(args) > 0 && args[0] == "run" {
 		f.oc, f.runHooks = true, false
+	}
+	if len(args) > 0 && args[0] == "agy" {
+		return fakeagy.Main(args[1:], stdout, stderr)
+	}
+	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "agy" {
+		return fakeagy.Main(args, stdout, stderr)
 	}
 	var settings, resume string
 	for i := 0; i < len(args); i++ {
@@ -404,6 +420,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return f.triage(scenario, brief, sc)
 	case "review":
 		return f.review(scenario, brief)
+	case "adjudicate":
+		return f.adjudicate(scenario)
 	case "product", "engineering":
 		return f.planTurn(scenario, stage, item, brief, sc, progress)
 	case "orchestrate":
@@ -754,6 +772,31 @@ func (f *fake) review(play string, brief []byte) int {
 	res, _ := json.Marshal(r)
 	f.write(".loop/result.json", string(res))
 	f.result("Reviewed.")
+	return 0
+}
+
+// adjudicate plays the runner's adjudication turn: a verdict on each of Gemini's findings in
+// .loop/context/gemini-findings.json.
+func (f *fake) adjudicate(play string) int {
+	f.bash("cat .loop/context/gemini-findings.json")
+	b, _ := os.ReadFile(filepath.Join(f.cwd, ".loop", "context", "gemini-findings.json"))
+	var in struct {
+		Findings []struct {
+			ID int `json:"id"`
+		} `json:"findings"`
+	}
+	json.Unmarshal(b, &in)
+	verdicts := []any{}
+	for _, fd := range in.Findings {
+		v := map[string]any{"id": fd.ID, "verdict": "agree", "reason": "Checked the line: it is as the finding says."}
+		if play == Disagree {
+			v["verdict"], v["reason"] = "disagree", "The caller already checks this; the finding misreads the code."
+		}
+		verdicts = append(verdicts, v)
+	}
+	res, _ := json.Marshal(map[string]any{"verdicts": verdicts})
+	f.write(".loop/result.json", string(res))
+	f.result("Judged.")
 	return 0
 }
 

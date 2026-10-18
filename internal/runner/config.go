@@ -89,6 +89,9 @@ type Config struct {
 	// Qwen is the Qwen builder for items whose builder is qwen (qwen.go); nil: they build with
 	// claude.
 	Qwen *QwenConfig `json:"qwen,omitempty"`
+	// Gemini is the Gemini second opinion on approved reviews (gemini.go, secondopinion.go);
+	// nil: none.
+	Gemini *GeminiConfig `json:"gemini,omitempty"`
 
 	path             string
 	ciWait, mainWait time.Duration
@@ -333,6 +336,11 @@ func (c *Config) normalize() error {
 			return err
 		}
 	}
+	if c.Gemini != nil {
+		if err := c.Gemini.normalize(); err != nil {
+			return err
+		}
+	}
 	if c.VerifyMask == nil {
 		c.VerifyMask = DefaultVerifyMask(Home())
 	}
@@ -530,7 +538,12 @@ func (c *Config) ownSecrets() []string {
 	if c.Qwen != nil {
 		creds = c.Qwen.CredentialsFile
 	}
-	for _, p := range []string{c.path, c.LoopdTokens, c.LoopdData, creds} {
+	// agy's login: only agy's own fence leaves it readable (gemini.go).
+	gemini := ""
+	if c.Gemini != nil {
+		gemini = c.Gemini.Home
+	}
+	for _, p := range []string{c.path, c.LoopdTokens, c.LoopdData, creds, gemini} {
 		if p != "" {
 			out = append(out, p)
 		}

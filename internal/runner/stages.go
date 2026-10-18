@@ -592,6 +592,18 @@ func (r *Runner) reportReview(ctx context.Context, ru *run, out outcome, raw []b
 		return
 	}
 	fields := map[string]string{"pr_comment": "posted"}
+	if v.Outcome == "approved" && r.Cfg.Gemini != nil {
+		so := r.secondOpinion(ctx, ru, v)
+		if so.stopped {
+			return // the lease ended: the item is reviewed again
+		}
+		fields["second_opinion"] = so.Status
+		if so.Bounced {
+			fields["second_opinion"], fields["notes"] = "bounce", SecondOpinionNotes(so)
+			r.advance(ctx, ru, "bounce", r.metrics(ru, out, fields), nil)
+			return
+		}
+	}
 	if v.Outcome == "approved" {
 		fields["summary"], fields["head_sha"] = clip(v.Summary, 2000), it.HeadSHA
 		if v.NeedsReview {
