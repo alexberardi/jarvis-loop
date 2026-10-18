@@ -36,7 +36,8 @@ stays met: the merged code is still on main.
 
 ## Not done
 
-- A dependent that already merged before the reopen (in qa or done) gets no flag; it is past the
-  point where the flag changes anything, and its own qa check covers it.
+- A dependent that is done (or closed) gets no flag; it is past the point where the flag changes
+  anything. A dependent in qa is flagged: the user is about to check it, so that is where the
+  flag helps most.
 - The flag does not make the dependent wait on the reopen item; add the dependency by hand if it
   should.

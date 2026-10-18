@@ -10,8 +10,9 @@ import (
 // keeps its stage and its claim.
 const KindDependencyReopened = "dependency_reopened"
 
-// ReopenedDependency is a dependency of an open item that was reopened: the board and the
-// orchestrator show it until the dependent is done or closed, or the reopen item is merged or closed.
+// ReopenedDependency is a dependency of an open item (any stage but done or closed, so qa too)
+// that was reopened: the board and the orchestrator show it until the dependent is done or
+// closed, or the reopen item is merged or closed.
 type ReopenedDependency struct {
 	Dependency int64  `json:"dependency"`
 	ReopenItem int64  `json:"reopen_item"`

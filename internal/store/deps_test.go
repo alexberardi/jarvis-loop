@@ -116,7 +116,7 @@ func TestClaimTakesADependencyInQA(t *testing.T) {
 func TestReopenFlagsDependents(t *testing.T) {
 	s, _ := open(t)
 	ctx := context.Background()
-	var b, c, dropped pipeline.Item
+	var b, c, dropped, merged, finished pipeline.Item
 	a := toMerged(t, s, runner, func(a pipeline.Item) {
 		if _, err := s.SetQA(ctx, user, a.ID); err != nil {
 			t.Fatal(err)
@@ -124,8 +124,17 @@ func TestReopenFlagsDependents(t *testing.T) {
 		b = addAfter(t, s, "b", "P1", a.ID)
 		c = addAfter(t, s, "c", "P2", a.ID)
 		dropped = addAfter(t, s, "dropped", "P3", a.ID)
+		merged = addAfter(t, s, "merged", "P3", a.ID)
+		finished = addAfter(t, s, "finished", "P3", a.ID)
 		add(t, s, "unrelated", "P3")
 	}, nil)
+	// A dependent that merged already is flagged too (its qa check is next); a done one is not.
+	if _, err := s.w.Exec(`UPDATE items SET stage = 'qa' WHERE id = ?`, merged.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.w.Exec(`UPDATE items SET stage = 'done' WHERE id = ?`, finished.ID); err != nil {
+		t.Fatal(err)
+	}
 	if cl := claim(t, s, "x"); cl == nil || cl.Item.ID != b.ID {
 		t.Fatalf("claim b: %+v", cl)
 	}
@@ -153,6 +162,13 @@ func TestReopenFlagsDependents(t *testing.T) {
 	if ev := lastEvent(t, s, dropped.ID, KindDependencyReopened); ev != nil {
 		t.Fatalf("a closed item was flagged: %+v", ev)
 	}
+	if ev := lastEvent(t, s, finished.ID, KindDependencyReopened); ev != nil {
+		t.Fatalf("a done item was flagged: %+v", ev)
+	}
+	if ev := lastEvent(t, s, merged.ID, KindDependencyReopened); ev == nil || ev.From != "qa" || ev.To != "qa" ||
+		ev.Data["reopen_item"] != float64(n.ID) {
+		t.Fatalf("the dependent in qa: %+v", ev)
+	}
 	flags := func() map[int64][]ReopenedDependency {
 		t.Helper()
 		cards, err := s.BoardItems(ctx)
@@ -168,7 +184,8 @@ func TestReopenFlagsDependents(t *testing.T) {
 		return out
 	}
 	want := []ReopenedDependency{{Dependency: a.ID, ReopenItem: n.ID, Words: "the code is still small"}}
-	if got := flags(); len(got) != 2 || !slices.Equal(got[b.ID], want) || !slices.Equal(got[c.ID], want) {
+	if got := flags(); len(got) != 3 || !slices.Equal(got[b.ID], want) || !slices.Equal(got[c.ID], want) ||
+		!slices.Equal(got[merged.ID], want) {
 		t.Fatalf("board flags: %+v", got)
 	}
 	snap, err := s.OrchSnapshot(ctx)
@@ -184,7 +201,7 @@ func TestReopenFlagsDependents(t *testing.T) {
 	if _, err := s.Drop(ctx, user, c.ID, ""); err != nil {
 		t.Fatal(err)
 	}
-	if got := flags(); len(got) != 1 || got[b.ID] == nil {
+	if got := flags(); len(got) != 2 || got[b.ID] == nil || got[merged.ID] == nil {
 		t.Fatalf("after c dropped: %+v", got)
 	}
 	// And when the reopen item is merged or closed.
