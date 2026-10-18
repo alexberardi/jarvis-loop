@@ -86,6 +86,10 @@ const (
 	// run that writes .loop/evidence/harness.txt. HarnessHang does the same, then hangs.
 	Harness     = "harness"
 	HarnessHang = "harness_hang"
+	// Background starts a check in the background, says it will wait for it and exits 0 with no
+	// result, as the agents of #208 did; resumed with the runner's note, it plays the stage's usual.
+	// It plays in any stage.
+	Background = "background"
 
 	// Triage plays (a triage run of a build play plays Reproduce).
 	Reproduce      = "reproduce"       // reproduced, with notes and a repro file; picks the script's repo when the item has none
@@ -139,8 +143,8 @@ const (
 )
 
 var stagePlays = map[string][]string{
-	"triage": {Reproduce, Duplicate, TriageQuestion, TriageBadRepo, Route, Hang, UsageLimit, Exit3},
-	"review": {Approve, Bounce, ReviewCommit, ApproveHold, ApproveQA, ApproveToolState, ApproveNamesDir, ApproveNamesDirOnce, Hang, UsageLimit, Exit3},
+	"triage": {Reproduce, Duplicate, TriageQuestion, TriageBadRepo, Route, Hang, UsageLimit, Exit3, Background},
+	"review": {Approve, Bounce, ReviewCommit, ApproveHold, ApproveQA, ApproveToolState, ApproveNamesDir, ApproveNamesDirOnce, Hang, UsageLimit, Exit3, Background},
 	// Plan personas.
 	"product":     {PlanBrief, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
 	"engineering": {PlanBlueprint, BackToBrief, PlanCycle, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
@@ -422,6 +426,20 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if stage != "product" && stage != "engineering" && bytes.Contains(brief, []byte("`.loop/context/blueprint.md`")) {
 		f.bash("cat .loop/context/blueprint.md")
 	}
+	if scenario == Background {
+		if !bytes.HasPrefix(brief, []byte(noResultHeading)) {
+			f.tool("Bash", map[string]any{"command": "go test -race ./... > .loop/scratch/race.log 2>&1", "description": "the race suite",
+				"run_in_background": true}, func() (string, error) { return "Command running in background with ID: bg1", nil })
+			f.say("The race suite is still running. I'll be notified when it finishes.")
+			f.result("The race suite is still running. I'll be notified when it finishes.")
+			return 0
+		}
+		scenario, brief = Good, meta // the plays read the item from the brief the session has
+		if plays, ok := stagePlays[stage]; ok {
+			scenario = plays[0]
+		}
+		f.scenario = scenario
+	}
 	switch stage {
 	case "triage":
 		return f.triage(scenario, brief, sc)
@@ -514,6 +532,10 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // retryHeading opens the section the runner adds to the brief of its one retry after refusing a
 // result (runner.RetryHeading; not imported, as the runner's tests import this package).
 const retryHeading = "## Your previous result was refused"
+
+// noResultHeading starts the runner's note when it resumes a session that ended with no result
+// (runner.NoResultHeading).
+const noResultHeading = "# Your run ended without a result"
 
 // trustedBrief is how the runner's brief says the user OK'd a trusted-file commit (runner brief.go).
 const trustedBrief = "The user OK'd verify running commit"

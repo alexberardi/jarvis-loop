@@ -398,6 +398,17 @@ func RetryBrief(brief, why string) string {
 		"`.loop/result.json` again. This is the one retry: a second refusal goes to the user as a runner error.\n"
 }
 
+// NoResultHeading starts NoResultNote.
+const NoResultHeading = "# Your run ended without a result\n"
+
+// NoResultNote is the prompt of a session resumed because its run exited with no
+// .loop/result.json (#208): the session has the brief already.
+const NoResultNote = NoResultHeading + "\nYour last turn ended without `.loop/result.json`, most likely while a command ran in the background " +
+	"(`run_in_background`, Monitor or `&`). This is a one-shot run: it ends when you stop, a background task never reports back, " +
+	"and its process is gone now. This is the same session, resumed once, in the same worktree.\n\n" +
+	"Re-run in the foreground what you were waiting for (raise the Bash `timeout`, up to 600000 ms, or split a long check), " +
+	"then finish with `.loop/result.json` as the brief (still in `.loop/brief.md`) says. If this run ends without it too, the item goes to the user.\n"
+
 // BuildBrief is the build stage's brief.
 func BuildBrief(it Item, r RunInfo) string { return Brief(StageBuild, it, r) }
 

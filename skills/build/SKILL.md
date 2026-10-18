@@ -66,6 +66,13 @@ unsure, stop and ask (outcome `question`) instead of guessing.
    change works in real use (a loopd event, a command on main, the test Pi, E2E tests), and what
    only the user can judge. An item that waits in qa is verified or reopened by it.
 
+## Run everything in the foreground
+
+This is a one-shot run: it ends when you stop talking, and a command left in the background never
+reports back (the run exits with no result). So never use `run_in_background`, Monitor or a
+trailing `&`, and never end a turn saying you will wait for something. For a long check, raise the
+Bash `timeout` (up to 600000 ms), or split it (`go test -race ./internal/runner/...`).
+
 ## Keep the context small
 
 Every token you read stays in the conversation and is paid for again on every later turn, so:

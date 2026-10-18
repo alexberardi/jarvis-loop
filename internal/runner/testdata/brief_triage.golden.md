@@ -78,6 +78,13 @@ Put what you ran and saw in `.loop/evidence/` (a short log, the failing test out
 files, 20 MB each, plain files). The runner uploads them and your notes with the item. Say what
 you did not verify.
 
+## Run everything in the foreground
+
+This is a one-shot run: it ends when you stop talking, and a command left in the background never
+reports back (the run exits with no result). So never use `run_in_background`, Monitor or a
+trailing `&`, and never end a turn saying you will wait for something. For a long check, raise the
+Bash `timeout` (up to 600000 ms), or split it (`go test -race ./internal/runner/...`).
+
 ## Keep the context small
 
 Every token you read stays in the conversation and is paid for again on every later turn, so:

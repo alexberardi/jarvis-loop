@@ -166,6 +166,8 @@ Claude Code gives a runner no reading of plan usage (`/usage` is interactive onl
 
 **Stop:** running agents stop at their next heartbeat (within a minute), their work is saved as a WIP branch, and each item returns to its queue; a Claude build resumes its session on the next claim on the same runner ([decision](decisions/2026-10-18-build-resume.md)). **Resume** clears it.
 
+**A run that ends with no result** (exit 0, no `.loop/result.json`, as one waiting on a background command does) resumes its session once in the same claim, with a short note; the briefs say to run every check in the foreground ([decision](decisions/2026-10-18-no-result-resume.md)).
+
 **Automatic:** when an agent run ends with a usage-limit or rate-limit error, `loopd` sets the active-agents number to 0, posts the error with its reset time in `#loop-digest` with an @mention, and does not raise it again on its own.
 
 **Advisory, not enforced:** every digest shows the loop's estimated spend today (from each run's tokens and `total_cost_usd`) against about 1/7 of a week, learned when the weekly limit is hit and whenever the user posts `/loop usage 42%` from `/usage`. It tells the user when to turn the number down; it never changes it. The loop only sees its own spend, not interactive sessions.
