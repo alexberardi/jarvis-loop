@@ -989,48 +989,27 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		}
 		caps := append([]string(nil), req.Capabilities...)
 		sort.Strings(caps)
-		if _, err := tx.Exec(`INSERT INTO runners (name, capabilities, last_seen) VALUES (?,?,?)
-			ON CONFLICT (name) DO UPDATE SET capabilities = excluded.capabilities, last_seen = excluded.last_seen`,
-			runnerName, strings.Join(caps, ","), now.UnixNano()); err != nil {
+		only := append([]string(nil), req.OnlyResources...)
+		sort.Strings(only)
+		var stages []string
+		for _, st := range req.RunnerStages {
+			stages = append(stages, string(st))
+		}
+		sort.Strings(stages)
+		if _, err := tx.Exec(`INSERT INTO runners (name, capabilities, only_resources, poll_seconds, stages, last_seen) VALUES (?,?,?,?,?,?)
+			ON CONFLICT (name) DO UPDATE SET capabilities = excluded.capabilities, only_resources = excluded.only_resources,
+				poll_seconds = excluded.poll_seconds, stages = excluded.stages, last_seen = excluded.last_seen`,
+			runnerName, strings.Join(caps, ","), strings.Join(only, ","), max(req.PollSeconds, 0), strings.Join(stages, ","), now.UnixNano()); err != nil {
 			return err
 		}
 		if err := s.checkUnservable(tx, now); err != nil {
 			return err
 		}
-		ctl, err := s.loadControl(tx)
+		cs, err := s.claimState(tx, now)
 		if err != nil {
 			return err
 		}
-		live, err := liveLeases(tx)
-		if err != nil {
-			return err
-		}
-		snap := make([]pipeline.LiveLease, len(live))
-		for i, l := range live {
-			snap[i] = pipeline.LiveLease{ItemID: l.ItemID, Stage: l.Stage, Resources: l.Resources}
-		}
-		turnLeases, err := livePlanLeases(tx)
-		if err != nil {
-			return err
-		}
-		for range turnLeases {
-			snap = append(snap, pipeline.LiveLease{Stage: pipeline.PlanTurnStage})
-		}
-		running, err := orchTurnWith(tx, OrchRunning)
-		if err != nil {
-			return err
-		}
-		if running != nil {
-			snap = append(snap, pipeline.LiveLease{Stage: pipeline.OrchestrateStage})
-		}
-		waiting, err := waitingItems(tx)
-		if err != nil {
-			return err
-		}
-		deps, err := dependencyStages(tx, waiting)
-		if err != nil {
-			return err
-		}
+		ctl, waiting, deps, snap := cs.ctl, cs.waiting, cs.deps, cs.live
 		turns, err := turnCandidates(tx)
 		if err != nil {
 			return err
@@ -1041,11 +1020,7 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 				return err
 			}
 		}
-		frozen, err := frozenRepos(tx)
-		if err != nil {
-			return err
-		}
-		w, ok := pipeline.ChooseWork(ctl, waiting, deps, snap, turns, orch, req, frozen)
+		w, ok := pipeline.ChooseWork(ctl, waiting, deps, snap, turns, orch, cs.holds, req, cs.frozen)
 		if !ok {
 			return nil
 		}
@@ -1073,6 +1048,97 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 			Data: map[string]any{"runner": runnerName, "agent": req.Agent, "lease": l.ID}})
 	})
 	return out, err
+}
+
+// claimState is what a claim chooses from: the control, the waiting items and their dependencies'
+// stages, the live leases (items, plan and orchestrate turns), the frozen repos and the slots held
+// (SlotHolds).
+type claimState struct {
+	ctl     pipeline.Control
+	waiting []pipeline.Item
+	deps    map[int64]pipeline.Stage
+	live    []pipeline.LiveLease
+	runners []pipeline.RunnerSeen
+	frozen  pipeline.Frozen
+	holds   []pipeline.SlotHold
+}
+
+func (s *Store) claimState(tx *sql.Tx, now time.Time) (claimState, error) {
+	var cs claimState
+	ctl, err := s.loadControl(tx)
+	if err != nil {
+		return cs, err
+	}
+	live, err := liveLeases(tx)
+	if err != nil {
+		return cs, err
+	}
+	snap := make([]pipeline.LiveLease, len(live))
+	for i, l := range live {
+		snap[i] = pipeline.LiveLease{ItemID: l.ItemID, Stage: l.Stage, Resources: l.Resources}
+	}
+	turnLeases, err := livePlanLeases(tx)
+	if err != nil {
+		return cs, err
+	}
+	for range turnLeases {
+		snap = append(snap, pipeline.LiveLease{Stage: pipeline.PlanTurnStage})
+	}
+	running, err := orchTurnWith(tx, OrchRunning)
+	if err != nil {
+		return cs, err
+	}
+	if running != nil {
+		snap = append(snap, pipeline.LiveLease{Stage: pipeline.OrchestrateStage})
+	}
+	waiting, err := waitingItems(tx)
+	if err != nil {
+		return cs, err
+	}
+	deps, err := dependencyStages(tx, waiting)
+	if err != nil {
+		return cs, err
+	}
+	runners, err := runnersSeen(tx)
+	if err != nil {
+		return cs, err
+	}
+	frozen, err := frozenRepos(tx)
+	if err != nil {
+		return cs, err
+	}
+	return claimState{ctl: ctl, waiting: waiting, deps: deps, live: snap, runners: runners, frozen: frozen,
+		holds: pipeline.SlotHolds(ctl, waiting, deps, snap, runners, frozen, now)}, nil
+}
+
+// RunnerPanel is the board's runners: those seen within pipeline.RunnerSeenWindow, by name, and
+// the slots held for their work now.
+type RunnerPanel struct {
+	Runners []pipeline.RunnerSeen
+	Holds   []pipeline.SlotHold
+}
+
+// Runners is the board's runner panel.
+func (s *Store) Runners(ctx context.Context) (RunnerPanel, error) {
+	var p RunnerPanel
+	tx, err := s.r.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return p, err
+	}
+	defer tx.Rollback()
+	now := s.clock.Now()
+	cs, err := s.claimState(tx, now)
+	if err != nil {
+		return p, err
+	}
+	for _, r := range cs.runners {
+		if now.Sub(r.LastSeen) <= pipeline.RunnerSeenWindow {
+			p.Runners = append(p.Runners, r)
+		}
+	}
+	sort.Slice(p.Runners, func(i, j int) bool { return p.Runners[i].Name < p.Runners[j].Name })
+	p.Holds = cs.holds
+	return p, nil
 }
 
 func liveLeases(tx *sql.Tx) ([]Lease, error) {

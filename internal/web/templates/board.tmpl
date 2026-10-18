@@ -73,6 +73,23 @@
 {{- end}}
 </details>
 {{- end}}{{end}}
+{{- with .Runners}}{{if .Runners}}
+<details class="orch"{{if .Holds}} open{{end}}>
+<summary>Runners · {{len .Runners}} seen today{{with len .Holds}} · {{.}} {{if eq . 1}}slot{{else}}slots{{end}} held{{end}}</summary>
+{{- if .Holds}}
+<ul>
+{{- range .Holds}}
+<li>A slot is held for {{.Resource}} work: <a href="/board/items/{{.ItemID}}">#{{.ItemID}}</a> is waiting for {{.Runner}}.</li>
+{{- end}}
+</ul>
+{{- end}}
+<ul>
+{{- range .Runners}}
+<li>{{.Name}}{{if .Capabilities}} <span class="why">offers</span> {{range .Capabilities}}<span class="label">{{.}}</span> {{end}}{{end}}{{if .OnlyResources}}<span class="why">takes only</span> {{range .OnlyResources}}<span class="label">{{.}}</span> {{end}}{{end}}<span class="why">· seen {{age .Ago}} ago{{if not .Around}} (quiet){{end}}</span></li>
+{{- end}}
+</ul>
+</details>
+{{- end}}{{end}}
 <div class="lanes">
 {{- range .Columns}}
 <section class="lane">
@@ -111,6 +128,9 @@
 </div>
 {{- if .Reason}}
 <div class="reason">{{.Reason}}</div>
+{{- end}}
+{{- range .ReopenedDeps}}
+<div class="reason">Depends on #{{.Dependency}}, which was reopened: {{.Words}} (the fix is #{{.ReopenItem}})</div>
 {{- end}}
 </article>
 {{- end}}

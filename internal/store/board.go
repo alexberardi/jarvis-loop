@@ -15,7 +15,7 @@ type BoardItem struct {
 	SlackChannel string
 	SlackTS      string
 	UpdatedAt    time.Time
-	// WaitingOn is the items it depends on that are not done yet.
+	// WaitingOn is the items it depends on that are not merged yet.
 	WaitingOn []int64
 	// Waits is each of those followed to the item that holds it up (pipeline.WaitChains).
 	Waits []pipeline.WaitChain
@@ -27,11 +27,17 @@ type BoardItem struct {
 	Feature string
 	// Unservable is the resources no runner offers it, when loopd flagged it (pipeline.Unservable).
 	Unservable []string
+	// ReopenedDeps is its dependencies that failed the user's check, while the fix is open.
+	ReopenedDeps []ReopenedDependency
 }
 
 // BoardItems is every item as a board card, in ListItems' order.
 func (s *Store) BoardItems(ctx context.Context) ([]BoardItem, error) {
 	flagged, err := unservableMissing(s.r)
+	if err != nil {
+		return nil, err
+	}
+	reopened, err := reopenedDependencies(s.r)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +68,7 @@ func (s *Store) BoardItems(ctx context.Context) ([]BoardItem, error) {
 		}
 		deps = append(deps, d)
 		stages[b.ID] = pipeline.Stage(b.Stage)
-		b.Unservable = flagged[b.ID]
+		b.Unservable, b.ReopenedDeps = flagged[b.ID], reopened[b.ID]
 		nodes[b.ID] = pipeline.WaitNode{Stage: pipeline.Stage(b.Stage), Claimed: b.ClaimedBy != "", DependsOn: d, Unservable: b.Unservable}
 		b.CreatedAt, b.UpdatedAt = fromNanos(created), fromNanos(updated)
 		b.AgeSeconds = int64(now.Sub(b.CreatedAt) / time.Second)

@@ -7,15 +7,19 @@ import (
 )
 
 // Item dependencies (docs/phases/07-planning.md, "Item dependencies and the plan link"): an item
-// waits until every item it depends on is done. qa does not count: the piece it depends on is
-// merged but not verified yet.
+// waits until every item it depends on is merged: in qa or done
+// (docs/decisions/2026-10-18-deps-at-merge.md). The user's check of a qa item goes on in parallel;
+// when it fails (Reopen), loopd flags the open items that depended on it rather than stopping them.
 
-// WaitingOn is the dependencies of it that are not done yet, in its order. stages holds the
-// dependencies' stages; one missing from it counts as not done.
+// DependencyMet is whether a dependency in stage st satisfies the items that depend on it.
+func DependencyMet(st Stage) bool { return st == QA || st == Done }
+
+// WaitingOn is the dependencies of it that are not merged yet, in its order. stages holds the
+// dependencies' stages; one missing from it counts as not merged.
 func WaitingOn(it Item, stages map[int64]Stage) []int64 {
 	var out []int64
 	for _, d := range it.DependsOn {
-		if st, ok := stages[d]; !ok || st != Done {
+		if st, ok := stages[d]; !ok || !DependencyMet(st) {
 			out = append(out, d)
 		}
 	}
@@ -32,7 +36,7 @@ type WaitNode struct {
 }
 
 // WaitChain is what an item waits on, followed to its root (docs/phases/08-orchestrator.md, "Talking
-// to it"): Path is a dependency of the item not done yet, then that one's, and so on; Root is the
+// to it"): Path is a dependency of the item not merged yet, then that one's, and so on; Root is the
 // state of the last one ("needs you", "in build"), which holds up the rest.
 type WaitChain struct {
 	Path []int64
@@ -48,8 +52,8 @@ func (c WaitChain) String() string {
 	return b.String() + c.Root
 }
 
-// WaitChains is one chain per dependency of item id not done yet, in its order; none for a done or
-// closed item. Past the first link a chain follows the first dependency not done of each item (that
+// WaitChains is one chain per dependency of item id not merged yet, in its order; none for a done or
+// closed item. Past the first link a chain follows the first dependency not merged of each item (that
 // item's own card shows the rest). A dependency missing from items ends its chain as "not found",
 // one already on the path as "a cycle".
 func WaitChains(id int64, items map[int64]WaitNode) []WaitChain {
@@ -59,7 +63,7 @@ func WaitChains(id int64, items map[int64]WaitNode) []WaitChain {
 	}
 	var out []WaitChain
 	for _, d := range it.DependsOn {
-		if n, ok := items[d]; ok && n.Stage == Done {
+		if n, ok := items[d]; ok && DependencyMet(n.Stage) {
 			continue
 		}
 		c := WaitChain{Path: []int64{d}}
@@ -72,7 +76,7 @@ func WaitChains(id int64, items map[int64]WaitNode) []WaitChain {
 			next := int64(0)
 			if n.Stage != Closed {
 				for _, dd := range n.DependsOn {
-					if nn, ok := items[dd]; !ok || nn.Stage != Done {
+					if nn, ok := items[dd]; !ok || !DependencyMet(nn.Stage) {
 						next = dd
 						break
 					}
