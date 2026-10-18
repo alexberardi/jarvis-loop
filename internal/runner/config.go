@@ -77,13 +77,15 @@ type Config struct {
 	// VerifyMask are the files and directories hidden from setup, prepare, cleanup and verify
 	// commands (which run the agent's code outside its sandbox): default the credential stores,
 	// loopd's tokens and data, the Slack tokens and this config (fence.go). Missing paths are
-	// skipped. Bwrap is the bubblewrap binary (default /usr/bin/bwrap).
+	// skipped. Bwrap is the bubblewrap binary (default /usr/bin/bwrap), the fence on Linux;
+	// SandboxExec is sandbox-exec (default /usr/bin/sandbox-exec), the fence on macOS.
 	VerifyMask []string `json:"verify_mask,omitempty"`
 	// VerifyWritable are the paths under HOME those commands may write besides their working dir,
 	// the runner's fence caches and a private /tmp (fence.go): default ~/.cache/jarvis-harness and
 	// ~/.android. The rest of HOME is read-only to them.
 	VerifyWritable []string `json:"verify_writable,omitempty"`
 	Bwrap          string   `json:"bwrap,omitempty"`
+	SandboxExec    string   `json:"sandbox_exec,omitempty"`
 	// Qwen is the Qwen builder for items whose builder is qwen (qwen.go); nil: they build with
 	// claude.
 	Qwen *QwenConfig `json:"qwen,omitempty"`
@@ -147,6 +149,9 @@ var Groups = []string{"server", "loop", "mobile", "docs", "installer", "package"
 
 // DefaultBwrap is where bubblewrap is.
 const DefaultBwrap = "/usr/bin/bwrap"
+
+// DefaultSandboxExec is where macOS's sandbox-exec is.
+const DefaultSandboxExec = "/usr/bin/sandbox-exec"
 
 // DefaultVerifyTimeout is a verify step's time limit when its config gives none.
 const DefaultVerifyTimeout = 20 * time.Minute
@@ -319,6 +324,9 @@ func (c *Config) normalize() error {
 	c.VerifyLock = Expand(c.VerifyLock)
 	if c.Bwrap == "" {
 		c.Bwrap = DefaultBwrap
+	}
+	if c.SandboxExec == "" {
+		c.SandboxExec = DefaultSandboxExec
 	}
 	if c.Qwen != nil {
 		if err := c.Qwen.normalize(); err != nil {
