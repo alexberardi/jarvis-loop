@@ -452,6 +452,11 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 		RepoGroup: ru.repo.Group}
 	if ru.hasHarness() {
 		info.Harness = ru.repo.Harness
+	}
+	if r.hasPi(ru) {
+		info.Pi = r.Cfg.Pi
+	}
+	if r.agentHarness(ru) {
 		info.HarnessBin = filepath.Join(r.Cfg.harnessBinDir(), "loop-harness")
 	}
 	if ru.stage == StageBuild {
@@ -521,7 +526,7 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 		LoopdAddrs: r.Cfg.LoopdAddrs(), AllowedDomains: r.Cfg.AllowedDomains, ExcludedCommands: ru.repo.ExcludedCommands,
 		ReadOnly: ru.stage != StageBuild,
 	}
-	if ru.hasHarness() {
+	if r.agentHarness(ru) {
 		in.Harness = true
 	}
 	settings, err := GenerateSettings(in)
@@ -795,7 +800,7 @@ func (r *Runner) agentCommand(ru *run) *exec.Cmd {
 	cmd := exec.Command(r.Cfg.Claude, ClaudeArgs(AgentArgs{Mode: r.Cfg.Mode, Settings: ru.settings, Model: r.Cfg.Model, Resume: ru.resume})...)
 	cmd.Dir = ru.wt
 	env := r.agentEnv()
-	if ru.hasHarness() {
+	if r.agentHarness(ru) {
 		env = prependPath(env, r.Cfg.harnessBinDir())
 	}
 	cmd.Env = append(env,
@@ -824,6 +829,9 @@ func (r *Runner) maxRun(ctx context.Context, ru *run) time.Duration {
 func (ru *run) hasHarness() bool {
 	return ru.repo.Harness != nil && (ru.stage == StageBuild || ru.stage == StageReview)
 }
+
+// agentHarness: the run's agent gets loop-harness, for the repo's harness or the test Pi.
+func (r *Runner) agentHarness(ru *run) bool { return ru.hasHarness() || r.hasPi(ru) }
 
 // prependPath puts dir first on env's PATH.
 func prependPath(env []string, dir string) []string {

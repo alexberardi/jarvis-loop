@@ -97,7 +97,7 @@ const (
 )
 
 // Resources a runner may offer and an item may need.
-var Resources = []string{"gpu", "voice", "emulator", "macos"}
+var Resources = []string{"gpu", "voice", "emulator", "macos", "pi"}
 
 // Sources an item may come from.
 var Sources = []string{"user", "finding", "nightly", "scout"}

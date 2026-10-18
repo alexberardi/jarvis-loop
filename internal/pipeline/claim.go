@@ -22,14 +22,14 @@ type Control struct {
 
 // LimitKeys are the resources and stages that can carry a limit. Build has none: it is bounded
 // only by the active-agents number.
-var LimitKeys = []string{"gpu", "voice", "emulator", "macos", "triage", "review", "land"}
+var LimitKeys = []string{"gpu", "voice", "emulator", "macos", "pi", "triage", "review", "land"}
 
 // DefaultControl is the control row of a new install.
 func DefaultControl() Control {
 	return Control{
 		ActiveAgents:  4,
 		MaxRunMinutes: 45,
-		Limits:        map[string]int{"gpu": 2, "voice": 1, "emulator": 1, "triage": 1, "review": 2, "land": 1},
+		Limits:        map[string]int{"gpu": 2, "voice": 1, "emulator": 1, "pi": 1, "triage": 1, "review": 2, "land": 1},
 		HoldRules:     DefaultHoldRules(),
 
 		OrchTurnsPerDay: DefaultOrchTurnsPerDay,

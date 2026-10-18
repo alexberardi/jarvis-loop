@@ -120,6 +120,8 @@ type RunInfo struct {
 	// the loop-harness on its PATH.
 	Harness    *HarnessConfig
 	HarnessBin string
+	// Pi is the runner's test Pi when the item needs it (pi.go).
+	Pi *PiConfig
 	// PR and HeadSHA are the PR a review run reviews, at that commit.
 	PR      int
 	HeadSHA string
@@ -182,7 +184,7 @@ func StaticBrief(stage string) string {
 	case StageTriage:
 		b.WriteString("Write `.loop/result.json` as your last step, exactly one of:\n\n```json\n")
 		b.WriteString(`{"outcome": "reproduced", "repo": "owner/name (only when the item has no repo)",
- "area": "a short area name", "size": "S | M | L", "risk": "normal | hold", "resources": ["gpu", "voice", "emulator", "macos"],
+ "area": "a short area name", "size": "S | M | L", "risk": "normal | hold", "resources": ["gpu", "voice", "emulator", "macos", "pi"],
  "summary": "one paragraph: what you found", "notes": "markdown: what to change, where, how to verify, what you could not check",
  "evidence": [{"file": "evidence/repro.log", "label": "the failing test on main"}],
  "needs_qa": false}`)
@@ -193,7 +195,7 @@ func StaticBrief(stage string) string {
 		b.WriteString("When the item has no repo yet (no checkouts this run), name it first:\n\n```json\n")
 		b.WriteString(`{"outcome": "routed", "repo": "owner/name", "why": "one line: why this repo"}`)
 		b.WriteString("\n```\n\n")
-		b.WriteString("`resources` lists only what verifying the change needs (often `[]`). The runner checks `repo` against the configured repos and uploads your `notes` (as `triage-notes.md`) and the files in `.loop/evidence/` with the item. After `routed`, the item is triaged again with that repo checked out. Set `needs_qa` to true when only the user can check the change once it is merged (on their phone or hardware): the item then waits in qa after it lands. No other fields.\n")
+		b.WriteString("`resources` lists only what verifying the change needs (often `[]`). `pi` is the test Raspberry Pi (HAT audio, LEDs, button, install on the device, the Go Pi node): the build agent gets a shell on it through the runner. The runner checks `repo` against the configured repos and uploads your `notes` (as `triage-notes.md`) and the files in `.loop/evidence/` with the item. After `routed`, the item is triaged again with that repo checked out. Set `needs_qa` to true when only the user can check the change once it is merged (on their phone or hardware): the item then waits in qa after it lands. No other fields.\n")
 	case StageReview:
 		b.WriteString("Write `.loop/result.json` as your last step, exactly one of:\n\n```json\n")
 		b.WriteString(`{"outcome": "approved", "summary": "one paragraph: why it can merge",
@@ -353,8 +355,29 @@ func Brief(stage string, it Item, r RunInfo) string {
 		}
 	}
 	fmt.Fprintf(&b, "- Scratch dir (temp files, GOTMPDIR): `%s`\n- Sandbox name for the harness: `%s`\n", r.Scratch, r.Sandbox)
+	if r.Pi != nil {
+		b.WriteString(piNote(stage, r))
+	}
 	if r.Harness != nil {
 		b.WriteString(harnessNote(stage, r))
+	}
+	return b.String()
+}
+
+// piNote tells a build or review agent of an item that needs the test Pi how to use it.
+func piNote(stage string, r RunInfo) string {
+	var b strings.Builder
+	b.WriteString("\n## The test Pi, through the runner\n\n")
+	fmt.Fprintf(&b, "This item needs the test Pi, a Raspberry Pi kept only for testing (Debian, NetworkManager, a ReSpeaker 2-mic HAT, the Python node running as `jarvis-node` when nobody is testing). You have it to yourself for this run. Your own `ssh` stays denied: the runner runs ssh for you with `loop-harness` (on your PATH; `%s`), from this worktree:\n\n", r.HarnessBin)
+	b.WriteString("- `loop-harness pi '<command>'`: a shell command on the Pi, as its user (who has sudo), in your scratch dir there. Anything goes on the Pi itself: stop the Python node (`sudo systemctl stop jarvis-node`) to free the HAT, install, reboot (then wait and retry), read logs.\n")
+	b.WriteString("- `loop-harness pi-put <file> <path>`: copy a file from this worktree to `<path>` under your scratch dir on the Pi (a built `GOOS=linux GOARCH=arm64 CGO_ENABLED=0` binary, a tarball you made: untar it there with `pi`).\n")
+	b.WriteString("- `loop-harness pi-get <path> <file>`: copy a file from your scratch dir on the Pi into this worktree (logs, recordings, measurements for `.loop/evidence/`).\n")
+	fmt.Fprintf(&b, "\nEach command may take %s; its output streams back and its exit code is `loop-harness`'s (255: ssh itself failed). Before your first command and after your run the runner puts the Pi back as the user keeps it (`%s`) and removes your scratch dir, so leave nothing there you need. Never point the Pi at anything but your own sandbox or test values; it is not the house's node.\n",
+		r.Pi.Timeout(), oneLine(r.Pi.Restore))
+	if stage == StageBuild {
+		b.WriteString("What you ran on the Pi and what it showed is verified: copy its output into `.loop/evidence/`, name it in the PR body, and leave it out of `not_verified`. What only a person can judge (sound, LED colours, button presses) stays there.\n")
+	} else {
+		b.WriteString("Name in your review what you ran on the Pi and what it showed.\n")
 	}
 	return b.String()
 }

@@ -43,6 +43,10 @@ const (
 	OpRun    = "run"    // run Cmd in the worktree (in the keeper when it is up, else a new fence)
 	OpDown   = "down"   // run the repo's harness "down" and end the keeper
 	OpStatus = "status" // the session's state
+	// The test Pi, for an item that needs the "pi" resource (the runner's ssh, never the agent's).
+	OpPi    = "pi"     // run Cmd in the item's scratch dir on the Pi
+	OpPiPut = "pi-put" // copy Src (in the worktree) to Dst (in the item's scratch dir on the Pi)
+	OpPiGet = "pi-get" // copy Src (on the Pi) to Dst (in the worktree)
 )
 
 // Request is what loop-harness asks for.
@@ -50,6 +54,8 @@ type Request struct {
 	Token string `json:"token"`
 	Op    string `json:"op"`
 	Cmd   string `json:"cmd,omitempty"`
+	Src   string `json:"src,omitempty"`
+	Dst   string `json:"dst,omitempty"`
 }
 
 // End is out/<id>.exit: the command's exit code, or why the broker refused or failed it.

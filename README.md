@@ -62,6 +62,11 @@ of items whose plan piece says `builder: qwen` run OpenCode in the verify fence 
 through a proxy in the runner that adds the app credentials; the second bounce turns the item to
 claude. Why and the gaps: [docs/decisions/2026-10-16-qwen-builder.md](docs/decisions/2026-10-16-qwen-builder.md).
 
+Test Pi: with `"pi"` in `capabilities` and a `pi` block in `runner.json`, build and review agents
+of items that need the `pi` resource get a shell on the test Pi through the harness broker
+(`loop-harness pi`, `pi-put`, `pi-get`); the runner runs ssh with its own key and puts the Pi back
+after each item. Setup and why: [docs/decisions/2026-10-18-pi-device.md](docs/decisions/2026-10-18-pi-device.md).
+
 Harness (phase 4b, [docs/phases/04b-loop-harness.md](docs/phases/04b-loop-harness.md)):
 `scripts/loop-sandbox run` plays `scenarios/*.json` against the real loopd wiring, runner, bot and
 `loop-guard`, with a fake Slack, claude and GitHub, and writes each scenario's Slack transcript.

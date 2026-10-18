@@ -103,6 +103,7 @@ A runner is a small daemon on a machine that can do the work. It polls `loopd` c
 | `gpu` (the shared live model) | 2 | the installed engine has one slot; the house comes first |
 | `voice` (CPU whisper) | 1 | about 2.4 s of CPU per utterance at 8 threads |
 | `emulator` | 1 | a headless emulator plus a release build is heavy |
+| `pi` (the test Pi) | 1 | one device; the runner puts it back after each item ([decision](decisions/2026-10-18-pi-device.md)) |
 
 **The brief every agent gets** (one skill per stage in this repo, sharing a preamble) carries the rules 2026-10-13/14 taught:
 
