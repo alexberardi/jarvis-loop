@@ -335,3 +335,8 @@ func (g Git) DiffPaths(ctx context.Context, mirror, base, head string, pr int) (
 	}
 	return paths, nil
 }
+
+// Head is the commit checked out in dir.
+func (g Git) Head(ctx context.Context, dir string) (string, error) {
+	return g.run(ctx, dir, "rev-parse", "HEAD")
+}
