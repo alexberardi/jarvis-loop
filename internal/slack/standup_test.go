@@ -94,13 +94,17 @@ func TestStandup(t *testing.T) {
 	if _, err := e.st.OrchEscalate(e.ctx, orchActor, idQ, "which repo is it?", "jarvis-server, because it names the API", "a product question"); err != nil {
 		t.Fatal(err)
 	}
+	e.clk.Advance(10 * time.Minute) // one escalation per 10 minutes
+	if _, err := e.st.OrchEscalate(e.ctx, orchActor, 0, "the git host is down", "wait an hour", "every run fails"); err != nil {
+		t.Fatal(err)
+	}
 	if err := e.st.Record(e.ctx, store.Event{Actor: "runner:devbox", Kind: store.KindOrchDone,
 		Data: map[string]any{"total_cost_usd": 0.42, "usage_input": 100000, "usage_output": 4000}}); err != nil {
 		t.Fatal(err)
 	}
 	e.orchCalls()
 
-	e.clk.Advance(time.Hour) // 09:00
+	e.clk.Advance(50 * time.Minute) // 09:00
 	e.b.Tick(e.ctx)
 	loop, orch := e.orchCalls()
 	posts := only(t, orch, "chat.postMessage")
@@ -116,8 +120,10 @@ func TestStandup(t *testing.T) {
 		fmt.Sprintf("• #%d asks — needs you: which repo? · I recommend: jarvis-server, because it names the API\n", idQ),
 		fmt.Sprintf("• #%d held one — held for your approval", idH),
 		fmt.Sprintf("• #%d merged one — merged, waiting for your check\n", idM),
-		"*What I did*\nescalated 1 · ",
+		"• the git host is down — I recommend: wait an hour\n",
+		"*What I did*\nescalated 2 · ",
 		fmt.Sprintf("• escalated #%d: a product question\n", idQ),
+		"• escalated: every run fails\n",
 		"*My spend*\n1 turn (cap 150 a day) · $0.42 · 100k tokens in, 4k out\n",
 	} {
 		if !strings.Contains(txt, w) {

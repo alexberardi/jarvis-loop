@@ -69,7 +69,11 @@ func standupText(d standupData, loc *time.Location) string {
 				fmt.Fprintf(&sb, "• … and %d more\n", len(lines)-i)
 				break
 			}
-			fmt.Fprintf(&sb, "• #%d %s", l.ID, Escape(Clip(strings.TrimSpace(l.Title), 100, "")))
+			sb.WriteString("• ")
+			if l.ID != 0 {
+				fmt.Fprintf(&sb, "#%d ", l.ID)
+			}
+			sb.WriteString(Escape(Clip(strings.TrimSpace(l.Title), 100, "")))
 			if l.Note != "" {
 				sb.WriteString(" — " + Escape(Clip(oneLine(l.Note), 160, "")))
 			}
@@ -246,7 +250,11 @@ func (b *Bot) standupData(ctx context.Context, at time.Time) (standupData, error
 	// Escalations about no item: the user's too.
 	for _, e := range board.Escalations {
 		if e.ItemID == 0 {
-			d.NeedsU = append(d.NeedsU, standupLine{Title: str(e.Data, "text"), Note: str(e.Data, "recommendation")})
+			l := standupLine{Title: str(e.Data, "text")}
+			if r := str(e.Data, "recommendation"); r != "" {
+				l.Note = "I recommend: " + r
+			}
+			d.NeedsU = append(d.NeedsU, l)
 		}
 	}
 	if ctl, err := b.c.Store.Control(ctx); err == nil {
