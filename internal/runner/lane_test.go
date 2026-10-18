@@ -158,3 +158,75 @@ func TestPausedRunnerStillLands(t *testing.T) {
 		t.Fatal("a paused runner claimed the build")
 	}
 }
+
+// landsByPR is GitHub for several land runs at once: each PR its own fakeLand.
+type landsByPR map[int]*fakeLand
+
+func (m landsByPR) LandView(ctx context.Context, slug string, pr int) (LandPR, error) {
+	return m[pr].LandView(ctx, slug, pr)
+}
+func (m landsByPR) Merge(ctx context.Context, slug string, pr int, head string) error {
+	return m[pr].Merge(ctx, slug, pr, head)
+}
+func (m landsByPR) CommitRuns(context.Context, string, string) ([]WorkflowRun, error) {
+	return nil, nil
+}
+func (m landsByPR) FailedLog(context.Context, string, int64) (string, error) { return "", nil }
+func (m landsByPR) RerunFailed(context.Context, string, int64) error         { return nil }
+
+// Land works in LandSlots lanes (default 3, loopd's default land limit): three approved items
+// wait on CI side by side instead of one at a time, and all three merge when it passes (#213).
+func TestLandLanesWaitOnCITogether(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	if g.r.Config().LandSlots != DefaultLandSlots {
+		t.Fatalf("land slots %d, want the default %d", g.r.Config().LandSlots, DefaultLandSlots)
+	}
+	ghs := landsByPR{}
+	var ids []int64
+	for i := range 3 {
+		id, gh := g.toLand(fmt.Sprintf("Approved %d", i))
+		gh.setChecks(BucketPending)
+		ghs[gh.pr.Number] = gh
+		ids = append(ids, id)
+	}
+	g.r.Land = ghs
+	g.stages(StageLand)
+
+	stop := g.runInBackground()
+	defer stop()
+	leased := func() int {
+		n := 0
+		for _, id := range ids {
+			if g.item(id).Lease != nil {
+				n++
+			}
+		}
+		return n
+	}
+	for i := 0; i < 600 && leased() < 3; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := leased(); n != 3 {
+		t.Fatalf("%d of 3 land items leased while CI is pending; log:\n%s", n, g.logs.String())
+	}
+	for _, gh := range ghs {
+		gh.setChecks(BucketPass)
+	}
+	// Each run looks again at its next poll; advance until all three merged.
+	merged := func() int {
+		n := 0
+		for _, gh := range ghs {
+			if _, m := gh.seen(); m > 0 {
+				n++
+			}
+		}
+		return n
+	}
+	for i := 0; i < 600 && merged() < 3; i++ {
+		g.clk.Advance(LandPollEvery)
+		time.Sleep(10 * time.Millisecond)
+	}
+	for _, id := range ids {
+		g.waitMerged(ghs[int(g.item(id).Item.PR)], id)
+	}
+}

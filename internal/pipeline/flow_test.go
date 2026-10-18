@@ -6,7 +6,7 @@ import (
 )
 
 func TestWaitReason(t *testing.T) {
-	ctl := DefaultControl() // 4 agents, triage:1, review:2, land:1, gpu:2, voice:1, emulator:1
+	ctl := DefaultControl() // 4 agents, triage:1, review:2, land:3, gpu:2, voice:1, emulator:1
 	stopped := DefaultControl()
 	stopped.Stopped = true
 	paused := DefaultControl()
@@ -58,7 +58,11 @@ func TestWaitReason(t *testing.T) {
 		// Land runs no agent: it needs none of the item's resources and takes no agent slot.
 		{"land ignores its resources' limits", ctl, waiting(1, Land, "P3", 0, "emulator"), nil,
 			[]LiveLease{{ItemID: 8, Stage: Build, Resources: []string{"emulator"}}}, nil, nil, nil, WaitReady},
-		{"land's own stage limit", ctl, waiting(1, Land, "P3", 0), nil, []LiveLease{{ItemID: 8, Stage: Land}}, nil, nil, nil, "limit land:1"},
+		// Land's default limit is 3 (#213): two lands running leave a lane, three fill it.
+		{"land under its stage limit", ctl, waiting(1, Land, "P3", 0), nil,
+			[]LiveLease{{ItemID: 8, Stage: Land}, {ItemID: 9, Stage: Land}}, nil, nil, nil, WaitReady},
+		{"land's own stage limit", ctl, waiting(1, Land, "P3", 0), nil,
+			[]LiveLease{{ItemID: 8, Stage: Land}, {ItemID: 9, Stage: Land}, {ItemID: 10, Stage: Land}}, nil, nil, nil, "limit land:3"},
 		{"land with every agent slot busy", two, waiting(1, Land, "P3", 0), nil,
 			[]LiveLease{{ItemID: 8, Stage: Build}, {ItemID: 9, Stage: Review}}, nil, nil, nil, WaitReady},
 		{"a land lease takes no agent slot", two, waiting(1, Build, "P3", 0), nil,

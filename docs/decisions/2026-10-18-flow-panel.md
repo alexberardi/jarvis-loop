@@ -68,9 +68,10 @@ panel (`/board/flow`, linked from the board's header) and the API the same numbe
 
 ## Speed
 
-Migration 0022 adds `events(at)`, `leases(ended_at)` and `plan_leases(ended_at)`: every window
-query starts from one of them (`TestFlowQueriesUseIndexes` checks the query plans), and the
-per-item pass pairing reads only the items with a stage change in the window, by the existing
+Migration 0023 adds `leases(ended_at)` and `plan_leases(ended_at)`; `events(at)` comes from the
+runway migration (#205, `0022_runway.sql`), so this one does not create it again. Every window query
+starts from one of the three (`TestFlowQueriesUseIndexes` checks the query plans), and the per-item
+pass pairing reads only the items with a stage change in the window, by the existing
 `events(item_id, id)` index. `BenchmarkFlow7d` (100k events over 2k items, 20k leases) takes about
 30 ms for the 7d window on the dev box. The live loop.db was not measured (off limits to the build).
 
