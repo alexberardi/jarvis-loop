@@ -274,7 +274,7 @@ func choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 		if len(req.OnlyResources) > 0 && !slices.ContainsFunc(it.Resources, func(r string) bool { return slices.Contains(req.OnlyResources, r) }) {
 			continue
 		}
-		// Dependencies: every item it depends on is done.
+		// Dependencies: every item it depends on is merged (qa or done).
 		if len(WaitingOn(*it, deps)) > 0 {
 			continue
 		}
