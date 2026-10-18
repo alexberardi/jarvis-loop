@@ -50,7 +50,7 @@ var onBehalfRoutes = map[string]bool{
 // differently from it.
 func (s *server) controlForUser(ctx context.Context, c store.ControlPatch) error {
 	via := store.ViaFrom(ctx)
-	if via == "" || (c.HoldRules == nil && c.Limits == nil && c.MaxRunMinutes == nil && c.OrchTurnsPerDay == nil) {
+	if via == "" || (c.HoldRules == nil && c.Limits == nil && c.MaxRunMinutes == nil && c.OrchTurnsPerDay == nil && c.RunwayWarnHours == nil) {
 		return nil
 	}
 	return s.st.Refused(ctx, via, 0, "control", &pipeline.Error{Code: CodeNotOnBehalf,

@@ -73,6 +73,9 @@ type OrchSnapshot struct {
 	Notebook     []Event             `json:"notebook"`
 	Escalations  []Event             `json:"escalations"`
 	Replies      []Event             `json:"replies"`
+	// Runway is how much the loop can do without the user, and what of theirs frees the most
+	// (#205): what it answers "runway" with.
+	Runway RunwayReport `json:"runway"`
 }
 
 // Snapshot sizes.
@@ -91,6 +94,9 @@ func (s *Store) OrchSnapshot(ctx context.Context) (OrchSnapshot, error) {
 		return snap, err
 	}
 	snap.TurnsPerDay, snap.ActiveAgents, snap.Stopped = ctl.OrchTurnsPerDay, ctl.ActiveAgents, ctl.Stopped
+	if snap.Runway, _, err = s.runway(s.r); err != nil {
+		return snap, err
+	}
 	if err := s.r.QueryRowContext(ctx, `SELECT COUNT(*) FROM orch_turns WHERE day = ? AND status != ?`, snap.Day, OrchQueued).
 		Scan(&snap.TurnsToday); err != nil {
 		return snap, err
