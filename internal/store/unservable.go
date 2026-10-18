@@ -15,7 +15,7 @@ const (
 )
 
 func runnersSeen(tx *sql.Tx) ([]pipeline.RunnerSeen, error) {
-	rows, err := tx.Query(`SELECT name, capabilities, last_seen FROM runners`)
+	rows, err := tx.Query(`SELECT name, capabilities, only_resources, poll_seconds, last_seen FROM runners`)
 	if err != nil {
 		return nil, err
 	}
@@ -23,12 +23,12 @@ func runnersSeen(tx *sql.Tx) ([]pipeline.RunnerSeen, error) {
 	var out []pipeline.RunnerSeen
 	for rows.Next() {
 		var r pipeline.RunnerSeen
-		var caps string
+		var caps, only string
 		var seen int64
-		if err := rows.Scan(&r.Name, &caps, &seen); err != nil {
+		if err := rows.Scan(&r.Name, &caps, &only, &r.PollSeconds, &seen); err != nil {
 			return nil, err
 		}
-		r.Capabilities, r.LastSeen = splitList(caps), fromNanos(seen)
+		r.Capabilities, r.OnlyResources, r.LastSeen = splitList(caps), splitList(only), fromNanos(seen)
 		out = append(out, r)
 	}
 	return out, rows.Err()

@@ -399,7 +399,9 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		Capabilities []string `json:"capabilities"`
 		// OnlyResources: only items needing one of these (a subset of the capabilities).
 		OnlyResources []string `json:"only_resources"`
-		Stages        []string `json:"stages"`
+		// PollSeconds: how often the runner asks (the held slots wait two of them for it).
+		PollSeconds int      `json:"poll_seconds"`
+		Stages      []string `json:"stages"`
 		// Kinds: item, plan (plan turns), orchestrate; empty is items only.
 		Kinds []string `json:"kinds"`
 	}
@@ -446,7 +448,7 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, Stages: stages, Kinds: body.Kinds})
+	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, Stages: stages, Kinds: body.Kinds})
 	if err != nil {
 		s.fail(w, err)
 		return

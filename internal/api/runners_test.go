@@ -2,9 +2,11 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -55,7 +57,11 @@ func TestRunnersListenerTakesRunnerTokensOnly(t *testing.T) {
 	e.do(runnerTok, "GET", "/items", nil, 200, nil)
 	e.do(otherTok, "POST", "/claim", map[string]any{"agent": "mac-1", "capabilities": []string{"macos"}}, 204, nil)
 	// only_resources (the Mac's claim scope) must be among the capabilities offered.
-	e.do(otherTok, "POST", "/claim", map[string]any{"agent": "mac-1", "capabilities": []string{"macos"}, "only_resources": []string{"macos"}}, 204, nil)
+	e.do(otherTok, "POST", "/claim", map[string]any{"agent": "mac-1", "capabilities": []string{"macos"}, "only_resources": []string{"macos"}, "poll_seconds": 15}, 204, nil)
+	// loopd keeps what the runner claims with, for the held slots (#192).
+	if p, err := e.store.Runners(context.Background()); err != nil || len(p.Runners) != 1 || !slices.Equal(p.Runners[0].OnlyResources, []string{"macos"}) || p.Runners[0].PollSeconds != 15 {
+		t.Fatalf("runners %+v %v", p, err)
+	}
 	e.refused(otherTok, "POST", "/claim", map[string]any{"agent": "mac-1", "capabilities": []string{"gpu"}, "only_resources": []string{"macos"}}, 400, "invalid_field")
 	// A runner's own rules hold as on the main listener.
 	e.refused(runnerTok, "POST", "/claim", map[string]any{"runner": "mac", "agent": "a"}, 403, "runner_mismatch")

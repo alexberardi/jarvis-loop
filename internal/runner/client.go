@@ -22,6 +22,9 @@ type Client struct {
 	Base  string
 	Token string
 	HTTP  *http.Client
+	// PollSeconds goes with each claim: loopd holds a slot for a Mac runner's work only while
+	// the runner has asked within two of its poll intervals.
+	PollSeconds int
 }
 
 // APIError is a loopd error answer.
@@ -139,6 +142,9 @@ func (c *Client) ClaimOnly(ctx context.Context, agent string, caps, only, stages
 	body := map[string]any{"agent": agent, "capabilities": caps, "stages": stages}
 	if len(only) > 0 {
 		body["only_resources"] = only
+	}
+	if c.PollSeconds > 0 {
+		body["poll_seconds"] = c.PollSeconds
 	}
 	turnKinds := map[string]string{StagePlan: pipeline.WorkPlan, StageOrchestrate: pipeline.WorkOrchestrate}
 	if slices.ContainsFunc(stages, func(s string) bool { return turnKinds[s] != "" }) {

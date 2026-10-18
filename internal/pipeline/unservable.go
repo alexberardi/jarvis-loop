@@ -18,7 +18,10 @@ const RunnerSeenWindow = 24 * time.Hour
 type RunnerSeen struct {
 	Name         string
 	Capabilities []string
-	LastSeen     time.Time
+	// OnlyResources and PollSeconds are as it last claimed (slot holds, slothold.go).
+	OnlyResources []string
+	PollSeconds   int
+	LastSeen      time.Time
 }
 
 // Unservable is what of resources no runner seen within RunnerSeenWindow of now can serve, sorted;
