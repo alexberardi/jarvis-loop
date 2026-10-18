@@ -92,6 +92,19 @@ func TestMigrationsFromEmptyAndReopen(t *testing.T) {
 	}
 }
 
+// TestMigrationNumbersAreUnique: migrate keys schema_migrations by the number alone, so a second
+// file with a number already applied is skipped silently (two 0022s once left runway's columns out).
+func TestMigrationNumbersAreUnique(t *testing.T) {
+	seen := map[string]string{}
+	for _, name := range migrationFiles(t) {
+		n, _, _ := strings.Cut(name, "_")
+		if prev, ok := seen[n]; ok {
+			t.Errorf("migrations %s and %s share the number %s: the second is never applied", prev, name, n)
+		}
+		seen[n] = name
+	}
+}
+
 func migrationFiles(t *testing.T) []string {
 	t.Helper()
 	ents, err := migrations.ReadDir("migrations")
