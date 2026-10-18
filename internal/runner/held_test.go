@@ -106,3 +106,37 @@ func TestHeldNotesForTheBuilder(t *testing.T) {
 		t.Fatal("review notes written without a bounce")
 	}
 }
+
+// A needs_you item the user sent back to build (a rebuild reply or the Rebuild button) gets the
+// note in .loop/review/held.md too, with or without a PR yet, and the brief says it came from a
+// question.
+func TestNeedsYouRebuildNotesForTheBuilder(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	id := g.toBuild("asks")
+	if _, err := g.st.Claim(g.ctx, "devbox", pipeline.ClaimRequest{Runner: "devbox", Agent: "builder", Stages: []pipeline.Stage{pipeline.Build}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.st.Advance(g.ctx, "devbox", id, pipeline.Question, map[string]string{"question": "which plug?"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.st.Rebuild(g.ctx, "slack:U0C9AFPAMD4", id, "rebuild with the kasa plug"); err != nil {
+		t.Fatal(err)
+	}
+	cl, err := g.r.Client.Claim(g.ctx, "b", nil, []string{StageBuild})
+	if err != nil || cl == nil || cl.Item.ID != id {
+		t.Fatalf("claim %+v %v", cl, err)
+	}
+	ru, _ := g.r.newRun(cl, "b")
+	brief, err := g.r.prepare(g.ctx, ru)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.r.cleanup(g.ctx, ru, g.r.Log)
+	notes := g.read(filepath.Join(ru.wt, ".loop", "review", "held.md"))
+	if !strings.Contains(notes, "## Sent back by the user, instead of an answer to: which plug? (2026-10-15 12:00 UTC)\n\nrebuild with the kasa plug\n") {
+		t.Fatalf("notes:\n%s", notes)
+	}
+	if !strings.Contains(brief, "- Sent back to build by the user instead of an answer to its question. Do what `.loop/review/held.md` asks.") {
+		t.Fatalf("brief:\n%s", brief[strings.Index(brief, ItemHeading):])
+	}
+}

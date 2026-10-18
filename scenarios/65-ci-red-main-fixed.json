@@ -1,0 +1,45 @@
+{
+  "name": "ci-red-main-fixed",
+  "about": "#131 (#123/#124): main's CI was red when the PR branched off and is green now (a fix landed meanwhile). CI fails on the PR; land sees main red at the PR's base and green at its head, says so in the back-to-build reason (\"rebase on main\") and records main's green head. The build changes nothing, so the question recommends a rebuild (a rebase), not a rerun, which would test the same merge again. The approver's Rebuild form sends it back to build with the default note.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "ci", "main": {"ci": "fail"}, "main_head": true},
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "no_change"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "push", "branch": "main", "file": "internal/fix.txt", "text": "main's fix\n"},
+    {"do": "ci", "main": {"ci": "pass"}, "main_head": true},
+    {"do": "ci", "item": "a", "checks": {"check": "fail", "lint": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "back_to_build", "actor": "runner",
+       "data": {"reason": "^CI failed on `[0-9a-f]{7}`: check .*; main was red at this PR's base and is green now at `[0-9a-f]{7}`: rebase on main$",
+                "main_fixed_sha": "^[0-9a-f]{40}$"}, "count": 1}]},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "question": {"a": "^CI failed on [0-9a-f]{7} and the build changed nothing, but main was red at this PR's base and is green now \\(`[0-9a-f]{7}`\\): rebuild \\(rebase on main\\), not a rerun, which tests the same merge again\\. Reply \"rebuild\" or use the Rebuild button, or drop\\.$"}},
+
+    {"do": "script", "item": "a", "play": "good"},
+    {"do": "press", "item": "a", "button": "rebuild", "as": "approver"},
+    {"do": "submit", "as": "approver"},
+    {"do": "wait", "stage": {"a": "build"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review"},
+    "events": [{"item": "a", "kind": "rebuild", "actor": "approver", "data": {"notes": "^rebase on main and fix what CI shows$"}, "count": 1}],
+    "no_events": [{"item": "a", "kind": "answered"}],
+    "messages": [
+      {"thread": "a", "text": "^Back to build: CI failed on `[0-9a-f]{7}`: check .*rebase on main"},
+      {"thread": "a", "from": "bot", "buttons": ["Rebuild…", "Drop"], "text": "needs you: CI failed on [0-9a-f]{7} and the build changed nothing, but main was red at this PR's base"}
+    ],
+    "prs": 1
+  }
+}

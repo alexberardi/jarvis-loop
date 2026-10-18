@@ -1024,6 +1024,32 @@ func TestRebuildHeld(t *testing.T) {
 	}
 }
 
+// A needs_you item goes back to build with the user's notes (a rebuild reply or the Rebuild
+// button), dropping its question; a runner's rebuild (the held watch) moves only held items.
+func TestRebuildNeedsYou(t *testing.T) {
+	e := newEnv(t)
+	id := e.addItem("x")
+	e.mustClaim("t", id, "triage")
+	e.upload(runnerTok, id, "e.txt", []byte("e"), 201)
+	e.advance(id, "question", map[string]string{"question": "which repo?"}, 200)
+	path := fmt.Sprintf("/items/%d/rebuild", id)
+	e.refused(userTok, "POST", path, map[string]any{"notes": "rebuild"}, 409, "wrong_stage") // triage's question
+	e.do(userTok, "POST", fmt.Sprintf("/items/%d/answer", id), map[string]any{"text": "jarvis-server"}, 200, nil)
+	e.mustClaim("t", id, "triage")
+	e.upload(runnerTok, id, "e.txt", []byte("e"), 201)
+	e.advance(id, "reproduced", map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": ""}, 200)
+	e.mustClaim("builder", id, "build")
+	e.advance(id, "question", map[string]string{"question": "which plug?"}, 200)
+	e.refused(runnerTok, "POST", path, map[string]any{"notes": "PR #1 conflicts with main"}, 409, "wrong_stage")
+	e.do(userTok, "POST", path, map[string]any{"notes": "rebuild with the kasa plug"}, 200, nil)
+	d := e.get(id)
+	last := d.Events[len(d.Events)-1]
+	if d.Item.Stage != "build" || d.Item.Question != "" || d.Item.ReturnStage != "" || last.Kind != "rebuild" ||
+		last.From != "needs_you" || last.Data["notes"] != "rebuild with the kasa plug" || last.Data["question"] != "which plug?" {
+		t.Fatalf("%+v, last %+v", d.Item, last)
+	}
+}
+
 // The trust OK is the user's (a runner token is refused), for the commit verify refused, and
 // sends the item back to build on the hold list.
 func TestTrust(t *testing.T) {

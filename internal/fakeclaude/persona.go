@@ -27,6 +27,8 @@ const (
 	bounceAnswer  = "Go on with the reviewer's notes: fix each must-fix point, then open the PR again."
 	redCIRerun    = "Land reads CI again: re-run it once, the failure may be flaky."
 	redCIBack     = "Red again on the same head: fix the code, not the expectation; the failing job's log is in ci-failure.log."
+	// redCIRebuild marks the same-head red CI question that recommends a rebuild (main fixed).
+	redCIRebuild = "rebuild (rebase on main)"
 )
 
 var (
@@ -190,6 +192,11 @@ func personaActions(turn string, raw []byte) []any {
 				"Read the reviewer's last notes and either narrow the ask (drop or split the point review keeps raising) or answer that point yourself. "+
 					"Because the build already fixed one round of notes and review bounced it again, so another round alone will not converge.",
 				"the second bounce limit on one item is the user's")
+
+		case redCIQ.MatchString(it.Question) && strings.Contains(it.Question, redCIRebuild):
+			// Main was red at the PR's base and is green now: the question recommends a rebuild
+			// (a rerun would test the same merge again), which is the user's (Rebuild…), not a
+			// red_ci answer: leave it to them.
 
 		case redCIQ.MatchString(it.Question):
 			n := 0

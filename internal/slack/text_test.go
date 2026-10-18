@@ -143,6 +143,46 @@ func TestIsHeldNote(t *testing.T) {
 	}
 }
 
+// A needs_you reply is the user's answer unless it opens (after mentions and lead words) with
+// rebuild, rebase or fix: an answer to the question may well start with another change verb
+// ("use the staging DB", "add it to jarvis-node"), and "retry" or "drop it" mean what they say there.
+func TestIsRebuildNote(t *testing.T) {
+	cases := []struct {
+		reply string
+		note  bool
+	}{
+		{"rebuild, rebase on main", true},
+		{"rebuild", true},
+		{"Rebase on main and fix what CI shows", true},
+		{"please rebase and fix the lint", true},
+		{"ok, rebuild", true},
+		{"yes, fix the flaky test too", true},
+		{"<@U0LOOPBOT> rebuild it", true},
+		{"rebasing on main should do it", true},
+		{"fix the failing test", true},
+
+		{"jarvis-server", false},
+		{"re-run it, I think it's flaky", false},
+		{"rerun CI", false},
+		{"retry", false},
+		{"the fix is already on main", false},
+		{"yes, use the staging DB", false},
+		{"use the store's clock", false},
+		{"add it to jarvis-node", false},
+		{"drop it", false},
+		{"fix main first, then rerun", false},
+		{"don't rebuild, just rerun", false},
+		{"should we rebase?", false},
+		{"it needs a rebuild of the cache, use jarvis-server", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := IsRebuildNote(c.reply); got != c.note {
+			t.Errorf("IsRebuildNote(%q) = %v, want %v", c.reply, got, c.note)
+		}
+	}
+}
+
 func TestParsePriority(t *testing.T) {
 	cases := []struct {
 		text, priority, title string

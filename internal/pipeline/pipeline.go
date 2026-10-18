@@ -174,6 +174,10 @@ type Item struct {
 	// CIRedSHA is the head land sent back to build for red CI; a pr_opened with the same head
 	// goes to the user, not review (the build changed nothing, so CI would stay red).
 	CIRedSHA string `json:"ci_red_sha,omitempty"`
+	// CIMainFixed is main's head when land, at that red CI, saw main red at the PR's base and green
+	// now: the question for a build that changes nothing then recommends a rebuild (a rebase), since
+	// a rerun tests the same merge again (docs/decisions/2026-10-17-needs-you-rebuild.md).
+	CIMainFixed string `json:"ci_main_fixed,omitempty"`
 	// DependsOn are the items this one waits for: claim skips it until they are all done.
 	DependsOn []int64 `json:"depends_on"`
 	// PlanID and PlanPiece link an item filed from a plan to its piece (docs/phases/07-planning.md).
@@ -467,10 +471,16 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if it.CIRedSHA != "" && it.CIRedSHA == sha {
 			// Another review and land would see the same red CI: the user decides. An answer
 			// returns to land, which reads CI again (a rerun may have passed).
-			it = toNeedsYou(it, Land, fmt.Sprintf("CI failed on %s and the build changed nothing: rerun CI, fix main, or drop", sha[:7]))
+			q := fmt.Sprintf("CI failed on %s and the build changed nothing: rerun CI, fix main, or drop", sha[:7])
+			if it.CIMainFixed != "" {
+				q = fmt.Sprintf("CI failed on %s and the build changed nothing, but main was red at this PR's base and is green now (`%s`): "+
+					"rebuild (rebase on main), not a rerun, which tests the same merge again. Reply \"rebuild\" or use the Rebuild button, or drop.",
+					sha[:7], it.CIMainFixed[:7])
+			}
+			it = toNeedsYou(it, Land, q)
 			break
 		}
-		it.CIRedSHA = ""
+		it.CIRedSHA, it.CIMainFixed = "", ""
 		it.Stage = Review
 	case Approved:
 		summary, err := f.need("summary")
@@ -601,7 +611,12 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 			if err != nil {
 				return Transition{}, err
 			}
-			it.CIRedSHA = head
+			it.CIRedSHA, it.CIMainFixed = head, ""
+			if _, ok := a.Fields["main_fixed_sha"]; ok {
+				if it.CIMainFixed, err = f.sha("main_fixed_sha"); err != nil {
+					return Transition{}, err
+				}
+			}
 			it = bounce(it, data, reason)
 			break
 		}
@@ -736,12 +751,17 @@ func ApplyHold(it Item, words string) (Transition, error) {
 	return Transition{Item: it, From: Held, To: Held, Kind: "held", Data: map[string]any{"words": words}}, nil
 }
 
-// ApplyRebuild sends a held item back to build with notes for the builder: the user's reply in
-// the held thread that is not an approval, or the runner finding the held PR conflicting. The PR,
-// branch and hold stay; an approval is voided (the build makes a new head). It is not a bounce.
+// ApplyRebuild sends a held or needs_you item back to build with notes for the builder: the
+// user's reply in the held thread that is not an approval, a rebuild reply or the Rebuild button
+// on a held or needs_you item, or the runner finding the held PR conflicting. The PR, branch and
+// hold stay; an approval is voided (the build makes a new head); a question is dropped (the notes
+// replace its answer). It is not a bounce.
 func ApplyRebuild(it Item, notes string) (Transition, error) {
-	if it.Stage != Held {
-		return Transition{}, errf(CodeWrongStage, "item is %s, not held", it.Stage)
+	if it.Stage != Held && it.Stage != NeedsYou {
+		return Transition{}, errf(CodeWrongStage, "item is %s, not held or needs_you", it.Stage)
+	}
+	if it.Stage == NeedsYou && !Rebuildable(it) {
+		return Transition{}, errf(CodeWrongStage, "item waits on triage's question (no build yet): answer it")
 	}
 	notes = strings.TrimSpace(notes)
 	if notes == "" {
@@ -752,8 +772,18 @@ func ApplyRebuild(it Item, notes string) (Transition, error) {
 		it.Approval = nil
 		data["approval_voided"] = true
 	}
-	it.Stage = Build
-	return Transition{Item: it, From: Held, To: Build, Kind: "rebuild", Data: data}, nil
+	if it.Stage == NeedsYou {
+		data["question"] = it.Question
+	}
+	from := it.Stage
+	it.Stage, it.ReturnStage, it.Question = Build, "", ""
+	return Transition{Item: it, From: from, To: Build, Kind: "rebuild", Data: data}, nil
+}
+
+// Rebuildable reports whether a needs_you item may go back to build with the user's notes: its
+// question came after triage (a build, review or land question), so the item has its repo.
+func Rebuildable(it Item) bool {
+	return it.ReturnStage == Build || it.ReturnStage == Review || it.ReturnStage == Land
 }
 
 // DropReason is the reason a dropped item's event records.

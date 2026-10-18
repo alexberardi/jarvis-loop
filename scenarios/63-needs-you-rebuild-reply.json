@@ -1,0 +1,49 @@
+{
+  "name": "needs-you-rebuild-reply",
+  "about": "#131: CI is red on a head the build did not change, so the item waits on the user (needs-you, return stage land). A reply there that opens with rebuild, rebase or fix is the user's note for the builder, not an answer: \"rebuild, rebase on main\" from the approver sends the item back to build on the same PR (a rerun would test the same merge again), and the next build's brief points at the note. The same reply from someone else is refused and the item keeps waiting.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "no_change"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "fail", "lint": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}, "question": {"a": "^CI failed on [0-9a-f]{7} and the build changed nothing: rerun CI, fix main, or drop$"},
+     "messages": [{"thread": "a", "from": "bot", "buttons": ["Rebuild…", "Drop"],
+       "text": "needs you: CI failed on [0-9a-f]{7} and the build changed nothing: rerun CI, fix main, or drop\\nReply in this thread to answer, or start with \"rebuild\" \\(or use Rebuild…\\) to send it back to build with your note\\.$"}]},
+
+    {"do": "reply", "item": "a", "as": "other", "text": "rebuild, rebase on main"},
+    {"do": "expect", "stage": {"a": "needs_you"}, "no_events": [{"item": "a", "kind": "rebuild"}],
+     "messages": [{"kind": "ephemeral", "to": "other", "text": "^Sorry, only the approver can do that\\.$"}]},
+
+    {"do": "script", "item": "a", "play": "good"},
+    {"do": "reply", "item": "a", "as": "approver", "text": "rebuild, rebase on main"},
+    {"do": "wait", "stage": {"a": "build"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review"},
+    "events": [
+      {"item": "a", "kind": "rebuild", "actor": "approver",
+       "data": {"notes": "^rebuild, rebase on main$", "question": "^CI failed on [0-9a-f]{7} and the build changed nothing"}, "count": 1},
+      {"item": "a", "kind": "refused", "actor": "other", "count": 1}
+    ],
+    "no_events": [{"item": "a", "kind": "answered"}],
+    "messages": [
+      {"thread": "a", "from": "approver", "text": "^rebuild, rebase on main$"},
+      {"thread": "a", "from": "bot", "text": "^Sent back to build by you: 'rebuild, rebase on main'\\.$"}
+    ],
+    "prs": 1,
+    "agent_runs": {"build": 3},
+    "run_files": [{"item": "a", "stage": "build", "file": "brief.md",
+      "text": "- Sent back to build by the user instead of an answer to its question; PR #[0-9]+ is open on this branch\\. Do what `\\.loop/review/held\\.md` asks on the same branch"}]
+  }
+}

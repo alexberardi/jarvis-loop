@@ -18,7 +18,7 @@ func TestNeedsYouMessageHasADropButton(t *testing.T) {
 	if !strings.Contains(allText(msg), "needs you") {
 		t.Fatalf("last post is not the needs_you message: %s", allText(msg))
 	}
-	if ids := actionIDs(msg); len(ids) != 1 || ids[0] != "drop" {
+	if ids := actionIDs(msg); len(ids) != 1 || ids[0] != "drop" { // triage's question: no Rebuild
 		t.Fatalf("buttons %v", ids)
 	}
 	if v := elementValue(msg, "drop"); v != fmt.Sprint(id) {

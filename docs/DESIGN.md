@@ -83,7 +83,7 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | `POST /items/{id}/advance` | finish a stage with its result and evidence; the server checks the exit criteria and picks the next stage |
 | `POST /items/{id}/evidence` | upload a file |
 | `POST /items/{id}/ask`, `/answer` | put an item in needs-you with a question; record the answer |
-| `POST /items/{id}/approve`, `/hold`, `/rebuild` | the decision on a held merge; `/rebuild` (the user, or a runner for a held PR that turned conflicting) sends it back to build with notes |
+| `POST /items/{id}/approve`, `/hold`, `/rebuild` | the decision on a held merge; `/rebuild` (the user, or a runner for a held PR that turned conflicting) sends it back to build with notes; *since 2026-10-17* the user's also takes a needs-you item whose question came after triage ([decision](decisions/2026-10-17-needs-you-rebuild.md)) |
 | `POST /items/{id}/drop` | the user closes an item they won't land, from any open stage; the runner then closes its PR |
 | `POST /items/{id}/qa`, `/verified`, `/reopen` | the QA lane: mark an item for the user's check before it lands; the check passed (qa → done) or failed (qa → done, and a new P2 item with the words) |
 | `GET`, `PUT /control` | the active-agents number, stop and resume |
@@ -193,7 +193,7 @@ The script then:
 **Hold list (it stays):** jarvis-server's `CLAUDE.md` also holds PRs that change auth or access, update signing or the helper, or prod, that weaken a test or CI check, or that are marked "needs review". They still need the three gates, and then the user's approval, by button or in plain words in the item's thread ("yea, removing that old test is fine"):
 
 - Only the user's member ID (`U0C9AFPAMD4`), in that item's own thread, counts.
-- The bot decides whether the reply approves; anything unclear is a question, answered in the thread while the item stays held. *Since 2026-10-16:* a reply that is neither an approval nor a question, a "wait" or a "no" ("rebuild", "rebase and fix X") is a note for the builder: the item goes back to build with it, on the same PR.
+- The bot decides whether the reply approves; anything unclear is a question, answered in the thread while the item stays held. *Since 2026-10-16:* a reply that is neither an approval nor a question, a "wait" or a "no" ("rebuild", "rebase and fix X") is a note for the builder: the item goes back to build with it, on the same PR. *Since 2026-10-17:* a needs-you reply that opens with rebuild, rebase or fix does the same instead of answering, and needs-you and held messages have a Rebuild… button with a note form ([decision](decisions/2026-10-17-needs-you-rebuild.md)).
 - It posts what it understood ("Approved by you: '…', merging #142") with a **Cancel** button, and merges after 2 minutes.
 - An approval is for the PR's head commit when given; new commits after it expire it, and the bot asks again.
 - The item's history records who, the words, and the commit.

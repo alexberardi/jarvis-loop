@@ -190,6 +190,66 @@ func TestPressesWhatIsThere(t *testing.T) {
 	}
 }
 
+// A press carries a trigger_id; views.open with it shows a modal (recorded, once per trigger), and
+// Submit sends that person's open modal back as a view_submission with what they typed.
+func TestModalOpensAndSubmits(t *testing.T) {
+	f, api, c := start(t)
+	ctx := context.Background()
+	ts, _ := api.PostMessage(ctx, slack.Message{Channel: loopCh, Text: "q", Blocks: []map[string]any{
+		{"type": "actions", "block_id": "needs_you", "elements": []any{
+			map[string]any{"type": "button", "action_id": "rebuild", "value": "7", "text": map[string]any{"type": "plain_text", "text": "Rebuild…"}}}},
+	}})
+	if err := f.Submit("U3", nil); !errors.Is(err, slackfake.ErrNoView) {
+		t.Fatalf("submit without a modal: %v", err)
+	}
+	if err := f.Press("U3", loopCh, ts, "rebuild"); err != nil {
+		t.Fatal(err)
+	}
+	var p struct {
+		TriggerID string `json:"trigger_id"`
+		View      struct {
+			CallbackID      string `json:"callback_id"`
+			PrivateMetadata string `json:"private_metadata"`
+			State           struct {
+				Values map[string]map[string]map[string]any
+			} `json:"state"`
+		} `json:"view"`
+	}
+	json.Unmarshal(waitEnvs(t, c, 1)[0].Payload, &p)
+	if p.TriggerID == "" {
+		t.Fatal("no trigger_id")
+	}
+	view := map[string]any{"type": "modal", "callback_id": "rebuild", "private_metadata": "7",
+		"title": map[string]any{"type": "plain_text", "text": "Rebuild #7"}, "submit": map[string]any{"type": "plain_text", "text": "Rebuild"},
+		"close": map[string]any{"type": "plain_text", "text": "Cancel"},
+		"blocks": []any{map[string]any{"type": "input", "block_id": "note", "label": map[string]any{"type": "plain_text", "text": "Note"},
+			"element": map[string]any{"type": "plain_text_input", "action_id": "note", "initial_value": "rebase"}}}}
+	if err := api.OpenView(ctx, p.TriggerID, view); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.OpenView(ctx, p.TriggerID, view); err == nil {
+		t.Fatal("a trigger opened two views")
+	}
+	msgs := f.Messages()
+	if m := msgs[len(msgs)-1]; m.Kind != "modal" || m.To != "U3" || m.Text != "[Rebuild #7]\nNote: rebase\n[Rebuild] [Cancel]" {
+		t.Fatalf("modal %+v", m)
+	}
+	if err := f.Submit("U3", map[string]string{"note": "rebase and fix the lint"}); err != nil {
+		t.Fatal(err)
+	}
+	json.Unmarshal(waitEnvs(t, c, 2)[1].Payload, &p)
+	if p.View.CallbackID != "rebuild" || p.View.PrivateMetadata != "7" || p.View.State.Values["note"]["note"]["value"] != "rebase and fix the lint" {
+		t.Fatalf("submission %+v", p.View)
+	}
+	msgs = f.Messages()
+	if m := msgs[len(msgs)-1]; m.Kind != "submit" || m.User != "U3" || m.Text != "[Rebuild #7]\nNote: rebase and fix the lint" {
+		t.Fatalf("submit %+v", m)
+	}
+	if err := f.Submit("U3", nil); !errors.Is(err, slackfake.ErrNoView) {
+		t.Fatalf("a modal submitted twice: %v", err)
+	}
+}
+
 func TestCommandRecordsTheAnswer(t *testing.T) {
 	f, _, _ := start(t)
 	answer, err := f.Command("U0C9AFPAMD4", loopCh, "/loop", "status")

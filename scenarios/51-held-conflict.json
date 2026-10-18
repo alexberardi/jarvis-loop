@@ -36,6 +36,6 @@
     ],
     "agent_runs": {"build": 2},
     "run_files": [{"item": "a", "stage": "build", "file": "brief.md",
-      "text": "- Sent back from held; PR #101 is open on this branch\\. Do what `\\.loop/review/held\\.md` asks(?s:.*)`\\.loop/review/held\\.md` \\(why the held PR came back to build, newest last\\)"}]
+      "text": "- Sent back from held; PR #101 is open on this branch\\. Do what `\\.loop/review/held\\.md` asks(?s:.*)`\\.loop/review/held\\.md` \\(why the item came back to build, newest last\\)"}]
   }
 }

@@ -729,9 +729,9 @@ func (s *server) hold(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, it)
 }
 
-// rebuild sends a held item back to build with notes (store.Rebuild): the user's reply that is
-// not an approval, or a runner finding the held PR conflicting. It holds no lease: only a held
-// item moves, and only to build.
+// rebuild sends a held or needs_you item back to build with notes (store.Rebuild): the user's
+// note (a reply or the Rebuild button), or a runner finding the held PR conflicting. It holds no
+// lease: only a held or needs_you item moves (a runner's call only a held one), and only to build.
 func (s *server) rebuild(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	if !ok {

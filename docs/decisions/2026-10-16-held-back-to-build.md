@@ -37,5 +37,9 @@ covered by a test or a scenario:
   last `pr_opened` to `.loop/review/held.md` (who sent it back, when, the notes), and the brief
   says "Sent back from held; PR #n is open on this branch. Do what `.loop/review/held.md` asks".
 
+**Since 2026-10-17 (item #131):** a needs_you item can go back to build the same way (a reply
+that opens with rebuild, rebase or fix, or the Rebuild… button on needs_you and held messages);
+see `2026-10-17-needs-you-rebuild.md`. The context file's label and heading no longer say "held".
+
 **Not done:** the held message's buttons are not updated when the item leaves held this way (a
 later press gets the store's "item is build, not held"), as with a reply approval today.

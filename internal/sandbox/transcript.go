@@ -141,7 +141,13 @@ func header(m slackfake.Message) string {
 	who := DisplayName(m.User)
 	var tags []string
 	switch m.Kind {
-	case "ephemeral", "response", "command":
+	case "ephemeral", "response", "command", "modal", "submit":
+		if m.Kind == "modal" {
+			tags = append(tags, "a form")
+		}
+		if m.Kind == "submit" {
+			tags = append(tags, "submitted the form")
+		}
 		if m.To == slack.Approver {
 			tags = append(tags, "only you see this")
 		} else {

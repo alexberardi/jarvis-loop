@@ -373,8 +373,9 @@ func (r *Runner) planContext(ctx context.Context, ru *run, info *RunInfo) {
 	}
 }
 
-// heldNotes writes to rel why a held item came back to build (pipeline.ApplyRebuild): the user's
-// reply in the held thread, or the conflict the runner found, since the build's last PR update.
+// heldNotes writes to rel why a held or needs_you item came back to build (pipeline.ApplyRebuild):
+// the user's note (a reply in the thread or the Rebuild button), or the conflict the runner found
+// on a held PR, since the build's last PR update. info.HeldFrom is the newest one's stage.
 func (r *Runner) heldNotes(ctx context.Context, ru *run, info *RunInfo, rel string) {
 	d, err := r.Client.Detail(ctx, ru.item.ID)
 	if err != nil {
@@ -382,6 +383,7 @@ func (r *Runner) heldNotes(ctx context.Context, ru *run, info *RunInfo, rel stri
 		return
 	}
 	var notes []string
+	from := ""
 	for _, e := range d.Events {
 		switch {
 		case e.Outcome == "pr_opened":
@@ -391,6 +393,10 @@ func (r *Runner) heldNotes(ctx context.Context, ru *run, info *RunInfo, rel stri
 			if strings.HasPrefix(e.Actor, "runner:") {
 				by = "the runner (land's held watch)"
 			}
+			if q, _ := e.Data["question"].(string); e.From == string(pipeline.NeedsYou) {
+				by += ", instead of an answer to: " + oneLine(q)
+			}
+			from = e.From
 			n, _ := e.Data["notes"].(string)
 			notes = append(notes, fmt.Sprintf("\n## Sent back by %s (%s)\n\n%s\n", by, e.At.UTC().Format("2006-01-02 15:04 UTC"), strings.TrimSpace(n)))
 		}
@@ -398,8 +404,8 @@ func (r *Runner) heldNotes(ctx context.Context, ru *run, info *RunInfo, rel stri
 	if len(notes) == 0 {
 		return
 	}
-	writeContext(ru, info, rel, "why the held PR came back to build, newest last", "# Sent back from held (from loopd)\n"+strings.Join(notes, ""))
-	info.HeldNotes = rel
+	writeContext(ru, info, rel, "why the item came back to build, newest last", "# Sent back to build (from loopd)\n"+strings.Join(notes, ""))
+	info.HeldNotes, info.HeldFrom = rel, from
 }
 
 // reviewContext writes the review notes loopd recorded on the item's bounces to notesRel, and the

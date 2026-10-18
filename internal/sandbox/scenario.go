@@ -86,6 +86,9 @@ type Step struct {
 	// the workflow runs on main's commits go (name -> pass, fail, pending, cancel)
 	Checks map[string]string `json:"checks,omitempty"`
 	Main   map[string]string `json:"main,omitempty"`
+	// MainHead: Main is how the runs went on main's current head only (of the demo repo, or
+	// Slug), whether merged or pushed; it wins over the runs set for every commit.
+	MainHead bool `json:"main_head,omitempty"`
 	// push: a commit by someone else to the item's branch, or to Branch ("main") of the demo
 	// repo (or of Slug), changing File to Text
 	Branch string `json:"branch,omitempty"`
@@ -245,7 +248,7 @@ type MsgMatch struct {
 	Parent    string   `json:"parent,omitempty"`  // this item's first message
 	Channel   string   `json:"channel,omitempty"` // loop or digest
 	From      string   `json:"from,omitempty"`    // bot, approver, other
-	Kind      string   `json:"kind,omitempty"`    // message, ephemeral, command, response
+	Kind      string   `json:"kind,omitempty"`    // message, ephemeral, command, response, modal, submit
 	To        string   `json:"to,omitempty"`      // an ephemeral's reader
 	Text      string   `json:"text,omitempty"`    // regexp on the visible text
 	Buttons   []string `json:"buttons,omitempty"` // labels that must be on it
@@ -571,7 +574,14 @@ func (p *player) step(st Step) error {
 	case "land":
 		return p.land(st)
 	case "ci":
-		if st.Main != nil {
+		switch {
+		case st.Main != nil && st.MainHead:
+			slug := RepoSlug
+			if st.Slug != "" {
+				slug = st.Slug
+			}
+			s.GitHub.SetMainCIAt(slug, s.GitHub.MainHead(slug), st.Main)
+		case st.Main != nil:
 			s.GitHub.SetMainCI(st.Main)
 		}
 		if st.Item == "" {
@@ -689,6 +699,32 @@ func (p *player) step(st Step) error {
 		return err
 	case "press", "choose":
 		return p.press(st)
+	case "submit":
+		// As submits the modal their last press opened (the Rebuild form), with Text as its note
+		// when set (else the note it opened with).
+		user, err := userID(st.As)
+		if err != nil {
+			return err
+		}
+		var values map[string]string
+		if st.Text != "" {
+			values = map[string]string{"note": st.Text}
+		}
+		within := 10 * time.Second
+		if st.Within != "" {
+			if within, err = time.ParseDuration(st.Within); err != nil {
+				return err
+			}
+		}
+		// The bot opens the modal after it acked the press: wait for it, not for anything else.
+		var serr error
+		eventually(within, func() error {
+			if serr = s.Slack.Submit(user, values); errors.Is(serr, slackfake.ErrNoView) {
+				return serr
+			}
+			return nil
+		})
+		return serr
 	case "command":
 		user, err := userID(st.As)
 		if err != nil {

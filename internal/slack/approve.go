@@ -77,20 +77,8 @@ func ClassifyReply(text string) bool {
 // note. Anything else ("looks good", "let me check", "later", "merge it please") is not a note,
 // and the item stays held.
 func IsHeldNote(text string) bool {
-	text = stripMentions(text)
-	if strings.Contains(text, "?") {
-		return false
-	}
-	ws := words(text)
-	for _, w := range ws {
-		if slices.Contains(negationWords, w) || strings.HasSuffix(w, "n't") {
-			return false
-		}
-	}
-	for len(ws) > 0 && slices.Contains(leadWords, ws[0]) {
-		ws = ws[1:]
-	}
-	if len(ws) == 0 || slices.Contains(questionStarts, ws[0]) {
+	ws, ok := noteWords(text)
+	if !ok {
 		return false
 	}
 	if isChangeVerb(ws[0]) {
@@ -103,6 +91,48 @@ func IsHeldNote(text string) bool {
 		return true
 	}
 	return slices.ContainsFunc(ws[1:], isChangeVerb)
+}
+
+// IsRebuildNote decides whether a reply in a needs_you thread is the user's note for the builder,
+// which sends the item back to build (as the Rebuild button does) instead of answering the
+// question. It is narrower than IsHeldNote, since an answer may open with a change verb ("use the
+// staging DB", "add it to jarvis-node", "retry", "drop it"): the reply (after mentions and lead
+// words) must open with rebuild, rebase or fix (or their -ing forms), and "fix main" is an answer
+// (the user fixes main; the item then reads CI again). Questions and negations are never notes.
+func IsRebuildNote(text string) bool {
+	ws, ok := noteWords(text)
+	if !ok {
+		return false
+	}
+	switch ws[0] {
+	case "rebuild", "rebuilding", "rebase", "rebasing":
+		return true
+	case "fix", "fixing":
+		return len(ws) == 1 || ws[1] != "main"
+	}
+	return false
+}
+
+// noteWords are a reply's words after mentions and lead words, and whether it can be a note at
+// all: not a question (a question mark or a question opening), no negation or "wait" word.
+func noteWords(text string) ([]string, bool) {
+	text = stripMentions(text)
+	if strings.Contains(text, "?") {
+		return nil, false
+	}
+	ws := words(text)
+	for _, w := range ws {
+		if slices.Contains(negationWords, w) || strings.HasSuffix(w, "n't") {
+			return nil, false
+		}
+	}
+	for len(ws) > 0 && slices.Contains(leadWords, ws[0]) {
+		ws = ws[1:]
+	}
+	if len(ws) == 0 || slices.Contains(questionStarts, ws[0]) {
+		return nil, false
+	}
+	return ws, true
 }
 
 // isChangeVerb is a change verb or its -ing form ("adding", "fixing", "rebasing").

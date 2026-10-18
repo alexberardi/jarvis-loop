@@ -59,20 +59,33 @@ type Call struct {
 
 // Message is a message as it stands in the fake workspace.
 type Message struct {
-	Seq      int              `json:"seq"` // order of posting (shared with calls and injections)
-	Channel  string           `json:"channel"`
-	TS       string           `json:"ts"`
-	ThreadTS string           `json:"thread_ts,omitempty"`
-	User     string           `json:"user"`         // BotUser or the person's id
-	To       string           `json:"to,omitempty"` // an ephemeral's only reader
-	Kind     string           `json:"kind"`         // "message", "ephemeral", "command" (a slash command typed), "response" (its answer)
-	Text     string           `json:"text"`
-	Blocks   []map[string]any `json:"blocks,omitempty"`
-	Edits    int              `json:"edits,omitempty"`  // chat.update calls on it
-	Pinned   bool             `json:"pinned,omitempty"` // pins.add
+	Seq      int    `json:"seq"` // order of posting (shared with calls and injections)
+	Channel  string `json:"channel"`
+	TS       string `json:"ts"`
+	ThreadTS string `json:"thread_ts,omitempty"`
+	User     string `json:"user"`         // BotUser or the person's id
+	To       string `json:"to,omitempty"` // an ephemeral's only reader
+	// Kind is "message", "ephemeral", "command" (a slash command typed), "response" (its answer),
+	// "modal" (a form views.open showed To) or "submit" (To submitting it).
+	Kind   string           `json:"kind"`
+	Text   string           `json:"text"`
+	Blocks []map[string]any `json:"blocks,omitempty"`
+	Edits  int              `json:"edits,omitempty"`  // chat.update calls on it
+	Pinned bool             `json:"pinned,omitempty"` // pins.add
 	// Reactions are the bot's reactions on it (reactions.add, reactions.remove), in order added.
 	Reactions []string `json:"reactions,omitempty"`
 	History   []string `json:"history,omitempty"`
+}
+
+// trigger is where a press happened, for the modal its trigger_id opens.
+type trigger struct{ user, channel, thread, app string }
+
+// view is a modal views.open showed: to whom, where the press was, and the view itself.
+type view struct {
+	id        string
+	at        trigger
+	body      map[string]any
+	submitted bool
 }
 
 // Server is the fake. Start it with New; Close it when done.
@@ -91,6 +104,9 @@ type Server struct {
 	sockets  map[string]*socket
 	waiting  map[string]chan map[string]any
 	eventSeq int
+	// triggers are the trigger_ids of the presses (for views.open), and views the modals opened.
+	triggers map[string]trigger
+	views    []*view
 
 	acks chan map[string]any
 }
@@ -103,7 +119,8 @@ func New() *Server {
 // NewAt starts a fake Slack listening on addr (loopback).
 func NewAt(addr string) *Server {
 	f := &Server{fail: map[string][]string{}, acks: make(chan map[string]any, 256),
-		waiting: map[string]chan map[string]any{}, main: newSocket(), sockets: map[string]*socket{}}
+		waiting: map[string]chan map[string]any{}, main: newSocket(), sockets: map[string]*socket{},
+		triggers: map[string]trigger{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/{method}", f.api)
 	mux.HandleFunc("/ws", f.ws)
@@ -259,6 +276,20 @@ func (f *Server) api(w http.ResponseWriter, r *http.Request) {
 				code = "no_reaction"
 			default:
 				m.Reactions = slices.Delete(m.Reactions, i, i+1)
+			}
+		case "views.open":
+			at, ok := f.triggers[str("trigger_id")]
+			v, _ := body["view"].(map[string]any)
+			switch {
+			case !ok:
+				code = "invalid_trigger_id"
+			case v == nil || v["type"] != "modal":
+				code = "invalid_arguments"
+			default:
+				delete(f.triggers, str("trigger_id")) // a trigger opens one view
+				f.views = append(f.views, &view{id: fmt.Sprintf("V%d", seq), at: at, body: v})
+				f.msgs = append(f.msgs, &Message{Seq: seq, Channel: at.channel, TS: ts, ThreadTS: at.thread, User: poster,
+					To: at.user, Kind: "modal", Text: viewText(v, nil)})
 			}
 		case "pins.add":
 			if m := f.find(str("channel"), str("timestamp")); m != nil {
@@ -638,16 +669,17 @@ func (f *Server) action(user, channel, ts, actionID, value string) error {
 	thread := m.ThreadTS
 	blocks := blocksFrom(m.Blocks)
 	// The press goes to the app that posted the message.
-	k := f.main
+	k, app := f.main, ""
 	for _, a := range f.apps {
 		if m.User == a.BotUser {
-			k = f.sockets[a.Name]
+			k, app = f.sockets[a.Name], a.Name
 		}
 	}
-	f.nextSeq()
+	trig := fmt.Sprintf("trig-%d", f.nextSeq())
+	f.triggers[trig] = trigger{user: user, channel: channel, thread: thread, app: app}
 	f.mu.Unlock()
 	payload := map[string]any{
-		"type": "block_actions", "user": map[string]any{"id": user}, "channel": map[string]any{"id": channel},
+		"type": "block_actions", "user": map[string]any{"id": user}, "channel": map[string]any{"id": channel}, "trigger_id": trig,
 		"container": map[string]any{"type": "message", "channel_id": channel, "message_ts": ts, "thread_ts": thread},
 		"message":   map[string]any{"ts": ts, "thread_ts": thread, "blocks": blocks}, "actions": []any{act},
 	}
@@ -673,4 +705,84 @@ func (f *Server) Command(user, channel, command, text string) (string, error) {
 	f.msgs = append(f.msgs, &Message{Seq: f.nextSeq(), Channel: channel, TS: f.newTS(), User: BotUser, To: user, Kind: "response", Text: answer})
 	f.mu.Unlock()
 	return answer, nil
+}
+
+// ErrNoView is returned when a submit finds no open modal for that person.
+var ErrNoView = errors.New("slackfake: no open modal to submit")
+
+// Submit is a person submitting the newest modal open for them (views.open after their press),
+// with values by input block_id; an input not named keeps its initial_value. It is recorded (kind
+// "submit") and goes to the app that opened it as a view_submission.
+func (f *Server) Submit(user string, values map[string]string) error {
+	f.mu.Lock()
+	var v *view
+	for i := len(f.views) - 1; i >= 0 && v == nil; i-- {
+		if x := f.views[i]; x.at.user == user && !x.submitted {
+			v = x
+		}
+	}
+	if v == nil {
+		f.mu.Unlock()
+		return fmt.Errorf("%w for %s", ErrNoView, user)
+	}
+	v.submitted = true
+	state := map[string]any{}
+	typed := map[string]string{}
+	for _, b := range blocksFrom(v.body["blocks"]) {
+		el, _ := b["element"].(map[string]any)
+		bid, _ := b["block_id"].(string)
+		if b["type"] != "input" || el == nil || bid == "" {
+			continue
+		}
+		val, ok := values[bid]
+		if !ok {
+			val, _ = el["initial_value"].(string)
+		}
+		typed[bid] = val
+		var jv any = val
+		if val == "" {
+			jv = nil // Slack sends null for an empty input
+		}
+		state[bid] = map[string]any{fmt.Sprint(el["action_id"]): map[string]any{"type": el["type"], "value": jv}}
+	}
+	k := f.main
+	if v.at.app != "" {
+		k = f.sockets[v.at.app]
+	}
+	f.msgs = append(f.msgs, &Message{Seq: f.nextSeq(), Channel: v.at.channel, TS: f.newTS(), ThreadTS: v.at.thread, User: user, To: user,
+		Kind: "submit", Text: viewText(v.body, typed)})
+	payload := map[string]any{"type": "view_submission", "user": map[string]any{"id": user},
+		"view": map[string]any{"id": v.id, "type": "modal", "callback_id": v.body["callback_id"], "private_metadata": v.body["private_metadata"],
+			"state": map[string]any{"values": state}}}
+	f.mu.Unlock()
+	_, err := f.deliverOn(k, "interactive", payload, InjectTimeout)
+	return err
+}
+
+// viewText is a modal as a transcript shows it: the title, the sections, each input's label and
+// value (typed, else its initial value), and the buttons.
+func viewText(v map[string]any, typed map[string]string) string {
+	text := func(x any) string {
+		m, _ := x.(map[string]any)
+		s, _ := m["text"].(string)
+		return s
+	}
+	lines := []string{"[" + text(v["title"]) + "]"}
+	for _, b := range blocksFrom(v["blocks"]) {
+		switch b["type"] {
+		case "section":
+			lines = append(lines, text(b["text"]))
+		case "input":
+			el, _ := b["element"].(map[string]any)
+			val, ok := typed[fmt.Sprint(b["block_id"])]
+			if !ok && el != nil {
+				val, _ = el["initial_value"].(string)
+			}
+			lines = append(lines, text(b["label"])+": "+val)
+		}
+	}
+	if typed == nil {
+		lines = append(lines, "["+text(v["submit"])+"] ["+text(v["close"])+"]")
+	}
+	return strings.Join(lines, "\n")
 }

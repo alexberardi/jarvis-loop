@@ -94,7 +94,7 @@ func (e *botEnv) calls() []call {
 			continue
 		}
 		ch, _ := c.Body["channel"].(string)
-		if ch != ChannelLoop && ch != ChannelDigest && ch != ChannelPlan {
+		if c.Method != "views.open" && ch != ChannelLoop && ch != ChannelDigest && ch != ChannelPlan {
 			e.t.Errorf("%s to channel %q", c.Method, ch)
 		}
 		raw, _ := json.Marshal(c.Body)
@@ -250,7 +250,7 @@ func (e *botEnv) press(user, channel, msgTS, actionID, blockID, value string) {
 		act = map[string]any{"action_id": actionID, "block_id": blockID, "selected_option": map[string]any{"value": value}}
 	}
 	e.b.HandleEnvelope(e.ctx, envelope("interactive", map[string]any{
-		"type": "block_actions", "user": map[string]any{"id": user}, "channel": map[string]any{"id": channel},
+		"type": "block_actions", "user": map[string]any{"id": user}, "channel": map[string]any{"id": channel}, "trigger_id": "trig-" + user,
 		"container": map[string]any{"channel_id": channel, "message_ts": msgTS},
 		"message":   map[string]any{"ts": msgTS}, "actions": []any{act}}))
 }
@@ -492,7 +492,7 @@ func TestHeldMessageHasButtons(t *testing.T) {
 		}
 	}
 	ids := actionIDs(held)
-	if len(ids) != 3 || ids[0] != "approve" || ids[1] != "keep_holding" || ids[2] != "drop" {
+	if strings.Join(ids, ",") != "approve,keep_holding,rebuild,drop" {
 		t.Fatalf("buttons %v", ids)
 	}
 	if v := elementValue(held, "approve"); v != fmt.Sprintf("%d:%s", id, shaA) {

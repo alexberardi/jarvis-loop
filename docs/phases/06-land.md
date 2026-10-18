@@ -58,7 +58,11 @@ Everything is re-derived from GitHub and git, never from an agent's words.
    runs' log as evidence `ci-failure.log`; on main red, the runner attaches it when it triages
    the P1 (docs/decisions/2026-10-16-ci-failure-log.md).* *As built (2026-10-15, item #18): it also sends `ci_head_sha`, the head that failed;
    loopd counts it as a bounce, and a build that reports `pr_opened` with that same head goes to
-   needs-you instead of review (`docs/decisions/2026-10-15-ci-red-unchanged-head.md`).* Any pending → wait: poll every 30 s with heartbeats, up to `land_ci_wait`
+   needs-you instead of review (`docs/decisions/2026-10-15-ci-red-unchanged-head.md`).* *As built
+   (2026-10-17, item #131): when main was red at the PR's merge base and is green at main's head
+   now, it also sends `main_fixed_sha` and adds "main was red at this PR's base and is green now
+   at `…`: rebase on main" to the reason; the same-head question then recommends a rebuild, not a
+   rerun (`docs/decisions/2026-10-17-needs-you-rebuild.md`).* Any pending → wait: poll every 30 s with heartbeats, up to `land_ci_wait`
    (config, default 30 min), then `failed` ("CI still pending after 30m"). No checks at all → wait
    the same way (a repo with no CI configured is a config error, not a pass).
 5. **Harness evidence:** the item has at least one evidence file from build (`pr_opened`) and the
