@@ -26,8 +26,8 @@ panel (`/board/flow`, linked from the board's header) and the API the same numbe
   7d window is a few thousand samples.
 - **Why items wait now** classifies every open item that waits (`pipeline.WaitReason`): `needs
   you`, `held for approval`, `qa`; for an unclaimed item in a work stage: `dependencies`, `no
-  runner for a resource` (the `unservable` flag), `stopped`, `no free slot` (live runs ≥ active
-  agents, turns included), `limit <key>:<n>` (a resource's limit first, then the stage's), else
+  runner for a resource` (the `unservable` flag), `stopped`, `no free slot` (agent runs ≥ active
+  agents, turns included; land leases take none), `limit <key>:<n>` (a resource's limit first, then the stage's), else
   `ready` (nothing holds it: the next runner that asks for its stage gets it). The item's own
   blockers come before the loop's (once the loop frees up it would still wait for them).
   `WaitReason` and the claim (`Choose`) share the checks (`loopBlocks`, `itemBlocks`), and
@@ -62,6 +62,9 @@ panel (`/board/flow`, linked from the board's header) and the API the same numbe
   its limits (`ChooseWork` applies the holds after `Choose`); the held work itself is `ready`, and
   a frozen repo's fix ignores the holds as `chooseFix` does. The runner panel on the board names
   the hold; the flow panel keeps the ask's reasons.
+- **Land** (#209, #210): land runs no agent, so a land item waits on none of its resources' limits
+  (`itemBlocks` uses `Needs`) and never for a busy or held agent slot; only its stage's limit, a
+  stop or 0 active agents hold it back.
 
 ## Speed
 
