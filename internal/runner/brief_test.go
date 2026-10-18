@@ -102,3 +102,16 @@ func TestBriefHarness(t *testing.T) {
 		}
 	}
 }
+
+// Every claude stage's brief keeps its checks in the foreground: a one-shot run ends when the
+// agent stops, and a background command never reports back (#208).
+func TestBriefsSayForeground(t *testing.T) {
+	for _, stage := range []string{StageBuild, StageReview, StageTriage} {
+		b := Brief(stage, Item{ID: 1, Title: "T"}, RunInfo{Slug: "a/b", Base: "main", Branch: "loop/1-t", Worktree: "/x", Scratch: "/y", Sandbox: "loop-1"})
+		for _, want := range []string{"## Run everything in the foreground", "never use `run_in_background`, Monitor or a\ntrailing `&`", "600000 ms"} {
+			if !strings.Contains(b, want) {
+				t.Errorf("the %s brief lacks %q", stage, want)
+			}
+		}
+	}
+}
