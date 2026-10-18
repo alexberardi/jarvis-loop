@@ -189,6 +189,19 @@ func TestProofSweep(t *testing.T) {
 	if q := queuedTriggers(t, s); len(q) != 1 {
 		t.Fatalf("asked twice: %+v", q)
 	}
+	// A turn that ends without a proof does not ask again: no turn every tick, forever.
+	cl := claimKinds(t, s, "o", pipeline.WorkOrchestrate)
+	if cl == nil || cl.Orch == nil {
+		t.Fatalf("the sweep's turn: %+v", cl)
+	}
+	finish(t, s, cl, "sess-1")
+	clk.Advance(time.Minute)
+	if err := s.OrchTick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if q := queuedTriggers(t, s); len(q) != 0 {
+		t.Fatalf("asked again after a turn without a proof: %+v", q)
+	}
 	got, err := s.OrchProof(ctx, "orchestrator:loop", bare.ID, json.RawMessage(`[{"kind":"usage","event":"verified"}]`), "from the PR's test plan")
 	if err != nil || got.Proof == nil || got.Proof.By != pipeline.ProofBySweep {
 		t.Fatalf("orch proof: %+v %v", got.Proof, err)
@@ -201,6 +214,93 @@ func TestProofSweep(t *testing.T) {
 	}
 	if _, err := s.OrchProof(ctx, "orchestrator:loop", bare.ID, json.RawMessage(`[{"kind":"what"}]`), "bad"); code(err) == "" {
 		t.Fatalf("a bad proof: %v", err)
+	}
+}
+
+// recordEvent writes an event as the loop would, for usage checks to see.
+func recordEvent(t *testing.T, s *Store, e Event) {
+	t.Helper()
+	if err := s.tx(context.Background(), func(tx *sql.Tx) error { return s.event(tx, e) }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// checkProof is a runner's check of a proof with only usage checks; it returns the event kind and
+// the proof's status.
+func checkProof(t *testing.T, s *Store, clk interface{ Advance(time.Duration) }, id int64) Event {
+	t.Helper()
+	clk.Advance(pipeline.ProofRecheck)
+	ev, err := s.ProofChecked(context.Background(), runner, id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ev
+}
+
+// A usage check with actors counts only their events: a claim by another runner is not use.
+func TestProofUsageActors(t *testing.T) {
+	s, clk := open(t)
+	it := proofQA(t, s, `[{"kind":"usage","event":"claimed","actor":["runner:mbp","runner:mini"]}]`)
+	other := add(t, s, "other work", "")
+	recordEvent(t, s, Event{ItemID: other.ID, Actor: "runner:other", Kind: "claimed"})
+	if ev := checkProof(t, s, clk, it.ID); ev.Kind != KindProofChecked || ev.Data["status"] != pipeline.CheckPending {
+		t.Fatalf("a claim by runner:other: %+v", ev)
+	}
+	recordEvent(t, s, Event{ItemID: other.ID, Actor: "runner:mbp", Kind: "claimed"})
+	if ev := checkProof(t, s, clk, it.ID); ev.Kind != "verified" {
+		t.Fatalf("a claim by runner:mbp: %+v", ev)
+	}
+}
+
+// A usage check's match compares values: a missing key or another value is not use; numbers and
+// bools compare as their text.
+func TestProofUsageMatch(t *testing.T) {
+	s, clk := open(t)
+	it := proofQA(t, s, `[{"kind":"usage","event":"rebuild","match":{"source":["needs_you"],"forced":["true"],"n":["2"]}}]`)
+	other := add(t, s, "other work", "")
+	for _, d := range []map[string]any{
+		{"source": "other", "forced": true, "n": 2},
+		{"forced": true, "n": 2},
+		{"source": "needs_you", "forced": false, "n": 2},
+		{"source": "needs_you", "forced": true, "n": 3},
+	} {
+		recordEvent(t, s, Event{ItemID: other.ID, Actor: user, Kind: "rebuild", Data: d})
+		if ev := checkProof(t, s, clk, it.ID); ev.Kind != KindProofChecked || ev.Data["status"] != pipeline.CheckPending {
+			t.Fatalf("rebuild %v: %+v", d, ev)
+		}
+	}
+	recordEvent(t, s, Event{ItemID: other.ID, Actor: user, Kind: "rebuild", Data: map[string]any{"source": "needs_you", "forced": true, "n": 2}})
+	if ev := checkProof(t, s, clk, it.ID); ev.Kind != "verified" {
+		t.Fatalf("the matching rebuild: %+v", ev)
+	}
+}
+
+// A proof cannot pass on its own records: the item's own proof_checked and proof_set events are
+// not use; another item's are.
+func TestProofUsageNotItsOwnChecks(t *testing.T) {
+	s, clk := open(t)
+	ctx := context.Background()
+	own := proofQA(t, s, `[{"kind":"usage","event":"proof_checked"}]`)
+	for i := 0; i < 2; i++ {
+		if ev := checkProof(t, s, clk, own.ID); ev.Kind != KindProofChecked || ev.Data["status"] != pipeline.CheckPending {
+			t.Fatalf("check %d on its own proof_checked: %+v", i+1, ev)
+		}
+	}
+	// A sweep's proof is set after the merge: its own proof_set is not use either.
+	swept := toMerged(t, s, runner, nil, map[string]string{"needs_qa": "true"})
+	if _, err := s.OrchProof(ctx, "orchestrator:loop", swept.ID, json.RawMessage(`[{"kind":"usage","event":"proof_set"}]`), "sweep"); err != nil {
+		t.Fatal(err)
+	}
+	if ev := checkProof(t, s, clk, swept.ID); ev.Kind != KindProofChecked || ev.Data["status"] != pipeline.CheckPending {
+		t.Fatalf("a check on its own proof_set: %+v", ev)
+	}
+	other := add(t, s, "other work", "")
+	recordEvent(t, s, Event{ItemID: other.ID, Actor: "runner:" + runner, Kind: KindProofChecked})
+	recordEvent(t, s, Event{ItemID: other.ID, Actor: "orchestrator:loop", Kind: "proof_set"})
+	for _, id := range []int64{own.ID, swept.ID} {
+		if ev := checkProof(t, s, clk, id); ev.Kind != "verified" {
+			t.Fatalf("#%d on another item's proof records: %+v", id, ev)
+		}
 	}
 }
 

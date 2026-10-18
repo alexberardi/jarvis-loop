@@ -51,7 +51,7 @@ func (s *Store) ProofChecked(ctx context.Context, runnerName string, id int64, d
 				if c.Kind != pipeline.ProofUsage || c.State == pipeline.CheckPassed {
 					continue
 				}
-				if usage[i], err = usageSeen(tx, c, since); err != nil {
+				if usage[i], err = usageSeen(tx, id, c, since); err != nil {
 					return err
 				}
 			}
@@ -97,10 +97,12 @@ func proofSince(tx *sql.Tx, id int64) (int64, error) {
 }
 
 // usageSeen counts the events after since that match a usage check: its event kind, one of its
-// actors (when set), and for each match key one of its values in the event's data.
-func usageSeen(tx *sql.Tx, c pipeline.ProofCheck, since int64) (pipeline.UsageSeen, error) {
+// actors (when set), and for each match key one of its values in the event's data. The item's own
+// proof records (proof_set, proof_checked) are not use: a proof cannot pass on its own checks.
+func usageSeen(tx *sql.Tx, id int64, c pipeline.ProofCheck, since int64) (pipeline.UsageSeen, error) {
 	var u pipeline.UsageSeen
-	rows, err := tx.Query(`SELECT id, actor, data FROM events WHERE kind = ? AND id > ? ORDER BY id`, c.Event, since)
+	rows, err := tx.Query(`SELECT id, actor, data FROM events WHERE kind = ? AND id > ?
+		AND NOT (COALESCE(item_id, 0) = ? AND kind IN ('proof_set', ?)) ORDER BY id`, c.Event, since, id, KindProofChecked)
 	if err != nil {
 		return u, err
 	}
