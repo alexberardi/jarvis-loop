@@ -41,6 +41,7 @@ const (
 	ActEscalate = "escalate"
 	ActAgents   = "agents"
 	ActNote     = "note"
+	ActProof    = "proof"
 )
 
 // orchFields are each action's fields besides action and reason (every one needs a reason), and
@@ -54,6 +55,7 @@ var orchFields = map[string]struct{ allowed, required []string }{
 	ActEscalate: {[]string{"item_id", "text", "recommendation"}, []string{"text"}},
 	ActAgents:   {[]string{"active_agents"}, []string{"active_agents"}},
 	ActNote:     {[]string{"text"}, []string{"text"}},
+	ActProof:    {[]string{"item_id", "checks"}, []string{"item_id", "checks"}},
 }
 
 // MaxOrchActions is the most actions one turn may ask for.
@@ -75,6 +77,8 @@ type OrchAction struct {
 	DependsOn      []int64 `json:"depends_on,omitempty"`
 	Signature      string  `json:"signature,omitempty"`
 	ActiveAgents   *int    `json:"active_agents,omitempty"`
+	// Checks is a proof action's checks, as a build states them (pipeline.ParseProof).
+	Checks json.RawMessage `json:"checks,omitempty"`
 }
 
 // OrchActionResult is how an action went, as loopd records it on the turn.
@@ -178,6 +182,9 @@ func (a OrchAction) route() (path string, body map[string]any) {
 	case ActAgents:
 		body["active_agents"] = a.ActiveAgents
 		return "/orchestrator/agents", body
+	case ActProof:
+		body["checks"] = a.Checks
+		return item + "proof", body
 	default: // ActNote
 		body["text"] = a.Text
 		return "/orchestrator/notes", body
@@ -223,7 +230,8 @@ Every turn, write ` + "`out/result.json`" + ` as your last step:
   {"action": "add", "title": "…", "ask": "…", "repo": "owner/name", "priority": "P1", "depends_on": [], "signature": "the normalised failure", "reason": "…"},
   {"action": "escalate", "item_id": 17, "text": "what needs the user", "recommendation": "what you would do, and why", "reason": "…"},
   {"action": "agents", "active_agents": 2, "reason": "every run fails the same way"},
-  {"action": "note", "text": "what you are watching, tried, suspect", "reason": "…"}
+  {"action": "note", "text": "what you are watching, tried, suspect", "reason": "…"},
+  {"action": "proof", "item_id": 18, "checks": [{"kind": "usage", "event": "claimed", "actor": ["runner:mbp"]}, {"kind": "manual", "look": "…"}], "reason": "from the PR's test plan"}
 ]}
 ` + "```" + `
 

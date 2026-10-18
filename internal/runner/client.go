@@ -377,6 +377,15 @@ func (c *Client) AwaitingDeploy(ctx context.Context) ([]BoardRow, error) {
 	return out.Items, err
 }
 
+// ProofsDue lists the qa items whose proof is due a check (GET /items?proof_due=1).
+func (c *Client) ProofsDue(ctx context.Context) ([]BoardRow, error) {
+	var out struct {
+		Items []BoardRow `json:"items"`
+	}
+	_, err := c.json(ctx, "GET", "/items?proof_due=1", nil, &out)
+	return out.Items, err
+}
+
 // Held lists the held items (GET /items?stage=held).
 func (c *Client) Held(ctx context.Context) ([]BoardRow, error) {
 	var out struct {

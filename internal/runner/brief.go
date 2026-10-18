@@ -41,6 +41,8 @@ type Item struct {
 	// PlanID and PlanPiece link an item filed from a plan to its piece (0: not from a plan).
 	PlanID    int64 `json:"plan_id,omitempty"`
 	PlanPiece int   `json:"plan_piece,omitempty"`
+	// Proof is how the loop checks it once merged (the runner runs its command checks).
+	Proof *pipeline.Proof `json:"proof,omitempty"`
 }
 
 // ItemTrust is the part of a trust OK the runner needs.
@@ -210,9 +212,11 @@ func StaticBrief(stage string) string {
 		b.WriteString(`{"outcome": "ready_for_pr", "pr_title": "one line, at most 256 characters",
  "pr_body": "markdown, at most 60,000 characters: what changed, the tests, what was not verified; name evidence files by file name",
  "summary": "one paragraph", "not_verified": ["…"], "evidence": [{"file": "evidence/after.png", "label": "after, phone"}],
- "needs_review": false}`)
+ "needs_review": false,
+ "proof": [{"kind": "command", "run": "go test ./internal/web -run TestBoardQA"}, {"kind": "manual", "look": "the QA column on a phone"}]}`)
 		b.WriteString("\n```\n\n```json\n{\"outcome\": \"question\", \"question\": \"…\"}\n```\n\n")
-		b.WriteString("`ready_for_pr` means everything is committed: the runner refuses a worktree with uncommitted changes, and reports git's own HEAD and changed files. It adds a Verification footer (the evidence files, the run's numbers) to your `pr_body`. Set `needs_review` to true when the change touches something the user should look at before it merges. No other fields.\n")
+		b.WriteString("`ready_for_pr` means everything is committed: the runner refuses a worktree with uncommitted changes, and reports git's own HEAD and changed files. It adds a Verification footer (the evidence files, the run's numbers, your proof) to your `pr_body`. Set `needs_review` to true when the change touches something the user should look at before it merges. No other fields.\n\n")
+		b.WriteString("`proof` (optional, at most 10 checks) is how the loop can tell, once merged, that the change works; an item that waits in qa is checked with it. Kinds: `usage` (`event`: a loopd event kind seen since the merge, with optional `actor` and `match` lists on its data fields: `{\"kind\": \"usage\", \"event\": \"claimed\", \"actor\": [\"runner:mbp\"]}`); `command` (`run`: one shell line the runner runs fenced in a checkout of main, exit 0 passes); `pi` (`run`, for the test Pi; it waits until the loop has one); `e2e` (`tests`: E2E suite test names; they wait until it runs); `manual` (`look`: one line, what only the user can judge). Every automatic check passing verifies the item without the user; a command failing twice in a row reopens it. So make each check really show the change works, and use `manual` only for looks, feel or a product call.\n")
 	}
 	return b.String()
 }

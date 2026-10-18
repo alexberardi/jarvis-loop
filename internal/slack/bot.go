@@ -549,6 +549,9 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	if strings.HasPrefix(e.Actor, orchestratorPrefix) {
 		return Message{Text: b.orchestratorLine(ctx, e)}, true
 	}
+	if e.Kind == store.KindProofChecked {
+		return b.proofCheckedMessage(e, d)
+	}
 	by := who(e.Actor)
 	if via := str(e.Data, "via"); strings.HasPrefix(via, orchestratorPrefix) {
 		by += " via orchestrator"
@@ -714,6 +717,8 @@ func (b *Bot) orchestratorLine(ctx context.Context, e store.Event) string {
 		what = "filed this item"
 	case store.KindOrchSeenAgain:
 		what = "saw this again"
+	case "proof_set":
+		what = "wrote its proof (the proof sweep): " + b.field(strings.Join(listOf(e.Data, "checks"), "; "), 600, e.ItemID)
 	case "refused":
 		return fmt.Sprintf("Orchestrator: tried to %s; refused: %s", Escape(str(e.Data, "action")), f("message", 300))
 	default:

@@ -33,29 +33,35 @@ func (s *Store) Reopen(ctx context.Context, actor string, id int64, words string
 		if err != nil {
 			return err
 		}
-		now := s.clock.Now()
-		n, err := pipeline.NewReopen(it, words, now)
-		if err != nil {
-			return err
-		}
-		if err := s.insertItem(tx, actor, &n); err != nil {
-			return err
-		}
-		tr.Item.UpdatedAt = now
-		if err := saveItem(tx, tr.Item); err != nil {
-			return err
-		}
-		tr.Data["reopen_item"] = n.ID
-		old, filed = tr.Item, n
-		if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
-			return err
-		}
-		return s.planItemSettled(tx, tr.Item)
+		old, filed, err = s.reopenTx(tx, actor, it, tr, words)
+		return err
 	})
 	if err != nil {
 		return old, filed, s.refuse(ctx, actor, id, "reopen", err)
 	}
 	return old, filed, nil
+}
+
+// reopenTx stores a reopen transition of it (the user's or a failed proof's): it files the new P2
+// item with the words, and records the event with the new item's id.
+func (s *Store) reopenTx(tx *sql.Tx, actor string, it pipeline.Item, tr pipeline.Transition, words string) (old, filed pipeline.Item, err error) {
+	now := s.clock.Now()
+	n, err := pipeline.NewReopen(it, words, now)
+	if err != nil {
+		return old, filed, err
+	}
+	if err := s.insertItem(tx, actor, &n); err != nil {
+		return old, filed, err
+	}
+	tr.Item.UpdatedAt = now
+	if err := saveItem(tx, tr.Item); err != nil {
+		return old, filed, err
+	}
+	tr.Data["reopen_item"] = n.ID
+	if err := s.event(tx, transitionEvent(it.ID, actor, tr)); err != nil {
+		return old, filed, err
+	}
+	return tr.Item, n, s.planItemSettled(tx, tr.Item)
 }
 
 // Deployed is a runner reporting that the loop build it runs contains a qa item's merge commit

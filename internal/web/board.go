@@ -491,7 +491,7 @@ func str(m map[string]any, k string) string {
 }
 
 // lanes maps the board's columns to display stages (pipeline.Display). Planning holds the open
-// plans instead (planning is not an item stage); QA has no stage yet.
+// plans instead (planning is not an item stage). QA groups its cards (pipeline.QAGroup).
 var lanes = []struct {
 	name, note string
 	displays   []string
@@ -502,7 +502,7 @@ var lanes = []struct {
 	{"Review", "", []string{"review (queued)", "review", "land (queued)", "land"}},
 	{"Needs you", "", []string{"needs-you"}},
 	{"Approval", "", []string{"held"}},
-	{"QA", "No QA stage yet.", nil},
+	{"QA", "Nothing waits for a check.", []string{"qa"}},
 	{"Done", "", []string{"done", "closed"}},
 }
 
@@ -540,7 +540,17 @@ func boardView(items []store.BoardItem, plans []store.PlanRow, now time.Time, sh
 			if len(l.displays) > 1 {
 				c.Label = it.Display
 			}
+			if it.Display == "qa" {
+				c.Label, c.Reason = pipeline.QAGroup(it.Proof, it.AwaitingDeploy)
+			}
 			col.Cards = append(col.Cards, c)
+		}
+		if l.name == "QA" && len(col.Cards) > 0 {
+			// In the column's groups: waiting for a proof, needs you, failed.
+			slices.SortStableFunc(col.Cards, func(a, b card) int {
+				return slices.Index(pipeline.QAGroups, a.Label) - slices.Index(pipeline.QAGroups, b.Label)
+			})
+			col.Note = ""
 		}
 		v.Total += len(col.Cards)
 		v.Columns = append(v.Columns, col)
@@ -612,6 +622,10 @@ func itemView(d store.Detail, channel, ts string, now time.Time, slackBase strin
 		SlackURL: slackURL(slackBase, channel, ts), Reason: it.Question, Age: int64(now.Sub(it.CreatedAt) / time.Second)}
 	if it.Stage == pipeline.Held {
 		v.Reason = it.HoldReason
+	}
+	if it.Stage == pipeline.QA {
+		g, why := pipeline.QAGroup(it.Proof, it.AwaitingDeploy)
+		v.Reason = g + ": " + why
 	}
 	if d.Lease != nil {
 		v.ClaimedBy = d.Lease.Runner + "/" + d.Lease.Agent

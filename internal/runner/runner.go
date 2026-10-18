@@ -120,6 +120,12 @@ func (r *Runner) Run(ctx context.Context) error {
 			defer wg.Done()
 			r.heldWatchLoop(ctx)
 		}()
+		// The runner that works on main checks the qa items' proofs there.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.checkProofsLoop(ctx)
+		}()
 	}
 	lane := func(stages []string) {
 		wg.Add(1)
@@ -1339,6 +1345,9 @@ func (r *Runner) reportBuild(ctx context.Context, ru *run, out outcome, raw []by
 	if v.NeedsReview {
 		fields["needs_review"] = "true"
 	}
+	if v.ProofChecks != nil {
+		fields["proof"] = string(v.Proof)
+	}
 	r.advance(ctx, ru, "pr_opened", r.metrics(ru, out, fields), facts.ChangedPaths)
 }
 
@@ -1376,7 +1385,7 @@ func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []Evidence
 	}
 	st := r.runStats(ru, out)
 	body := filepath.Join(ru.dir, "pr-body.md")
-	if err := os.WriteFile(body, []byte(PRBody(v.PRBody, ru.item.ID, files, evidenceLabels(v.Result), st, vres)), 0o600); err != nil {
+	if err := os.WriteFile(body, []byte(PRBody(v.PRBody, ru.item.ID, files, evidenceLabels(v.Result), st, vres, v.ProofChecks)), 0o600); err != nil {
 		return 0, "", err
 	}
 	spec := PRSpec{Slug: ru.repo.Slug, Head: ru.branch, Base: ru.repo.Base, Title: v.PRTitle, BodyFile: body}

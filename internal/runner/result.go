@@ -34,6 +34,9 @@ type Result struct {
 	// NeedsQA (triage's reproduced, review's approved): once merged, the item waits in qa for the
 	// user's own check (docs/decisions/2026-10-15-qa.md).
 	NeedsQA bool `json:"needs_qa,omitempty"`
+	// Proof (build's ready_for_pr) is how the loop can tell, once merged, that the change works:
+	// a list of checks (pipeline.ParseProof; docs/decisions/2026-10-18-qa-proofs.md).
+	Proof json.RawMessage `json:"proof,omitempty"`
 
 	// Triage's.
 	Repo      string   `json:"repo,omitempty"`
@@ -75,6 +78,8 @@ type Expect struct {
 type Valid struct {
 	Result
 	Paths []string
+	// ProofChecks is the proof as checked (nil: none stated).
+	ProofChecks *pipeline.Proof
 }
 
 // OutcomeReadyForPR is the build agent's "done": committed on the item's branch, for the runner
@@ -97,7 +102,7 @@ var StageOutcomes = map[string][]string{
 // outcome is refused, so an agent cannot slip, say, a repo into a build result.
 var outcomeFields = map[string][]string{
 	"question":         {"question"},
-	OutcomeReadyForPR:  {"pr_title", "pr_body", "head_sha", "summary", "not_verified", "evidence", "needs_review"},
+	OutcomeReadyForPR:  {"pr_title", "pr_body", "head_sha", "summary", "not_verified", "evidence", "needs_review", "proof"},
 	"reproduced":       {"repo", "area", "size", "risk", "resources", "summary", "notes", "evidence", "not_verified", "needs_qa"},
 	OutcomeRouted:      {"repo", "why"},
 	"not_reproducible": {"summary", "notes", "evidence", "not_verified"},
@@ -177,6 +182,17 @@ func ValidateResult(raw []byte, want Expect, facts GitFacts, loopDir string) (Va
 	case len(facts.ChangedPaths) == 0:
 		return Valid{}, fmt.Errorf("no commits change anything against the base branch")
 	}
+	var proof *pipeline.Proof
+	if len(r.Proof) > 0 && string(r.Proof) != "null" {
+		if proof, err = pipeline.ParseProof(string(r.Proof), pipeline.ProofByBuild); err != nil {
+			return Valid{}, fmt.Errorf("%s", strings.TrimPrefix(err.Error(), pipeline.CodeInvalidField+": "))
+		}
+		var b bytes.Buffer
+		if err := json.Compact(&b, r.Proof); err != nil {
+			return Valid{}, err
+		}
+		r.Proof = b.Bytes()
+	}
 	r.PRTitle = title
 	r.HeadSHA = facts.HeadSHA
 	for _, p := range normPaths(facts.ChangedPaths) {
@@ -200,7 +216,7 @@ func ValidateResult(raw []byte, want Expect, facts GitFacts, loopDir string) (Va
 			return Valid{}, fmt.Errorf("evidence entry %q must name a file directly in evidence/", e.File)
 		}
 	}
-	return Valid{Result: r, Paths: facts.ChangedPaths}, nil
+	return Valid{Result: r, Paths: facts.ChangedPaths, ProofChecks: proof}, nil
 }
 
 // normPaths turns name-status lines ("M\tx", "M x", "R100\ta\tb") into a sorted canonical form.

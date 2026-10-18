@@ -44,18 +44,60 @@ func (b *Bot) deployedMessage(e store.Event, d store.Detail) Message {
 	return b.qaAsk(it, "Deployed", deployed)
 }
 
-// qaAsk is the ask with the Verified and Reopen buttons.
+// qaAsk is the ask with the Verified and Reopen buttons. With a proof (docs/decisions/2026-10-18-qa-proofs.md)
+// that still has automatic checks to pass, it says the loop checks it itself and does not mention
+// the approver; with only manual checks left, it says what to look at.
 func (b *Bot) qaAsk(it pipeline.Item, what, detail string) Message {
-	text := fmt.Sprintf("<@%s> %s: %s — waiting for your check. %s.\nPress Verified when it works; Reopen, then reply here with what is wrong, files a new item.",
-		Approver, ref(it.ID, it.Title), what, detail)
+	head := fmt.Sprintf("<@%s> %s: %s — waiting for your check", Approver, ref(it.ID, it.Title), what)
+	text := fmt.Sprintf("%s. %s.\nPress Verified when it works; Reopen, then reply here with what is wrong, files a new item.", head, detail)
+	switch st := it.Proof.Status(); st {
+	case pipeline.CheckManual:
+		head = fmt.Sprintf("<@%s> %s: %s — waiting for your check: %s", Approver, ref(it.ID, it.Title), what, b.looks(it))
+		text = fmt.Sprintf("%s. %s.\nPress Verified when it works; Reopen, then reply here with what is wrong, files a new item.", head, detail)
+	case pipeline.CheckPending, pipeline.CheckWaiting, pipeline.CheckFailed:
+		head = fmt.Sprintf("%s: %s — the loop checks it itself", ref(it.ID, it.Title), what)
+		checks := append(it.Proof.Open(pipeline.CheckPending), it.Proof.Open(pipeline.CheckWaiting)...)
+		text = fmt.Sprintf("%s: %s. %s.", head, b.field(strings.Join(checks, "; "), 600, it.ID), detail)
+		if looks := it.Proof.Looks(); len(looks) > 0 {
+			text += "\nThen your check: " + b.looks(it) + "."
+		}
+		text += "\nIt is verified when every automatic check passes, and reopened if one fails twice in a row; Verified and Reopen still work by hand."
+	}
 	value := strconv.FormatInt(it.ID, 10)
-	return Message{Text: fmt.Sprintf("<@%s> %s: %s — waiting for your check", Approver, ref(it.ID, it.Title), what), Blocks: []map[string]any{
+	return Message{Text: head, Blocks: []map[string]any{
 		section(text),
 		{"type": "actions", "block_id": "qa", "elements": []any{
 			button("Verified", "qa_verified", value, "primary"),
 			button("Reopen", "qa_reopen", value, "danger"),
 		}},
 	}}
+}
+
+// looks is a proof's manual checks: what the user should look at.
+func (b *Bot) looks(it pipeline.Item) string {
+	return "look at " + b.field(strings.Join(it.Proof.Looks(), "; "), 600, it.ID)
+}
+
+// proofCheckedMessage is a check of the proof that changed where it stands: its automatic checks
+// passed and only the user's are left (the ask, with the buttons), a command check failed once
+// (checked again before it reopens), or what it still waits for. A check that changed nothing
+// posts nothing (they run every 30 minutes).
+func (b *Bot) proofCheckedMessage(e store.Event, d store.Detail) (Message, bool) {
+	it := d.Item
+	if e.Data["changed"] != true || it.Proof == nil {
+		return Message{}, false
+	}
+	switch str(e.Data, "status") {
+	case pipeline.CheckManual:
+		return b.qaAsk(it, "Proof passed", "Every automatic check passed"), true
+	case pipeline.CheckFailed:
+		_, why := pipeline.QAGroup(it.Proof, false)
+		text := fmt.Sprintf("Proof check %s. I check again in %d minutes; a second failure in a row reopens it.",
+			b.field(why, 800, it.ID), int(pipeline.ProofRecheck.Minutes()))
+		return Message{Text: text}, true
+	}
+	_, why := pipeline.QAGroup(it.Proof, false)
+	return Message{Text: "Proof: " + b.field(why, 800, it.ID) + "."}, true
 }
 
 // reopenButton is the approver's Reopen: the words come in the next reply in the item's thread.

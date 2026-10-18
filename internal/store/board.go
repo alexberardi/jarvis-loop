@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
@@ -25,6 +26,10 @@ type BoardItem struct {
 	Builder string
 	// Unservable is the resources no runner offers it, when loopd flagged it (pipeline.Unservable).
 	Unservable []string
+	// Proof is a qa item's proof (nil: none), and AwaitingDeploy whether it waits for its deploy:
+	// the QA column groups by them (pipeline.QAGroup).
+	Proof          *pipeline.Proof
+	AwaitingDeploy bool
 }
 
 // BoardItems is every item as a board card, in ListItems' order.
@@ -35,7 +40,7 @@ func (s *Store) BoardItems(ctx context.Context) ([]BoardItem, error) {
 	}
 	rows, err := s.r.QueryContext(ctx, `SELECT i.id, i.title, i.priority, i.stage, i.repo, i.pr, i.created_at,
 		COALESCE(l.runner || '/' || l.agent, ''), i.question, i.hold_reason, i.slack_channel, i.slack_ts, i.updated_at,
-		i.depends_on, i.plan_id, i.builder FROM items i LEFT JOIN leases l ON l.item_id = i.id AND l.ended_at IS NULL
+		i.depends_on, i.plan_id, i.builder, i.proof, i.awaiting_deploy FROM items i LEFT JOIN leases l ON l.item_id = i.id AND l.ended_at IS NULL
 		ORDER BY i.priority, i.created_at, i.id`)
 	if err != nil {
 		return nil, err
@@ -49,10 +54,16 @@ func (s *Store) BoardItems(ctx context.Context) ([]BoardItem, error) {
 	for rows.Next() {
 		var b BoardItem
 		var created, updated int64
-		var dependsOn string
+		var dependsOn, proof string
 		if err := rows.Scan(&b.ID, &b.Title, &b.Priority, &b.Stage, &b.Repo, &b.PR, &created, &b.ClaimedBy,
-			&b.Question, &b.HoldReason, &b.SlackChannel, &b.SlackTS, &updated, &dependsOn, &b.PlanID, &b.Builder); err != nil {
+			&b.Question, &b.HoldReason, &b.SlackChannel, &b.SlackTS, &updated, &dependsOn, &b.PlanID, &b.Builder, &proof, &b.AwaitingDeploy); err != nil {
 			return nil, err
+		}
+		if proof != "" {
+			b.Proof = &pipeline.Proof{}
+			if err := json.Unmarshal([]byte(proof), b.Proof); err != nil {
+				return nil, err
+			}
 		}
 		d, err := splitIDs(dependsOn)
 		if err != nil {
