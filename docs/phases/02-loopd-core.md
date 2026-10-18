@@ -109,6 +109,8 @@ snapshot so they are table-testable:
 ## Control
 
 `GET /control` and `PUT /control {active_agents?, stopped?, max_run_minutes?, limits?}` (user only).
+`GET /flow?window=6h|24h|7d` (any reading token) is the flow panel's numbers
+(docs/decisions/2026-10-18-flow-panel.md); the board shows them at `/board/flow`.
 `active_agents` is 0–6, default 4. `stopped: true` means no claims and heartbeats answer
 `stop: true`; `false` resumes. Every change is an event (`control`) with the actor.
 
