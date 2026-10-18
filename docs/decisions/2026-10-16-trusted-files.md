@@ -33,10 +33,18 @@ rule in [2026-10-15-all-repos.md](2026-10-15-all-repos.md); each point is enforc
   had to OK an unchanged diff again after a runner fault or an answered question). Any other head,
   including a later commit on the same branch, is refused again and needs a new OK; the OK never
   covers more than the one commit the user saw.
-- **The rebuild adds nothing.** The build after the OK runs the agent again (it writes the result
-  the runner needs for the PR); its brief says the user OK'd that commit and to add no commit, since
-  a new one voids the OK. The guard still refuses the agent's Write/Edit on `deny_write` paths: the
-  OK only lets verify run a commit that already exists.
+- **The build after the OK runs no agent** (*since 2026-10-18*, #203). At the refusal the runner
+  keeps the build's result (`.loop/result.json` and its evidence) in its work root
+  (`trusted/<item>/`), beside the commits it keeps in its mirror. The build claim after the OK, when
+  the branch's head is the OK'd commit, puts that result back in the fresh worktree and goes
+  straight to the runner's report: verify on that head, push, the PR, review. Before, the agent ran
+  again with a brief line asking it to add no commit; on #144 (twice) and #142 it committed anyway,
+  the new head was refused again, and the user was asked for another OK each time. A claim with no
+  kept result for the head (another runner, whose mirror lacks the commits; a moved branch; a kept
+  result the runner refuses) runs the agent as before, with that brief line. Only a later rebuild
+  (a review bounce, a held note, the user's Rebuild) runs the agent, and its new commit needs a new
+  OK. The guard still refuses the agent's Write/Edit on `deny_write` paths: the OK only lets verify
+  run a commit that already exists.
 - **Land holds it.** The OK raises the item's risk to hold with the reason "trusted files changed
   (verify ran the agent's version on the user's OK)", so land holds the PR for the user's approval
   whatever the path rules say. The hold rules also gain `trusted-file` rules: jarvis-server's
@@ -49,8 +57,11 @@ rule in [2026-10-15-all-repos.md](2026-10-15-all-repos.md); each point is enforc
 
 ## Not chosen
 
-- A verify-only rerun without the agent: the runner needs a result (PR title and body) to open the
-  PR, and the worktree's `.loop/` does not survive the run. The agent's rerun is cheap, and a
-  commit it adds only costs a new OK.
+- (Chosen on 2026-10-16, reversed on 2026-10-18 by #203.) Rerunning the agent after the OK, on the
+  grounds that the runner needs its result and `.loop/` does not survive the run: an agent that
+  commits anyway loops the item between Trust and a new refusal. The runner now keeps the result.
+- Pushing the branch at the refusal, so that any runner could verify the OK'd commit: it would put
+  an unverified trusted-file change on GitHub (and its CI) before the user looked. A claim on a
+  runner without the commit falls back to the agent instead.
 - Overlaying the base's version of the trusted files: the point of the change is the agent's
   version, which the user looked at.

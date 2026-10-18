@@ -362,6 +362,19 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 		r.advance(ctx, ru, "failed", map[string]string{"error": "the runner could not prepare the run: " + clip(err.Error(), 1500)}, nil)
 		return
 	}
+	if raw := r.restoreTrustedResult(ctx, ru, log); raw != nil {
+		// The user OK'd the branch's head after verify refused it: verify runs that commit, with
+		// the result its build left, and the agent does not run (a new commit would need a new OK).
+		log.Info("verify runs the commit the user OK'd, without the agent", "head", ru.item.Trust.HeadSHA)
+		r.reportBuild(cleanupCtx, ru, outcome{}, raw)
+		if ru.rejected == "" {
+			return
+		}
+		log.Warn("the kept result was refused; the agent runs", "why", ru.rejected)
+		r.dropTrustedResult(ru)
+		ru.rejected = ""
+		os.Remove(filepath.Join(ru.wt, ".loop", "result.json"))
+	}
 	log.Info("agent starting", "worktree", ru.wt, "branch", ru.branch, "mode", r.Cfg.Mode, "builder", ru.builder, "resume", ru.resume)
 	out := r.runAgentHarness(ctx, ru, brief)
 	log.Info("agent ended", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
@@ -1355,6 +1368,7 @@ func (r *Runner) reportBuild(ctx context.Context, ru *run, out outcome, raw []by
 	}
 	var tr *trustRefusal
 	if errors.As(err, &tr) {
+		r.saveTrustedResult(ru, tr.head, raw, files)
 		r.refuseTrusted(ctx, ru, out, tr)
 		return
 	}
