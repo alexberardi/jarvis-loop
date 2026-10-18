@@ -471,6 +471,30 @@ func str(d map[string]any, k string) string {
 	return s
 }
 
+// secondOpinionLine is a second_opinion event in the thread: counts only (the findings are in
+// the PR comment).
+func secondOpinionLine(d map[string]any) string {
+	n := func(k string) int { f, _ := d[k].(float64); return int(f) }
+	if str(d, "status") == "unavailable" {
+		return fmt.Sprintf("Second opinion (Gemini) unavailable (%s); the review stands.", Escape(str(d, "reason")))
+	}
+	if n("findings") == 0 {
+		return "Second opinion (Gemini): no findings."
+	}
+	text := fmt.Sprintf("Second opinion (Gemini): %d findings (%d high)", n("findings"), n("high"))
+	switch {
+	case str(d, "status") == "unjudged":
+		return text + "; not judged (" + Escape(str(d, "reason")) + "); the review stands."
+	case d["bounced"] == true:
+		return text + fmt.Sprintf(", Claude agreed with %d (%d high); sent back to build.", n("agreed"), n("agreed_high"))
+	case d["repeat"] == true:
+		return text + fmt.Sprintf(", Claude agreed with %d (%d high); this head was sent back once already, so it stands.", n("agreed"), n("agreed_high"))
+	case d["blocking"] == true:
+		return text + fmt.Sprintf(", Claude agreed with %d (%d high); the review stands.", n("agreed"), n("agreed_high"))
+	}
+	return text + fmt.Sprintf(", Claude agreed with %d (%d high); advisory, recorded only.", n("agreed"), n("agreed_high"))
+}
+
 // describe is the thread reply for an event: one or two lines, or the question and held
 // messages, which mention the approver.
 func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Message, bool) {
@@ -608,6 +632,8 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		} else {
 			text = "Builder: qwen → claude for the rest of this item (second strike)."
 		}
+	case store.KindSecondOpinion:
+		text = secondOpinionLine(e.Data)
 	case "low_cache_hit":
 		text = fmt.Sprintf("Low prompt-cache hit ratio on this run (%s over %s turns).", Escape(str(e.Data, "cache_hit_ratio")), Escape(str(e.Data, "num_turns")))
 	case "approval_cancelled":

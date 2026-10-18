@@ -443,3 +443,35 @@ func TestBoardOrchestratorGolden(t *testing.T) {
 		t.Error("a panel for an orchestrator that never acted")
 	}
 }
+
+// The board shows the Gemini second opinions in total (its header), per item (the card) and on
+// the item's page, so the user can judge whether to turn blocking on.
+func TestBoardSecondOpinion(t *testing.T) {
+	srv, st := boardSetup(t)
+	ctx := context.Background()
+	it, err := st.AddItem(ctx, "user:alex", store.NewItem{Title: "x", Repo: "o/r"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := &http.Cookie{Name: "loop_board", Value: boardTok}
+	if _, body := get(t, srv.URL+"/board", cookie); strings.Contains(body, "Gemini") {
+		t.Fatal("second opinion shown with none recorded")
+	}
+	if _, err := st.Claim(ctx, "devbox", pipeline.ClaimRequest{Agent: "t", Stages: []pipeline.Stage{pipeline.Triage}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RunnerEvent(ctx, "devbox", it.ID, store.KindSecondOpinion, map[string]any{"status": "ok", "findings": 4, "judged": 4,
+		"agreed": 3, "high": 1, "medium": 2, "low": 1, "agreed_high": 1, "agreed_medium": 1, "agreed_low": 1, "bounced": false}); err != nil {
+		t.Fatal(err)
+	}
+	line := "1 review · 4 findings: 1 high, 2 medium, 1 low · Claude agreed with 3 of 4 judged (75%): 1 high, 1 medium, 1 low"
+	_, body := get(t, srv.URL+"/board", cookie)
+	for _, want := range []string{"Second opinion (Gemini): " + line, ">Gemini 4 · 3 agreed</span>"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("board lacks %q", want)
+		}
+	}
+	if _, body := get(t, srv.URL+"/board/items/1", cookie); !strings.Contains(body, "<h2>Second opinion (Gemini)</h2>\n<p>"+line+"</p>") {
+		t.Errorf("item page lacks the second opinion:\n%s", body)
+	}
+}

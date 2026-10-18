@@ -30,6 +30,9 @@
 <body>
 <h1>Jarvis Loop</h1>
 <p class="sub">{{.Total}} items ·{{if .PlanCount}} {{.PlanCount}} open plans ·{{end}} {{stamp .Now}} · refreshes every 30 s (working now: every 5 s) · {{if .ShowClosed}}<a href="/board">hide closed</a>{{else}}<a href="/board?closed=1">show closed</a>{{end}}</p>
+{{- if .SecondOpinion.Runs}}
+<p class="sub">Second opinion (Gemini): {{template "second-opinion" .SecondOpinion}}</p>
+{{- end}}
 {{- template "working-section" .Working}}
 {{- with .Orch}}{{if .Show}}
 <details class="orch"{{if .Escalations}} open{{end}}>
@@ -102,6 +105,7 @@
 {{- if .Builder}}<span class="label">builder: {{.Builder}}</span>{{end}}
 {{- if and .Unservable (not .ClaimedBy)}}<span class="label">{{unservable .Unservable}}</span>{{end}}
 {{- range .Waits}}<span class="label">waiting on {{.}}</span>{{end}}
+{{- with .SecondOpinion}}<span class="label" title="Gemini's findings; Claude agreed with {{.Agreed}} of {{.Judged}} judged">Gemini {{.Findings}} · {{.Agreed}} agreed</span>{{end}}
 </div>
 {{- if .Reason}}
 <div class="reason">{{.Reason}}</div>

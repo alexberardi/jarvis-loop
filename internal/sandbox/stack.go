@@ -709,6 +709,26 @@ func (s *Stack) SetScript(id int64, stage, play, file, repo string) error {
 	return os.WriteFile(filepath.Join(s.scripts, name), b, 0o644)
 }
 
+// Gemini turns on the runner's Gemini second opinion (off by default), with the fake agy (the
+// fake claude through a link named agy, unfenced) playing play (fakeagy's plays; "" for ok).
+func (s *Stack) Gemini(play string, blocking bool) error {
+	agy := filepath.Join(s.Dir, "bin", "agy")
+	if err := os.MkdirAll(filepath.Dir(agy), 0o755); err != nil {
+		return err
+	}
+	if err := os.Symlink(s.Runner.Cfg.Claude, agy); err != nil && !os.IsExist(err) {
+		return err
+	}
+	b, _ := json.Marshal(map[string]string{"play": play})
+	if err := os.WriteFile(filepath.Join(s.scripts, "agy.json"), b, 0o644); err != nil {
+		return err
+	}
+	off := false
+	s.Runner.Cfg.Gemini = &runner.GeminiConfig{Agy: agy, Model: runner.DefaultGeminiModel, Blocking: blocking, Fence: &off,
+		Home: filepath.Join(s.Dir, "gemini")}
+	return nil
+}
+
 // AgentState is what the fake claude reported for an item's runs so far ("started", "hanging").
 func (s *Stack) AgentState(id int64) []string {
 	b, _ := os.ReadFile(filepath.Join(s.scripts, fmt.Sprintf("%d.state", id)))

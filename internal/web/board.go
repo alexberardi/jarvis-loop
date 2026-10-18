@@ -172,6 +172,19 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 	v := boardView(items, plans, now, r.URL.Query().Get("closed") == "1", p.cfg.SlackWorkspace)
 	v.Working = workingView(work, now, 0)
 	v.Orch = orchView(orch, items)
+	per, total, err := p.st.SecondOpinions(r.Context())
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
+	v.SecondOpinion = total
+	for _, col := range v.Columns {
+		for i := range col.Cards {
+			if so, ok := per[col.Cards[i].ID]; ok {
+				col.Cards[i].SecondOpinion = &so
+			}
+		}
+	}
 	w.Header().Set("Content-Security-Policy", liveCSP)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := boardTmpl.Execute(w, v); err != nil {
@@ -333,6 +346,8 @@ type card struct {
 	SlackURL string
 	// Reason is why it waits on the user: the question or the hold reason.
 	Reason string
+	// SecondOpinion is its Gemini second opinions added up (nil: none).
+	SecondOpinion *store.SecondOpinionStats
 }
 
 // planCard is an open plan in the Planning column.
@@ -389,6 +404,8 @@ type boardData struct {
 	Now        time.Time
 	Total      int
 	PlanCount  int
+	// SecondOpinion is every item's Gemini second opinions added up.
+	SecondOpinion store.SecondOpinionStats
 }
 
 // orchLimit is how many of each list the Orchestrator panel shows.
@@ -601,6 +618,8 @@ type itemData struct {
 	Evidence  []evidenceRow
 	// Working is the item's "Working now" card while a lease is live (nil otherwise).
 	Working *workingSection
+	// SecondOpinion is its Gemini second opinions added up (nil: none).
+	SecondOpinion *store.SecondOpinionStats
 }
 
 // maxDataText caps an event's data on the page; the full record is in `loop show`.
@@ -626,6 +645,9 @@ func itemView(d store.Detail, channel, ts string, now time.Time, slackBase strin
 			}
 		}
 		v.Events = append(v.Events, row)
+	}
+	if so, ok := store.SumSecondOpinions(d.Events); ok {
+		v.SecondOpinion = &so
 	}
 	for _, ev := range d.Evidence {
 		v.Evidence = append(v.Evidence, evidenceRow{Evidence: ev, Image: slices.Contains(imageTypes, ev.ContentType)})
