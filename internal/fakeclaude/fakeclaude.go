@@ -82,6 +82,9 @@ const (
 	// says the user OK'd that commit for verify, it commits nothing; on any other rerun it commits
 	// another change to the file (a new head, which needs a new OK).
 	TrustedChange = "trusted_change"
+	// TrustedChangeEager is TrustedChange by an agent that ignores the brief's line about the
+	// OK: every run commits another change to the file (#144, #142).
+	TrustedChangeEager = "trusted_change_eager"
 	// Harness is good, after using the repo's harness through the runner: loop-harness up, then a
 	// run that writes .loop/evidence/harness.txt. HarnessHang does the same, then hangs.
 	Harness     = "harness"
@@ -470,8 +473,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	resumed := strings.TrimSpace(git(f.cwd, "rev-list", "--count", "origin/"+base+"..HEAD")) != "0"
 	if scenario == NoChange && resumed {
 		// Nothing to fix: no commit.
-	} else if scenario == TrustedChange {
-		if !resumed || !bytes.Contains(brief, []byte(trustedBrief)) {
+	} else if scenario == TrustedChange || scenario == TrustedChangeEager {
+		if !resumed || scenario == TrustedChangeEager || !bytes.Contains(brief, []byte(trustedBrief)) {
 			f.bash("mkdir -p \"$(dirname " + shellQuote(change) + ")\" && echo 'shoot --dark' >> " + shellQuote(change) + " && git add " + shellQuote(change) +
 				" && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'harness: shoot dark mode too'")
 		}

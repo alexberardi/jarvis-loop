@@ -1,6 +1,6 @@
 {
   "name": "trusted-files",
-  "about": "The build changes tools/shoot, a file the mobile repo's runner trusts (deny_write): verify refuses it and the item goes to needs-you with the trusted files' diff stat, the diff as evidence and a Trust button for that commit. Someone else's press and reply are refused, and so is the approver's reply naming another commit (trust 0000000). The approver's press OKs that commit: the next build adds nothing, verify runs that exact commit once, the PR opens, and land holds it for the user. A note from the held thread makes a new commit, which verify refuses again: a new head needs a new OK.",
+  "about": "The build changes tools/shoot, a file the mobile repo's runner trusts (deny_write): verify refuses it and the item goes to needs-you with the trusted files' diff stat, the diff as evidence and a Trust button for that commit. Someone else's press and reply are refused, and so is the approver's reply naming another commit (trust 0000000). The approver's press OKs that commit: the next build runs no agent, the runner verifies that exact commit once with the refused build's result, the PR opens, and land holds it for the user. A note from the held thread makes a new commit, which verify refuses again: a new head needs a new OK.",
   "stages": ["build", "review", "land"],
   "steps": [
     {"do": "add", "item": "a", "via": "slack", "title": "shoot dark mode too", "text": "[mobile] shoot dark mode too"},

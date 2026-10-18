@@ -289,6 +289,7 @@ func Brief(stage string, it Item, r RunInfo) string {
 			fmt.Fprintf(&b, "- Sent back from held; PR #%d is open on this branch. Do what `%s` asks (the user's note, or a conflict with `%s`) on the same branch; the runner updates that PR, and the user approves the new head.\n", it.PR, r.HeldNotes, r.Base)
 		}
 		if it.Trust != nil && it.Trust.allows(it.Trust.HeadSHA) {
+			// Only when the runner kept no result for the OK'd head (trusted.go): else no agent runs.
 			fmt.Fprintf(&b, "- The user OK'd verify running commit `%s`, which changes files the runner trusts (deny_write). If that commit is this item's work, add no commit: return `ready_for_pr` for it as it is. Any new commit needs a new OK from the user.\n", it.Trust.HeadSHA)
 		}
 		if len(r.Verify) > 0 {
