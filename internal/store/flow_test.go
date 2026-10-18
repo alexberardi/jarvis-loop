@@ -230,6 +230,33 @@ func TestFlowFrozenRepo(t *testing.T) {
 	}
 }
 
+// The last free slot held for a Mac's item (#192): the Mac's item is ready, the others have no
+// free slot.
+func TestFlowHeldSlot(t *testing.T) {
+	s, clk := open(t)
+	f := flowFixture{t, s}
+	clk.Advance(30 * time.Hour)
+	f.item(1, "build", 25, 0, "")
+	f.item(2, "build", 25, 0, "")
+	f.item(3, "build", 26, 0, "")
+	f.exec(`UPDATE items SET resources = 'macos' WHERE id = 2`)
+	f.exec(`UPDATE control SET active_agents = 2 WHERE id = 1`)
+	f.exec(`INSERT INTO runners (name, capabilities, only_resources, poll_seconds, stages, last_seen, slots) VALUES ('mbp', 'macos', 'macos', 20, 'build', ?, 1)`, h(30))
+	f.lease("L1", 3, "build", "devbox", 29, -1, "")
+
+	got, err := s.Flow(context.Background(), "24h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWait := []FlowWait{
+		{Reason: "no free slot", Count: 1, Items: []int64{1}},
+		{Reason: "ready", Count: 1, Items: []int64{2}},
+	}
+	if !reflect.DeepEqual(got.Waiting, wantWait) {
+		t.Errorf("waiting:\n got %+v\nwant %+v", got.Waiting, wantWait)
+	}
+}
+
 func TestBounceText(t *testing.T) {
 	long := strings.Repeat("x", 150)
 	for in, want := range map[string]string{

@@ -19,6 +19,7 @@ func TestWaitReason(t *testing.T) {
 	qa.AwaitingDeploy = true
 	in := func(it Item, repo string) Item { it.Repo = repo; return it }
 	frozen := Frozen{"o/r": 5}
+	macHold := []SlotHold{{Resource: "macos", Runner: "mac", ItemID: 2}}
 
 	cases := []struct {
 		name       string
@@ -28,56 +29,65 @@ func TestWaitReason(t *testing.T) {
 		live       []LiveLease
 		unservable []string
 		frozen     Frozen
+		holds      []SlotHold
 		want       string
 	}{
-		{"needs you", ctl, waiting(1, NeedsYou, "P3", 0), nil, nil, nil, nil, WaitNeedsYou},
-		{"held", ctl, waiting(1, Held, "P3", 0), nil, nil, nil, nil, WaitHeld},
-		{"qa", ctl, waiting(1, QA, "P3", 0), nil, nil, nil, nil, WaitQA},
-		{"qa after deploy", ctl, qa, nil, nil, nil, nil, WaitQA},
-		{"done is not waiting", ctl, waiting(1, Done, "P3", 0), nil, nil, nil, nil, ""},
-		{"closed is not waiting", ctl, waiting(1, Closed, "P3", 0), nil, nil, nil, nil, ""},
-		{"claimed is not waiting", ctl, waiting(1, Build, "P3", 0), nil, []LiveLease{{ItemID: 1, Stage: Build}}, nil, nil, ""},
-		{"ready", ctl, waiting(1, Build, "P3", 0), nil, nil, nil, nil, WaitReady},
-		{"dependency not done", ctl, dep(waiting(1, Build, "P3", 0), 7), map[int64]Stage{7: QA}, nil, nil, nil, WaitDeps},
-		{"dependency done", ctl, dep(waiting(1, Build, "P3", 0), 7), map[int64]Stage{7: Done}, nil, nil, nil, WaitReady},
+		{"needs you", ctl, waiting(1, NeedsYou, "P3", 0), nil, nil, nil, nil, nil, WaitNeedsYou},
+		{"held", ctl, waiting(1, Held, "P3", 0), nil, nil, nil, nil, nil, WaitHeld},
+		{"qa", ctl, waiting(1, QA, "P3", 0), nil, nil, nil, nil, nil, WaitQA},
+		{"qa after deploy", ctl, qa, nil, nil, nil, nil, nil, WaitQA},
+		{"done is not waiting", ctl, waiting(1, Done, "P3", 0), nil, nil, nil, nil, nil, ""},
+		{"closed is not waiting", ctl, waiting(1, Closed, "P3", 0), nil, nil, nil, nil, nil, ""},
+		{"claimed is not waiting", ctl, waiting(1, Build, "P3", 0), nil, []LiveLease{{ItemID: 1, Stage: Build}}, nil, nil, nil, ""},
+		{"ready", ctl, waiting(1, Build, "P3", 0), nil, nil, nil, nil, nil, WaitReady},
+		{"dependency not merged", ctl, dep(waiting(1, Build, "P3", 0), 7), map[int64]Stage{7: Land}, nil, nil, nil, nil, WaitDeps},
+		{"dependency merged, in qa", ctl, dep(waiting(1, Build, "P3", 0), 7), map[int64]Stage{7: QA}, nil, nil, nil, nil, WaitReady},
+		{"dependency done", ctl, dep(waiting(1, Build, "P3", 0), 7), map[int64]Stage{7: Done}, nil, nil, nil, nil, WaitReady},
 		// The item's own blockers come before the loop-wide ones: once the loop resumes it would
 		// still wait for them.
-		{"dependency beats stopped", stopped, dep(waiting(1, Build, "P3", 0), 7), map[int64]Stage{}, nil, nil, nil, WaitDeps},
-		{"no runner for a resource", ctl, waiting(1, Build, "P3", 0, "macos"), nil, nil, []string{"macos"}, nil, WaitNoRunner},
-		{"stopped", stopped, waiting(1, Build, "P3", 0), nil, nil, nil, nil, WaitStopped},
-		{"active agents 0", paused, waiting(1, Build, "P3", 0), nil, nil, nil, nil, WaitNoSlot},
+		{"dependency beats stopped", stopped, dep(waiting(1, Build, "P3", 0), 7), map[int64]Stage{}, nil, nil, nil, nil, WaitDeps},
+		{"no runner for a resource", ctl, waiting(1, Build, "P3", 0, "macos"), nil, nil, []string{"macos"}, nil, nil, WaitNoRunner},
+		{"stopped", stopped, waiting(1, Build, "P3", 0), nil, nil, nil, nil, nil, WaitStopped},
+		{"active agents 0", paused, waiting(1, Build, "P3", 0), nil, nil, nil, nil, nil, WaitNoSlot},
 		{"every slot busy", two, waiting(1, Build, "P3", 0), nil,
-			[]LiveLease{{ItemID: 8, Stage: Build}, {ItemID: 9, Stage: PlanTurnStage}}, nil, nil, WaitNoSlot},
-		{"stage limit", ctl, waiting(1, Triage, "P3", 0), nil, []LiveLease{{ItemID: 8, Stage: Triage}}, nil, nil, "limit triage:1"},
-		{"resource limit", ctl, waiting(1, Build, "P3", 0, "voice"), nil, []LiveLease{{ItemID: 8, Stage: Review, Resources: []string{"voice"}}}, nil, nil, "limit voice:1"},
+			[]LiveLease{{ItemID: 8, Stage: Build}, {ItemID: 9, Stage: PlanTurnStage}}, nil, nil, nil, WaitNoSlot},
+		{"stage limit", ctl, waiting(1, Triage, "P3", 0), nil, []LiveLease{{ItemID: 8, Stage: Triage}}, nil, nil, nil, "limit triage:1"},
+		{"resource limit", ctl, waiting(1, Build, "P3", 0, "voice"), nil, []LiveLease{{ItemID: 8, Stage: Review, Resources: []string{"voice"}}}, nil, nil, nil, "limit voice:1"},
 		{"resource limit before stage limit", ctl, waiting(1, Land, "P3", 0, "emulator"), nil,
-			[]LiveLease{{ItemID: 8, Stage: Land, Resources: []string{"emulator"}}}, nil, nil, "limit emulator:1"},
-		{"below the limit", ctl, waiting(1, Review, "P3", 0), nil, []LiveLease{{ItemID: 8, Stage: Review}}, nil, nil, WaitReady},
-		{"frozen repo", ctl, in(waiting(1, Build, "P3", 0), "o/r"), nil, nil, nil, frozen, WaitFrozen},
-		{"another repo is not frozen", ctl, in(waiting(1, Build, "P3", 0), "o/other"), nil, nil, nil, frozen, WaitReady},
-		{"dependency beats frozen", ctl, dep(in(waiting(1, Build, "P3", 0), "o/r"), 7), map[int64]Stage{}, nil, nil, frozen, WaitDeps},
-		{"frozen beats stopped", stopped, in(waiting(1, Build, "P3", 0), "o/r"), nil, nil, nil, frozen, WaitFrozen},
+			[]LiveLease{{ItemID: 8, Stage: Land, Resources: []string{"emulator"}}}, nil, nil, nil, "limit emulator:1"},
+		{"below the limit", ctl, waiting(1, Review, "P3", 0), nil, []LiveLease{{ItemID: 8, Stage: Review}}, nil, nil, nil, WaitReady},
+		{"frozen repo", ctl, in(waiting(1, Build, "P3", 0), "o/r"), nil, nil, nil, frozen, nil, WaitFrozen},
+		{"another repo is not frozen", ctl, in(waiting(1, Build, "P3", 0), "o/other"), nil, nil, nil, frozen, nil, WaitReady},
+		{"dependency beats frozen", ctl, dep(in(waiting(1, Build, "P3", 0), "o/r"), 7), map[int64]Stage{}, nil, nil, frozen, nil, WaitDeps},
+		{"frozen beats stopped", stopped, in(waiting(1, Build, "P3", 0), "o/r"), nil, nil, nil, frozen, nil, WaitFrozen},
 		// The fix may take a slot over the active-agents number and its stage's limit (chooseFix).
-		{"the fix is ready", ctl, in(waiting(5, Build, "P1", 0), "o/r"), nil, nil, nil, frozen, WaitReady},
+		{"the fix is ready", ctl, in(waiting(5, Build, "P1", 0), "o/r"), nil, nil, nil, frozen, nil, WaitReady},
 		{"the fix ignores a busy loop", two, in(waiting(5, Build, "P1", 0), "o/r"), nil,
-			[]LiveLease{{ItemID: 8, Stage: Build}, {ItemID: 9, Stage: Build}}, nil, frozen, WaitReady},
-		{"the fix ignores its stage's limit", ctl, in(waiting(5, Triage, "P1", 0), "o/r"), nil, []LiveLease{{ItemID: 8, Stage: Triage}}, nil, frozen, WaitReady},
-		{"the fix waits for a stop", stopped, in(waiting(5, Build, "P1", 0), "o/r"), nil, nil, nil, frozen, WaitStopped},
-		{"the fix waits for 0 active agents", paused, in(waiting(5, Build, "P1", 0), "o/r"), nil, nil, nil, frozen, WaitNoSlot},
+			[]LiveLease{{ItemID: 8, Stage: Build}, {ItemID: 9, Stage: Build}}, nil, frozen, nil, WaitReady},
+		{"the fix ignores its stage's limit", ctl, in(waiting(5, Triage, "P1", 0), "o/r"), nil, []LiveLease{{ItemID: 8, Stage: Triage}}, nil, frozen, nil, WaitReady},
+		{"the fix waits for a stop", stopped, in(waiting(5, Build, "P1", 0), "o/r"), nil, nil, nil, frozen, nil, WaitStopped},
+		{"the fix waits for 0 active agents", paused, in(waiting(5, Build, "P1", 0), "o/r"), nil, nil, nil, frozen, nil, WaitNoSlot},
 		{"the fix waits for a resource limit", ctl, in(waiting(5, Build, "P1", 0, "voice"), "o/r"), nil,
-			[]LiveLease{{ItemID: 8, Stage: Review, Resources: []string{"voice"}}}, nil, frozen, "limit voice:1"},
+			[]LiveLease{{ItemID: 8, Stage: Review, Resources: []string{"voice"}}}, nil, frozen, nil, "limit voice:1"},
+		// The last free slots held for a Mac's work (SlotHolds): only an item needing a held
+		// resource may take them; a frozen repo's fix takes a slot regardless (chooseFix).
+		{"slot held for macos", two, waiting(1, Build, "P3", 0), nil, []LiveLease{{ItemID: 8, Stage: Build}}, nil, nil, macHold, WaitNoSlot},
+		{"the held slot's own work", two, waiting(1, Build, "P3", 0, "macos"), nil, []LiveLease{{ItemID: 8, Stage: Build}}, nil, nil, macHold, WaitReady},
+		{"more free slots than held", two, waiting(1, Build, "P3", 0), nil, nil, nil, nil, macHold, WaitReady},
+		{"a limit before the held slot", two, waiting(1, Triage, "P3", 0), nil, []LiveLease{{ItemID: 8, Stage: Triage}}, nil, nil, macHold, "limit triage:1"},
+		{"the fix ignores a held slot", two, in(waiting(5, Build, "P1", 0), "o/r"), nil, []LiveLease{{ItemID: 8, Stage: Build}}, nil, frozen, macHold, WaitReady},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := WaitReason(c.ctl, c.it, c.deps, c.live, c.unservable, c.frozen); got != c.want {
+			if got := WaitReason(c.ctl, c.it, c.deps, c.live, c.unservable, c.frozen, c.holds); got != c.want {
 				t.Fatalf("WaitReason = %q, want %q", got, c.want)
 			}
 		})
 	}
 }
 
-// Choose skips exactly the items WaitReason says wait (deps, limits, a frozen repo and its fix's
-// exemptions, a full loop): the two share the checks.
+// ChooseWork skips exactly the items WaitReason says wait (deps, limits, a frozen repo and its
+// fix's exemptions, a full loop, the held slots): the two share the checks.
 func TestWaitReasonAgreesWithChoose(t *testing.T) {
 	full := DefaultControl()
 	full.ActiveAgents = 2
@@ -95,12 +105,19 @@ func TestWaitReasonAgreesWithChoose(t *testing.T) {
 		{ID: 4, Stage: Build, Priority: "P1", DependsOn: []int64{6}, CreatedAt: t0.Add(time.Second)},
 		waiting(5, Review, "P2", 0),
 	}
-	for _, ctl := range []Control{DefaultControl(), full} {
-		for _, it := range items {
-			_, chosen := Choose(ctl, []Item{it}, deps, live, req, frozen)
-			why := WaitReason(ctl, it, deps, live, nil, frozen)
-			if chosen != (why == WaitReady) {
-				t.Errorf("%d agents, item %d: Choose %v, WaitReason %q", ctl.ActiveAgents, it.ID, chosen, why)
+	three := DefaultControl()
+	three.ActiveAgents = 3 // one free slot, which macHold holds
+	macHold := []SlotHold{{Resource: "macos", Runner: "mac", ItemID: 13}}
+	items = append(items, waiting(13, Build, "P2", 0, "macos"))
+	for _, ctl := range []Control{DefaultControl(), full, three} {
+		for _, holds := range [][]SlotHold{nil, macHold} {
+			for _, it := range items {
+				w, _ := ChooseWork(ctl, []Item{it}, deps, live, nil, nil, holds, req, frozen)
+				chosen := w.Item != nil
+				why := WaitReason(ctl, it, deps, live, nil, frozen, holds)
+				if chosen != (why == WaitReady) {
+					t.Errorf("%d agents, %d held, item %d: ChooseWork %v, WaitReason %q", ctl.ActiveAgents, len(holds), it.ID, chosen, why)
+				}
 			}
 		}
 	}

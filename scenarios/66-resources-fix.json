@@ -1,0 +1,22 @@
+{
+  "name": "resources-fix",
+  "about": "#202: triage tagged an item macos by mistake, so loopd flags it unservable (no runner offers macos). The user fixes the tag with loop resources a none instead of a database edit (#94): a resources event with the old and new tags, the line in the thread, the flag clears at once (no servable event: no runner came), and the runner (which offers nothing) claims the build.",
+  "stages": ["build"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Settings page typo", "priority": "P4"},
+    {"do": "triage", "item": "a", "resources": "macos"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [{"item": "a", "kind": "unservable", "actor": "loopd", "data": {"missing": "macos"}, "count": 1}]},
+    {"do": "resources", "item": "a", "resources": "none"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [{"item": "a", "kind": "resources", "actor": "user", "count": 1},
+                {"item": "a", "kind": "unservable", "count": 1}],
+     "no_events": [{"item": "a", "kind": "servable"}],
+     "messages": [{"thread": "a", "text": "^Resources macos → none \\(you \\(.*, CLI\\)\\)\\.$"}]},
+    {"do": "runner", "claims": "a"}
+  ],
+  "expect": {
+    "events": [{"item": "a", "kind": "claimed", "actor": "runner", "count": 1}]
+  }
+}

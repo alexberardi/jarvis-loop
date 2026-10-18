@@ -178,7 +178,7 @@ type Item struct {
 	// now: the question for a build that changes nothing then recommends a rebuild (a rebase), since
 	// a rerun tests the same merge again (docs/decisions/2026-10-17-needs-you-rebuild.md).
 	CIMainFixed string `json:"ci_main_fixed,omitempty"`
-	// DependsOn are the items this one waits for: claim skips it until they are all done.
+	// DependsOn are the items this one waits for: claim skips it until they are all merged (qa or done).
 	DependsOn []int64 `json:"depends_on"`
 	// PlanID and PlanPiece link an item filed from a plan to its piece (docs/phases/07-planning.md).
 	PlanID    int64 `json:"plan_id,omitempty"`

@@ -275,7 +275,7 @@ line; the run goes on. Committing the plan into the repo is not built yet. Scena
 
 ## Harness (loop-sandbox scenarios, test-first)
 
-1. Dependencies: B depends on A → B not claimed until A is done; A dropped → B to needs-you.
+1. Dependencies: B depends on A → B not claimed until A is merged (qa or done; docs/decisions/2026-10-18-deps-at-merge.md), and flagged if A is reopened; A dropped → B to needs-you.
 2. `#plan` message → plan, product turn (fake claude writes a brief, `ready`) → Approve brief →
    engineering turn (blueprint with 3 pieces, 2 depending on 1) → Approve → 3 items with the right
    dependencies; only piece 1 is claimable.

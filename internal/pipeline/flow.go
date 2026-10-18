@@ -74,11 +74,13 @@ func itemBlocks(c Control, it Item, deps map[int64]Stage, inUse map[string]int, 
 // WaitReason is why it waits right now ("" when it does not: claimed, done or closed). deps are the
 // stages of the items it depends on, live the running leases (turns included, as Claim counts
 // them), unservable the resources no runner offers it (Unservable, nil when none), frozen the
-// repos whose main is red. An item's own blockers (dependencies, no runner) come before its repo's
-// (frozen) and the loop's (stopped, no free slot): once those free up it would still wait for
-// them. The limits come last: they change with every run. A frozen repo's fix waits only for a
-// stop or 0 active agents and the resource limits, as chooseFix takes it.
-func WaitReason(c Control, it Item, deps map[int64]Stage, live []LiveLease, unservable []string, frozen Frozen) string {
+// repos whose main is red, holds the slots held (SlotHolds). An item's own blockers (dependencies,
+// no runner) come before its repo's (frozen) and the loop's (stopped, no free slot): once those
+// free up it would still wait for them. The limits come next: they change with every run. Last,
+// the free slots all held for work it does not need is no free slot, as ChooseWork applies them.
+// A frozen repo's fix waits only for a stop or 0 active agents and the resource limits, as
+// chooseFix takes it.
+func WaitReason(c Control, it Item, deps map[int64]Stage, live []LiveLease, unservable []string, frozen Frozen, holds []SlotHold) string {
 	switch it.Stage {
 	case NeedsYou:
 		return WaitNeedsYou
@@ -106,6 +108,9 @@ func WaitReason(c Control, it Item, deps map[int64]Stage, live []LiveLease, unse
 	}
 	if r := itemBlocks(c, it, deps, inUse, !fix); r != "" {
 		return r
+	}
+	if !fix && len(holds) > 0 && c.ActiveAgents-len(live) <= len(holds) && !serves(Work{Item: &it}, holds) {
+		return WaitNoSlot
 	}
 	return WaitReady
 }

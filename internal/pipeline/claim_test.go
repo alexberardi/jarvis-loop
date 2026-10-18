@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -137,5 +139,125 @@ func TestJudgeLease(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// The last free agent slot is held for an only_resources runner (a Mac's) while it is around and
+// has an item it can take now, unless the claim takes that item itself (#192).
+func TestSlotHold(t *testing.T) {
+	two := DefaultControl()
+	two.ActiveAgents = 2
+	three := DefaultControl()
+	three.ActiveAgents = 3
+	mac1 := DefaultControl()
+	mac1.ActiveAgents = 3
+	mac1.Limits = map[string]int{"macos": 1}
+	devbox := ClaimRequest{Runner: "devbox", Agent: "devbox-1", Capabilities: []string{"gpu", "voice", "emulator"}}
+	macReq := ClaimRequest{Runner: "mbp", Agent: "mbp-1", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}}
+	mbp := RunnerSeen{Name: "mbp", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}, PollSeconds: 30, LastSeen: t0.Add(-10 * time.Second)}
+	iosBox := RunnerSeen{Name: "mini", Capabilities: []string{"ios"}, OnlyResources: []string{"ios"}, LastSeen: t0.Add(-10 * time.Second)}
+	quiet := mbp
+	quiet.LastSeen = t0.Add(-61 * time.Second) // more than 2 × 30 s ago
+	fast := mbp
+	fast.PollSeconds, fast.LastSeen = 5, t0.Add(-11*time.Second)
+	macBR := mbp // the runbook's Mac: build and review, landing stays on the dev box
+	macBR.Stages = []Stage{Build, Review}
+	devboxSeen := RunnerSeen{Name: "devbox", Capabilities: []string{"gpu"}, LastSeen: t0}
+	oneLive := []LiveLease{{ItemID: 9, Stage: Build}}
+	macItem := waiting(2, Build, "P4", 0, "macos")
+	plain := waiting(1, Build, "P1", time.Hour)
+	deps := map[int64]Stage{7: Build}
+	blocked := macItem
+	blocked.DependsOn = []int64{7}
+
+	cases := []struct {
+		name    string
+		ctl     Control
+		items   []Item
+		live    []LiveLease
+		runners []RunnerSeen
+		req     ClaimRequest
+		holds   []string // the held resources
+		want    int64    // the item the claim takes, 0: nothing
+	}{
+		{"the dev box is refused the last slot", two, []Item{plain, macItem}, oneLive, []RunnerSeen{mbp, devboxSeen}, devbox, []string{"macos"}, 0},
+		{"a dev box with macos takes the held item", two, []Item{plain, macItem}, oneLive, []RunnerSeen{mbp},
+			ClaimRequest{Runner: "devbox", Agent: "devbox-1", Capabilities: []string{"gpu", "macos"}}, []string{"macos"}, 2},
+		{"the Mac takes it", two, []Item{plain, macItem}, oneLive, []RunnerSeen{mbp, devboxSeen}, macReq, []string{"macos"}, 2},
+		{"(a) the Mac runner has gone quiet", two, []Item{plain, macItem}, oneLive, []RunnerSeen{quiet}, devbox, nil, 1},
+		{"(a) the window is the runner's own poll interval", two, []Item{plain, macItem}, oneLive, []RunnerSeen{fast}, devbox, nil, 1},
+		{"(a) a runner without only_resources holds nothing", two, []Item{plain, macItem}, oneLive,
+			[]RunnerSeen{{Name: "both", Capabilities: []string{"macos", "gpu"}, LastSeen: t0}}, devbox, nil, 1},
+		{"(b) the macos item is in land and the Mac takes build and review", two, []Item{plain, waiting(2, Land, "P4", 0, "macos")}, oneLive, []RunnerSeen{macBR, devboxSeen}, devbox, nil, 1},
+		{"(b) the macos item is in triage and the Mac takes build and review", two, []Item{plain, waiting(2, Triage, "P4", 0, "macos")}, oneLive, []RunnerSeen{macBR, devboxSeen}, devbox, nil, 1},
+		{"(b) the macos item is in one of the Mac's stages", two, []Item{plain, macItem}, oneLive, []RunnerSeen{macBR, devboxSeen}, devbox, []string{"macos"}, 0},
+		{"(b) no macos item", two, []Item{plain}, oneLive, []RunnerSeen{mbp}, devbox, nil, 1},
+		{"(b) the macos item waits on a dependency", two, []Item{plain, blocked}, oneLive, []RunnerSeen{mbp}, devbox, nil, 1},
+		{"(b) the macos item is leased", two, []Item{plain, macItem}, []LiveLease{{ItemID: 2, Stage: Build, Resources: []string{"macos"}}}, []RunnerSeen{mbp}, devbox, nil, 1},
+		{"(b) at the macos limit", mac1, []Item{plain, waiting(3, Build, "P4", 0, "macos")},
+			[]LiveLease{{ItemID: 2, Stage: Build, Resources: []string{"macos"}}, {ItemID: 9, Stage: Build}}, []RunnerSeen{mbp}, devbox, nil, 1},
+		{"(c) a claimant whose best item needs macos", two, []Item{waiting(1, Build, "P5", 0), macItem}, oneLive, []RunnerSeen{mbp},
+			ClaimRequest{Runner: "big", Agent: "big-1", Capabilities: []string{"macos"}}, []string{"macos"}, 2},
+		{"not the last slot", three, []Item{plain, macItem}, oneLive, []RunnerSeen{mbp}, devbox, []string{"macos"}, 1},
+		{"no free slot holds nothing", two, []Item{plain, macItem}, []LiveLease{{ItemID: 8, Stage: Build}, {ItemID: 9, Stage: Build}}, []RunnerSeen{mbp}, devbox, nil, 0},
+		{"two resources hold a slot each", three, []Item{plain, macItem, waiting(3, Build, "P4", 0, "ios")}, oneLive,
+			[]RunnerSeen{mbp, iosBox}, devbox, []string{"ios", "macos"}, 0},
+		{"two resources, the ios runner takes its own", three, []Item{plain, macItem, waiting(3, Build, "P4", 0, "ios")}, oneLive,
+			[]RunnerSeen{mbp, iosBox}, ClaimRequest{Runner: "mini", Agent: "mini-1", Capabilities: []string{"ios"}, OnlyResources: []string{"ios"}}, []string{"ios", "macos"}, 3},
+		{"two resources, one free slot holds one", two, []Item{plain, macItem, waiting(3, Build, "P4", 0, "ios")}, oneLive,
+			[]RunnerSeen{mbp, iosBox}, devbox, []string{"ios"}, 0},
+		{"one runner for two resources holds a slot each", three, []Item{plain, macItem, waiting(3, Build, "P4", 0, "ios")}, oneLive,
+			[]RunnerSeen{{Name: "mac", Capabilities: []string{"ios", "macos"}, OnlyResources: []string{"ios", "macos"}, LastSeen: t0}}, devbox, []string{"ios", "macos"}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			holds := SlotHolds(tc.ctl, tc.items, deps, tc.live, tc.runners, nil, t0)
+			var got []string
+			for _, h := range holds {
+				got = append(got, h.Resource)
+			}
+			if !slices.Equal(got, tc.holds) {
+				t.Fatalf("holds %+v, want %v", holds, tc.holds)
+			}
+			w, ok := ChooseWork(tc.ctl, tc.items, deps, tc.live, nil, nil, holds, tc.req, nil)
+			var id int64
+			if ok {
+				id = w.Item.ID
+			}
+			if id != tc.want {
+				t.Fatalf("claimed #%d (ok %v, held %q), want #%d", id, ok, w.Held, tc.want)
+			}
+			if tc.want == 0 && len(tc.holds) > 0 && !strings.HasSuffix(w.Held, " held for "+strings.Join(tc.holds, ", ")+" work") {
+				t.Fatalf("reason %q", w.Held)
+			}
+		})
+	}
+}
+
+// A macos item in a frozen repo can't be claimed, so it holds nothing; the repo's fix still does.
+func TestSlotHoldFrozen(t *testing.T) {
+	two := DefaultControl()
+	two.ActiveAgents = 2
+	mbp := RunnerSeen{Name: "mbp", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}, LastSeen: t0}
+	live := []LiveLease{{ItemID: 9, Stage: Build}}
+	macItem := waiting(2, Build, "P4", 0, "macos")
+	macItem.Repo = "o/mac"
+	if h := SlotHolds(two, []Item{macItem}, nil, live, []RunnerSeen{mbp}, Frozen{"o/mac": 5}, t0); len(h) != 0 {
+		t.Fatalf("frozen: holds %+v, want none", h)
+	}
+	if h := SlotHolds(two, []Item{macItem}, nil, live, []RunnerSeen{mbp}, Frozen{"o/mac": 2}, t0); len(h) != 1 || h[0].ItemID != 2 {
+		t.Fatalf("the fix: holds %+v, want macos #2", h)
+	}
+}
+
+// A held slot is held from turns too: a plan or orchestrate turn takes a slot like an item.
+func TestSlotHoldTurns(t *testing.T) {
+	two := DefaultControl()
+	two.ActiveAgents = 2
+	holds := []SlotHold{{Resource: "macos", Runner: "mbp", ItemID: 2}}
+	req := ClaimRequest{Runner: "devbox", Agent: "a", Kinds: []string{WorkItem, WorkPlan, WorkOrchestrate}}
+	turns := []TurnCandidate{{TurnID: 5, PlanID: 5, Priority: "P1", CreatedAt: t0}}
+	if w, ok := ChooseWork(two, nil, nil, []LiveLease{{ItemID: 9, Stage: Build}}, turns, &OrchCandidate{}, holds, req, nil); ok {
+		t.Fatalf("got %+v, want nothing", w)
 	}
 }

@@ -31,7 +31,7 @@ panel (`/board/flow`, linked from the board's header) and the API the same numbe
   `ready` (nothing holds it: the next runner that asks for its stage gets it). The item's own
   blockers come before the loop's (once the loop frees up it would still wait for them).
   `WaitReason` and the claim (`Choose`) share the checks (`loopBlocks`, `itemBlocks`), and
-  `store.Flow` uses the claim's own live snapshot (`liveSnapshot`), so the panel cannot say "ready"
+  `store.Flow` uses the claim's own state (`claimState`: live runs, frozen repos, held slots), so the panel cannot say "ready"
   for an item the claim would skip for a limit or a dependency. Review independence (the builder's
   agent may not review) depends on who asks, so it is not a reason.
 - **Sent back** is the `advanced` events with outcome `bounce` (counted against review),
@@ -57,10 +57,15 @@ panel (`/board/flow`, linked from the board's header) and the API the same numbe
   claim's `chooseFix` takes it: it waits only for a stop, 0 active agents or a resource limit, not
   for a free slot or its stage's limit (`itemBlocks` takes the same `stageLimits` switch as the
   claim's `choose`).
+- **Held slots** (#192, 2026-10-18-slot-hold.md): when the free slots are all held for a Mac's
+  work (`SlotHolds`), an item that needs none of the held resources waits `no free slot`, after
+  its limits (`ChooseWork` applies the holds after `Choose`); the held work itself is `ready`, and
+  a frozen repo's fix ignores the holds as `chooseFix` does. The runner panel on the board names
+  the hold; the flow panel keeps the ask's reasons.
 
 ## Speed
 
-Migration 0020 adds `events(at)`, `leases(ended_at)` and `plan_leases(ended_at)`: every window
+Migration 0021 adds `events(at)`, `leases(ended_at)` and `plan_leases(ended_at)`: every window
 query starts from one of them (`TestFlowQueriesUseIndexes` checks the query plans), and the
 per-item pass pairing reads only the items with a stage change in the window, by the existing
 `events(item_id, id)` index. `BenchmarkFlow7d` (100k events over 2k items, 20k leases) takes about

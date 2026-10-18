@@ -179,18 +179,18 @@ func (s *Store) Flow(ctx context.Context, window string) (Flow, error) {
 		return Flow{}, err
 	}
 	defer tx.Rollback()
-	ctl, err := s.loadControl(tx)
+	cs, err := s.claimState(tx, now)
 	if err != nil {
 		return Flow{}, err
 	}
-	f.ActiveAgents = ctl.ActiveAgents
+	f.ActiveAgents = cs.ctl.ActiveAgents
 	since, until := f.Since.UnixNano(), now.UnixNano()
 	for _, step := range []func(*sql.Tx, int64, int64) error{f.throughput, f.stageTimes, f.bounces, f.runs, f.features} {
 		if err := step(tx, since, until); err != nil {
 			return Flow{}, err
 		}
 	}
-	if err := f.waiting(tx, ctl); err != nil {
+	if err := f.waiting(tx, cs); err != nil {
 		return Flow{}, err
 	}
 	return f, nil
@@ -501,16 +501,9 @@ func (f *Flow) features(tx *sql.Tx, since, _ int64) error {
 	return nil
 }
 
-// waiting classifies every open item that waits right now, with the claim's own snapshot.
-func (f *Flow) waiting(tx *sql.Tx, ctl pipeline.Control) error {
-	live, err := liveSnapshot(tx)
-	if err != nil {
-		return err
-	}
-	items, err := waitingItems(tx)
-	if err != nil {
-		return err
-	}
+// waiting classifies every open item that waits right now, with the claim's own snapshot (cs).
+func (f *Flow) waiting(tx *sql.Tx, cs claimState) error {
+	items := slices.Clone(cs.waiting)
 	rows, err := tx.Query(`SELECT ` + itemCols + ` FROM items WHERE stage IN ('needs_you', 'held', 'qa')`)
 	if err != nil {
 		return err
@@ -535,14 +528,10 @@ func (f *Flow) waiting(tx *sql.Tx, ctl pipeline.Control) error {
 	if err != nil {
 		return err
 	}
-	frozen, err := frozenRepos(tx)
-	if err != nil {
-		return err
-	}
 	slices.SortFunc(items, func(a, b pipeline.Item) int { return int(a.ID - b.ID) })
 	by := map[string]*FlowWait{}
 	for _, it := range items {
-		why := pipeline.WaitReason(ctl, it, deps, live, flagged[it.ID], frozen)
+		why := pipeline.WaitReason(cs.ctl, it, deps, cs.live, flagged[it.ID], cs.frozen, cs.holds)
 		if why == "" {
 			continue
 		}
