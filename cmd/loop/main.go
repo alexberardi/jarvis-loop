@@ -38,6 +38,7 @@ const usage = `usage: loop <command> [args]
   priority <id> <P1-P5>
   agents [<0-6>]
   stop | resume
+  unfreeze <repo>             lift the freeze on a repo whose main went red (owner/name or bare name)
 
   for moving items by hand, as a runner:
   claim [--runner R] --agent A [--cap gpu,voice,...]
@@ -170,6 +171,7 @@ var commands = map[string]command{
 	"reopen":    {2, 2, nil, cmdReopen},
 	"priority":  {2, 2, nil, cmdPriority},
 	"agents":    {0, 1, nil, cmdAgents},
+	"unfreeze":  {1, 1, nil, cmdUnfreeze},
 	"stop":      {0, 0, nil, cmdStop(true)},
 	"resume":    {0, 0, nil, cmdStop(false)},
 	"claim":     {0, 0, []string{"runner", "agent", "cap"}, cmdClaim},
@@ -365,6 +367,14 @@ func cmdStatus(c *client, _ []string, f map[string][]string) error {
 		return err
 	}
 	fmt.Fprintln(c.out, controlLine(ctl))
+	var fz []freeze
+	if _, err := c.json("GET", "/freezes", nil, &fz); err != nil {
+		return err
+	}
+	for _, f := range fz {
+		fmt.Fprintf(c.out, "FROZEN %s: main is red (%s); only #%d moves, %d result(s) waiting; lift with: loop unfreeze %s\n",
+			f.Repo, strings.Join(f.Jobs, ", "), f.ItemID, f.Queued, f.Repo)
+	}
 	if len(board.Items) == 0 {
 		fmt.Fprintln(c.out, "no items")
 		return nil
@@ -646,6 +656,22 @@ func cmdDrop(c *client, pos []string, f map[string][]string) error {
 		return err
 	}
 	fmt.Fprintf(c.out, "#%d dropped (closed)\n", it.ID)
+	return nil
+}
+
+type freeze struct {
+	Repo   string   `json:"repo"`
+	ItemID int64    `json:"item_id"`
+	Jobs   []string `json:"jobs"`
+	Queued int      `json:"queued"`
+}
+
+func cmdUnfreeze(c *client, pos []string, _ map[string][]string) error {
+	var f freeze
+	if _, err := c.json("POST", "/unfreeze", map[string]string{"repo": pos[0]}, &f); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "%s unfrozen: the results that waited are applied\n", f.Repo)
 	return nil
 }
 

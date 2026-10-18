@@ -146,6 +146,14 @@ type fakeLand struct {
 	runs     []WorkflowRun
 	logs     map[int64]string
 	logCalls []int64
+	reruns   []int64
+}
+
+func (f *fakeLand) RerunFailed(_ context.Context, _ string, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reruns = append(f.reruns, id)
+	return nil
 }
 
 func (f *fakeLand) LandView(_ context.Context, slug string, pr int) (LandPR, error) {

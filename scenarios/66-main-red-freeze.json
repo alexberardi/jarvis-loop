@@ -1,0 +1,71 @@
+{
+  "name": "main-red-freeze",
+  "about": "#197: main goes red after a's merge and stays red after one re-run of the failed job. loopd files the P1 (#4) and freezes sandbox/demo, announced in #loop. b's build was already running: it finishes (its PR is opened) but its advance waits, b staying in build. c waits in build and is never claimed while frozen; the P1 goes first through every stage, on the second slot while b's build holds the first. While main's CI runs on the P1's merge, the runner claims nothing (c is frozen). Main is green on it: the freeze lifts, b's queued advance applies (b to review) and c moves again.",
+  "stages": ["triage", "build", "review", "land"],
+  "slots": 2,
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"build": "pending", "test": "pending"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "expect", "stage": {"a": "done"}, "leased": {"a": false}},
+
+    {"do": "add", "item": "b", "title": "Tidy the digest footer"},
+    {"do": "triage", "item": "b"},
+    {"do": "script", "item": "b", "play": "wait"},
+    {"do": "runner", "claims": "b"},
+    {"do": "agent_running", "item": "b"},
+    {"do": "add", "item": "c", "title": "Shorten the digest subject"},
+    {"do": "triage", "item": "c"},
+
+    {"do": "ci", "main": {"build": "pass", "test": "fail"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "clock", "advance": "30s"},
+    {"do": "wait", "events": [{"item": "a", "kind": "main_ci", "actor": "runner", "data": {"result": "^red$", "p1_item": "^4$", "rerun": "^\\[\"test\"\\]$"}, "count": 1},
+      {"kind": "frozen", "actor": "loopd", "data": {"repo": "^sandbox/demo$", "item": "^4$", "jobs": "^\\[\"test\"\\]$"}, "count": 1}]},
+
+    {"do": "runner", "claims": "#4"},
+    {"do": "wait", "stage": {"#4": "build"}, "leased": {"#4": false}},
+    {"do": "runner", "claims": "#4"},
+    {"do": "wait", "stage": {"#4": "review"}, "leased": {"#4": false}},
+
+    {"do": "release", "item": "b"},
+    {"do": "wait", "events": [{"item": "b", "kind": "advance_queued", "actor": "runner", "outcome": "pr_opened", "count": 1}]},
+    {"do": "expect", "stage": {"b": "build", "c": "build"}, "leased": {"b": false, "c": false}, "prs": 3},
+
+    {"do": "runner", "claims": "#4"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "#4", "checks": {"check": "pass"}},
+    {"do": "ci", "main": {"build": "pending", "test": "pending"}},
+    {"do": "runner", "claims": "#4"},
+    {"do": "wait", "stage": {"#4": "done"}, "leased": {"#4": false}},
+    {"do": "runner", "claims": "none"},
+    {"do": "ci", "main": {"build": "pass", "test": "pass"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"#4": "done", "b": "review", "c": "build"},
+     "events": [{"item": "#4", "kind": "main_ci", "data": {"result": "^green$"}, "count": 1},
+       {"kind": "unfrozen", "actor": "loopd", "data": {"repo": "^sandbox/demo$", "applied": "^1$", "reason": "^main green on [0-9a-f]{7} after #4's merge$"}, "count": 1},
+       {"item": "b", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "data": {"queued_at": "."}, "count": 1}]},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done", "#4": "done", "c": "build"},
+    "remote": {"main": "#4"},
+    "events": [
+      {"kind": "created", "actor": "runner", "data": {"title": "^main red in sandbox/demo: test$", "priority": "^P1$", "source": "^finding$"}, "count": 1},
+      {"item": "b", "kind": "advanced", "outcome": "approved", "count": 1}
+    ],
+    "messages": [
+      {"channel": "loop", "text": "^:rotating_light: \\*main is red in sandbox/demo\\* \\(failing: test, still red after a re-run\\): \\*frozen\\*\\. Nothing else in it moves stages .* #4 main red in sandbox/demo: test goes first\\. Likely culprit: #1 Fix the digest wording \\(PR #101\\)\\. Lift it by hand: `loop unfreeze sandbox/demo`\\.$"},
+      {"thread": "b", "text": "^Finished build \\(pr_opened\\); main is red in sandbox/demo, so the result waits for #4 main red in sandbox/demo: test and applies once main is green\\.$"},
+      {"channel": "loop", "text": "^:large_green_circle: \\*sandbox/demo unfrozen\\* \\(main green on [0-9a-f]{7} after #4's merge\\)\\. Applied 1 result\\(s\\) that waited, in the order they finished\\.$"}
+    ]
+  }
+}

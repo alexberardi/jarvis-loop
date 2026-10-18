@@ -37,7 +37,7 @@ func TestChooseDependencies(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := Choose(ctl, tc.items, tc.stages, nil, allCaps)
+			got, ok := Choose(ctl, tc.items, tc.stages, nil, allCaps, nil)
 			if tc.want == 0 {
 				if ok {
 					t.Fatalf("want nothing, got item %d", got.ID)

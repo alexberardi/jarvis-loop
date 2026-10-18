@@ -18,6 +18,7 @@
     {"do": "expect", "no_events": [{"item": "a", "kind": "main_ci"}]},
     {"do": "ci", "main": {"build": "pass", "test": "fail"}},
     {"do": "clock", "advance": "30s"},
+    {"do": "clock", "advance": "30s"},
     {"do": "runner_idle"}
   ],
   "expect": {
@@ -26,13 +27,13 @@
     "events": [
       {"item": "a", "kind": "main_ci", "actor": "runner",
        "data": {"result": "^red$", "failing": "^\\[\"test\"\\]$", "p1_item": "^2$", "urls": "actions/runs/"}, "count": 1},
-      {"kind": "created", "actor": "runner", "data": {"title": "^main red after #101: test$", "priority": "^P1$", "source": "^finding$", "repo": "^sandbox/demo$"}, "count": 1}
+      {"kind": "created", "actor": "runner", "data": {"title": "^main red in sandbox/demo: test$", "priority": "^P1$", "source": "^finding$", "repo": "^sandbox/demo$"}, "count": 1}
     ],
     "messages": [
       {"thread": "a", "text": "^Merged .*sandbox/demo#101> as `[0-9a-f]{7}`; watching main's CI\\.$"},
-      {"channel": "loop", "text": "^\\*#2 main red after #101: test\\*\\nPriority \\*P1\\* · Stage \\*intake\\* · Source finding · Repo sandbox/demo"},
-      {"channel": "loop", "text": "^<@U0C9AFPAMD4> P1, filed by the loop: main red after #101: test$"},
-      {"thread": "a", "text": "^main red on `[0-9a-f]{7}` \\(failing: test\\): filed #2 main red after #101: test \\(P1\\)\\.$"}
+      {"channel": "loop", "text": "^\\*#2 main red in sandbox/demo: test\\*\\nPriority \\*P1\\* · Stage \\*intake\\* · Source finding · Repo sandbox/demo"},
+      {"channel": "loop", "text": "^<@U0C9AFPAMD4> P1, filed by the loop: main red in sandbox/demo: test$"},
+      {"thread": "a", "text": "^main red on `[0-9a-f]{7}` \\(failing: test\\): filed #2 main red in sandbox/demo: test \\(P1\\)\\.$"}
     ]
   }
 }
