@@ -75,7 +75,7 @@ func TestWaitReasonAgreesWithChoose(t *testing.T) {
 		waiting(5, Review, "P2", 0),
 	}
 	for _, it := range items {
-		_, chosen := Choose(ctl, []Item{it}, deps, live, req)
+		_, chosen := Choose(ctl, []Item{it}, deps, live, req, nil)
 		ready := WaitReason(ctl, it, deps, live, nil) == WaitReady
 		if chosen != ready {
 			t.Errorf("item %d: Choose %v, WaitReason %q", it.ID, chosen, WaitReason(ctl, it, deps, live, nil))

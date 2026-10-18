@@ -707,7 +707,9 @@ func (p *player) remoteProblems(rm RemoteMatch) []string {
 }
 
 // prefixProblems checks that the runner's runs of a stage share their prompt prefix: each run's
-// brief starts with the stage's static brief (byte for byte) and every run has the same argv.
+// brief starts with the stage's static brief (byte for byte) and every run has the same argv; a
+// resumed build's prompt is the note on its interruption alone, and its argv adds
+// --resume <session>.
 func (p *player) prefixProblems(stage string) []string {
 	if slices.Contains(runner.Personas, stage) {
 		return p.personaPrefixProblems(stage)
@@ -725,14 +727,25 @@ func (p *player) prefixProblems(stage string) []string {
 			out = append(out, err.Error())
 			continue
 		}
+		resumed := strings.HasPrefix(string(brief), runner.ResumeHeading)
 		cut := strings.Index(string(brief), runner.ItemHeading)
-		if cut < 0 || string(brief[:cut]) != static {
+		if !resumed && (cut < 0 || string(brief[:cut]) != static) {
 			out = append(out, fmt.Sprintf("%s: the brief's start is not the %s stage's static brief", filepath.Base(r), stage))
 		}
 		argv, err := os.ReadFile(filepath.Join(r, "argv.json"))
 		if err != nil {
 			out = append(out, err.Error())
 			continue
+		}
+		if resumed {
+			var a []string
+			json.Unmarshal(argv, &a)
+			if i := slices.Index(a, "--resume"); i >= 0 {
+				a = slices.Delete(a, i, min(i+2, len(a)))
+			} else {
+				out = append(out, fmt.Sprintf("%s: a resumed build's argv has no --resume", filepath.Base(r)))
+			}
+			argv, _ = json.Marshal(a)
 		}
 		if i == 0 {
 			argv0 = argv

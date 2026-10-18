@@ -52,12 +52,17 @@ func loopBlocks(c Control, live []LiveLease) string {
 }
 
 // itemBlocks is what holds a waiting work item back whichever runner asks ("" for nothing), in
-// Choose's order: its dependencies, then the per-resource limits, then its stage's.
-func itemBlocks(c Control, it Item, deps map[int64]Stage, inUse map[string]int) string {
+// Choose's order: its dependencies, then the per-resource limits, then its stage's (unless
+// stageLimits is false: a frozen repo's fix is exempt from them).
+func itemBlocks(c Control, it Item, deps map[int64]Stage, inUse map[string]int, stageLimits bool) string {
 	if len(WaitingOn(it, deps)) > 0 {
 		return WaitDeps
 	}
-	for _, key := range append(slices.Clone(it.Resources), string(it.Stage)) {
+	keys := slices.Clone(it.Resources)
+	if stageLimits {
+		keys = append(keys, string(it.Stage))
+	}
+	for _, key := range keys {
 		if limit, ok := c.Limits[key]; ok && inUse[key] >= limit {
 			return LimitReason(key, limit)
 		}
@@ -92,7 +97,7 @@ func WaitReason(c Control, it Item, deps map[int64]Stage, live []LiveLease, unse
 	if r := loopBlocks(c, live); r != "" {
 		return r
 	}
-	if r := itemBlocks(c, it, deps, inUse); r != "" {
+	if r := itemBlocks(c, it, deps, inUse, true); r != "" {
 		return r
 	}
 	return WaitReady
