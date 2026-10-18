@@ -293,7 +293,7 @@ func TestChooseWorkPaced(t *testing.T) {
 			[]LiveLease{{ItemID: 5}, {ItemID: 6}, {ItemID: 7}, {ItemID: 8}}, nil, nil, req, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			w, ok := ChooseWorkPaced(ctl, tc.pace, tc.items, nil, tc.live, tc.turns, tc.orch, tc.req, nil)
+			w, ok := ChooseWorkPaced(ctl, tc.pace, tc.items, nil, tc.live, tc.turns, tc.orch, nil, tc.req, nil)
 			var got int64
 			switch {
 			case !ok:
@@ -352,7 +352,7 @@ func TestChooseWorkPacedFrozen(t *testing.T) {
 		{"paused, every slot taken: nothing", Pace{Level: PacePaused}, full, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			w, ok := ChooseWorkPaced(DefaultControl(), tc.pace, []Item{fix, other, land}, nil, tc.live, nil, nil, req, frozen)
+			w, ok := ChooseWorkPaced(DefaultControl(), tc.pace, []Item{fix, other, land}, nil, tc.live, nil, nil, nil, req, frozen)
 			var got int64
 			if ok && w.Item != nil {
 				got = w.Item.ID
@@ -361,5 +361,29 @@ func TestChooseWorkPacedFrozen(t *testing.T) {
 				t.Fatalf("got %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// The work of a held slot (SlotHolds) is paced like any item: paused, the last slot's Mac build
+// does not go to claude; a P4 S build routes to qwen there when the runner has it.
+func TestChooseWorkPacedHeldSlot(t *testing.T) {
+	two := DefaultControl()
+	two.ActiveAgents = 2
+	holds := []SlotHold{{Resource: "macos", Runner: "mbp", ItemID: 2}}
+	live := []LiveLease{{ItemID: 9, Stage: Build}}
+	mac := sized(waiting(2, Build, "P4", 0, "macos"), "S", "")
+	req := ClaimRequest{Runner: "mbp", Agent: "mbp-1", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}, Kinds: []string{WorkItem}}
+	qwenReq := req
+	qwenReq.Builders = []string{BuilderQwen}
+	paused := Pace{Level: PacePaused}
+	if w, ok := ChooseWorkPaced(two, paused, []Item{mac}, nil, live, nil, nil, holds, req, nil); ok {
+		t.Fatalf("paused: got %+v, want nothing", w)
+	}
+	w, ok := ChooseWorkPaced(two, paused, []Item{mac}, nil, live, nil, nil, holds, qwenReq, nil)
+	if !ok || w.Item == nil || w.Item.ID != 2 || !w.RouteQwen {
+		t.Fatalf("paused, qwen on the runner: got %+v, %v; want #2 routed to qwen", w, ok)
+	}
+	if w, ok := ChooseWorkPaced(two, Pace{Agents: 2}, []Item{mac}, nil, live, nil, nil, holds, req, nil); !ok || w.Item == nil || w.Item.ID != 2 || w.RouteQwen {
+		t.Fatalf("normal: got %+v, %v; want #2 with claude", w, ok)
 	}
 }

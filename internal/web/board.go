@@ -174,6 +174,11 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, err)
 		return
 	}
+	runners, err := p.st.Runners(r.Context())
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
 	now := p.cfg.Clock.Now()
 	v := boardView(items, plans, now, r.URL.Query().Get("closed") == "1", p.cfg.SlackWorkspace)
 	v.Freezes = fz
@@ -184,6 +189,7 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 	} else {
 		p.log.Error("board usage", "err", err)
 	}
+	v.Runners = runnerView(runners, now)
 	w.Header().Set("Content-Security-Policy", liveCSP)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := boardTmpl.Execute(w, v); err != nil {
@@ -399,6 +405,7 @@ type boardData struct {
 	Working    workingSection
 	Orch       orchSection
 	Usage      usageSection
+	Runners    runnerSection
 	Columns    []column
 	ShowClosed bool
 	Now        time.Time
@@ -465,6 +472,27 @@ func usageView(u store.UsageReport) usageSection {
 	}
 	for i := range v.Days {
 		v.Days[i] = *byDay[v.Days[i].Day]
+	}
+	return v
+}
+
+// runnerSection is the runner panel: the runners seen within a day and the slots held for their
+// work (pipeline.SlotHolds).
+type runnerSection struct {
+	Runners []runnerRow
+	Holds   []pipeline.SlotHold
+}
+
+type runnerRow struct {
+	pipeline.RunnerSeen
+	Ago    int64 // seconds since loopd last saw it
+	Around bool  // seen within two of its polls
+}
+
+func runnerView(p store.RunnerPanel, now time.Time) runnerSection {
+	v := runnerSection{Holds: p.Holds}
+	for _, r := range p.Runners {
+		v.Runners = append(v.Runners, runnerRow{RunnerSeen: r, Ago: max(int64(now.Sub(r.LastSeen)/time.Second), 0), Around: r.Around(now)})
 	}
 	return v
 }

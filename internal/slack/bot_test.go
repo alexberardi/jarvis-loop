@@ -1258,6 +1258,23 @@ func TestUnservableLines(t *testing.T) {
 	}
 }
 
+// dependency_reopened (docs/decisions/2026-10-18-deps-at-merge.md) tells the dependent's thread
+// which dependency failed the user's check, why, and the item filed to fix it; the work goes on.
+func TestDependencyReopenedLine(t *testing.T) {
+	e := newBotEnv(t)
+	it, err := e.st.AddItem(e.ctx, "user:alex", store.NewItem{Title: "Pair screen", Repo: "jarvis-server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := store.Event{ItemID: it.ID, Actor: "loopd", Kind: store.KindDependencyReopened, From: "build", To: "build",
+		Data: map[string]any{"dependency": float64(94), "reopen_item": float64(201), "words": "the code is <small>"}}
+	m, ok := e.b.describe(e.ctx, ev, store.Detail{Item: it})
+	want := "This depends on #94, which was reopened: the code is &lt;small&gt; (the fix is #201). The work here goes on; check whether it needs a change."
+	if !ok || m.Text != want {
+		t.Errorf("got %q, want %q", m.Text, want)
+	}
+}
+
 // /loop add sets the repo when the text names a configured one, with the priority words too;
 // otherwise the repo stays empty for triage.
 func TestAddRepoWords(t *testing.T) {

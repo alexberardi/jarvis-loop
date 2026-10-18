@@ -102,6 +102,12 @@ type ClaimRequest struct {
 	// OnlyResources, when set, limits the claim to items that need at least one of them: a Mac
 	// runner with [macos] takes the macos items and leaves the rest to the dev box.
 	OnlyResources []string
+	// PollSeconds is how often the runner asks (0: it did not say); loopd keeps it with the
+	// runner for the held slots (SlotHolds).
+	PollSeconds int
+	// RunnerStages are the work stages the runner takes in all its lanes (none: it did not say);
+	// loopd keeps them with the runner so a slot is held only for work it would claim.
+	RunnerStages []Stage
 	// Stages, when set, limits the claim to these stages (a runner that only builds).
 	Stages []Stage
 	// Kinds is the work the runner takes: WorkItem, WorkPlan (plan turns), WorkOrchestrate.
@@ -143,6 +149,8 @@ type Work struct {
 	Orch *OrchCandidate
 	// RouteQwen: build the item with qwen this run (a paced claim, ChooseWorkPaced).
 	RouteQwen bool
+	// Held, with nothing to claim, is why: the slots left are held (SlotHolds).
+	Held string
 }
 
 // ChooseWork picks an item (Choose), a queued plan turn or the queued orchestrate turn (orch, nil
@@ -150,55 +158,87 @@ type Work struct {
 // running turns); a plan turn's priority is its plan's, and it beats an item of the same priority:
 // the user is in the conversation. The orchestrate turn beats everything (it gets the next free
 // slot), one at a time. The fix of a frozen repo (frozen) beats even that: it may take a slot
-// over the active-agents number.
-func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest, frozen Frozen) (Work, bool) {
-	return ChooseWorkPaced(c, Pace{Level: PaceNormal, Agents: c.ActiveAgents}, items, deps, live, turns, orch, req, frozen)
+// over the active-agents number. holds are the slots held (SlotHolds): when they are all the free
+// slots left, the claim gets only an item needing a held resource.
+func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, holds []SlotHold, req ClaimRequest, frozen Frozen) (Work, bool) {
+	return ChooseWorkPaced(c, Pace{Level: PaceNormal, Agents: c.ActiveAgents}, items, deps, live, turns, orch, holds, req, frozen)
 }
 
 // ChooseWorkPaced is ChooseWork under a claude pace (PaceFor). Slow: claude's runs at once are at
 // most pace.Agents (live counts the Claude leases), and claude takes only P1 and size S items,
 // triage (short, and an item has no size before it) and P1 plan turns; paused: claude takes nothing. Either way land and qwen builds go on, and a P3–P5
 // build of size S or M with no builder set goes to qwen this run when the runner has it
-// (Work.RouteQwen). The active-agents number caps everything as before; a frozen repo's fix is
-// paced like any item.
-func ChooseWorkPaced(c Control, pace Pace, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest, frozen Frozen) (Work, bool) {
+// (Work.RouteQwen). The active-agents number caps everything as before; a frozen repo's fix and
+// the work of a held slot are paced like any item.
+func ChooseWorkPaced(c Control, pace Pace, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, holds []SlotHold, req ClaimRequest, frozen Frozen) (Work, bool) {
 	claudeLive := 0
 	for _, l := range live {
 		if l.Claude {
 			claudeLive++
 		}
 	}
-	claudeOK := pace.Level == PaceNormal || pace.Level == PaceSlow && claudeLive < pace.Agents
-	route := func(it Item) bool {
+	p := pacing{pace: pace, claudeOK: pace.Level == PaceNormal || pace.Level == PaceSlow && claudeLive < pace.Agents}
+	p.route = func(it Item) bool {
 		return pace.Level != PaceNormal && routable(it) && slices.Contains(req.Builders, BuilderQwen)
 	}
-	eligible := func(it Item) bool {
-		if !UsesClaude(it) || route(it) {
+	p.eligible = func(it Item) bool {
+		if !UsesClaude(it) || p.route(it) {
 			return true
 		}
-		return claudeOK && (pace.Level == PaceNormal || it.Priority == "P1" || it.Size == "S" || it.Stage == Triage)
+		return p.claudeOK && (pace.Level == PaceNormal || it.Priority == "P1" || it.Size == "S" || it.Stage == Triage)
 	}
 	if req.wants(WorkItem) {
-		if it, ok := chooseFix(c, items, deps, live, req, frozen, eligible); ok {
-			return Work{Item: &it, RouteQwen: route(it)}, true
+		if it, ok := chooseFix(c, items, deps, live, req, frozen, p.eligible); ok {
+			return Work{Item: &it, RouteQwen: p.route(it)}, true
 		}
 	}
 	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
 		return Work{}, false
 	}
-	if orch != nil && claudeOK && req.wants(WorkOrchestrate) && !slices.ContainsFunc(live, func(l LiveLease) bool { return l.Stage == OrchestrateStage }) {
+	w, ok := chooseWork(c, p, items, deps, live, turns, orch, req, frozen)
+	if len(holds) == 0 || c.ActiveAgents-len(live) > len(holds) || (ok && serves(w, holds)) {
+		return w, ok
+	}
+	// The slots left are held: only held work, if this runner can take some.
+	if req.wants(WorkItem) {
+		held := req
+		held.OnlyResources = nil
+		for _, h := range holds {
+			if len(req.OnlyResources) == 0 || slices.Contains(req.OnlyResources, h.Resource) {
+				held.OnlyResources = append(held.OnlyResources, h.Resource)
+			}
+		}
+		if len(held.OnlyResources) > 0 {
+			if it, ok := choosePaced(c, items, deps, live, held, frozen, p.eligible); ok {
+				return Work{Item: &it, RouteQwen: p.route(it)}, true
+			}
+		}
+	}
+	return Work{Held: HeldReason(holds)}, false
+}
+
+// pacing is a claim's pace (ChooseWorkPaced): whether claude may take another run, which items it
+// may take, and which builds go to qwen this run.
+type pacing struct {
+	pace            Pace
+	claudeOK        bool
+	eligible, route func(Item) bool
+}
+
+func chooseWork(c Control, p pacing, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest, frozen Frozen) (Work, bool) {
+	if orch != nil && p.claudeOK && req.wants(WorkOrchestrate) && !slices.ContainsFunc(live, func(l LiveLease) bool { return l.Stage == OrchestrateStage }) {
 		return Work{Orch: orch}, true
 	}
 	var it Item
 	okItem := false
 	if req.wants(WorkItem) {
-		it, okItem = choosePaced(c, items, deps, live, req, frozen, eligible)
+		it, okItem = choosePaced(c, items, deps, live, req, frozen, p.eligible)
 	}
 	var best *TurnCandidate
-	if req.wants(WorkPlan) && claudeOK {
+	if req.wants(WorkPlan) && p.claudeOK {
 		for i := range turns {
 			t := &turns[i]
-			if pace.Level != PaceNormal && t.Priority != "P1" {
+			if p.pace.Level != PaceNormal && t.Priority != "P1" {
 				continue
 			}
 			if best == nil || turnBefore(*t, *best) {
@@ -210,7 +250,7 @@ func ChooseWorkPaced(c Control, pace Pace, items []Item, deps map[int64]Stage, l
 	case best != nil && (!okItem || PriorityRank(best.Priority) <= PriorityRank(it.Priority)):
 		return Work{Turn: best}, true
 	case okItem:
-		return Work{Item: &it, RouteQwen: route(it)}, true
+		return Work{Item: &it, RouteQwen: p.route(it)}, true
 	}
 	return Work{}, false
 }
@@ -307,7 +347,7 @@ func choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 		if len(req.OnlyResources) > 0 && !slices.ContainsFunc(it.Resources, func(r string) bool { return slices.Contains(req.OnlyResources, r) }) {
 			continue
 		}
-		// Dependencies: every item it depends on is done.
+		// Dependencies: every item it depends on is merged (qa or done).
 		if len(WaitingOn(*it, deps)) > 0 {
 			continue
 		}

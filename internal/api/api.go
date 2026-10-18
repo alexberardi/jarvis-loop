@@ -407,7 +407,12 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		Capabilities []string `json:"capabilities"`
 		// OnlyResources: only items needing one of these (a subset of the capabilities).
 		OnlyResources []string `json:"only_resources"`
-		Stages        []string `json:"stages"`
+		// PollSeconds: how often the runner asks (the held slots wait two of them for it).
+		PollSeconds int      `json:"poll_seconds"`
+		Stages      []string `json:"stages"`
+		// RunnerStages: the work stages the runner takes in all its lanes (the held slots count
+		// only its work in them); empty: it did not say.
+		RunnerStages []string `json:"runner_stages"`
 		// Kinds: item, plan (plan turns), orchestrate; empty is items only.
 		Kinds []string `json:"kinds"`
 		// Builders: the other builders the runner can run (qwen), for a paced claim's route.
@@ -437,6 +442,14 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		}
 		stages = append(stages, pipeline.Stage(st))
 	}
+	var runnerStages []pipeline.Stage
+	for _, st := range body.RunnerStages {
+		if !pipeline.Stage(st).IsWork() {
+			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "runner_stages must be work stages (triage, build, review, land), got " + strconv.Quote(st)})
+			return
+		}
+		runnerStages = append(runnerStages, pipeline.Stage(st))
+	}
 	if body.Runner != "" && body.Runner != p.Name {
 		writeErr(w, http.StatusForbidden, "runner_mismatch", "this token belongs to runner "+strconv.Quote(p.Name))
 		return
@@ -462,7 +475,7 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, Stages: stages, Kinds: body.Kinds, Builders: body.Builders})
+	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds, Builders: body.Builders})
 	if err != nil {
 		s.fail(w, err)
 		return
