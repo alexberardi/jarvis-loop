@@ -103,10 +103,11 @@ func (r *Runner) Paused() string {
 }
 
 // Run works items until ctx ends: agent work in up to Cfg.Slots parallel slots, and land, which
-// runs no agent, in a lane of its own next to them, one item at a time (loopd's land limit), so an
-// approved item never waits for a slot (docs/decisions/2026-10-16-land-lane.md). A Reload re-sizes
-// the lanes (slots, stages); after Drain, Run claims nothing and returns once its runs end. Only
-// the end of ctx ends the runs themselves.
+// runs no agent, in up to Cfg.LandSlots lanes of their own next to them (loopd's land limit caps
+// the total), so an approved item never waits for an agent slot, nor for another item's CI
+// (docs/decisions/2026-10-16-land-lane.md, docs/decisions/2026-10-18-land-never-waits.md). A
+// Reload re-sizes the lanes (slots, land slots, stages); after Drain, Run claims nothing and
+// returns once its runs end. Only the end of ctx ends the runs themselves.
 func (r *Runner) Run(ctx context.Context) error {
 	r.ctl()
 	claimCtx, stopClaims := context.WithCancel(ctx)
@@ -202,8 +203,13 @@ func (r *Runner) Run(ctx context.Context) error {
 				return nil
 			})
 		}
-		if land != nil {
-			lane("land", func() []string { _, land := r.Lanes(); return land })
+		for i := 0; land != nil && i < r.Config().LandSlots; i++ {
+			lane(fmt.Sprintf("land-%d", i), func() []string {
+				if _, land := r.Lanes(); land != nil && i < r.Config().LandSlots {
+					return land
+				}
+				return nil
+			})
 		}
 		select {
 		case <-claimCtx.Done():
@@ -444,6 +450,19 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 		log.Error("prepare", "err", err)
 		r.advance(ctx, ru, "failed", map[string]string{"error": "the runner could not prepare the run: " + clip(err.Error(), 1500)}, nil)
 		return
+	}
+	if raw := r.restoreTrustedResult(ctx, ru, log); raw != nil {
+		// The user OK'd the branch's head after verify refused it: verify runs that commit, with
+		// the result its build left, and the agent does not run (a new commit would need a new OK).
+		log.Info("verify runs the commit the user OK'd, without the agent", "head", ru.item.Trust.HeadSHA)
+		r.reportBuild(cleanupCtx, ru, outcome{}, raw)
+		if ru.rejected == "" {
+			return
+		}
+		log.Warn("the kept result was refused; the agent runs", "why", ru.rejected)
+		r.dropTrustedResult(ru)
+		ru.rejected = ""
+		os.Remove(filepath.Join(ru.wt, ".loop", "result.json"))
 	}
 	log.Info("agent starting", "worktree", ru.wt, "branch", ru.branch, "mode", r.cfgOf(ru).Mode, "builder", ru.builder, "resume", ru.resume)
 	out := r.runAgentHarness(ctx, ru, brief)
@@ -1476,6 +1495,7 @@ func (r *Runner) reportBuild(ctx context.Context, ru *run, out outcome, raw []by
 	}
 	var tr *trustRefusal
 	if errors.As(err, &tr) {
+		r.saveTrustedResult(ru, tr.head, raw, files)
 		r.refuseTrusted(ctx, ru, out, tr)
 		return
 	}

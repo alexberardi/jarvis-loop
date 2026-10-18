@@ -200,11 +200,17 @@ func (s *Store) migrate() error {
 		return err
 	}
 	sort.Slice(ents, func(i, j int) bool { return ents[i].Name() < ents[j].Name() })
+	seen := map[int]string{}
 	for _, e := range ents {
 		v, err := strconv.Atoi(strings.SplitN(e.Name(), "_", 2)[0])
 		if err != nil {
 			return fmt.Errorf("migration %s: name must start with a number", e.Name())
 		}
+		// Two files with one number: the second would be skipped as already applied.
+		if prev, ok := seen[v]; ok {
+			return fmt.Errorf("migrations %s and %s share version %d", prev, e.Name(), v)
+		}
+		seen[v] = e.Name()
 		body, err := migrations.ReadFile("migrations/" + e.Name())
 		if err != nil {
 			return err

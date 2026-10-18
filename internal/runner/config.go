@@ -33,8 +33,12 @@ type Config struct {
 	// of its capabilities): a Mac runner with ["macos"] leaves everything else to the dev box.
 	OnlyResources []string `json:"only_resources,omitempty"`
 	// Slots is how many agent runs this runner works at once; loopd's active-agents number still
-	// caps the total. Land, with no agent, has its own lane next to them, one item at a time.
+	// caps the total. Land, with no agent, has its own lanes next to them.
 	Slots int `json:"slots"`
+	// LandSlots is how many land runs this runner works at once (default 3), each in its own lane
+	// next to the agent slots; loopd's land limit still caps the total. A land run mostly waits on
+	// CI, so one lane would land one item per CI run (#213).
+	LandSlots int `json:"land_slots,omitempty"`
 	// Stages are the stages this runner claims: triage, build and review (the default, all
 	// three), or a subset; land, plan (plan turns, docs/phases/07-planning.md), orchestrate and
 	// regression (regression.go) only when named.
@@ -284,9 +288,16 @@ func Expand(p string) string {
 	return p
 }
 
+// DefaultLandSlots is a runner's land lanes when its config does not say (loopd's default land
+// limit).
+const DefaultLandSlots = 3
+
 func (c *Config) normalize() error {
 	if c.Slots <= 0 {
 		c.Slots = 1
+	}
+	if c.LandSlots <= 0 {
+		c.LandSlots = DefaultLandSlots
 	}
 	if c.PollSeconds <= 0 {
 		c.PollSeconds = 30

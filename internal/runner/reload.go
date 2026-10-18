@@ -68,7 +68,7 @@ func (r *Runner) ReloadConfig(c *Config) error {
 	}
 	added, removed := repoDiff(old, c)
 	r.Log.Info("config reloaded: it applies to the next claim; live runs keep theirs", "path", c.Path(),
-		"slots", c.Slots, "stages", c.Stages, "repos_added", added, "repos_removed", removed)
+		"slots", c.Slots, "land_slots", c.LandSlots, "stages", c.Stages, "repos_added", added, "repos_removed", removed)
 	return nil
 }
 

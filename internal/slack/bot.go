@@ -235,6 +235,10 @@ func (b *Bot) handleEvent(ctx context.Context, e store.Event) {
 			b.regressionReport(ctx, e)
 			return
 		}
+		if e.Kind == store.KindRunwayLow {
+			b.post(ctx, "runway", b.runwayMessage(ctx, e))
+			return
+		}
 		if e.Kind == "control" {
 			if err := b.updateControl(ctx); err != nil {
 				b.c.Log.Error("slack: control message", "err", err.Error())
@@ -1213,6 +1217,11 @@ func (b *Bot) onActions(ctx context.Context, p interaction) {
 		if !IsApprover(user) {
 			b.refuse(ctx, channel, user, itemID, a.ActionID)
 			continue
+		}
+		// A button on a runway warning leaves the warning as it is: it lists other items too.
+		msgTS := msgTS
+		if strings.HasPrefix(a.BlockID, runwayBlock) {
+			msgTS = ""
 		}
 		switch a.ActionID {
 		case "priority":

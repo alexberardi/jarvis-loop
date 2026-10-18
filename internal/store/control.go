@@ -17,8 +17,8 @@ func (s *Store) loadControl(q interface {
 	var c pipeline.Control
 	var stopped int
 	var limits, rules string
-	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules, orchestrator_turns_per_day FROM control WHERE id = 1`).
-		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules, &c.OrchTurnsPerDay)
+	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules, orchestrator_turns_per_day, runway_warn_hours FROM control WHERE id = 1`).
+		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules, &c.OrchTurnsPerDay, &c.RunwayWarnHours)
 	if err != nil {
 		return c, err
 	}
@@ -56,8 +56,8 @@ func saveControl(tx *sql.Tx, c pipeline.Control, builtInRules bool) error {
 	if c.Stopped {
 		stopped = 1
 	}
-	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=?, orchestrator_turns_per_day=? WHERE id = 1`,
-		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules), c.OrchTurnsPerDay)
+	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=?, orchestrator_turns_per_day=?, runway_warn_hours=? WHERE id = 1`,
+		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules), c.OrchTurnsPerDay, c.RunwayWarnHours)
 	return err
 }
 
@@ -101,6 +101,8 @@ type ControlPatch struct {
 	HoldRules     *[]pipeline.HoldRule `json:"hold_rules"`
 	// OrchTurnsPerDay is the orchestrator's daily cap of turns.
 	OrchTurnsPerDay *int `json:"orchestrator_turns_per_day"`
+	// RunwayWarnHours is the runway below which loopd warns the user when away (0: off).
+	RunwayWarnHours *int `json:"runway_warn_hours"`
 }
 
 // SetControl applies a patch to the control row and records it.
@@ -127,6 +129,9 @@ func (s *Store) SetControl(ctx context.Context, actor string, p ControlPatch) (p
 		}
 		if p.OrchTurnsPerDay != nil {
 			c.OrchTurnsPerDay = *p.OrchTurnsPerDay
+		}
+		if p.RunwayWarnHours != nil {
+			c.RunwayWarnHours = *p.RunwayWarnHours
 		}
 		for k, v := range p.Limits {
 			c.Limits[k] = v

@@ -364,8 +364,8 @@ func TestLandConfigWaits(t *testing.T) {
 	if err := c.normalize(); err != nil {
 		t.Fatal(err)
 	}
-	if c.ciWait.Minutes() != 30 || c.mainWait.Minutes() != 30 || strings.Join(c.Stages, ",") != "triage,build,review" {
-		t.Fatalf("defaults: %v %v %v", c.ciWait, c.mainWait, c.Stages)
+	if c.ciWait.Minutes() != 30 || c.mainWait.Minutes() != 30 || strings.Join(c.Stages, ",") != "triage,build,review" || c.LandSlots != 3 {
+		t.Fatalf("defaults: %v %v %v, land slots %d", c.ciWait, c.mainWait, c.Stages, c.LandSlots)
 	}
 	c.LandCIWait, c.LandMainWait, c.Stages = "45m", "1h", []string{"land", "build"}
 	if err := c.normalize(); err != nil || c.ciWait.Minutes() != 45 || c.mainWait.Hours() != 1 {

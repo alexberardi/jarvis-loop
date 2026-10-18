@@ -196,6 +196,11 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, err)
 		return
 	}
+	rw, err := p.st.Runway(r.Context())
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
 	now := p.cfg.Clock.Now()
 	v := boardView(items, plans, now, r.URL.Query().Get("closed") == "1", p.cfg.SlackWorkspace)
 	v.Draining = draining
@@ -204,6 +209,7 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 	v.Orch = orchView(orch, items)
 	v.Runners = runnerView(runners, now)
 	v.Regressions = regressionView(regs, p.principal(r).Kind == api.KindUser, now)
+	v.Runway = runwayView(rw)
 	w.Header().Set("Content-Security-Policy", liveCSP)
 	if v.Regressions.CanRun {
 		w.Header().Set("Content-Security-Policy", boardFormCSP)
@@ -426,11 +432,13 @@ type boardData struct {
 	Runners runnerSection
 	// Regressions are the latest regression runs, and the user's button to start one.
 	Regressions regressionSection
-	Columns     []column
-	ShowClosed  bool
-	Now         time.Time
-	Total       int
-	PlanCount   int
+	// Runway is how much the loop can do without the user (#205); nil: not shown.
+	Runway     *runwaySection
+	Columns    []column
+	ShowClosed bool
+	Now        time.Time
+	Total      int
+	PlanCount  int
 }
 
 // runnerSection is the runner panel: the runners seen within a day and the slots held for their
@@ -724,3 +732,17 @@ var (
 	docTmpl        = template.Must(template.New("plandoc.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plandoc.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
 	regressionTmpl = template.Must(template.New("regression.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/regression.tmpl", "templates/style.tmpl"))
 )
+
+// runwaySection is the board's runway line: the hours, and the user's waiting items that free the
+// most (the first boardRunwayTop).
+type runwaySection struct {
+	store.RunwayReport
+	Low bool
+}
+
+const boardRunwayTop = 3
+
+func runwayView(r store.RunwayReport) *runwaySection {
+	r.Unblockers = r.Unblockers[:min(len(r.Unblockers), boardRunwayTop)]
+	return &runwaySection{RunwayReport: r, Low: r.Threshold > 0 && r.Hours < float64(r.Threshold)}
+}

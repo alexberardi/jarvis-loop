@@ -17,7 +17,9 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The race tests plus the scenarios take about 9 minutes; at 10, a slow runner cancelled most PR
+    # runs and every one came back to the loop as a CI failure (#212).
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -43,7 +45,8 @@ jobs:
       - name: test (race)
         env:
           CGO_ENABLED: "1"
-        run: go test -race ./...
+        # Under the job's cap, so a hung test prints its goroutines instead of the job being cut off.
+        run: go test -race -timeout 12m ./...
       - name: build (CGO off)
         env:
           CGO_ENABLED: "0"
