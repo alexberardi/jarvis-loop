@@ -47,7 +47,7 @@ type boardPage struct {
 	cfg    BoardConfig
 }
 
-// NewBoard returns the handler for GET /board, GET /board/working, GET /board/live.js,
+// NewBoard returns the handler for GET /board, GET /board/working, GET /board/flow, GET /board/live.js,
 // GET /board/items/{id}, GET /board/items/{id}/evidence/{n}, GET /board/plans/{id} and
 // GET /board/plans/{id}/{kind}/{v}, and nothing else.
 func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardConfig) http.Handler {
@@ -58,6 +58,7 @@ func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardCo
 	mux := http.NewServeMux()
 	mux.Handle("GET /board", p.auth(p.board))
 	mux.Handle("GET /board/working", p.auth(p.working))
+	mux.Handle("GET /board/flow", p.auth(p.flow))
 	mux.Handle("GET /board/live.js", p.auth(p.liveJS))
 	mux.Handle("GET /board/items/{id}", p.auth(p.item))
 	mux.Handle("GET /board/items/{id}/evidence/{n}", p.auth(p.evidence))
@@ -651,12 +652,13 @@ var templateFS embed.FS
 //go:embed templates/live.js
 var liveJS []byte
 
-var funcs = template.FuncMap{"age": age, "size": size, "stamp": stamp, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot}
+var funcs = template.FuncMap{"age": age, "size": size, "stamp": stamp, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot, "dur": dur, "mins": mins}
 
 var (
 	boardTmpl   = template.Must(template.New("board.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/board.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
 	itemTmpl    = template.Must(template.New("item.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/item.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
 	workingTmpl = template.Must(template.New("working.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/working.tmpl"))
 	planTmpl    = template.Must(template.New("plan.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plan.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
+	flowTmpl    = template.Must(template.New("flow.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/flow.tmpl", "templates/style.tmpl"))
 	docTmpl     = template.Must(template.New("plandoc.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plandoc.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
 )

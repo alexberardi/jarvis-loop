@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="refresh" content="60">
+<title>Jarvis Loop flow · {{.Window}}</title>
+{{template "style"}}
+<style>
+.windows a, .windows strong { margin-right: 8px; }
+.tiles { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; min-width: 120px; }
+.tile .n { font-size: 24px; font-weight: 600; }
+.tile .l { color: var(--muted); font-size: 13px; }
+section.panel { background: var(--lane); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; overflow-x: auto; }
+section.panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 0 8px; }
+table { border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 2px 12px 2px 0; vertical-align: top; }
+th { color: var(--muted); font-weight: 500; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.spark { margin-bottom: 8px; }
+.spark svg { display: block; width: 100%; max-width: 600px; height: 48px; }
+.spark rect { fill: var(--accent); }
+.spark .base { stroke: var(--line); stroke-width: 1; }
+.note { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>Flow</h1>
+<p class="sub windows"><a href="/board">board</a> · last {{range .Windows}}{{if eq . $.Window}}<strong>{{.}}</strong>{{else}}<a href="/board/flow?window={{.}}">{{.}}</a>{{end}}{{end}} · {{stamp .Since}} to {{stamp .Now}} · JSON: GET /flow?window={{.Window}} on the API</p>
+
+<div class="tiles">
+<div class="tile"><div class="n">{{.Done}}</div><div class="l">done · {{.DoneRate}}/h</div></div>
+<div class="tile"><div class="n">{{.Merged}}</div><div class="l">merged · {{.MergedRate}}/h</div></div>
+<div class="tile"><div class="n">{{.WaitingTotal}}</div><div class="l">waiting now</div></div>
+<div class="tile"><div class="n">{{mins .BusyMinutes}}</div><div class="l">busy agent-min{{with .BusyShare}} · {{.}} of {{$.ActiveAgents}} agents{{end}}</div></div>
+<div class="tile"><div class="n">{{.KilledRuns}}</div><div class="l">killed runs · {{mins .LostMinutes}} agent-min lost</div></div>
+</div>
+
+<section class="panel" id="throughput">
+<h2>Per hour</h2>
+{{- range .Sparks}}
+<div class="spark">
+<div class="note">{{.Name}}: {{.Total}} in the window, at most {{.Max}} in an hour</div>
+<svg viewBox="0 0 {{.W}} {{.H}}" preserveAspectRatio="none" role="img" aria-label="{{.Name}} per hour">
+{{- range .Bars}}
+<rect x="{{printf "%.1f" .X}}" y="{{printf "%.1f" .Y}}" width="{{printf "%.1f" .W}}" height="{{printf "%.1f" .H}}" rx="1"><title>{{.Title}}</title></rect>
+{{- end}}
+<line class="base" x1="0" y1="{{.H}}" x2="{{.W}}" y2="{{.H}}"></line>
+</svg>
+</div>
+{{- end}}
+</section>
+
+<section class="panel" id="stages">
+<h2>Time per stage</h2>
+<table>
+<tr><th>stage</th><th class="num">passes</th><th class="num">median</th><th class="num">p90</th><th class="num">runs</th><th class="num">run median</th><th class="num">run p90</th></tr>
+{{- range .Stages}}
+<tr><td>{{.Stage}}</td>{{with .Time}}<td class="num">{{.Count}}</td>{{if .Count}}<td class="num">{{dur .MedianSeconds}}</td><td class="num">{{dur .P90Seconds}}</td>{{else}}<td class="num">–</td><td class="num">–</td>{{end}}{{end}}{{with .Run}}<td class="num">{{.Count}}</td>{{if .Count}}<td class="num">{{dur .MedianSeconds}}</td><td class="num">{{dur .P90Seconds}}</td>{{else}}<td class="num">–</td><td class="num">–</td>{{end}}{{end}}</tr>
+{{- end}}
+{{- with .ToMerge}}
+<tr><td>created → merged</td><td class="num">{{.Count}}</td>{{if .Count}}<td class="num">{{dur .MedianSeconds}}</td><td class="num">{{dur .P90Seconds}}</td>{{else}}<td class="num">–</td><td class="num">–</td>{{end}}</tr>
+{{- end}}
+{{- with .ToDone}}
+<tr><td>created → done</td><td class="num">{{.Count}}</td>{{if .Count}}<td class="num">{{dur .MedianSeconds}}</td><td class="num">{{dur .P90Seconds}}</td>{{else}}<td class="num">–</td><td class="num">–</td>{{end}}</tr>
+{{- end}}
+</table>
+<p class="note">A pass is one stay in a stage that ended in the window; a bounce makes another. Runs are the agent runs that finished with a result (claim to advance). The runner's verify runs inside build.</p>
+</section>
+
+<section class="panel" id="waiting">
+<h2>Why items wait now · {{.WaitingTotal}}</h2>
+{{- if .Waiting}}
+<table>
+{{- range .Waiting}}
+<tr><td>{{.Reason}}</td><td class="num">{{.Count}}</td><td>{{range .Items}}<a href="/board/items/{{.}}">#{{.}}</a> {{end}}</td></tr>
+{{- end}}
+</table>
+{{- else}}
+<p class="note">Nothing waits.</p>
+{{- end}}
+</section>
+
+<section class="panel" id="bounces">
+<h2>Sent back</h2>
+{{- if .Bounces}}
+<table>
+<tr><th>stage</th><th class="num">count</th><th>how</th><th>top reasons</th></tr>
+{{- range .Bounces}}
+<tr><td>{{.Stage}}</td><td class="num">{{.Count}}</td><td>{{range $k, $n := .ByOutcome}}{{$k}} {{$n}} {{end}}</td><td>{{range .Top}}<div>{{.Count}}× {{.Text}} {{range .Items}}<a href="/board/items/{{.}}">#{{.}}</a> {{end}}</div>{{end}}</td></tr>
+{{- end}}
+</table>
+{{- else}}
+<p class="note">Nothing was sent back.</p>
+{{- end}}
+</section>
+
+<section class="panel" id="slots">
+<h2>Slot use</h2>
+<table>
+<tr><th>runner</th><th class="num">slots</th><th class="num">runs</th><th class="num">busy min</th><th class="num">capacity min</th><th class="num">idle min</th><th>last seen</th></tr>
+{{- range .Runners}}
+<tr><td>{{.Runner}}</td><td class="num">{{if .Slots}}{{.Slots}}{{else}}?{{end}}</td><td class="num">{{.Runs}}</td><td class="num">{{mins .BusyMinutes}}</td><td class="num">{{if .Slots}}{{mins .CapacityMinutes}}{{else}}–{{end}}</td><td class="num">{{with .IdleMinutes}}{{mins .}}{{else}}–{{end}}</td><td>{{if .LastSeen.IsZero}}–{{else}}{{stamp .LastSeen}}{{end}}</td></tr>
+{{- end}}
+</table>
+<p class="note">Capacity is a runner's slots × the window when it was seen in it (? : a runner that does not report its slots yet). The loop runs at most {{.ActiveAgents}} agents at once.</p>
+{{- if .Killed}}
+<h2>Killed runs · {{.KilledRuns}} · {{mins .LostMinutes}} agent-min lost</h2>
+<table>
+{{- range .Killed}}
+<tr><td>{{.Reason}}</td><td class="num">{{.Runs}}</td><td class="num">{{mins .LostMinutes}} min</td></tr>
+{{- end}}
+</table>
+{{- end}}
+</section>
+
+<section class="panel" id="features">
+<h2>Features</h2>
+{{- if .Features}}
+<table>
+<tr><th>plan</th><th>stage</th><th class="num">done</th><th>items by stage</th></tr>
+{{- range .Features}}
+<tr><td><a href="/board/plans/{{.PlanID}}">{{.Title}}</a></td><td>{{.Stage}}</td><td class="num">{{.Done}}/{{.Items}}</td><td>{{range $k, $n := .ByStage}}{{$k}} {{$n}} {{end}}</td></tr>
+{{- end}}
+</table>
+{{- else}}
+<p class="note">No plan has open items.</p>
+{{- end}}
+<p class="note">Grouped by plan until items carry feature tags.</p>
+</section>
+</body>
+</html>
