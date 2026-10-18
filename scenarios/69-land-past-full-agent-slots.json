@@ -1,0 +1,55 @@
+{
+  "name": "land-past-full-agent-slots",
+  "about": "Land takes no agent slot (#210): active_agents is set to 1, the runner's slots. A P1 build whose agent hangs holds that one slot, and an item review approved is still claimed for land next to it (loopd used to count the land lease against active_agents and refuse it), waits for CI and squash-merges while the build keeps its lease. With the slot full and nothing to land, the runner claims nothing (a second build item waits for the slot); /loop stop then ends the build.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pending"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"}},
+    {"do": "add", "item": "b", "title": "Rework the board queries", "priority": "P1"},
+    {"do": "triage", "item": "b"},
+    {"do": "script", "item": "b", "play": "hang"},
+    {"do": "runner", "claims": "b"},
+    {"do": "agent_running", "item": "b"},
+    {"do": "add", "item": "c", "title": "Trim the digest footer"},
+    {"do": "triage", "item": "c"},
+    {"do": "control", "active_agents": 1},
+    {"do": "runner", "claims": "a"},
+    {"do": "expect", "stage": {"a": "land", "b": "build"}, "leased": {"a": true, "b": true}, "pr": {"a": {"merge_calls": 0}}},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "wait", "stage": {"a": "done"}},
+    {"do": "expect", "stage": {"b": "build"}, "leased": {"a": false, "b": true}, "pr": {"a": {"state": "MERGED", "merge_calls": 1}}},
+    {"do": "runner", "claims": "none"},
+    {"do": "command", "as": "approver", "text": "stop", "answer": "^Stopped: running agents stop at their next heartbeat"},
+    {"do": "clock", "advance": "60s"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "control": {"active_agents": 1},
+    "stage": {"a": "done", "b": "build", "c": "build"},
+    "leased": {"a": false, "b": false, "c": false},
+    "agent_runs": {"build": 2, "review": 1, "land": 0},
+    "pr": {"a": {"number": 101, "state": "MERGED", "merge_calls": 1}},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "merged", "actor": "runner", "count": 1},
+      {"item": "b", "kind": "stopped", "count": 1}
+    ],
+    "no_events": [
+      {"item": "b", "kind": "advanced", "actor": "runner"},
+      {"item": "c", "kind": "claimed", "actor": "runner"}
+    ],
+    "messages": [
+      {"thread": "b", "text": "^Claimed for build\\.$"},
+      {"thread": "a", "text": "^Claimed for land\\.$"},
+      {"thread": "a", "text": "^Merged <https://github.com/sandbox/demo/pull/101\\|sandbox/demo#101> as `[0-9a-f]{7}`; watching main's CI\\.$"},
+      {"thread": "b", "text": "^Stopped; back in the build queue\\.$"}
+    ]
+  }
+}

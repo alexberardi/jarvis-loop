@@ -100,12 +100,14 @@ A runner is a small daemon on a machine that can do the work. It polls `loopd` c
 
 | Resource | Limit | Why |
 | --- | --- | --- |
-| agents in total | the active-agents number (0–6, default 4) | the user's throttle (Usage control) |
+| agents in total | the active-agents number (0–6, default 4); land runs no agent and takes no slot | the user's throttle (Usage control) |
 | `gpu` (the shared live model) | 2 | the installed engine has one slot; the house comes first |
 | `voice` (CPU whisper) | 1 | about 2.4 s of CPU per utterance at 8 threads |
 | `emulator` | 1 | a headless emulator plus a release build is heavy |
 
 A runner that takes only some resources (a Mac's `only_resources: [macos]`) gets the last free agent slot held for it while it has polled lately and one of its items can run now; otherwise the last slot goes to whoever asks ([2026-10-18](decisions/2026-10-18-slot-hold.md)).
+
+An item's resources gate its agent stages (triage, build, review) only: land (CI, merge, hold) needs none of them, so any runner that takes land lands it, past the resource limits ([2026-10-18](decisions/2026-10-18-land-needs-no-resources.md)).
 
 **The brief every agent gets** (one skill per stage in this repo, sharing a preamble) carries the rules 2026-10-13/14 taught:
 
