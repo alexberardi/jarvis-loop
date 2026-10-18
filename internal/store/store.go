@@ -659,6 +659,8 @@ type Detail struct {
 	Lease     *Lease     `json:"lease,omitempty"`
 	Events    []Event    `json:"events"`
 	Evidence  []Evidence `json:"evidence"`
+	// Frozen is the freeze on the item's repo while its main is red (the item may be its fix).
+	Frozen *Freeze `json:"frozen,omitempty"`
 }
 
 // GetItem returns an item, its live lease, events and evidence.
@@ -710,7 +712,12 @@ func (s *Store) GetItem(ctx context.Context, id int64) (Detail, error) {
 	if err := rows.Err(); err != nil {
 		return d, err
 	}
-	d.Evidence, err = listEvidence(tx, id)
+	if d.Evidence, err = listEvidence(tx, id); err != nil {
+		return d, err
+	}
+	if d.Item.Repo != "" {
+		d.Frozen, err = liveFreeze(tx, d.Item.Repo)
+	}
 	return d, err
 }
 
@@ -996,7 +1003,7 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 				return err
 			}
 		}
-		w, ok := pipeline.ChooseWork(ctl, waiting, deps, snap, turns, orch, cs.holds, req)
+		w, ok := pipeline.ChooseWork(ctl, waiting, deps, snap, turns, orch, cs.holds, req, cs.frozen)
 		if !ok {
 			return nil
 		}
@@ -1027,13 +1034,15 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 }
 
 // claimState is what a claim chooses from: the control, the waiting items and their dependencies'
-// stages, the live leases (items, plan and orchestrate turns) and the slots held (SlotHolds).
+// stages, the live leases (items, plan and orchestrate turns), the frozen repos and the slots held
+// (SlotHolds).
 type claimState struct {
 	ctl     pipeline.Control
 	waiting []pipeline.Item
 	deps    map[int64]pipeline.Stage
 	live    []pipeline.LiveLease
 	runners []pipeline.RunnerSeen
+	frozen  pipeline.Frozen
 	holds   []pipeline.SlotHold
 }
 
@@ -1077,8 +1086,12 @@ func (s *Store) claimState(tx *sql.Tx, now time.Time) (claimState, error) {
 	if err != nil {
 		return cs, err
 	}
-	return claimState{ctl: ctl, waiting: waiting, deps: deps, live: snap, runners: runners,
-		holds: pipeline.SlotHolds(ctl, waiting, deps, snap, runners, now)}, nil
+	frozen, err := frozenRepos(tx)
+	if err != nil {
+		return cs, err
+	}
+	return claimState{ctl: ctl, waiting: waiting, deps: deps, live: snap, runners: runners, frozen: frozen,
+		holds: pipeline.SlotHolds(ctl, waiting, deps, snap, runners, frozen, now)}, nil
 }
 
 // RunnerPanel is the board's runners: those seen within pipeline.RunnerSeenWindow, by name, and
@@ -1130,7 +1143,8 @@ func liveLeases(tx *sql.Tx) ([]Lease, error) {
 
 func waitingItems(tx *sql.Tx) ([]pipeline.Item, error) {
 	rows, err := tx.Query(`SELECT ` + itemCols + ` FROM items WHERE stage IN ('triage','build','review','land')
-		AND id NOT IN (SELECT item_id FROM leases WHERE ended_at IS NULL)`)
+		AND id NOT IN (SELECT item_id FROM leases WHERE ended_at IS NULL)
+		AND id NOT IN (SELECT item_id FROM queued_advances WHERE applied_at IS NULL)`)
 	if err != nil {
 		return nil, err
 	}
@@ -1285,6 +1299,25 @@ func (s *Store) HeartbeatActivity(ctx context.Context, runnerName, leaseID, note
 			return s.event(tx, Event{ItemID: l.ItemID, Actor: "loopd", Kind: "stopped", From: string(l.Stage), To: string(l.Stage),
 				Data: map[string]any{"lease": l.ID, "runner": l.Runner, "agent": l.Agent, "note": note}})
 		}
+		// A land run in a frozen repo stops before it can merge; the item waits in land.
+		if l.Stage == pipeline.Land {
+			it, err := loadItem(tx, l.ItemID)
+			if err != nil {
+				return err
+			}
+			frozen, err := frozenRepos(tx)
+			if err != nil {
+				return err
+			}
+			if frozen.Blocks(it) {
+				stop = true
+				if err := endLease(tx, l.ID, now, "frozen"); err != nil {
+					return err
+				}
+				return s.event(tx, Event{ItemID: l.ItemID, Actor: "loopd", Kind: KindLandFrozen, From: string(l.Stage), To: string(l.Stage),
+					Data: map[string]any{"lease": l.ID, "runner": l.Runner, "agent": l.Agent, "repo": it.Repo, "fix_item": frozen[it.Repo]}})
+			}
+		}
 		if note == "" {
 			note = l.Note
 		}
@@ -1364,56 +1397,25 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 		if err != nil {
 			return err
 		}
-		tr, err := pipeline.ApplyAdvance(it, pipeline.Advance{Outcome: outcome, Fields: fields, Evidence: n, Agent: l.Agent,
-			ChangedPaths: changedPaths, HoldRules: ctl.HoldRules, Repos: s.Repos()}, now)
+		adv := pipeline.Advance{Outcome: outcome, Fields: fields, Evidence: n, Agent: l.Agent,
+			ChangedPaths: changedPaths, HoldRules: ctl.HoldRules, Repos: s.Repos()}
+		tr, err := pipeline.ApplyAdvance(it, adv, now)
 		if err != nil {
 			return err
 		}
-		if err := saveItem(tx, tr.Item); err != nil {
+		// In a repo whose main is red the run's result waits, checked now, applied once main is
+		// green. A usage limit is about the runner's account, not the repo, and a merge has already
+		// happened on GitHub (main's CI on it must be taken): both apply now.
+		frozen, err := frozenRepos(tx)
+		if err != nil {
 			return err
 		}
-		if err := endLease(tx, l.ID, now, "advanced"); err != nil {
+		if frozen.Blocks(it) && outcome != pipeline.UsageLimit && outcome != pipeline.Merged {
+			out = it
+			return s.queueAdvance(tx, actor, runnerName, it, l, adv, now)
+		}
+		if err := s.applyAdvance(tx, actor, id, l.ID, tr, fields, now); err != nil {
 			return err
-		}
-		tr.Data["lease"] = l.ID
-		if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
-			return err
-		}
-		for _, n := range tr.Also {
-			// A note, not a transition: it stays in the stage the advance left the item in.
-			if err := s.event(tx, Event{ItemID: id, Actor: actor, Kind: n.Kind, From: string(tr.To), To: string(tr.To), Data: n.Data}); err != nil {
-				return err
-			}
-		}
-		if tr.Item.Stage == pipeline.Closed {
-			if err := s.dependencyClosed(tx, id); err != nil {
-				return err
-			}
-		}
-		if err := s.checkUnservable(tx, now); err != nil {
-			return err
-		}
-		if err := s.planItemSettled(tx, tr.Item); err != nil {
-			return err
-		}
-		if tr.ActiveAgentsZero {
-			ctl, err := s.loadControl(tx)
-			if err != nil {
-				return err
-			}
-			before := ctl
-			ctl.ActiveAgents = 0
-			builtIn, err := builtInRules(tx)
-			if err != nil {
-				return err
-			}
-			if err := saveControl(tx, ctl, builtIn); err != nil {
-				return err
-			}
-			if err := s.event(tx, Event{Actor: "loopd", Kind: "control", Data: map[string]any{
-				"from": before, "to": ctl, "reason": "usage_limit", "item": id, "error": fields["error"], "reset": fields["reset"]}}); err != nil {
-				return err
-			}
 		}
 		out = tr.Item
 		return nil
@@ -1422,4 +1424,56 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 		return out, s.refuse(ctx, actor, id, "advance "+string(outcome), err)
 	}
 	return out, nil
+}
+
+// applyAdvance stores an advance's transition, made under leaseID (ended here when still live),
+// and what follows from it.
+func (s *Store) applyAdvance(tx *sql.Tx, actor string, id int64, leaseID string, tr pipeline.Transition, fields map[string]string, now time.Time) error {
+	if err := saveItem(tx, tr.Item); err != nil {
+		return err
+	}
+	if err := endLease(tx, leaseID, now, "advanced"); err != nil {
+		return err
+	}
+	tr.Data["lease"] = leaseID
+	if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
+		return err
+	}
+	for _, n := range tr.Also {
+		// A note, not a transition: it stays in the stage the advance left the item in.
+		if err := s.event(tx, Event{ItemID: id, Actor: actor, Kind: n.Kind, From: string(tr.To), To: string(tr.To), Data: n.Data}); err != nil {
+			return err
+		}
+	}
+	if tr.Item.Stage == pipeline.Closed {
+		if err := s.dependencyClosed(tx, id); err != nil {
+			return err
+		}
+	}
+	if err := s.checkUnservable(tx, now); err != nil {
+		return err
+	}
+	if err := s.planItemSettled(tx, tr.Item); err != nil {
+		return err
+	}
+	if tr.ActiveAgentsZero {
+		ctl, err := s.loadControl(tx)
+		if err != nil {
+			return err
+		}
+		before := ctl
+		ctl.ActiveAgents = 0
+		builtIn, err := builtInRules(tx)
+		if err != nil {
+			return err
+		}
+		if err := saveControl(tx, ctl, builtIn); err != nil {
+			return err
+		}
+		if err := s.event(tx, Event{Actor: "loopd", Kind: "control", Data: map[string]any{
+			"from": before, "to": ctl, "reason": "usage_limit", "item": id, "error": fields["error"], "reset": fields["reset"]}}); err != nil {
+			return err
+		}
+	}
+	return nil
 }

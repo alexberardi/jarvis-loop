@@ -139,13 +139,19 @@ type Work struct {
 // when there is none to start). Turns share the active-agents limit with items (live includes the
 // running turns); a plan turn's priority is its plan's, and it beats an item of the same priority:
 // the user is in the conversation. The orchestrate turn beats everything (it gets the next free
-// slot), one at a time. holds are the slots held (SlotHolds): when they are all the free slots
-// left, the claim gets only an item needing a held resource.
-func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, holds []SlotHold, req ClaimRequest) (Work, bool) {
+// slot), one at a time. The fix of a frozen repo (frozen) beats even that: it may take a slot
+// over the active-agents number. holds are the slots held (SlotHolds): when they are all the free
+// slots left, the claim gets only an item needing a held resource.
+func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, holds []SlotHold, req ClaimRequest, frozen Frozen) (Work, bool) {
+	if req.wants(WorkItem) {
+		if it, ok := chooseFix(c, items, deps, live, req, frozen); ok {
+			return Work{Item: &it}, true
+		}
+	}
 	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
 		return Work{}, false
 	}
-	w, ok := chooseWork(c, items, deps, live, turns, orch, req)
+	w, ok := chooseWork(c, items, deps, live, turns, orch, req, frozen)
 	if len(holds) == 0 || c.ActiveAgents-len(live) > len(holds) || (ok && serves(w, holds)) {
 		return w, ok
 	}
@@ -159,7 +165,7 @@ func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease,
 			}
 		}
 		if len(held.OnlyResources) > 0 {
-			if it, ok := Choose(c, items, deps, live, held); ok {
+			if it, ok := Choose(c, items, deps, live, held, frozen); ok {
 				return Work{Item: &it}, true
 			}
 		}
@@ -167,14 +173,14 @@ func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease,
 	return Work{Held: HeldReason(holds)}, false
 }
 
-func chooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest) (Work, bool) {
+func chooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest, frozen Frozen) (Work, bool) {
 	if orch != nil && req.wants(WorkOrchestrate) && !slices.ContainsFunc(live, func(l LiveLease) bool { return l.Stage == OrchestrateStage }) {
 		return Work{Orch: orch}, true
 	}
 	var it Item
 	okItem := false
 	if req.wants(WorkItem) {
-		it, okItem = Choose(c, items, deps, live, req)
+		it, okItem = Choose(c, items, deps, live, req, frozen)
 	}
 	var best *TurnCandidate
 	if req.wants(WorkPlan) {
@@ -208,12 +214,32 @@ var stageOrder = map[Stage]int{Land: 0, Review: 1, Build: 2, Triage: 3}
 
 // Choose picks the item a runner should get, or false when there is nothing for it. items are the
 // candidates (callers pass the waiting items; anything claimed or not in a work stage is skipped
-// here too); deps are the stages of the items they depend on; live are the leases still running.
-func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req ClaimRequest) (Item, bool) {
+// here too); deps are the stages of the items they depend on; live are the leases still running;
+// frozen are the repos whose main is red: their items are skipped, except each one's fix, which
+// goes first (chooseFix).
+func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req ClaimRequest, frozen Frozen) (Item, bool) {
+	if it, ok := chooseFix(c, items, deps, live, req, frozen); ok {
+		return it, true
+	}
 	// 1. Control.
 	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
 		return Item{}, false
 	}
+	return choose(c, items, deps, live, req, func(it Item) bool { return !frozen.Blocks(it) }, true)
+}
+
+// chooseFix is the main-red item of a frozen repo, when it waits and this runner may take it: it
+// goes before everything, and may take a slot over the active-agents number and its stage's limit
+// (the frozen repo's running work holds slots it cannot give back); a stop, 0 active agents, the
+// resource limits and review independence still apply.
+func chooseFix(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req ClaimRequest, frozen Frozen) (Item, bool) {
+	if len(frozen) == 0 || c.Stopped || c.ActiveAgents <= 0 {
+		return Item{}, false
+	}
+	return choose(c, items, deps, live, req, frozen.Fixes, false)
+}
+
+func choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req ClaimRequest, pick func(Item) bool, stageLimits bool) (Item, bool) {
 	claimed := map[int64]bool{}
 	inUse := map[string]int{}
 	for _, l := range live {
@@ -231,6 +257,9 @@ func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 	var best *Item
 	for i := range items {
 		it := &items[i]
+		if !pick(*it) {
+			continue
+		}
 		// 2. Eligible: waiting, in a work stage, resources ⊆ capabilities (and, with OnlyResources,
 		// needing one of them).
 		if !it.Stage.IsWork() || claimed[it.ID] {
@@ -254,7 +283,7 @@ func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 			continue
 		}
 		// 4. Per-stage limits.
-		if atLimit(string(it.Stage)) {
+		if stageLimits && atLimit(string(it.Stage)) {
 			continue
 		}
 		// 5. Review independence.

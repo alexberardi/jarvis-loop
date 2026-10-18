@@ -1,0 +1,40 @@
+{
+  "name": "build-resume",
+  "about": "#200: a Claude build stopped mid-run (/loop stop) pushes its WIP and the runner keeps its session; claimed again, the build resumes that session (claude --resume <session>, a short note on the interruption for a prompt instead of the brief), finishes from the WIP and reports resumed=true. The build's command lines differ only by --resume.",
+  "steps": [
+    {"do": "add", "item": "a", "title": "Tidy the runner log"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "hang"},
+    {"do": "runner", "claims": "a"},
+    {"do": "agent_running", "item": "a"},
+    {"do": "control", "stopped": true},
+    {"do": "clock", "advance": "60s"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"}, "leased": {"a": false},
+     "remote": {"branches": {"a": "^WIP: loop item #\\d+ \\(stopped\\)$"}}},
+
+    {"do": "control", "stopped": false},
+    {"do": "script", "item": "a", "play": "good"},
+    {"do": "clock", "advance": "1s"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review"},
+    "events": [
+      {"item": "a", "kind": "advanced", "actor": "runner", "outcome": "pr_opened",
+       "data": {"resumed": "^true$", "resumed_from": "^fake-session-hang$", "session_id": "^fake-session-hang$"}, "count": 1}
+    ],
+    "agent_runs": {"build": 2},
+    "same_prefix": ["build"],
+    "run_files": [
+      {"item": "a", "stage": "build", "run": 1, "file": "argv.json", "no_text": "--resume"},
+      {"item": "a", "stage": "build", "run": 2, "file": "argv.json", "text": "\"--resume\",\"fake-session-hang\""},
+      {"item": "a", "stage": "build", "run": 2, "file": "brief.md",
+       "text": "^# Your build was interrupted\\nYour run was interrupted at [0-9-]+ [0-9:]+ UTC by a stop \\(`/loop stop`, or loopd ended the lease\\); this is the same session, resumed\\.",
+       "no_text": "## The item"}
+    ],
+    "remote": {"files": {"a": ["feature.txt", "wip.txt"]}},
+    "prs": 1
+  }
+}

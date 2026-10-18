@@ -104,7 +104,7 @@ func TestChoose(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := Choose(tc.ctl, tc.items, nil, tc.live, tc.req)
+			got, ok := Choose(tc.ctl, tc.items, nil, tc.live, tc.req, nil)
 			if tc.want == 0 {
 				if ok {
 					t.Fatalf("want nothing, got item %d", got.ID)
@@ -211,7 +211,7 @@ func TestSlotHold(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			holds := SlotHolds(tc.ctl, tc.items, deps, tc.live, tc.runners, t0)
+			holds := SlotHolds(tc.ctl, tc.items, deps, tc.live, tc.runners, nil, t0)
 			var got []string
 			for _, h := range holds {
 				got = append(got, h.Resource)
@@ -219,7 +219,7 @@ func TestSlotHold(t *testing.T) {
 			if !slices.Equal(got, tc.holds) {
 				t.Fatalf("holds %+v, want %v", holds, tc.holds)
 			}
-			w, ok := ChooseWork(tc.ctl, tc.items, deps, tc.live, nil, nil, holds, tc.req)
+			w, ok := ChooseWork(tc.ctl, tc.items, deps, tc.live, nil, nil, holds, tc.req, nil)
 			var id int64
 			if ok {
 				id = w.Item.ID
@@ -234,6 +234,22 @@ func TestSlotHold(t *testing.T) {
 	}
 }
 
+// A macos item in a frozen repo can't be claimed, so it holds nothing; the repo's fix still does.
+func TestSlotHoldFrozen(t *testing.T) {
+	two := DefaultControl()
+	two.ActiveAgents = 2
+	mbp := RunnerSeen{Name: "mbp", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}, LastSeen: t0}
+	live := []LiveLease{{ItemID: 9, Stage: Build}}
+	macItem := waiting(2, Build, "P4", 0, "macos")
+	macItem.Repo = "o/mac"
+	if h := SlotHolds(two, []Item{macItem}, nil, live, []RunnerSeen{mbp}, Frozen{"o/mac": 5}, t0); len(h) != 0 {
+		t.Fatalf("frozen: holds %+v, want none", h)
+	}
+	if h := SlotHolds(two, []Item{macItem}, nil, live, []RunnerSeen{mbp}, Frozen{"o/mac": 2}, t0); len(h) != 1 || h[0].ItemID != 2 {
+		t.Fatalf("the fix: holds %+v, want macos #2", h)
+	}
+}
+
 // A held slot is held from turns too: a plan or orchestrate turn takes a slot like an item.
 func TestSlotHoldTurns(t *testing.T) {
 	two := DefaultControl()
@@ -241,7 +257,7 @@ func TestSlotHoldTurns(t *testing.T) {
 	holds := []SlotHold{{Resource: "macos", Runner: "mbp", ItemID: 2}}
 	req := ClaimRequest{Runner: "devbox", Agent: "a", Kinds: []string{WorkItem, WorkPlan, WorkOrchestrate}}
 	turns := []TurnCandidate{{TurnID: 5, PlanID: 5, Priority: "P1", CreatedAt: t0}}
-	if w, ok := ChooseWork(two, nil, nil, []LiveLease{{ItemID: 9, Stage: Build}}, turns, &OrchCandidate{}, holds, req); ok {
+	if w, ok := ChooseWork(two, nil, nil, []LiveLease{{ItemID: 9, Stage: Build}}, turns, &OrchCandidate{}, holds, req, nil); ok {
 		t.Fatalf("got %+v, want nothing", w)
 	}
 }

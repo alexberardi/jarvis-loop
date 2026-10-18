@@ -44,14 +44,17 @@ const (
 	// Plant in the shared mirror: its commondir, another worktree's commondir and a file in its
 	// worktrees dir, then good.
 	GitTamperShared = "git_tamper_shared"
-	Lying           = "lying"       // good, but the result's head_sha is not HEAD
-	Malformed       = "malformed"   // commit, then a result that is not JSON
-	NoResult        = "noresult"    // commit, exit 0, no result
-	Question        = "question"    // a question result
-	CommitAsk       = "commit_ask"  // commit, then a question (the commit stays in the runner's mirror)
-	Dirty           = "dirty"       // good, but a change left uncommitted
-	Hang            = "hang"        // write a file, then wait forever
-	IgnoreTerm      = "ignore_term" // like hang, but ignore SIGTERM
+	Lying           = "lying"      // good, but the result's head_sha is not HEAD
+	Malformed       = "malformed"  // commit, then a result that is not JSON
+	NoResult        = "noresult"   // commit, exit 0, no result
+	Question        = "question"   // a question result
+	CommitAsk       = "commit_ask" // commit, then a question (the commit stays in the runner's mirror)
+	Dirty           = "dirty"      // good, but a change left uncommitted
+	Hang            = "hang"       // write a file, then wait forever
+	// Wait reports hanging, waits until the harness releases the item (<dir>/<item id>.release),
+	// then plays good: a run still going while something else happens.
+	Wait       = "wait_release"
+	IgnoreTerm = "ignore_term" // like hang, but ignore SIGTERM
 	// TodosHang is hang after a to-do list (TodoWrite) and a described Bash call whose command
 	// holds SECRET_CMD_MARKER (which must never reach the board).
 	TodosHang = "todos_hang"
@@ -180,16 +183,23 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			f.mode = args[i]
 		}
 	}
+	f.cwd, _ = os.Getwd()
 	scenario := os.Getenv("FAKE_CLAUDE_SCENARIO")
 	if scenario == "" {
 		scenario = Good
 	}
-	f.cwd, _ = os.Getwd()
 	brief, _ := io.ReadAll(stdin)
-	branch := find("Branch: `([^`]+)`", brief)
-	base := find("base branch `([^`]+)`", brief)
-	item := find(`Item: #(\d+)`, brief)
-	stage := find(`(?m)^- Stage: (\w+)$`, brief)
+	meta := brief
+	if resume != "" && find(`Item: #(\d+)`, brief) == "" && find(`(?m)^- (Persona|Orchestrate): `, brief) == "" {
+		// A resumed build's prompt is a note alone (the session has the brief): the brief's
+		// fields come from the copy in the worktree, as the real claude remembers them.
+		full, _ := os.ReadFile(filepath.Join(f.cwd, ".loop", "brief.md"))
+		meta = append(full, brief...)
+	}
+	branch := find("Branch: `([^`]+)`", meta)
+	base := find("base branch `([^`]+)`", meta)
+	item := find(`Item: #(\d+)`, meta)
+	stage := find(`(?m)^- Stage: (\w+)$`, meta)
 	if persona := find(`(?m)^- Persona: (\w+)$`, brief); persona != "" {
 		// A plan turn: the plan stands in for the item, the persona for the stage.
 		item, stage = "P"+find(`(?m)^- Plan: P(\d+):`, brief), persona
@@ -252,8 +262,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		mode = "default"
 	}
 	// Sessions: an item run's is named after its scenario; a plan turn starts a session of its own
-	// (one per plan and persona) or resumes one, which, as claude's, must have been made in the
-	// same working directory.
+	// (one per plan and persona). Any run resumes one (an interrupted build, a plan turn), which,
+	// as claude's, must have been made in the same working directory.
 	f.session = "fake-session-" + scenario
 	if strings.HasPrefix(item, "P") {
 		f.session = "fake-session-" + item + "-" + stage
@@ -276,7 +286,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 1
 		}
 		f.session = resume
-	} else if strings.HasPrefix(item, "P") || orchTurn != "" || f.oc {
+	} else {
 		saveSession(sessions, f.session, f.cwd)
 	}
 	if f.oc {
@@ -313,6 +323,16 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if scenario == HarnessHang {
 			scenario = Hang
 		}
+	}
+	if scenario == Wait {
+		progress("hanging")
+		release := filepath.Join(os.Getenv("FAKE_CLAUDE_SCRIPTS"), item+".release")
+		for deadline := time.Now().Add(2 * time.Minute); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			if os.Remove(release) == nil {
+				break
+			}
+		}
+		scenario = Good
 	}
 	switch scenario {
 	case TodosHang:

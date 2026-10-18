@@ -107,6 +107,8 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /plans/{id}/drop", user, s.dropPlan)
 	route("POST /plans/{id}/turns/{turn}/result", runner, s.planTurnResult)
 	route("GET /control", reads, s.getControl)
+	route("GET /freezes", reads, s.listFreezes)
+	route("POST /unfreeze", user, s.unfreeze)
 	route("PUT /control", user, s.putControl)
 	// The orchestrator's own actions (orchestrator.go).
 	route("POST /orchestrator/items", orch, s.orchAdd)
@@ -220,6 +222,7 @@ var statusByCode = map[string]int{
 	store.CodeAlreadyRecorded:     http.StatusConflict,
 	store.CodeNotApprover:         http.StatusForbidden,
 	store.CodeUsed:                http.StatusConflict,
+	store.CodeNotFrozen:           http.StatusConflict,
 	pipeline.CodeLimit:            http.StatusConflict,
 	pipeline.CodeTooSoon:          http.StatusTooManyRequests,
 	CodeForbidden:                 http.StatusForbidden,
@@ -840,6 +843,32 @@ func (s *server) reopen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"item": it, "filed": filed})
+}
+
+// listFreezes are the repos frozen while their main is red.
+func (s *server) listFreezes(w http.ResponseWriter, r *http.Request) {
+	fz, err := s.st.Freezes(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, fz)
+}
+
+// unfreeze lifts a repo's freeze by hand (loop unfreeze <repo>): the user's word only.
+func (s *server) unfreeze(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Repo string `json:"repo"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	f, err := s.st.Unfreeze(r.Context(), PrincipalFrom(r.Context()).Actor(), body.Repo)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
 }
 
 func (s *server) getControl(w http.ResponseWriter, r *http.Request) {

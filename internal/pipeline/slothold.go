@@ -34,8 +34,8 @@ func (r RunnerSeen) Around(now time.Time) bool {
 	return now.Sub(r.LastSeen) <= 2*time.Duration(poll)*time.Second
 }
 
-// SlotHolds is the slots held now, by resource. items, deps and live are as for Choose.
-func SlotHolds(c Control, items []Item, deps map[int64]Stage, live []LiveLease, runners []RunnerSeen, now time.Time) []SlotHold {
+// SlotHolds is the slots held now, by resource. items, deps, live and frozen are as for Choose.
+func SlotHolds(c Control, items []Item, deps map[int64]Stage, live []LiveLease, runners []RunnerSeen, frozen Frozen, now time.Time) []SlotHold {
 	free := c.ActiveAgents - len(live)
 	if c.Stopped || free <= 0 {
 		return nil
@@ -52,7 +52,7 @@ func SlotHolds(c Control, items []Item, deps map[int64]Stage, live []LiveLease, 
 				continue
 			}
 			req := ClaimRequest{Runner: r.Name, Capabilities: r.Capabilities, OnlyResources: []string{res}, Stages: r.Stages}
-			if it, ok := Choose(c, items, deps, live, req); ok {
+			if it, ok := Choose(c, items, deps, live, req, frozen); ok {
 				byRes[res] = SlotHold{Resource: res, Runner: r.Name, ItemID: it.ID}
 			}
 		}

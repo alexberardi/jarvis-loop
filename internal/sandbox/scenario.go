@@ -31,8 +31,10 @@ type Scenario struct {
 	// Stages are the stages the sandbox's runner claims (default: triage, build and review). A
 	// scenario that does triage or review by hand while the runner builds names ["build"].
 	Stages []string `json:"stages,omitempty"`
-	Steps  []Step   `json:"steps"`
-	Final  *Expect  `json:"expect,omitempty"`
+	// Slots are the runner's agent slots (default 1): two let a run go on while another starts.
+	Slots int     `json:"slots,omitempty"`
+	Steps []Step  `json:"steps"`
+	Final *Expect `json:"expect,omitempty"`
 }
 
 // Step is one thing that happens. Do says what; the other fields are its arguments. An "expect"
@@ -88,6 +90,9 @@ type Step struct {
 	// the workflow runs on main's commits go (name -> pass, fail, pending, cancel)
 	Checks map[string]string `json:"checks,omitempty"`
 	Main   map[string]string `json:"main,omitempty"`
+	// Rerun is how main's jobs go when the runner re-runs their failed jobs (name -> pass, fail,
+	// pending); a job not named goes as it went the first time.
+	Rerun map[string]string `json:"rerun,omitempty"`
 	// MainHead: Main is how the runs went on main's current head only (of the demo repo, or
 	// Slug), whether merged or pushed; it wins over the runs set for every commit.
 	MainHead bool `json:"main_head,omitempty"`
@@ -536,6 +541,13 @@ func (p *player) step(st Step) error {
 	case "deploy":
 		return s.Deploy(st.Build)
 	case "release":
+		if st.Item != "" {
+			r, err := p.ref(st.Item)
+			if err != nil {
+				return err
+			}
+			return s.Release(r.id)
+		}
 		id, err := p.planRef(st.Plan)
 		if err != nil {
 			return err
@@ -591,6 +603,9 @@ func (p *player) step(st Step) error {
 			s.GitHub.SetMainCIAt(slug, s.GitHub.MainHead(slug), st.Main)
 		case st.Main != nil:
 			s.GitHub.SetMainCI(st.Main)
+		}
+		if st.Rerun != nil {
+			s.GitHub.SetMainRerun(st.Rerun)
 		}
 		if st.Item == "" {
 			return nil
@@ -773,6 +788,12 @@ func (p *player) step(st Step) error {
 			patch["orchestrator_turns_per_day"] = *st.OrchTurnsPerDay
 		}
 		return s.user.do("PUT", "/control", patch, nil)
+	case "unfreeze":
+		slug := RepoSlug
+		if st.Slug != "" {
+			slug = st.Slug
+		}
+		return s.user.do("POST", "/unfreeze", map[string]string{"repo": slug}, nil)
 	case "expect", "wait":
 		return p.check(st.Expect)
 	case "orchestrator_message":
