@@ -136,8 +136,8 @@ func (r *Runner) startHarness(ru *run) (*harnessSession, error) {
 	if !ru.hasHarness() {
 		return nil, nil
 	}
-	if _, err := os.Stat(r.Cfg.LoopHarness); err != nil {
-		return nil, fmt.Errorf("the loop-harness binary %s: %w", r.Cfg.LoopHarness, err)
+	if _, err := os.Stat(r.cfgOf(ru).LoopHarness); err != nil {
+		return nil, fmt.Errorf("the loop-harness binary %s: %w", r.cfgOf(ru).LoopHarness, err)
 	}
 	if err := r.linkHarnessBin(); err != nil {
 		return nil, err
@@ -193,17 +193,17 @@ func (r *Runner) startHarness(ru *run) (*harnessSession, error) {
 
 // linkHarnessBin makes <work_root>/bin/loop-harness, the agent's way to the client.
 func (r *Runner) linkHarnessBin() error {
-	dir := r.Cfg.harnessBinDir()
+	dir := r.Config().harnessBinDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	link := filepath.Join(dir, "loop-harness")
-	if cur, err := os.Readlink(link); err == nil && cur == r.Cfg.LoopHarness {
+	if cur, err := os.Readlink(link); err == nil && cur == r.Config().LoopHarness {
 		return nil
 	}
 	tmp := link + ".tmp"
 	os.Remove(tmp)
-	if err := os.Symlink(r.Cfg.LoopHarness, tmp); err != nil {
+	if err := os.Symlink(r.Config().LoopHarness, tmp); err != nil {
 		return err
 	}
 	return os.Rename(tmp, link)
@@ -409,7 +409,7 @@ func (s *harnessSession) startFence(script string, atEnd bool) (*fenceProc, io.R
 		return nil, nil, errSessionEnded
 	}
 	r := s.b.r
-	script += "\nexec " + shellQuote(r.Cfg.LoopHarness) + " serve-inner\n"
+	script += "\nexec " + shellQuote(r.Config().LoopHarness) + " serve-inner\n"
 	cmd, err := r.fence(s.wt, script, s.env, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("the fence: %w", err)

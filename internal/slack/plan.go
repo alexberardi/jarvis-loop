@@ -48,10 +48,10 @@ func (b *Bot) docLink(id int64, kind string, version int) string {
 // startPlan starts a plan from the user's words, as /loop add reads them: priority words and the
 // repo anywhere; the title is the first line without them.
 func (b *Bot) startPlan(ctx context.Context, actor, text, channel, ts string) (pipeline.Plan, error) {
-	repo, rest := ParseRepo(text, b.c.Repos, b.c.Aliases)
+	repo, rest := b.parseRepo(text)
 	pri, all := ParsePriority(rest)
 	first, _, _ := strings.Cut(text, "\n")
-	_, first = ParseRepo(first, b.c.Repos, b.c.Aliases)
+	_, first = b.parseRepo(first)
 	_, title := ParsePriority(first)
 	if title == "" {
 		title = all
