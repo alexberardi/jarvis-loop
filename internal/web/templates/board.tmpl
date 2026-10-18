@@ -106,6 +106,9 @@
 {{- if .Reason}}
 <div class="reason">{{.Reason}}</div>
 {{- end}}
+{{- range .ReopenedDeps}}
+<div class="reason">Depends on #{{.Dependency}}, which was reopened: {{.Words}} (the fix is #{{.ReopenItem}})</div>
+{{- end}}
 </article>
 {{- end}}
 </section>

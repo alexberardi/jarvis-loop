@@ -35,6 +35,8 @@ type OrchSnapItem struct {
 	Resources []string `json:"resources,omitempty"`
 	// Unservable is the resources no runner offers it, when loopd flagged it (it told the user).
 	Unservable []string `json:"unservable,omitempty"`
+	// ReopenedDeps is its dependencies that failed the user's check, while the fix is open.
+	ReopenedDeps []ReopenedDependency `json:"reopened_deps,omitempty"`
 }
 
 // OrchSnapRunner is a runner's health.
@@ -141,11 +143,15 @@ func (s *Store) OrchSnapshot(ctx context.Context) (OrchSnapshot, error) {
 	if err != nil {
 		return snap, err
 	}
+	reopened, err := reopenedDependencies(s.r)
+	if err != nil {
+		return snap, err
+	}
 	for _, it := range open {
 		snap.Items = append(snap.Items, OrchSnapItem{ID: it.ID, Title: it.Title, Repo: it.Repo, Priority: it.Priority, Stage: string(it.Stage),
 			Leased: leased[it.ID], DependsOn: it.DependsOn, WaitingOn: waitingOn(it, deps), BounceCount: it.BounceCount,
 			AgeInStage: int64(now.Sub(it.UpdatedAt) / time.Second), Question: it.Question, HoldReason: it.HoldReason, PR: it.PR, HeadSHA: it.HeadSHA, Resources: it.Resources,
-			Unservable: flagged[it.ID]})
+			Unservable: flagged[it.ID], ReopenedDeps: reopened[it.ID]})
 	}
 
 	// The runners.
