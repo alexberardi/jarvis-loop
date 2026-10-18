@@ -86,6 +86,9 @@ type ClaimRequest struct {
 	Runner       string
 	Agent        string
 	Capabilities []string
+	// OnlyResources, when set, limits the claim to items that need at least one of them: a Mac
+	// runner with [macos] takes the macos items and leaves the rest to the dev box.
+	OnlyResources []string
 	// Stages, when set, limits the claim to these stages (a runner that only builds).
 	Stages []Stage
 	// Kinds is the work the runner takes: WorkItem, WorkPlan (plan turns), WorkOrchestrate.
@@ -196,7 +199,8 @@ func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 	var best *Item
 	for i := range items {
 		it := &items[i]
-		// 2. Eligible: waiting, in a work stage, resources ⊆ capabilities.
+		// 2. Eligible: waiting, in a work stage, resources ⊆ capabilities (and, with OnlyResources,
+		// needing one of them).
 		if !it.Stage.IsWork() || claimed[it.ID] {
 			continue
 		}
@@ -204,6 +208,9 @@ func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 			continue
 		}
 		if !subset(it.Resources, req.Capabilities) {
+			continue
+		}
+		if len(req.OnlyResources) > 0 && !slices.ContainsFunc(it.Resources, func(r string) bool { return slices.Contains(req.OnlyResources, r) }) {
 			continue
 		}
 		// Dependencies: every item it depends on is done.

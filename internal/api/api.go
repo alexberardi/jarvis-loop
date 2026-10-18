@@ -397,7 +397,9 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		Runner       string   `json:"runner"`
 		Agent        string   `json:"agent"`
 		Capabilities []string `json:"capabilities"`
-		Stages       []string `json:"stages"`
+		// OnlyResources: only items needing one of these (a subset of the capabilities).
+		OnlyResources []string `json:"only_resources"`
+		Stages        []string `json:"stages"`
 		// Kinds: item, plan (plan turns), orchestrate; empty is items only.
 		Kinds []string `json:"kinds"`
 	}
@@ -433,7 +435,18 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, Stages: stages, Kinds: body.Kinds})
+	only, err := pipeline.ParseResources(strings.Join(body.OnlyResources, ","))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	for _, o := range only {
+		if !slices.Contains(caps, o) {
+			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "only_resources must be among the capabilities, and " + strconv.Quote(o) + " is not"})
+			return
+		}
+	}
+	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, Stages: stages, Kinds: body.Kinds})
 	if err != nil {
 		s.fail(w, err)
 		return

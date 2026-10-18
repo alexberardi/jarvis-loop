@@ -29,6 +29,9 @@ type Config struct {
 	OrchestratorToken string   `json:"orchestrator_token,omitempty"`
 	Name              string   `json:"name"`
 	Capabilities      []string `json:"capabilities"`
+	// OnlyResources, when set, makes the runner claim only items that need one of them (each one
+	// of its capabilities): a Mac runner with ["macos"] leaves everything else to the dev box.
+	OnlyResources []string `json:"only_resources,omitempty"`
 	// Slots is how many agent runs this runner works at once; loopd's active-agents number still
 	// caps the total. Land, with no agent, has its own lane next to them, one item at a time.
 	Slots int `json:"slots"`
@@ -299,6 +302,11 @@ func (c *Config) normalize() error {
 		*w.to = d
 	}
 	c.Stages = uniq(c.Stages)
+	for _, o := range c.OnlyResources {
+		if !slices.Contains(c.Capabilities, o) {
+			return fmt.Errorf("config: only_resources %q is not one of the capabilities", o)
+		}
+	}
 	switch {
 	case c.PlanTurnMinutes < 0:
 		return fmt.Errorf("config: plan_turn_minutes must be positive, not %d", c.PlanTurnMinutes)

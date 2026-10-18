@@ -41,6 +41,10 @@ func TestConfig(t *testing.T) {
 	if slices.Contains(c.Stages, StagePlan) || c.PlanTurnMinutes != 15 {
 		t.Fatalf("stages %v, plan_turn_minutes %d", c.Stages, c.PlanTurnMinutes)
 	}
+	m, err := LoadConfig(writeCfg(t, strings.Replace(cfgBody, `"capabilities":["gpu"]`, `"capabilities":["macos"],"only_resources":["macos"]`, 1), 0o600))
+	if err != nil || !slices.Equal(m.OnlyResources, []string{"macos"}) {
+		t.Fatalf("only_resources: %+v %v", m, err)
+	}
 	p, err := LoadConfig(writeCfg(t, strings.Replace(cfgBody, `"name"`, `"stages":["build","plan"],"plan_turn_minutes":5,"name"`, 1), 0o600))
 	if err != nil || !slices.Equal(p.Stages, []string{"build", "plan"}) || p.PlanTurnMinutes != 5 {
 		t.Fatalf("plan stage: %+v %v", p, err)
@@ -52,12 +56,13 @@ func TestConfigRefusals(t *testing.T) {
 		t.Fatalf("a readable config must be refused: %v", err)
 	}
 	for name, body := range map[string]string{
-		"unknown field": strings.Replace(cfgBody, `"name"`, `"nmae"`, 1),
-		"short token":   strings.Replace(cfgBody, "runner-token-0123456789", "x", 1),
-		"bad mode":      strings.Replace(cfgBody, `"name"`, `"mode":"bypass","name"`, 1),
-		"no slug":       strings.Replace(cfgBody, `,"slug":"alexberardi/jarvis-server"`, ``, 1),
-		"bad plan turn": strings.Replace(cfgBody, `"name"`, `"plan_turn_minutes":-1,"name"`, 1),
-		"bad url":       strings.Replace(cfgBody, "http://127.0.0.1:7780", "127.0.0.1:7780", 1),
+		"unknown field":                   strings.Replace(cfgBody, `"name"`, `"nmae"`, 1),
+		"short token":                     strings.Replace(cfgBody, "runner-token-0123456789", "x", 1),
+		"bad mode":                        strings.Replace(cfgBody, `"name"`, `"mode":"bypass","name"`, 1),
+		"no slug":                         strings.Replace(cfgBody, `,"slug":"alexberardi/jarvis-server"`, ``, 1),
+		"bad plan turn":                   strings.Replace(cfgBody, `"name"`, `"plan_turn_minutes":-1,"name"`, 1),
+		"only_resources not a capability": strings.Replace(cfgBody, `"name"`, `"only_resources":["macos"],"name"`, 1),
+		"bad url":                         strings.Replace(cfgBody, "http://127.0.0.1:7780", "127.0.0.1:7780", 1),
 	} {
 		if _, err := LoadConfig(writeCfg(t, body, 0o600)); err == nil {
 			t.Errorf("%s accepted", name)

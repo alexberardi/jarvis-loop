@@ -54,6 +54,9 @@ func TestRunnersListenerTakesRunnerTokensOnly(t *testing.T) {
 
 	e.do(runnerTok, "GET", "/items", nil, 200, nil)
 	e.do(otherTok, "POST", "/claim", map[string]any{"agent": "mac-1", "capabilities": []string{"macos"}}, 204, nil)
+	// only_resources (the Mac's claim scope) must be among the capabilities offered.
+	e.do(otherTok, "POST", "/claim", map[string]any{"agent": "mac-1", "capabilities": []string{"macos"}, "only_resources": []string{"macos"}}, 204, nil)
+	e.refused(otherTok, "POST", "/claim", map[string]any{"agent": "mac-1", "capabilities": []string{"gpu"}, "only_resources": []string{"macos"}}, 400, "invalid_field")
 	// A runner's own rules hold as on the main listener.
 	e.refused(runnerTok, "POST", "/claim", map[string]any{"runner": "mac", "agent": "a"}, 403, "runner_mismatch")
 	e.refused(runnerTok, "POST", "/items/1/approve", map[string]any{}, 403, "forbidden")
