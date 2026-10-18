@@ -36,6 +36,9 @@
 {{- if .SecondOpinion.Runs}}
 <p class="sub">Second opinion (Gemini): {{template "second-opinion" .SecondOpinion}}</p>
 {{- end}}
+{{- with .Runway}}
+<p class="sub runway">{{if .Low}}<strong>Runway low:</strong>{{else}}Runway:{{end}} about {{printf "%.1f" .Hours}} agent-hours of work without you ({{.Runnable}} runnable){{with .Unblockers}} · frees the most:{{range $i, $u := .}}{{if $i}},{{end}} {{$u.Action}} <a href="/items/{{$u.ItemID}}">#{{$u.ItemID}}</a> → {{$u.Frees}}{{end}}{{end}}</p>
+{{- end}}
 {{- range .Draining}}
 <p class="runners">Runner <strong>{{.Name}}</strong> is {{.State}} since {{stamp .Since}}: it claims nothing new and restarts once its runs end.</p>
 {{- end}}

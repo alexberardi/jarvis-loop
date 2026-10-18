@@ -546,7 +546,7 @@ type Claimed struct {
 
 // Poll has the runner claim once, as its poll loop would, and work the item (or plan turn) in the
 // background. It returns once the claim is decided: what it claimed, or nothing. It keeps to the
-// runner's lanes as Run does: with every agent slot working it claims only land, with the land
+// runner's lanes as Run does: with every agent slot working it claims only land, with every land
 // lane working only agent stages, and with both, nothing; with room in both, it claims once in
 // every stage (Run's lanes would each claim; the scenario sees the one loopd hands out first).
 func (s *Stack) Poll(timeout time.Duration) (Claimed, error) {
@@ -558,7 +558,7 @@ func (s *Stack) Poll(timeout time.Duration) (Claimed, error) {
 	stages := s.Runner.Config().Stages
 	run := &pollRun{}
 	s.runsMu.Lock()
-	switch agentFull, landFull := s.agentRuns >= s.Runner.Config().Slots, s.landRuns >= 1; {
+	switch agentFull, landFull := s.agentRuns >= s.Runner.Config().Slots, s.landRuns >= s.Runner.Config().LandSlots; {
 	case agentFull && landFull:
 		stages = nil
 	case agentFull:

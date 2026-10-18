@@ -514,3 +514,27 @@ func TestBoardRunnersGolden(t *testing.T) {
 		t.Errorf("only old-mini is quiet")
 	}
 }
+
+func TestBoardRunwayLine(t *testing.T) {
+	v := boardView(goldenItems(), goldenPlans(), now, false, "")
+	v.Runway = runwayView(store.RunwayReport{Hours: 1.5, Runnable: 2, Threshold: 3, Unblockers: []store.RunwayUnblocker{
+		{Unblocker: pipeline.Unblocker{ItemID: 184, Action: pipeline.UnblockApprove, Frees: 4}},
+		{Unblocker: pipeline.Unblocker{ItemID: 144, Action: pipeline.UnblockTrust, Frees: 2}},
+		{Unblocker: pipeline.Unblocker{ItemID: 7, Action: pipeline.UnblockAnswer, Frees: 1}},
+		{Unblocker: pipeline.Unblocker{ItemID: 8, Action: pipeline.UnblockAnswer, Frees: 1}},
+	}})
+	var b strings.Builder
+	if err := boardTmpl.Execute(&b, v); err != nil {
+		t.Fatal(err)
+	}
+	got := b.String()
+	for _, want := range []string{"<strong>Runway low:</strong> about 1.5 agent-hours of work without you (2 runnable)",
+		`approve <a href="/items/184">#184</a> → 4, trust <a href="/items/144">#144</a> → 2, answer <a href="/items/7">#7</a> → 1</p>`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("board lacks %q", want)
+		}
+	}
+	if strings.Contains(got, "#8</a>") {
+		t.Error("board shows more than the top 3 unblockers")
+	}
+}
