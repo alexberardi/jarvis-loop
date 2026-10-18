@@ -4,7 +4,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -22,14 +21,6 @@ import (
 
 const maxJSONBody = 1 << 20
 
-type ctxKey struct{}
-
-// PrincipalFrom returns the authenticated principal of a request.
-func PrincipalFrom(ctx context.Context) Principal {
-	p, _ := ctx.Value(ctxKey{}).(Principal)
-	return p
-}
-
 type server struct {
 	st     *store.Store
 	tokens *Tokens
@@ -40,32 +31,6 @@ type server struct {
 func New(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
 	s := &server{st: st, tokens: tokens, log: log}
 	return Logged(log, s.routes())
-}
-
-// CodeRunnersOnly refuses a token that is not a runner's on the remote runners' listener.
-const CodeRunnersOnly = "runners_only"
-
-// NewRunners is the API for remote runners only: what loopd's LAN listener (--runner-addr)
-// serves, so the main API, the status page and the board stay on their own listeners. A token of
-// any other kind (user, board, orchestrator) is refused on every route before routing, which also
-// rules out acting for the user; a runner token then meets New's routes and rules.
-func NewRunners(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
-	s := &server{st: st, tokens: tokens, log: log}
-	mux := s.routes()
-	return Logged(log, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p, ok := tokens.Lookup(BearerToken(r))
-		if !ok {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="loopd"`)
-			writeErr(w, http.StatusUnauthorized, "unauthorized", "a valid bearer token is required")
-			return
-		}
-		if p.Kind != KindRunner {
-			SetActor(w, p)
-			writeErr(w, http.StatusForbidden, CodeRunnersOnly, "this listener is for runners: "+article(p.Kind)+" "+p.Kind+" token is refused here")
-			return
-		}
-		mux.ServeHTTP(w, r)
-	}))
 }
 
 // routes are the API's routes, each behind its token rule.
@@ -164,47 +129,6 @@ func SetActor(w http.ResponseWriter, p Principal) {
 	if rec, ok := w.(*statusRecorder); ok {
 		rec.actor = p.Actor()
 	}
-}
-
-// BearerToken extracts the token of an "Authorization: Bearer" header.
-func BearerToken(r *http.Request) string {
-	h := r.Header.Get("Authorization")
-	if len(h) > 7 && strings.EqualFold(h[:7], "bearer ") {
-		return strings.TrimSpace(h[7:])
-	}
-	return ""
-}
-
-func (s *server) auth(pattern string, kinds []string, next http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p, ok := s.tokens.Lookup(BearerToken(r))
-		if !ok {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="loopd"`)
-			writeErr(w, http.StatusUnauthorized, "unauthorized", "a valid bearer token is required")
-			return
-		}
-		SetActor(w, p)
-		onBehalf := r.Header.Get(OnBehalfHeader)
-		if onBehalf == "" && !slices.Contains(kinds, p.Kind) {
-			s.fail(w, s.refusedRoute(r, p, pattern, &pipeline.Error{Code: CodeForbidden, Message: article(p.Kind) + " " + p.Kind + " token cannot do this"}))
-			return
-		}
-		// Expiry is evaluated on every request, so a read never shows a dead lease as live.
-		if err := s.st.Sweep(r.Context()); err != nil {
-			s.fail(w, err)
-			return
-		}
-		ctx := r.Context()
-		if onBehalf != "" {
-			np, nctx, err := s.actForUser(ctx, r, p, pattern, onBehalf)
-			if err != nil {
-				s.fail(w, err)
-				return
-			}
-			p, ctx = np, nctx
-		}
-		next(w, r.WithContext(context.WithValue(ctx, ctxKey{}, p)))
-	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -683,65 +607,6 @@ func (s *server) answer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, err := s.st.Answer(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Text)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, it)
-}
-
-func (s *server) approve(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		HeadSHA string `json:"head_sha"`
-		Words   string `json:"words"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	it, err := s.st.Approve(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.HeadSHA, body.Words)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, it)
-}
-
-// trust is the approver's OK for verify to run the commit it refused for changing trusted files.
-func (s *server) trust(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		HeadSHA string `json:"head_sha"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	it, err := s.st.Trust(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.HeadSHA)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, it)
-}
-
-func (s *server) hold(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		Words string `json:"words"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	it, err := s.st.Hold(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Words)
 	if err != nil {
 		s.fail(w, err)
 		return
