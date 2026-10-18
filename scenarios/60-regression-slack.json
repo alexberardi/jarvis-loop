@@ -1,0 +1,48 @@
+{
+  "name": "regression-slack",
+  "about": "The regression from Slack (docs/decisions/2026-10-18-regression-trigger.md). Someone else's '@jarvis-loop regression' is refused. The approver's 'regression web' queues R1 (acknowledged to them only); a second ask while it waits is refused: one at a time. A runner with stage regression takes it, runs the demo repo's scripts/e2e (the stand-in: one pass, one failure with its screenshot) in the fence and reports it: one message in #loop with the counts, the failure's name and assertion, a link to its screenshot and a File it button, and the board's report page shows it all. File it from someone else is refused; the approver's files one item (the screenshot attached) and the report shows it in place of the button; the next run's report of the same failing test shows the open item, not a second File it.",
+  "stages": ["triage", "build", "review", "regression"],
+  "steps": [
+    {"do": "e2e", "outcome": "fail"},
+    {"do": "regression", "as": "other", "text": "regression"},
+    {"do": "expect",
+     "messages": [{"channel": "loop", "kind": "ephemeral", "to": "other", "text": "^Sorry, only the approver can do that\\.$"}],
+     "events": [{"kind": "refused", "actor": "other", "data": {"action": "regression"}}],
+     "no_events": [{"kind": "regression_queued"}]},
+    {"do": "regression", "as": "approver", "text": "regression web"},
+    {"do": "regression", "as": "approver", "text": "regression"},
+    {"do": "expect",
+     "messages": [
+       {"channel": "loop", "kind": "ephemeral", "to": "approver", "text": "^Regression R1 \\(web\\) queued: it takes the next free agent slot, and its report comes to #loop when it ends\\.$"},
+       {"channel": "loop", "kind": "ephemeral", "to": "approver", "text": "^No regression run queued: regression R1 \\(web\\) is already queued; one runs at a time$"}
+     ],
+     "events": [{"kind": "regression_queued", "count": 1, "data": {"suite": "^web$", "via": "^slack$"}}]},
+
+    {"do": "runner", "claims": "regression"},
+    {"do": "runner_idle"},
+    {"do": "expect",
+     "events": [{"kind": "regression_done", "actor": "runner", "data": {"status": "^failed$", "passed": "^1$", "failed": "^1$"}}],
+     "messages": [{"channel": "loop", "from": "bot", "buttons": ["File it"],
+       "text": "(?s)^\\*Regression R1 \\(web\\) :red_circle: failed\\*: 1 passed, 1 failed, 0 skipped · jarvis-server `[0-9a-f]{7}` · full report: /board/regressions/1 on loopd.*\\*web: login\\.spec\\.ts › a wrong password is refused\\*.*Expected: \"Wrong password\".*Received: \"Welcome back\".*\\(screenshot on the board\\)"}],
+     "no_messages": [{"channel": "loop", "from": "bot", "text": "deleting from the detail page"}],
+     "board_regression": {"1": "(?s)Regression R1 \\(web\\): failed.*1 passed, 1 failed, 0 skipped.*<h3>web: login\\.spec\\.ts › a wrong password is refused</h3>.*tests/login\\.spec\\.ts:9, failed.*Received: &#34;Welcome back&#34;.*<img src=\"/board/regressions/1/files/1\".*report\\.md.*report\\.json"}},
+
+    {"do": "press", "as": "other", "message": "loop", "button": "regression_file"},
+    {"do": "expect",
+     "events": [{"kind": "refused", "actor": "other", "data": {"action": "regression_file"}}],
+     "no_events": [{"kind": "created"}]},
+    {"do": "press", "as": "approver", "message": "loop", "button": "regression_file"},
+    {"do": "expect",
+     "events": [{"kind": "created", "count": 1, "actor": "approver", "data": {"title": "^E2E failing: login\\.spec\\.ts › a wrong password is refused$", "repo": "^sandbox/demo$"}},
+                {"kind": "evidence", "count": 1, "data": {"name": "^2-test-failed-1\\.png$"}}],
+     "messages": [{"channel": "loop", "from": "bot", "text": "^Filed as #1: E2E failing: login\\.spec\\.ts › a wrong password is refused$"}]},
+    {"do": "regression", "as": "approver", "text": "regression web"},
+    {"do": "runner", "claims": "regression"},
+    {"do": "runner_idle"},
+    {"do": "expect", "messages": [{"channel": "loop", "from": "bot", "text": "(?s)^\\*Regression R2 \\(web\\) :red_circle: failed.*Filed as #1\\."}]}
+  ],
+  "expect": {
+    "events": [{"kind": "created", "count": 1}, {"kind": "regression_done", "count": 2}],
+    "agent_runs": {}
+  }
+}

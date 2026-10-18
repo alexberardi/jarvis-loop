@@ -278,6 +278,10 @@ func (r *Runner) claimAndRunIn(claimCtx, ctx context.Context, stages []string) (
 		r.orchestrateTurn(ctx, cl, agent)
 		return true, nil
 	}
+	if cl.Kind == pipeline.WorkRegression {
+		r.regression(ctx, cl, agent)
+		return true, nil
+	}
 	r.work(ctx, cl, agent)
 	return true, nil
 }

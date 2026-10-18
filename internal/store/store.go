@@ -963,6 +963,8 @@ type Claim struct {
 	Turn  *pipeline.PlanTurn `json:"turn,omitempty"`
 	// Orch is an orchestrate turn's (Kind orchestrate, stage "orchestrate").
 	Orch *OrchTurn `json:"orchestrate,omitempty"`
+	// Reg is a regression run's (Kind regression, stage "regression").
+	Reg *Regression `json:"regression,omitempty"`
 }
 
 func newLeaseID() (string, error) {
@@ -1015,9 +1017,19 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 				return err
 			}
 		}
-		w, ok := pipeline.ChooseWork(ctl, waiting, deps, snap, turns, orch, cs.holds, req, cs.frozen)
+		var reg *pipeline.RegCandidate
+		if slices.Contains(req.Kinds, pipeline.WorkRegression) {
+			if reg, err = regCandidate(tx); err != nil {
+				return err
+			}
+		}
+		w, ok := pipeline.ChooseWork(ctl, waiting, deps, snap, turns, orch, reg, cs.holds, req, cs.frozen)
 		if !ok {
 			return nil
+		}
+		if w.Reg != nil {
+			out, err = s.claimReg(tx, runnerName, req.Agent, *w.Reg)
+			return err
 		}
 		if w.Orch != nil {
 			out, err = s.claimOrch(tx, runnerName, req.Agent, *w.Orch)
@@ -1085,6 +1097,13 @@ func (s *Store) claimState(tx *sql.Tx, now time.Time) (claimState, error) {
 	}
 	if running != nil {
 		snap = append(snap, pipeline.LiveLease{Stage: pipeline.OrchestrateStage})
+	}
+	reg, err := openRegression(tx)
+	if err != nil {
+		return cs, err
+	}
+	if reg != nil && reg.Status == RegRunning {
+		snap = append(snap, pipeline.LiveLease{Stage: pipeline.RegressionStage, Resources: reg.Resources()})
 	}
 	waiting, err := waitingItems(tx)
 	if err != nil {
@@ -1204,8 +1223,9 @@ func (s *Store) Sweep(ctx context.Context) error {
 	var due int
 	err = s.r.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM leases WHERE ended_at IS NULL AND (expires_at <= ?1 OR claimed_at <= ?2))
 		+ (SELECT COUNT(*) FROM plan_leases WHERE ended_at IS NULL AND (expires_at <= ?1 OR claimed_at <= ?2))
-		+ (SELECT COUNT(*) FROM orch_turns WHERE status = 'running' AND (expires_at <= ?1 OR claimed_at <= ?2))`,
-		now.UnixNano(), now.Add(-ctl.MaxRun()).UnixNano()).Scan(&due)
+		+ (SELECT COUNT(*) FROM orch_turns WHERE status = 'running' AND (expires_at <= ?1 OR claimed_at <= ?2))
+		+ (SELECT COUNT(*) FROM regressions WHERE status = 'running' AND (expires_at <= ?1 OR claimed_at <= ?3))`,
+		now.UnixNano(), now.Add(-ctl.MaxRun()).UnixNano(), now.Add(-pipeline.RegressionMaxRun).UnixNano()).Scan(&due)
 	if err != nil || due == 0 {
 		return err
 	}
@@ -1254,7 +1274,10 @@ func (s *Store) sweep(tx *sql.Tx) error {
 	if err := s.sweepPlans(tx, now, ctl.MaxRun()); err != nil {
 		return err
 	}
-	return s.sweepOrch(tx, now, ctl.MaxRun())
+	if err := s.sweepOrch(tx, now, ctl.MaxRun()); err != nil {
+		return err
+	}
+	return s.sweepReg(tx, now)
 }
 
 // Heartbeat keeps a lease alive. stop is true when the runner should stop: control is stopped
@@ -1282,6 +1305,9 @@ func (s *Store) HeartbeatActivity(ctx context.Context, runnerName, leaseID, note
 				return err
 			}
 			if stop, found, err = s.orchHeartbeat(tx, runnerName, leaseID, note, actJSON); found || err != nil {
+				return err
+			}
+			if stop, found, err = s.regHeartbeat(tx, runnerName, leaseID, note, actJSON); found || err != nil {
 				return err
 			}
 			return errf(CodeNotFound, "no lease %s", leaseID)

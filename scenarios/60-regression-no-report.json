@@ -1,0 +1,22 @@
+{
+  "name": "regression-no-report",
+  "about": "A regression run that produces no report (docs/decisions/2026-10-18-regression-trigger.md): the demo repo's scripts/e2e exits 2 before writing report.json (its sandbox did not come up). The runner reports why, with the last lines of its output, and #loop gets one message saying the run could not run; nothing to file. The next ask queues a new run; a mobile one waits for a runner with the emulator (this one offers none).",
+  "stages": ["triage", "build", "review", "regression"],
+  "steps": [
+    {"do": "e2e", "outcome": "no_report"},
+    {"do": "regression", "as": "approver", "text": "regression web"},
+    {"do": "runner", "claims": "regression"},
+    {"do": "runner_idle"},
+    {"do": "expect",
+     "events": [{"kind": "regression_done", "data": {"status": "^error$", "suite": "^web$", "error": "scripts/e2e exited 2 with no report"}}],
+     "messages": [{"channel": "loop", "from": "bot", "text": "(?s)^\\*Regression R1 \\(web\\) :warning: could not run\\* · jarvis-server `[0-9a-f]{7}` · full report: /board/regressions/1 on loopd\\nscripts/e2e exited 2 with no report \\(no \\.e2e/\\*/report\\.json\\); its log ends: .*the sandbox did not come up"}],
+     "no_messages": [{"channel": "loop", "from": "bot", "buttons": ["File it"]}]},
+    {"do": "regression", "as": "approver", "text": "regression mobile"},
+    {"do": "expect", "messages": [{"channel": "loop", "kind": "ephemeral", "to": "approver", "text": "^Regression R2 \\(mobile\\) queued"}]},
+    {"do": "runner", "claims": "none"}
+  ],
+  "expect": {
+    "events": [{"kind": "regression_queued", "count": 2}],
+    "agent_runs": {}
+  }
+}

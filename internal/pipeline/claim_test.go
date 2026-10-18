@@ -219,7 +219,7 @@ func TestSlotHold(t *testing.T) {
 			if !slices.Equal(got, tc.holds) {
 				t.Fatalf("holds %+v, want %v", holds, tc.holds)
 			}
-			w, ok := ChooseWork(tc.ctl, tc.items, deps, tc.live, nil, nil, holds, tc.req, nil)
+			w, ok := ChooseWork(tc.ctl, tc.items, deps, tc.live, nil, nil, nil, holds, tc.req, nil)
 			var id int64
 			if ok {
 				id = w.Item.ID
@@ -257,7 +257,7 @@ func TestSlotHoldTurns(t *testing.T) {
 	holds := []SlotHold{{Resource: "macos", Runner: "mbp", ItemID: 2}}
 	req := ClaimRequest{Runner: "devbox", Agent: "a", Kinds: []string{WorkItem, WorkPlan, WorkOrchestrate}}
 	turns := []TurnCandidate{{TurnID: 5, PlanID: 5, Priority: "P1", CreatedAt: t0}}
-	if w, ok := ChooseWork(two, nil, nil, []LiveLease{{ItemID: 9, Stage: Build}}, turns, &OrchCandidate{}, holds, req, nil); ok {
+	if w, ok := ChooseWork(two, nil, nil, []LiveLease{{ItemID: 9, Stage: Build}}, turns, &OrchCandidate{}, nil, holds, req, nil); ok {
 		t.Fatalf("got %+v, want nothing", w)
 	}
 }

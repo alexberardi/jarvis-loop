@@ -48,8 +48,9 @@ type boardPage struct {
 }
 
 // NewBoard returns the handler for GET /board, GET /board/working, GET /board/live.js,
-// GET /board/items/{id}, GET /board/items/{id}/evidence/{n}, GET /board/plans/{id} and
-// GET /board/plans/{id}/{kind}/{v}, and nothing else.
+// GET /board/items/{id}, GET /board/items/{id}/evidence/{n}, GET /board/plans/{id},
+// GET /board/plans/{id}/{kind}/{v}, GET /board/regressions/{id}, its files, and the user's
+// POST /board/regressions, and nothing else.
 func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardConfig) http.Handler {
 	if cfg.Clock == nil {
 		cfg.Clock = clock.Real{}
@@ -63,6 +64,11 @@ func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardCo
 	mux.Handle("GET /board/items/{id}/evidence/{n}", p.auth(p.evidence))
 	mux.Handle("GET /board/plans/{id}", p.auth(p.plan))
 	mux.Handle("GET /board/plans/{id}/{kind}/{v}", p.auth(p.planDoc))
+	mux.Handle("GET /board/regressions/{id}", p.auth(p.regression))
+	mux.Handle("GET /board/regressions/{id}/files/{n}", p.auth(p.regressionFile))
+	// The board's one write: the user's "Run regression" button. The cookie is SameSite=Strict,
+	// and the post is guarded against cross-origin requests too.
+	mux.Handle("POST /board/regressions", http.NewCrossOriginProtection().Handler(p.auth(p.runRegression)))
 	return mux
 }
 
@@ -71,6 +77,8 @@ func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardCo
 const (
 	boardCSP = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'none'; frame-ancestors 'none'"
 	liveCSP  = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; script-src 'self'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'"
+	// boardFormCSP is the board's own for the user's token: its "Run regression" form posts to it.
+	boardFormCSP = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; script-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'"
 )
 
 // boardKinds may read the board: its own read-only kind, and the user, who may do more anyway.
@@ -183,6 +191,11 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, err)
 		return
 	}
+	regs, err := p.st.Regressions(r.Context(), regLimit)
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
 	now := p.cfg.Clock.Now()
 	v := boardView(items, plans, now, r.URL.Query().Get("closed") == "1", p.cfg.SlackWorkspace)
 	v.Draining = draining
@@ -190,7 +203,11 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 	v.Working = workingView(work, now, 0)
 	v.Orch = orchView(orch, items)
 	v.Runners = runnerView(runners, now)
+	v.Regressions = regressionView(regs, p.principal(r).Kind == api.KindUser, now)
 	w.Header().Set("Content-Security-Policy", liveCSP)
+	if v.Regressions.CanRun {
+		w.Header().Set("Content-Security-Policy", boardFormCSP)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := boardTmpl.Execute(w, v); err != nil {
 		p.log.Error("render board", "err", err)
@@ -403,15 +420,17 @@ type boardData struct {
 	// Draining are the runners that claim nothing new before a restart (loop-runner drain).
 	Draining []store.RunnerState
 	// Freezes are the repos frozen while their main is red: a red banner each.
-	Freezes    []store.Freeze
-	Working    workingSection
-	Orch       orchSection
-	Runners    runnerSection
-	Columns    []column
-	ShowClosed bool
-	Now        time.Time
-	Total      int
-	PlanCount  int
+	Freezes []store.Freeze
+	Working workingSection
+	Orch    orchSection
+	Runners runnerSection
+	// Regressions are the latest regression runs, and the user's button to start one.
+	Regressions regressionSection
+	Columns     []column
+	ShowClosed  bool
+	Now         time.Time
+	Total       int
+	PlanCount   int
 }
 
 // runnerSection is the runner panel: the runners seen within a day and the slots held for their
@@ -698,9 +717,10 @@ var liveJS []byte
 var funcs = template.FuncMap{"join": strings.Join, "age": age, "size": size, "stamp": stamp, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot}
 
 var (
-	boardTmpl   = template.Must(template.New("board.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/board.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
-	itemTmpl    = template.Must(template.New("item.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/item.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
-	workingTmpl = template.Must(template.New("working.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/working.tmpl"))
-	planTmpl    = template.Must(template.New("plan.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plan.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
-	docTmpl     = template.Must(template.New("plandoc.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plandoc.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
+	boardTmpl      = template.Must(template.New("board.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/board.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
+	itemTmpl       = template.Must(template.New("item.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/item.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
+	workingTmpl    = template.Must(template.New("working.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/working.tmpl"))
+	planTmpl       = template.Must(template.New("plan.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plan.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
+	docTmpl        = template.Must(template.New("plandoc.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plandoc.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
+	regressionTmpl = template.Must(template.New("regression.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/regression.tmpl", "templates/style.tmpl"))
 )

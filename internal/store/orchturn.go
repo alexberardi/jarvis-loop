@@ -251,13 +251,13 @@ func (s *Store) orchHook(tx *sql.Tx, e Event) error {
 
 // orchFingerprint is what the sweep compares: the newest event the orchestrator did not cause
 // (its own actions and its turns' bookkeeping are left out, so a turn's notes do not start the
-// next one).
+// next one; so are the regression runs', which change no item).
 func orchFingerprint(q interface {
 	QueryRow(string, ...any) *sql.Row
 }) (string, error) {
 	var n int64
 	err := q.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM events WHERE actor NOT LIKE 'orchestrator:%'
-		AND kind NOT LIKE 'orchestrat%'`).Scan(&n)
+		AND kind NOT LIKE 'orchestrat%' AND kind NOT LIKE 'regression%'`).Scan(&n)
 	return strconv.FormatInt(n, 10), err
 }
 

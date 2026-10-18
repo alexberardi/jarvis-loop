@@ -233,7 +233,7 @@ Each phase is usable on its own and proves one thing before the next builds on i
 5. **Triage and review.** The two agent stages around build; bounce and needs-you. *Proves:* bad fixes and stale reports get caught before the user sees them.
 6. **Land.** The landing script, held merges through Slack. *Proves:* end to end without a human in the middle.
 7. **Move to the prod box.** `loopd` runs there as its own service; the dev box becomes just a runner. *Proves:* the split, and survives the dev box rebooting.
-8. **Nightly regressions, at 19:00 America/New_York.** The scenarios, admin, desktop and mobile shots on `main`, with failures filed as items. *Proves:* the loop finds work on its own.
+8. **Nightly regressions, at 19:00 America/New_York.** The scenarios, admin, desktop and mobile shots on `main`, with failures filed as items. *Proves:* the loop finds work on its own. The manual trigger comes first: `@jarvis-loop regression [web|mobile|all]` or the board's button runs jarvis-server's `scripts/e2e` on a runner and reports it in `#loop`, a failure filed with one press ([decision](decisions/2026-10-18-regression-trigger.md)).
    Then **6b, every active repo** (2026-10-15): routing triage, the runner's verify step, setup commands, repo aliases in Slack and the hold rules for the mobile apps, docs, installer and packages. *Proves:* an item about any of them goes from a Slack message to a merged PR with the same gates.
 9. **Later:** a Mac runner, the Cloudflare Tunnel.
 

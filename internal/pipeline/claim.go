@@ -131,18 +131,20 @@ type Work struct {
 	Item *Item
 	Turn *TurnCandidate
 	Orch *OrchCandidate
+	Reg  *RegCandidate
 	// Held, with nothing to claim, is why: the slots left are held (SlotHolds).
 	Held string
 }
 
-// ChooseWork picks an item (Choose), a queued plan turn or the queued orchestrate turn (orch, nil
-// when there is none to start). Turns share the active-agents limit with items (live includes the
+// ChooseWork picks an item (Choose), a queued plan turn, the queued orchestrate turn (orch, nil
+// when there is none to start) or the queued regression run (reg, nil when there is none). Turns share the active-agents limit with items (live includes the
 // running turns); a plan turn's priority is its plan's, and it beats an item of the same priority:
 // the user is in the conversation. The orchestrate turn beats everything (it gets the next free
-// slot), one at a time. The fix of a frozen repo (frozen) beats even that: it may take a slot
+// slot), one at a time; the regression run comes next (the user asked for it now), one at a time
+// and only for a runner with the resources its suite needs. The fix of a frozen repo (frozen) beats even that: it may take a slot
 // over the active-agents number. holds are the slots held (SlotHolds): when they are all the free
 // slots left, the claim gets only an item needing a held resource.
-func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, holds []SlotHold, req ClaimRequest, frozen Frozen) (Work, bool) {
+func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, reg *RegCandidate, holds []SlotHold, req ClaimRequest, frozen Frozen) (Work, bool) {
 	if req.wants(WorkItem) {
 		if it, ok := chooseFix(c, items, deps, live, req, frozen); ok {
 			return Work{Item: &it}, true
@@ -151,7 +153,7 @@ func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease,
 	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
 		return Work{}, false
 	}
-	w, ok := chooseWork(c, items, deps, live, turns, orch, req, frozen)
+	w, ok := chooseWork(c, items, deps, live, turns, orch, reg, req, frozen)
 	if len(holds) == 0 || c.ActiveAgents-len(live) > len(holds) || (ok && serves(w, holds)) {
 		return w, ok
 	}
@@ -173,9 +175,12 @@ func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease,
 	return Work{Held: HeldReason(holds)}, false
 }
 
-func chooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest, frozen Frozen) (Work, bool) {
+func chooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, reg *RegCandidate, req ClaimRequest, frozen Frozen) (Work, bool) {
 	if orch != nil && req.wants(WorkOrchestrate) && !slices.ContainsFunc(live, func(l LiveLease) bool { return l.Stage == OrchestrateStage }) {
 		return Work{Orch: orch}, true
+	}
+	if regressionFits(c, reg, live, req) {
+		return Work{Reg: reg}, true
 	}
 	var it Item
 	okItem := false

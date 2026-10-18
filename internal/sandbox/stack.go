@@ -369,6 +369,8 @@ func StartStack(opts Options) (st *Stack, err error) {
 				Description: "the household's phone app (screens, chat, pairing)", Verify: MobileVerify(dir), QA: true,
 				DenyWrite: []string{MobileTrustedFile}},
 		},
+		// The demo repo stands in for jarvis-server (its scripts/e2e from a scenario's e2e step).
+		Regression: &runner.RegressionConfig{Repo: RepoKey, MobileRepo: MobileKey},
 	}
 	if s.qwen, err = startFakeQwen(); err != nil {
 		return nil, err
@@ -541,6 +543,7 @@ func (s *Stack) Close() {
 type Claimed struct {
 	Item, Plan int64
 	Orch       int64  // an orchestrate turn's id
+	Reg        int64  // a regression run's id
 	Stage      string // the item's stage when claimed ("" for a plan turn)
 }
 
@@ -714,6 +717,9 @@ func (s *Stack) claimedSince(id int64) (Claimed, bool) {
 		case store.KindOrchClaimed:
 			n, _ := e.Data["turn"].(float64)
 			return Claimed{Orch: int64(n)}, true
+		case store.KindRegClaimed:
+			n, _ := e.Data["regression"].(float64)
+			return Claimed{Reg: int64(n)}, true
 		}
 	}
 	return Claimed{}, false
