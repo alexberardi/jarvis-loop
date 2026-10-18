@@ -50,6 +50,14 @@ func TestChoose(t *testing.T) {
 		{"resources subset of caps", ctl, []Item{waiting(1, Build, "P1", 0, "gpu", "voice")}, nil, allCaps, 1},
 		{"no caps still gets triage", ctl, []Item{waiting(1, Build, "P1", 0, "gpu"), waiting(2, Triage, "P5", 0)}, nil, ClaimRequest{Runner: "r", Agent: "a"}, 2},
 		{"no caps gets a build with no resources", ctl, []Item{waiting(1, Build, "P3", 0)}, nil, ClaimRequest{Runner: "r", Agent: "a"}, 1},
+		// A Mac runner (capabilities and only_resources [macos]) takes the items that need macos
+		// and leaves everything else to the dev box, whatever its priority.
+		{"only: skips an item without the resource", ctl, []Item{waiting(1, Build, "P1", 0), waiting(2, Build, "P5", 0, "macos")}, nil,
+			ClaimRequest{Runner: "mbp", Agent: "mbp-1", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}}, 2},
+		{"only: nothing that needs it", ctl, []Item{waiting(1, Build, "P1", 0), waiting(2, Triage, "P1", 0), waiting(3, Review, "P1", 0, "gpu")}, nil,
+			ClaimRequest{Runner: "mbp", Agent: "mbp-1", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}}, 0},
+		{"only: one of several", ctl, []Item{waiting(1, Review, "P3", 0, "gpu", "macos")}, nil,
+			ClaimRequest{Runner: "r", Agent: "a", Capabilities: []string{"macos", "gpu"}, OnlyResources: []string{"macos"}}, 1},
 		{"already claimed is skipped", ctl, []Item{waiting(1, Build, "P1", 0), waiting(2, Build, "P2", 0)}, []LiveLease{{ItemID: 1, Stage: Build}}, allCaps, 2},
 
 		// 3. per-resource limits

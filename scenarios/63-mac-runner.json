@@ -1,0 +1,32 @@
+{
+  "name": "mac-runner",
+  "about": "#94: a Mac runner works over loopd's remote runners' listener (--runner-addr), which takes runner tokens only: the user's, the orchestrator's and the board's are refused there, and so is no token. With capabilities and only_resources [macos] it claims the item that needs macos and leaves the P1 item that needs nothing to the dev box, which builds it. (Each item's first hand claim is its triage, on the main listener.)",
+  "stages": ["build"],
+  "steps": [
+    {"do": "add", "item": "mac", "title": "Mac server app progress window", "priority": "P4"},
+    {"do": "triage", "item": "mac", "resources": "macos"},
+    {"do": "add", "item": "plain", "title": "Fix a typo in the README", "priority": "P1"},
+    {"do": "triage", "item": "plain"},
+
+    {"do": "runner_listener", "as": "user", "refused": "HTTP 403.*runners_only"},
+    {"do": "runner_listener", "as": "orchestrator", "refused": "HTTP 403.*runners_only"},
+    {"do": "runner_listener", "as": "board", "refused": "HTTP 403.*runners_only"},
+    {"do": "runner_listener", "as": "none", "refused": "HTTP 401"},
+    {"do": "runner_listener", "as": "hand"},
+
+    {"do": "hand_claim", "via": "runner_listener", "item": "mac", "capabilities": "macos", "only": "macos"},
+    {"do": "hand_claim", "via": "runner_listener", "capabilities": "macos", "only": "macos", "claims": "none"},
+    {"do": "runner", "claims": "plain"}
+  ],
+  "expect": {
+    "stage": {"mac": "build", "plain": "review"},
+    "events": [
+      {"item": "mac", "kind": "unservable", "actor": "loopd", "data": {"missing": "macos"}, "count": 1},
+      {"item": "mac", "kind": "servable", "actor": "loopd", "count": 1},
+      {"item": "mac", "kind": "claimed", "actor": "runner:hand", "count": 2},
+      {"item": "plain", "kind": "claimed", "actor": "runner:hand", "count": 1},
+      {"item": "plain", "kind": "claimed", "actor": "runner:sandbox", "count": 1}
+    ],
+    "agent_runs": {"build": 1}
+  }
+}

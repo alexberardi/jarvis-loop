@@ -39,6 +39,37 @@ type server struct {
 // New returns the API handler.
 func New(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
 	s := &server{st: st, tokens: tokens, log: log}
+	return Logged(log, s.routes())
+}
+
+// CodeRunnersOnly refuses a token that is not a runner's on the remote runners' listener.
+const CodeRunnersOnly = "runners_only"
+
+// NewRunners is the API for remote runners only: what loopd's LAN listener (--runner-addr)
+// serves, so the main API, the status page and the board stay on their own listeners. A token of
+// any other kind (user, board, orchestrator) is refused on every route before routing, which also
+// rules out acting for the user; a runner token then meets New's routes and rules.
+func NewRunners(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
+	s := &server{st: st, tokens: tokens, log: log}
+	mux := s.routes()
+	return Logged(log, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := tokens.Lookup(BearerToken(r))
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="loopd"`)
+			writeErr(w, http.StatusUnauthorized, "unauthorized", "a valid bearer token is required")
+			return
+		}
+		if p.Kind != KindRunner {
+			SetActor(w, p)
+			writeErr(w, http.StatusForbidden, CodeRunnersOnly, "this listener is for runners: "+article(p.Kind)+" "+p.Kind+" token is refused here")
+			return
+		}
+		mux.ServeHTTP(w, r)
+	}))
+}
+
+// routes are the API's routes, each behind its token rule.
+func (s *server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	both := []string{KindUser, KindRunner}
 	reads := []string{KindUser, KindRunner, KindOrchestrator}
@@ -94,7 +125,7 @@ func New(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
 	route("POST /orchestrator/items/{id}/approval", orch, s.orchAskApproval)
 	route("GET /orchestrator/snapshot", reads, s.orchSnapshot)
 	route("POST /orchestrate/turns/{turn}/result", runner, s.orchTurnResult)
-	return Logged(log, mux)
+	return mux
 }
 
 // Logged logs each request: method, path (never the query or headers, so never a token),
@@ -366,7 +397,9 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		Runner       string   `json:"runner"`
 		Agent        string   `json:"agent"`
 		Capabilities []string `json:"capabilities"`
-		Stages       []string `json:"stages"`
+		// OnlyResources: only items needing one of these (a subset of the capabilities).
+		OnlyResources []string `json:"only_resources"`
+		Stages        []string `json:"stages"`
 		// Kinds: item, plan (plan turns), orchestrate; empty is items only.
 		Kinds []string `json:"kinds"`
 	}
@@ -402,7 +435,18 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, Stages: stages, Kinds: body.Kinds})
+	only, err := pipeline.ParseResources(strings.Join(body.OnlyResources, ","))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	for _, o := range only {
+		if !slices.Contains(caps, o) {
+			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "only_resources must be among the capabilities, and " + strconv.Quote(o) + " is not"})
+			return
+		}
+	}
+	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, Stages: stages, Kinds: body.Kinds})
 	if err != nil {
 		s.fail(w, err)
 		return

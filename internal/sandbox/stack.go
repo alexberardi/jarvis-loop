@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -101,8 +102,10 @@ type Stack struct {
 	LoopdURL string
 	// BoardURL is loopd's board listener (--board-addr), on its own loopback port.
 	BoardURL string
-	Remote   string
-	MainSHA  string // the remote's main when the stack started
+	// RunnerURL is loopd's listener for remote runners (--runner-addr): runner tokens only.
+	RunnerURL string
+	Remote    string
+	MainSHA   string // the remote's main when the stack started
 	// LoopRemote is the second repo's remote (LoopSlug), MobileRemote the third's.
 	LoopRemote   string
 	MobileRemote string
@@ -123,6 +126,9 @@ type Stack struct {
 	srv    *http.Server
 	qwen   *fakeQwen
 	board  *http.Server
+	// runners is the remote runners' listener; handRemote the hand runner on it, as a Mac would be.
+	runners    *http.Server
+	handRemote *runner.Client
 	// boardTok is the board token (kind board) the board expectation signs in with.
 	boardTok string
 
@@ -263,6 +269,13 @@ func StartStack(opts Options) (st *Stack, err error) {
 	s.BoardURL = "http://" + bln.Addr().String()
 	s.board = &http.Server{Handler: loopd.BoardHandler(s.Store, toks, log.With("component", "board"), boardCfg), ReadHeaderTimeout: 10 * time.Second}
 	go s.board.Serve(bln)
+	rln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	s.RunnerURL = "http://" + rln.Addr().String()
+	s.runners = &http.Server{Handler: loopd.RunnerHandler(s.Store, toks, log.With("component", "runners")), ReadHeaderTimeout: 10 * time.Second}
+	go s.runners.Serve(rln)
 	if opts.RealClock {
 		s.bg.Add(1)
 		go func() {
@@ -360,6 +373,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 	s.user = &apiClient{base: s.LoopdURL, token: userTok}
 	s.hand = &runner.Client{Base: s.LoopdURL, Token: handTok}
 	s.handAPI = &apiClient{base: s.LoopdURL, token: handTok}
+	s.handRemote = &runner.Client{Base: s.RunnerURL, Token: handTok}
 	s.orch = &apiClient{base: s.LoopdURL, token: orchTok}
 	if opts.RealClock {
 		s.bg.Add(1)
@@ -489,6 +503,9 @@ func (s *Stack) Close() {
 	}
 	if s.board != nil {
 		s.board.Close()
+	}
+	if s.runners != nil {
+		s.runners.Close()
 	}
 	s.qwen.Close()
 	if s.Slack != nil {
@@ -778,6 +795,34 @@ func (c *apiClient) doHeader(method, path string, hdr map[string]string, in, out
 	}
 	if out != nil && resp.StatusCode != http.StatusNoContent {
 		return json.Unmarshal(raw, out)
+	}
+	return nil
+}
+
+// runnerListener reads GET /items on the remote runners' listener with as's token ("user",
+// "orchestrator", "board", "none" or "hand"); with refused (a regexp) it must be refused.
+func (s *Stack) runnerListener(as, refused string) error {
+	tok := map[string]string{"user": s.user.token, "orchestrator": s.orch.token, "board": s.boardTok, "hand": s.handRemote.Token, "none": ""}
+	t, ok := tok[as]
+	if !ok {
+		return fmt.Errorf("runner_listener as %q: want user, orchestrator, board, none or hand", as)
+	}
+	err := (&apiClient{base: s.RunnerURL, token: t}).do("GET", "/items", nil, nil)
+	if refused == "" {
+		if err != nil {
+			return fmt.Errorf("runner listener as %s: %w", as, err)
+		}
+		return nil
+	}
+	if err == nil {
+		return fmt.Errorf("runner listener as %s: not refused, want /%s/", as, refused)
+	}
+	re, rerr := regexp.Compile(refused)
+	if rerr != nil {
+		return rerr
+	}
+	if !re.MatchString(err.Error()) {
+		return fmt.Errorf("runner listener as %s: refused with %q, want /%s/", as, err, refused)
 	}
 	return nil
 }

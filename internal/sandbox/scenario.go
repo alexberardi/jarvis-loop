@@ -52,8 +52,13 @@ type Step struct {
 	RepoAs string `json:"repo_as,omitempty"`
 	// triage: what the item needs from a runner (its resources, comma-separated)
 	Resources string `json:"resources,omitempty"`
-	// hand_claim: what the hand runner offers when it claims (comma-separated)
+	// hand_claim: what the hand runner offers when it claims (comma-separated), and the only
+	// resources it takes (only_resources, as a Mac runner's); with Via "runner_listener" it claims
+	// on the remote runners' listener (--runner-addr), and Claims "none" says it must get nothing.
+	// runner_listener: As ("user", "orchestrator", "board", "none" or "hand", the hand runner)
+	// reads GET /items on that listener; with Refused it must be refused (a regexp on the error).
 	Capabilities string `json:"capabilities,omitempty"`
+	Only         string `json:"only,omitempty"`
 	// script: how the fake claude plays the item's runs of a stage (default build), and the repo
 	// a triage run picks
 	For   string `json:"for,omitempty"` // the stage the script is for: triage, build (default), review
@@ -425,15 +430,32 @@ func (p *player) step(st Step) error {
 		}
 		return s.hand.Advance(p.ctx, r.id, "reproduced", map[string]string{"area": "sandbox", "size": "S", "risk": "normal", "resources": st.Resources}, nil)
 	case "hand_claim":
-		r, err := p.ref(st.Item)
-		if err != nil {
-			return err
-		}
-		var caps []string
+		var caps, only []string
 		if st.Capabilities != "" {
 			caps = strings.Split(st.Capabilities, ",")
 		}
-		cl, err := s.hand.Claim(p.ctx, "hand-builder", caps, []string{"build"})
+		if st.Only != "" {
+			only = strings.Split(st.Only, ",")
+		}
+		hand := s.hand
+		switch st.Via {
+		case "":
+		case "runner_listener":
+			hand = s.handRemote
+		default:
+			return fmt.Errorf("hand_claim via %q: want runner_listener or nothing", st.Via)
+		}
+		cl, err := hand.ClaimOnly(p.ctx, "hand-builder", caps, only, []string{"build"})
+		if err != nil {
+			return err
+		}
+		if st.Claims == "none" {
+			if cl != nil {
+				return fmt.Errorf("the hand runner (%s, only %s) claimed #%d, want nothing", st.Capabilities, st.Only, cl.Item.ID)
+			}
+			return nil
+		}
+		r, err := p.ref(st.Item)
 		if err != nil {
 			return err
 		}
@@ -441,6 +463,8 @@ func (p *player) step(st Step) error {
 			return fmt.Errorf("the hand runner (%s) claimed %+v in build, want #%d", st.Capabilities, cl, r.id)
 		}
 		return nil
+	case "runner_listener":
+		return s.runnerListener(st.As, st.Refused)
 	case "script":
 		if st.For == "orchestrate" {
 			b, _ := json.Marshal(map[string]string{"play": st.Play})

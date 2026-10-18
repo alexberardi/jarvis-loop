@@ -29,6 +29,9 @@ type Config struct {
 	OrchestratorToken string   `json:"orchestrator_token,omitempty"`
 	Name              string   `json:"name"`
 	Capabilities      []string `json:"capabilities"`
+	// OnlyResources, when set, makes the runner claim only items that need one of them (each one
+	// of its capabilities): a Mac runner with ["macos"] leaves everything else to the dev box.
+	OnlyResources []string `json:"only_resources,omitempty"`
 	// Slots is how many agent runs this runner works at once; loopd's active-agents number still
 	// caps the total. Land, with no agent, has its own lane next to them, one item at a time.
 	Slots int `json:"slots"`
@@ -74,13 +77,15 @@ type Config struct {
 	// VerifyMask are the files and directories hidden from setup, prepare, cleanup and verify
 	// commands (which run the agent's code outside its sandbox): default the credential stores,
 	// loopd's tokens and data, the Slack tokens and this config (fence.go). Missing paths are
-	// skipped. Bwrap is the bubblewrap binary (default /usr/bin/bwrap).
+	// skipped. Bwrap is the bubblewrap binary (default /usr/bin/bwrap), the fence on Linux;
+	// SandboxExec is sandbox-exec (default /usr/bin/sandbox-exec), the fence on macOS.
 	VerifyMask []string `json:"verify_mask,omitempty"`
 	// VerifyWritable are the paths under HOME those commands may write besides their working dir,
 	// the runner's fence caches and a private /tmp (fence.go): default ~/.cache/jarvis-harness and
 	// ~/.android. The rest of HOME is read-only to them.
 	VerifyWritable []string `json:"verify_writable,omitempty"`
 	Bwrap          string   `json:"bwrap,omitempty"`
+	SandboxExec    string   `json:"sandbox_exec,omitempty"`
 	// Qwen is the Qwen builder for items whose builder is qwen (qwen.go); nil: they build with
 	// claude.
 	Qwen *QwenConfig `json:"qwen,omitempty"`
@@ -144,6 +149,9 @@ var Groups = []string{"server", "loop", "mobile", "docs", "installer", "package"
 
 // DefaultBwrap is where bubblewrap is.
 const DefaultBwrap = "/usr/bin/bwrap"
+
+// DefaultSandboxExec is where macOS's sandbox-exec is.
+const DefaultSandboxExec = "/usr/bin/sandbox-exec"
 
 // DefaultVerifyTimeout is a verify step's time limit when its config gives none.
 const DefaultVerifyTimeout = 20 * time.Minute
@@ -299,6 +307,11 @@ func (c *Config) normalize() error {
 		*w.to = d
 	}
 	c.Stages = uniq(c.Stages)
+	for _, o := range c.OnlyResources {
+		if !slices.Contains(c.Capabilities, o) {
+			return fmt.Errorf("config: only_resources %q is not one of the capabilities", o)
+		}
+	}
 	switch {
 	case c.PlanTurnMinutes < 0:
 		return fmt.Errorf("config: plan_turn_minutes must be positive, not %d", c.PlanTurnMinutes)
@@ -311,6 +324,9 @@ func (c *Config) normalize() error {
 	c.VerifyLock = Expand(c.VerifyLock)
 	if c.Bwrap == "" {
 		c.Bwrap = DefaultBwrap
+	}
+	if c.SandboxExec == "" {
+		c.SandboxExec = DefaultSandboxExec
 	}
 	if c.Qwen != nil {
 		if err := c.Qwen.normalize(); err != nil {

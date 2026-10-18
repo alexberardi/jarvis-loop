@@ -124,6 +124,52 @@ func TestRunWithBoardAddr(t *testing.T) {
 	}
 }
 
+// --runner-addr starts the remote runners' listener (runner tokens only, internal/api's
+// TestRunnersListenerTakesRunnerTokensOnly) beside the others, with no --lan; all stop together.
+func TestRunWithRunnerAddr(t *testing.T) {
+	dir := t.TempDir()
+	tokens := filepath.Join(dir, "tokens")
+	os.WriteFile(tokens, []byte("user-token-0123456789abcdef\tuser\talex\n"), 0o600)
+	args := []string{"--addr", "127.0.0.1:0", "--data", filepath.Join(dir, "data"), "--tokens", tokens}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var stderr strings.Builder
+	if err := run(ctx, append(args, "--runner-addr", "127.0.0.1:0", "--board-addr", "127.0.0.1:0"), &stderr); err != nil {
+		t.Fatalf("run: %v\n%s", err, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), `"msg":"runner listener listening"`) {
+		t.Errorf("no runner listener in the log: %s", stderr.String())
+	}
+	if err := run(ctx, append(args[:len(args):len(args)], "--runner-addr", "nonsense"), &stderr); err == nil {
+		t.Error("run accepted --runner-addr nonsense")
+	}
+}
+
+// The runner listener serves the API and nothing else: no status page, no board.
+func TestRunnerHandlerRouting(t *testing.T) {
+	st, err := store.Open(t.TempDir(), clock.NewFake(time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	const runnerTok = "runner-token-0123456789abcdef"
+	toks, _ := api.ParseTokens(strings.NewReader(runnerTok + "\trunner\tmbp\n"))
+	srv := httptest.NewServer(loopd.RunnerHandler(st, toks, slog.New(slog.DiscardHandler)))
+	defer srv.Close()
+	for path, want := range map[string]int{"/": 404, "/board": 404, "/ui/control": 404, "/items": 200, "/control": 200} {
+		req, _ := http.NewRequest("GET", srv.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+runnerTok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("GET %s on the runner listener: %d, want %d", path, resp.StatusCode, want)
+		}
+	}
+}
+
 func TestSlackEnvMustBePrivate(t *testing.T) {
 	dir := t.TempDir()
 	tokens := filepath.Join(dir, "tokens")

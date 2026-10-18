@@ -131,7 +131,15 @@ func (c *Client) json(ctx context.Context, method, path string, in, out any) (in
 // are not item stages: they ask for plan or orchestrate turns too (kinds), and alone, for those
 // only.
 func (c *Client) Claim(ctx context.Context, agent string, caps, stages []string) (*Claim, error) {
+	return c.ClaimOnly(ctx, agent, caps, nil, stages)
+}
+
+// ClaimOnly is Claim for items that need one of only (none: any item caps can serve).
+func (c *Client) ClaimOnly(ctx context.Context, agent string, caps, only, stages []string) (*Claim, error) {
 	body := map[string]any{"agent": agent, "capabilities": caps, "stages": stages}
+	if len(only) > 0 {
+		body["only_resources"] = only
+	}
 	turnKinds := map[string]string{StagePlan: pipeline.WorkPlan, StageOrchestrate: pipeline.WorkOrchestrate}
 	if slices.ContainsFunc(stages, func(s string) bool { return turnKinds[s] != "" }) {
 		var items, kinds []string
