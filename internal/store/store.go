@@ -1033,7 +1033,7 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 			return err
 		}
 		l := Lease{ID: id, ItemID: it.ID, Stage: it.Stage, Runner: runnerName, Agent: req.Agent,
-			Resources: it.Resources, ClaimedAt: now, ExpiresAt: now.Add(LeaseTTL)}
+			Resources: it.Needs(), ClaimedAt: now, ExpiresAt: now.Add(LeaseTTL)}
 		if _, err := tx.Exec(`INSERT INTO leases (id, item_id, stage, runner, agent, resources, claimed_at, expires_at) VALUES (?,?,?,?,?,?,?,?)`,
 			l.ID, l.ItemID, string(l.Stage), l.Runner, l.Agent, strings.Join(l.Resources, ","), now.UnixNano(), l.ExpiresAt.UnixNano()); err != nil {
 			return err

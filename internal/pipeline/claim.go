@@ -260,18 +260,18 @@ func choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 		if !pick(*it) {
 			continue
 		}
-		// 2. Eligible: waiting, in a work stage, resources ⊆ capabilities (and, with OnlyResources,
-		// needing one of them).
+		// 2. Eligible: waiting, in a work stage, what it needs ⊆ capabilities (and, with
+		// OnlyResources, needing one of them; land needs none, Needs).
 		if !it.Stage.IsWork() || claimed[it.ID] {
 			continue
 		}
 		if len(req.Stages) > 0 && !slices.Contains(req.Stages, it.Stage) {
 			continue
 		}
-		if !subset(it.Resources, req.Capabilities) {
+		if !subset(it.Needs(), req.Capabilities) {
 			continue
 		}
-		if len(req.OnlyResources) > 0 && !slices.ContainsFunc(it.Resources, func(r string) bool { return slices.Contains(req.OnlyResources, r) }) {
+		if len(req.OnlyResources) > 0 && !slices.ContainsFunc(it.Needs(), func(r string) bool { return slices.Contains(req.OnlyResources, r) }) {
 			continue
 		}
 		// Dependencies: every item it depends on is merged (qa or done).
@@ -279,7 +279,7 @@ func choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 			continue
 		}
 		// 3. Per-resource limits.
-		if slices.ContainsFunc(it.Resources, atLimit) {
+		if slices.ContainsFunc(it.Needs(), atLimit) {
 			continue
 		}
 		// 4. Per-stage limits.
@@ -312,6 +312,16 @@ func before(a, b Item) bool {
 		return a.CreatedAt.Before(b.CreatedAt)
 	}
 	return a.ID < b.ID
+}
+
+// Needs is the resources a claim of it takes: its resources in the agent stages, none in land (CI,
+// merge and hold run on any runner that lands, #209). The claim's rules, its lease's resources
+// (the limits), the slot holds and the unservable flag all go by it.
+func (it Item) Needs() []string {
+	if it.Stage == Land {
+		return nil
+	}
+	return it.Resources
 }
 
 func subset(need, have []string) bool {
