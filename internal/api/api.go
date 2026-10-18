@@ -99,6 +99,7 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /items/{id}/link", user, s.link)
 	route("POST /items/{id}/unlink", user, s.unlink)
 	route("POST /items/{id}/resources", user, s.setResources)
+	route("POST /items/{id}/feature", user, s.setFeature)
 	route("POST /items/{id}/qa", user, s.setQA)
 	route("POST /items/{id}/verified", user, s.verified)
 	route("POST /items/{id}/reopen", user, s.reopen)
@@ -852,6 +853,26 @@ func (s *server) setResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, err := s.st.SetResources(r.Context(), PrincipalFrom(r.Context()).Actor(), id, strings.Join(body.Resources, ","))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// setFeature tags an item with a feature, or clears it (store.SetFeature).
+func (s *server) setFeature(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Feature string `json:"feature"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.SetFeature(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Feature)
 	if err != nil {
 		s.fail(w, err)
 		return

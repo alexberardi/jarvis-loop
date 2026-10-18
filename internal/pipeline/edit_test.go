@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -91,6 +92,51 @@ func TestApplyResources(t *testing.T) {
 	}
 	for _, s := range []Stage{Review, Land, NeedsYou, Held} {
 		_, err = ApplyResources(item(s), "macos")
+		wantCode(t, err, "")
+	}
+}
+
+func TestFeatureSlug(t *testing.T) {
+	cases := map[string]string{
+		"e2e":                     "e2e",
+		" Smallest Blocks ":       "smallest-blocks",
+		"smallest-blocks":         "smallest-blocks",
+		"Pantry: scan & stock v2": "pantry-scan-stock-v2",
+		"  ":                      "",
+		"!!":                      "",
+		strings.Repeat("ab ", 40): strings.TrimSuffix(strings.Repeat("ab-", 16), "-"),
+	}
+	for in, want := range cases {
+		if got := FeatureSlug(in); got != want {
+			t.Errorf("FeatureSlug(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestApplyFeature(t *testing.T) {
+	it := item(Build)
+	it.Feature = "old"
+	tr, err := ApplyFeature(it, " Smallest Blocks")
+	wantCode(t, err, "")
+	if tr.Item.Feature != "smallest-blocks" || tr.Kind != KindFeature || tr.From != Build || tr.To != Build {
+		t.Fatalf("feature: %+v", tr)
+	}
+	if want := map[string]any{"from": "old", "to": "smallest-blocks"}; !reflect.DeepEqual(tr.Data, want) {
+		t.Fatalf("feature data: %v", tr.Data)
+	}
+	// "" and none clear it.
+	for _, raw := range []string{"", " none "} {
+		tr, err = ApplyFeature(it, raw)
+		wantCode(t, err, "")
+		if tr.Item.Feature != "" {
+			t.Fatalf("clear with %q: %+v", raw, tr.Item)
+		}
+	}
+	_, err = ApplyFeature(it, "!!")
+	wantCode(t, err, CodeInvalidField)
+	// Any stage: a feature's progress counts its done items too.
+	for _, s := range []Stage{Triage, NeedsYou, Held, QA, Done, Closed} {
+		_, err = ApplyFeature(item(s), "x")
 		wantCode(t, err, "")
 	}
 }

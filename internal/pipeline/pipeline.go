@@ -187,6 +187,10 @@ type Item struct {
 	// plan's piece says, and a qwen item's second strike flips it to claude for the rest
 	// (docs/decisions/2026-10-16-qwen-builder.md).
 	Builder string `json:"builder,omitempty"`
+	// Feature groups the item with others that make up one feature ("": none): set at filing
+	// (loop add --feature), from the plan's title for a plan's pieces, or by loop feature
+	// (docs/decisions/2026-10-18-feature-tags.md).
+	Feature string `json:"feature,omitempty"`
 	// BuildSession is the OpenCode session of the item's last qwen build, which its next build
 	// resumes ("" for none).
 	BuildSession string    `json:"build_session,omitempty"`
@@ -852,7 +856,7 @@ func ApplyDeployed(it Item, revision string) (Transition, error) {
 const ReopenPriority = "P2"
 
 // NewReopen is the item a Reopen files: P2, the same repo, the user's words as the ask, linked to
-// the qa item.
+// the qa item, in its feature.
 func NewReopen(it Item, words string, now time.Time) (Item, error) {
 	words = strings.TrimSpace(words)
 	title := fmt.Sprintf("Reopen #%d: %s", it.ID, strings.Join(strings.Fields(words), " "))
@@ -863,7 +867,7 @@ func NewReopen(it Item, words string, now time.Time) (Item, error) {
 	if err != nil {
 		return n, err
 	}
-	n.ReopenOf = it.ID
+	n.ReopenOf, n.Feature = it.ID, it.Feature
 	return n, nil
 }
 

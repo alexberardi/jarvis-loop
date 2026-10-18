@@ -54,6 +54,8 @@ New features start in `#plan`, not in the loop: two planning stages turn an idea
 
 **Where briefs and blueprints live:** as pages (like the living design doc) while they are written, so the user can read and comment from a phone; a final copy is committed to the target repo (`docs/plans/<feature>.md`) when the first item starts, so agents read it in their worktree. Every item, thread and PR links back to its plan.
 
+**Features (2026-10-18):** an item may carry a **feature** tag, the name that groups the small items one feature is built from: set at filing (`loop add --feature`), from the plan's title for a plan's pieces, and changed with `loop feature <id> <name|none>`. It shows in `loop show` and on the board card. The claim order by feature, triage splitting anything above size M, and the board grouped by feature follow in later pieces ([decision](decisions/2026-10-18-feature-tags.md)).
+
 **What the loop gains:** item dependencies; a plan link on items; and conversational stages, where the runner starts a short agent per message in a `#plan` thread with the thread as context, instead of one agent per stage. Triage checks that the blueprint still matches the code; review and the harness gate check the work against the blueprint's own verification plan.
 
 ## loopd
@@ -90,7 +92,7 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | `GET`, `PUT /control` | the active-agents number, stop and resume |
 | `GET /board`, `/board/items/{id}`, `/board/items/{id}/evidence/{n}` | the swim-lane web board (HTML, read-only), also on the optional LAN listener `--board-addr`, which serves nothing else ([decision](decisions/2026-10-15-board.md)) |
 
-The `loop` CLI wraps the same API: `loop add` (`--json` or `-q` for scripts), `loop status`, `loop show`, `loop answer`, `loop edit`, `loop link`/`unlink`, `loop resources`, `loop rebuild`, `loop agents <n>`; its flags go anywhere on the line.
+The `loop` CLI wraps the same API: `loop add` (`--json` or `-q` for scripts), `loop status`, `loop show`, `loop answer`, `loop edit`, `loop link`/`unlink`, `loop resources`, `loop feature`, `loop rebuild`, `loop agents <n>`; its flags go anywhere on the line.
 
 ## Runners
 
