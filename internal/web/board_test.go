@@ -233,19 +233,21 @@ func goldenItems() []store.BoardItem {
 			WaitingOn: []int64{5, 8}, Waits: []pipeline.WaitChain{{Path: []int64{5}, Root: "in review"}, {Path: []int64{8}, Root: "held for approval"}}, PlanID: 2, Builder: "qwen", UpdatedAt: now},
 		{BoardRow: row(13, "Mac app progress window", "P4", "build", "ready", "alexberardi/jarvis-server", 0, "", 6*time.Hour),
 			Unservable: []string{"macos"}, UpdatedAt: now},
+		{BoardRow: row(14, "Pair screen copy", "P2", "build", "build", "alexberardi/jarvis-server", 0, "devbox/builder-1", 3*time.Hour),
+			ReopenedDeps: []store.ReopenedDependency{{Dependency: 9, ReopenItem: 15, Words: "the code is still <small> on the phone"}}, UpdatedAt: now},
 		{BoardRow: row(5, "Board page", "P2", "review", "review", "alexberardi/jarvis-loop", 14, "devbox/reviewer-1", 2*day), UpdatedAt: now},
 		{BoardRow: row(6, "Bump sqlite", "P3", "land", "land (queued)", "alexberardi/jarvis-server", 31, "", 4*day), UpdatedAt: now},
 		{BoardRow: row(7, "Which emulator?", "P1", "needs_you", "needs-you", "alexberardi/jarvis-server", 0, "", 1*day),
 			Question: "Should the test use the sandbox emulator or a fake?", SlackChannel: "C0LOOP", SlackTS: "1760000001.000200", UpdatedAt: now},
 		{BoardRow: row(8, "Token rotation", "P2", "held", "held", "alexberardi/jarvis-loop", 12, "", 6*day),
 			HoldReason: "triage: risk hold; touches internal/api/auth.go", UpdatedAt: now},
-		{BoardRow: row(14, "Mac runners", "P1", "qa", "qa", "alexberardi/jarvis-loop", 60, "", 2*day), UpdatedAt: now,
+		{BoardRow: row(18, "Mac runners", "P1", "qa", "qa", "alexberardi/jarvis-loop", 60, "", 2*day), UpdatedAt: now,
 			Proof: &pipeline.Proof{By: "build", Checks: []pipeline.ProofCheck{{Kind: "usage", Event: "claimed", Actor: []string{"runner:mbp", "runner:mini"}, State: "pending"}}}},
-		{BoardRow: row(15, "Board colours", "P2", "qa", "qa", "alexberardi/jarvis-loop", 61, "", 3*day), UpdatedAt: now,
+		{BoardRow: row(19, "Board colours", "P2", "qa", "qa", "alexberardi/jarvis-loop", 61, "", 3*day), UpdatedAt: now,
 			Proof: &pipeline.Proof{By: "sweep", Checks: []pipeline.ProofCheck{{Kind: "command", Run: "go test ./internal/web", State: "passed"}, {Kind: "manual", Look: "the QA column on a phone", State: "manual"}}}},
-		{BoardRow: row(16, "Rebuild button", "P2", "qa", "qa", "alexberardi/jarvis-loop", 62, "", 3*day), UpdatedAt: now,
+		{BoardRow: row(20, "Rebuild button", "P2", "qa", "qa", "alexberardi/jarvis-loop", 62, "", 3*day), UpdatedAt: now,
 			Proof: &pipeline.Proof{By: "build", Checks: []pipeline.ProofCheck{{Kind: "command", Run: "scripts/loop-sandbox run scenarios/64-rebuild-button.json", State: "failed", Fails: 1, Evidence: "exit 1 after 9s: 1 of 1 failed"}}}},
-		{BoardRow: row(17, "Old QA item", "P3", "qa", "qa", "alexberardi/jarvis-server", 40, "", 5*day), UpdatedAt: now, AwaitingDeploy: false},
+		{BoardRow: row(21, "Old QA item", "P3", "qa", "qa", "alexberardi/jarvis-server", 40, "", 5*day), UpdatedAt: now, AwaitingDeploy: false},
 		{BoardRow: row(9, "Fix the digest time", "P2", "done", "done", "alexberardi/jarvis-loop", 9, "", 10*day), UpdatedAt: now.Add(-13 * day)},
 		{BoardRow: row(10, "Old done item", "P2", "done", "done", "alexberardi/jarvis-loop", 3, "", 30*day), UpdatedAt: now.Add(-15 * day)},
 		{BoardRow: row(11, "Not worth it", "P3", "closed", "closed", "", 0, "", 8*day), UpdatedAt: now.Add(-2 * day)},
@@ -341,7 +343,7 @@ func TestBoardColumns(t *testing.T) {
 	if strings.Join(names, ",") != "Planning,Triage,Build,Review,Needs you,Approval,QA,Done" {
 		t.Errorf("columns %v", names)
 	}
-	want := map[string][]int64{"Triage": {1, 2, 12}, "Build": {3, 4, 13}, "Review": {5, 6}, "Needs you": {7}, "Approval": {8}, "QA": {14, 15, 17, 16}, "Done": {9}}
+	want := map[string][]int64{"Triage": {1, 2, 12}, "Build": {3, 4, 13, 14}, "Review": {5, 6}, "Needs you": {7}, "Approval": {8}, "QA": {18, 19, 21, 20}, "Done": {9}}
 	for k, ids := range want {
 		if !slicesEqual(got[k], ids) {
 			t.Errorf("%s: %v, want %v", k, got[k], ids)
@@ -491,5 +493,34 @@ func TestBoardOrchestratorGolden(t *testing.T) {
 	}
 	if strings.Contains(b.String(), "Orchestrator") {
 		t.Error("a panel for an orchestrator that never acted")
+	}
+}
+
+// The runner panel: the runners seen today and the slot held for the Mac's work (#192).
+func TestBoardRunnersGolden(t *testing.T) {
+	items := goldenItems()
+	v := boardView(items, goldenPlans(), now, false, "")
+	v.Runners = runnerView(store.RunnerPanel{
+		Runners: []pipeline.RunnerSeen{
+			{Name: "devbox", Capabilities: []string{"emulator", "gpu", "voice"}, PollSeconds: 30, LastSeen: now.Add(-5 * time.Second)},
+			{Name: "mbp", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}, PollSeconds: 30, LastSeen: now.Add(-20 * time.Second)},
+			{Name: "old-mini", Capabilities: []string{"ios"}, OnlyResources: []string{"ios"}, LastSeen: now.Add(-3 * time.Hour)},
+		},
+		Holds: []pipeline.SlotHold{{Resource: "macos", Runner: "mbp", ItemID: 61}},
+	}, now)
+	var b bytes.Buffer
+	if err := boardTmpl.Execute(&b, v); err != nil {
+		t.Fatal(err)
+	}
+	checkGolden(t, "board_runners.golden.html", b.Bytes())
+	out := b.String()
+	for _, want := range []string{"Runners · 3 seen today · 1 slot held", "A slot is held for macos work: <a href=\"/board/items/61\">#61</a> is waiting for mbp",
+		"old-mini", "(quiet)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the panel lacks %q", want)
+		}
+	}
+	if strings.Count(out, "(quiet)") != 1 {
+		t.Errorf("only old-mini is quiet")
 	}
 }

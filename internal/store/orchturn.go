@@ -544,7 +544,7 @@ func (s *Store) OrchTick(ctx context.Context) error {
 	})
 }
 
-// orchIdle queues an idle trigger for each item waiting (unclaimed, its dependencies done) in a
+// orchIdle queues an idle trigger for each item waiting (unclaimed, its dependencies merged) in a
 // work stage longer than its stage allows, once per wait. An item flagged unservable is skipped:
 // loopd has told the user already.
 func (s *Store) orchIdle(tx *sql.Tx, now time.Time) error {

@@ -1,0 +1,43 @@
+{
+  "name": "deps-at-merge",
+  "about": "Dependencies are met at merge (docs/decisions/2026-10-18-deps-at-merge.md). b and c depend on a, marked for qa. While a is in build, review and land, b is not claimed; once a is merged and waits in qa, b is triaged and built at once. The approver then reopens a: loopd flags b (in review) and c (in triage) in their threads and on their cards, naming a, the words and the fix item, and neither moves.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Show the pairing code larger"},
+    {"do": "command", "as": "approver", "text": "qa 1", "answer": "waits in qa for your check once merged"},
+    {"do": "add", "item": "b", "title": "Pair screen copy", "after": ["a"]},
+    {"do": "add", "item": "c", "title": "Pair screen help link", "after": ["a"]},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review", "b": "triage"}, "leased": {"b": false},
+     "board": {"b": {"column": "Triage", "card": "waiting on #1 → queued for review"}}},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "qa", "b": "triage"}, "pr": {"a": {"state": "MERGED", "merge_calls": 1}}},
+    {"do": "triage", "item": "b"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "qa", "b": "review"}},
+    {"do": "press", "item": "a", "button": "qa_reopen", "as": "approver"},
+    {"do": "reply", "item": "a", "as": "approver", "text": "the code is still small on the phone"},
+    {"do": "expect", "stage": {"a": "done", "b": "review", "c": "triage"},
+     "events": [{"item": "b", "kind": "dependency_reopened", "actor": "loopd", "data": {"dependency": "^1$", "reopen_item": "^4$", "words": "^the code is still small on the phone$"}, "count": 1},
+                {"item": "c", "kind": "dependency_reopened", "actor": "loopd", "count": 1}],
+     "messages": [{"thread": "b", "from": "bot", "text": "^This depends on #1, which was reopened: the code is still small on the phone \\(the fix is #4\\)\\. The work here goes on; check whether it needs a change\\.$"},
+                  {"thread": "c", "from": "bot", "text": "^This depends on #1, which was reopened"}],
+     "board": {"b": {"column": "Review", "card": "Depends on #1, which was reopened: the code is still small on the phone \\(the fix is #4\\)"},
+               "c": {"column": "Triage", "card": "Depends on #1, which was reopened"}}}
+  ],
+  "expect": {
+    "stage": {"a": "done", "b": "review", "c": "triage"},
+    "agent_runs": {"build": 2, "review": 1, "land": 0},
+    "no_events": [
+      {"item": "a", "kind": "dependency_reopened"}
+    ]
+  }
+}

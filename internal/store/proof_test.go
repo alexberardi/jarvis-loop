@@ -82,11 +82,12 @@ func TestProofVerifiedByTheLoop(t *testing.T) {
 }
 
 // A command check failing twice in a row reopens the item as the user's Reopen does: a P2 item
-// with the failure as its ask.
+// with the failure as its ask, and its open dependents are flagged (#193).
 func TestProofFailedTwiceReopens(t *testing.T) {
 	s, clk := open(t)
 	ctx := context.Background()
 	it := proofQA(t, s, `[{"kind":"command","run":"curl -fsS localhost:7781/healthz"}]`)
+	dep := addAfter(t, s, "dependent", "P2", it.ID)
 	bad := map[string]any{"results": []any{map[string]any{"check": 0, "state": "failed", "evidence": "exit 7: connection refused"}}}
 	ev, err := s.ProofChecked(ctx, runner, it.ID, bad)
 	if err != nil || ev.Kind != KindProofChecked || ev.Data["status"] != pipeline.CheckFailed || ev.Data["changed"] != true {
@@ -106,6 +107,10 @@ func TestProofFailedTwiceReopens(t *testing.T) {
 	if err != nil || nd.Item.ReopenOf != it.ID || nd.Item.Priority != pipeline.ReopenPriority ||
 		!strings.Contains(nd.Item.Ask, "exit 7: connection refused") {
 		t.Fatalf("filed: %+v %v", nd.Item, err)
+	}
+	if fl := lastEvent(t, s, dep.ID, KindDependencyReopened); fl == nil || fl.Data["dependency"] != float64(it.ID) ||
+		fl.Data["reopen_item"] != float64(n) || !strings.Contains(fl.Data["words"].(string), "exit 7") {
+		t.Fatalf("the dependent was not flagged: %+v", fl)
 	}
 }
 

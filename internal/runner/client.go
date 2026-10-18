@@ -22,6 +22,12 @@ type Client struct {
 	Base  string
 	Token string
 	HTTP  *http.Client
+	// PollSeconds goes with each claim: loopd holds a slot for a Mac runner's work only while
+	// the runner has asked within two of its poll intervals.
+	PollSeconds int
+	// Stages are the runner's configured stages, sent (the work ones) with each claim from
+	// either lane: loopd holds a slot only for work the runner would take in them.
+	Stages []string
 }
 
 // APIError is a loopd error answer.
@@ -139,6 +145,18 @@ func (c *Client) ClaimOnly(ctx context.Context, agent string, caps, only, stages
 	body := map[string]any{"agent": agent, "capabilities": caps, "stages": stages}
 	if len(only) > 0 {
 		body["only_resources"] = only
+	}
+	if c.PollSeconds > 0 {
+		body["poll_seconds"] = c.PollSeconds
+	}
+	var runnerStages []string
+	for _, st := range c.Stages {
+		if pipeline.Stage(st).IsWork() {
+			runnerStages = append(runnerStages, st)
+		}
+	}
+	if len(runnerStages) > 0 {
+		body["runner_stages"] = runnerStages
 	}
 	turnKinds := map[string]string{StagePlan: pipeline.WorkPlan, StageOrchestrate: pipeline.WorkOrchestrate}
 	if slices.ContainsFunc(stages, func(s string) bool { return turnKinds[s] != "" }) {
