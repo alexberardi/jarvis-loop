@@ -1338,12 +1338,13 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 			return err
 		}
 		// In a repo whose main is red the run's result waits, checked now, applied once main is
-		// green (a usage limit is about the runner's account, not the repo: it applies now).
+		// green. A usage limit is about the runner's account, not the repo, and a merge has already
+		// happened on GitHub (main's CI on it must be taken): both apply now.
 		frozen, err := frozenRepos(tx)
 		if err != nil {
 			return err
 		}
-		if frozen.Blocks(it) && outcome != pipeline.UsageLimit {
+		if frozen.Blocks(it) && outcome != pipeline.UsageLimit && outcome != pipeline.Merged {
 			out = it
 			return s.queueAdvance(tx, actor, runnerName, it, l, adv, now)
 		}

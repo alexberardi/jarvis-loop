@@ -37,8 +37,9 @@ scenario:
   - **No merges.** A land run in a frozen repo stops at its next pass of the gates, before any
     merge: `Detail.frozen` tells the runner, and its heartbeat makes loopd end the lease
     (`land_frozen`); the item waits in land and is landed afresh after the freeze (scenario
-    `main-red-land-stops`). Land's other outcomes from a pass already decided are queued like any
-    advance.
+    `main-red-land-stops`). A `merged` from a pass already past that check applies at once, like a
+    usage limit: the merge has happened on GitHub, and main's CI on it must be taken (its green
+    can lift the freeze). Land's other outcomes from such a pass are queued like any advance.
   - **Human actions still work** (answer, approve, drop, rebuild): they need no runner and do not
     merge; an approved item just waits in land. A drop of an item whose advance waits drops the
     advance (`queued_advance_dropped`).

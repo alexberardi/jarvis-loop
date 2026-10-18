@@ -280,3 +280,51 @@ func TestMainGreenBeforeTheRedMergeKeepsTheFreeze(t *testing.T) {
 		t.Fatal("an earlier merge's green lifted the freeze")
 	}
 }
+
+// A merge is a fact on GitHub, not a stage move the freeze can hold back: a land run that merged
+// just as main went red (between its frozen check and the merge) applies at once, so the watch's
+// main_ci on that merge is taken.
+func TestMergedAppliesInAFrozenRepo(t *testing.T) {
+	s, clk := open(t)
+	ctx := context.Background()
+	culprit := merged(t, s)
+	repo := culprit.Repo
+	it := addIn(t, s, "landing", repo, "P3")
+	clk.Advance(time.Minute)
+	step := func(agent string, out pipeline.Outcome, f map[string]string, paths []string, ev bool) {
+		t.Helper()
+		c := claimed(t, s, agent)
+		if c == nil || c.Item.ID != it.ID {
+			t.Fatalf("claim for %s: %+v", out, c)
+		}
+		if ev {
+			evidence(t, s, it.ID)
+		}
+		if _, err := s.Advance(ctx, runner, it.ID, out, f, paths); err != nil {
+			t.Fatalf("%s: %v", out, err)
+		}
+	}
+	step("triager", pipeline.Reproduced, triaged, nil, true)
+	step("builder", pipeline.PROpened, map[string]string{"repo": repo, "pr": "8", "branch": "loop/2-x", "head_sha": shaA}, []string{"M y.go"}, true)
+	step("reviewer", pipeline.Approved, map[string]string{"summary": "ok", "head_sha": shaA}, nil, false)
+	if c := claimed(t, s, "lander"); c == nil || c.Item.ID != it.ID {
+		t.Fatalf("land claim: %+v", c)
+	}
+	if _, err := s.MainCI(ctx, runner, culprit.ID, redData()); err != nil {
+		t.Fatal(err)
+	}
+	sha := "ffffffffffffffffffffffffffffffffffffff01"
+	got, err := s.Advance(ctx, runner, it.ID, pipeline.Merged, map[string]string{"merge_sha": sha, "head_sha": shaA}, []string{"M y.go"})
+	if err != nil || got.Stage != pipeline.Done {
+		t.Fatalf("merged while frozen: %s %v", got.Stage, err)
+	}
+	if countEvents(t, s, KindAdvanceQueued) != 0 {
+		t.Fatal("a merged advance was queued")
+	}
+	if _, err := s.MainCI(ctx, runner, it.ID, map[string]any{"result": "green", "merge_sha": sha}); err != nil {
+		t.Fatalf("main_ci on the merge: %v", err)
+	}
+	if fz, _ := s.Freezes(ctx); len(fz) != 0 {
+		t.Fatalf("main green on a merge after the red one, still frozen: %+v", fz)
+	}
+}
