@@ -60,6 +60,15 @@ func TestChoose(t *testing.T) {
 			ClaimRequest{Runner: "mbp", Agent: "mbp-1", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}}, 0},
 		{"only: one of several", ctl, []Item{waiting(1, Review, "P3", 0, "gpu", "macos")}, nil,
 			ClaimRequest{Runner: "r", Agent: "a", Capabilities: []string{"macos", "gpu"}, OnlyResources: []string{"macos"}}, 1},
+		// Land (CI, merge, hold) needs none of the item's resources (#209): any runner that takes land
+		// lands it, past the resource limits; a Mac runner (only_resources) takes no land.
+		{"land: the dev box lands a macos item", ctl, []Item{waiting(1, Land, "P1", 0, "macos")}, nil, allCaps, 1},
+		{"land: past the resource limits", ctl, []Item{waiting(1, Land, "P1", 0, "voice")},
+			[]LiveLease{{ItemID: 8, Stage: Build, Resources: []string{"voice"}}}, allCaps, 1},
+		{"land: still its stage limit", ctl, []Item{waiting(1, Land, "P1", 0, "macos")}, []LiveLease{{ItemID: 8, Stage: Land}}, allCaps, 0},
+		{"land: build of a macos item still needs macos", ctl, []Item{waiting(1, Build, "P1", 0, "macos"), waiting(2, Review, "P1", 0, "macos")}, nil, allCaps, 0},
+		{"land: only_resources takes no land", ctl, []Item{waiting(1, Land, "P1", 0, "macos")}, nil,
+			ClaimRequest{Runner: "mbp", Agent: "mbp-1", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}}, 0},
 		{"already claimed is skipped", ctl, []Item{waiting(1, Build, "P1", 0), waiting(2, Build, "P2", 0)}, []LiveLease{{ItemID: 1, Stage: Build}}, allCaps, 2},
 
 		// 3. per-resource limits
@@ -189,6 +198,8 @@ func TestSlotHold(t *testing.T) {
 		{"(a) a runner without only_resources holds nothing", two, []Item{plain, macItem}, oneLive,
 			[]RunnerSeen{{Name: "both", Capabilities: []string{"macos", "gpu"}, LastSeen: t0}}, devbox, nil, 1},
 		{"(b) the macos item is in land and the Mac takes build and review", two, []Item{plain, waiting(2, Land, "P4", 0, "macos")}, oneLive, []RunnerSeen{macBR, devboxSeen}, devbox, nil, 1},
+		{"(b) the macos item is in land and the Mac takes every stage", two, []Item{plain, waiting(2, Land, "P4", 0, "macos")}, oneLive, []RunnerSeen{mbp, devboxSeen}, devbox, nil, 1},
+		{"(c) landing a macos item is not the held work", two, []Item{macItem, waiting(3, Land, "P1", 0, "macos")}, oneLive, []RunnerSeen{mbp, devboxSeen}, devbox, []string{"macos"}, 0},
 		{"(b) the macos item is in triage and the Mac takes build and review", two, []Item{plain, waiting(2, Triage, "P4", 0, "macos")}, oneLive, []RunnerSeen{macBR, devboxSeen}, devbox, nil, 1},
 		{"(b) the macos item is in one of the Mac's stages", two, []Item{plain, macItem}, oneLive, []RunnerSeen{macBR, devboxSeen}, devbox, []string{"macos"}, 0},
 		{"(b) no macos item", two, []Item{plain}, oneLive, []RunnerSeen{mbp}, devbox, nil, 1},
@@ -259,5 +270,73 @@ func TestSlotHoldTurns(t *testing.T) {
 	turns := []TurnCandidate{{TurnID: 5, PlanID: 5, Priority: "P1", CreatedAt: t0}}
 	if w, ok := ChooseWork(two, nil, nil, []LiveLease{{ItemID: 9, Stage: Build}}, turns, &OrchCandidate{}, holds, req, nil); ok {
 		t.Fatalf("got %+v, want nothing", w)
+	}
+}
+
+// Land runs no agent (#210): a land lease takes no agent slot, and a land claim goes through when
+// every agent slot is busy or the last one is held for a resource. The land limit still applies.
+func TestLandTakesNoAgentSlot(t *testing.T) {
+	ctl := DefaultControl() // 4 active agents, land limit 1
+	landReq := ClaimRequest{Runner: "devbox", Agent: "devbox-land", Stages: []Stage{Land}}
+	agentReq := ClaimRequest{Runner: "devbox", Agent: "devbox-1", Stages: []Stage{Triage, Build, Review}}
+	anyReq := ClaimRequest{Runner: "devbox", Agent: "devbox-1"}
+	agents := []LiveLease{{ItemID: 11, Stage: Build}, {ItemID: 12, Stage: Build}, {ItemID: 13, Stage: Review}, {ItemID: 14, Stage: Triage}}
+	landing := append(slices.Clone(agents[:3]), LiveLease{ItemID: 15, Stage: Land})
+	mbp := RunnerSeen{Name: "mbp", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}, LastSeen: t0}
+	landMac := mbp
+	landMac.Stages = []Stage{Land}
+	land := waiting(1, Land, "P1", time.Hour)
+	build := waiting(2, Build, "P3", 0)
+	mac := waiting(3, Build, "P4", 0, "macos")
+	macLand := waiting(4, Land, "P1", 0, "macos")
+
+	cases := []struct {
+		name    string
+		items   []Item
+		live    []LiveLease
+		runners []RunnerSeen
+		req     ClaimRequest
+		holds   []string
+		want    int64
+	}{
+		{"every agent slot busy: the land lane lands", []Item{land, build}, agents, nil, landReq, nil, 1},
+		{"every agent slot busy: an any-stage claim gets only land", []Item{build, land}, agents, nil, anyReq, nil, 1},
+		{"every agent slot busy: the agent lane gets nothing", []Item{land, build}, agents, nil, agentReq, nil, 0},
+		{"the last slot held for macos: the land lane lands", []Item{land, build, mac}, agents[:3], []RunnerSeen{mbp}, landReq, []string{"macos"}, 1},
+		{"the last slot held for macos: the agent lane is refused", []Item{land, build, mac}, agents[:3], []RunnerSeen{mbp}, agentReq, []string{"macos"}, 0},
+		{"a live land lease takes no agent slot", []Item{build}, landing, nil, agentReq, nil, 2},
+		{"a live land lease does not make the last slot", []Item{build, mac}, append(slices.Clone(agents[:2]), LiveLease{ItemID: 15, Stage: Land}), []RunnerSeen{mbp}, agentReq, []string{"macos"}, 2},
+		{"at the land limit with agent slots full", []Item{waiting(5, Land, "P1", 0), build}, append(slices.Clone(agents), LiveLease{ItemID: 15, Stage: Land}), nil, landReq, nil, 0},
+		{"at the land limit, the agent lane is still capped", []Item{build}, append(slices.Clone(agents), LiveLease{ItemID: 15, Stage: Land}), nil, agentReq, nil, 0},
+		{"a macos item in land holds no agent slot", []Item{build, macLand}, agents[:3], []RunnerSeen{mbp}, agentReq, nil, 2},
+		{"a land-only Mac holds no agent slot", []Item{build, mac}, agents[:3], []RunnerSeen{landMac}, agentReq, nil, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			holds := SlotHolds(ctl, tc.items, nil, tc.live, tc.runners, nil, t0)
+			var got []string
+			for _, h := range holds {
+				got = append(got, h.Resource)
+			}
+			if !slices.Equal(got, tc.holds) {
+				t.Fatalf("holds %+v, want %v", holds, tc.holds)
+			}
+			w, ok := ChooseWork(ctl, tc.items, nil, tc.live, nil, nil, holds, tc.req, nil)
+			var id int64
+			if ok {
+				id = w.Item.ID
+			}
+			if id != tc.want {
+				t.Fatalf("claimed #%d (ok %v, held %q), want #%d", id, ok, w.Held, tc.want)
+			}
+			if it, ok := Choose(ctl, tc.items, nil, tc.live, tc.req, nil); len(tc.holds) == 0 && (ok && it.ID != tc.want || !ok && tc.want != 0) {
+				t.Fatalf("Choose: #%d (ok %v), want #%d", it.ID, ok, tc.want)
+			}
+		})
+	}
+	stopped := ctl
+	stopped.Stopped = true
+	if w, ok := ChooseWork(stopped, []Item{land}, nil, agents, nil, nil, nil, landReq, nil); ok {
+		t.Fatalf("stopped: got %+v, want nothing", w)
 	}
 }
