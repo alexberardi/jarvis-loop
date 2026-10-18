@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,5 +142,57 @@ func TestOrchIdleSkipsUnservable(t *testing.T) {
 				t.Fatalf("idle trigger for a flagged item: %+v", q)
 			}
 		}
+	}
+}
+
+// Land needs none of the item's resources (#209): the dev box lands a macos item, its lease holds
+// no macos, and with no Mac around it is not flagged unservable.
+func TestDevboxLandsAMacosItem(t *testing.T) {
+	s, clk := open(t)
+	ctx := context.Background()
+	it := add(t, s, "mac app", "P1")
+	dev := []string{"emulator", "gpu", "voice"}
+	triagedWith(t, s, it, "macos", dev...)
+	mac := func(agent string, stage pipeline.Stage) *Claim {
+		t.Helper()
+		c, err := s.Claim(ctx, "mbp", pipeline.ClaimRequest{Runner: "mbp", Agent: agent, Capabilities: []string{"macos"},
+			OnlyResources: []string{"macos"}, Stages: []pipeline.Stage{stage}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	if c := mac("mbp-1", pipeline.Build); c == nil || c.Item.ID != it.ID || !slices.Equal(c.Lease.Resources, []string{"macos"}) {
+		t.Fatalf("mbp build claim: %+v", c)
+	}
+	if _, err := s.AddEvidence(ctx, "mbp", it.ID, "log", "run.log", strings.NewReader("ok\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Advance(ctx, "mbp", it.ID, pipeline.PROpened, map[string]string{"repo": "o/r", "pr": "7", "branch": "loop/1-x", "head_sha": shaA}, []string{"M x.go"}); err != nil {
+		t.Fatal(err)
+	}
+	if c := mac("mbp-2", pipeline.Review); c == nil || c.Item.ID != it.ID {
+		t.Fatalf("mbp review claim: %+v", c)
+	}
+	if _, err := s.Advance(ctx, "mbp", it.ID, pipeline.Approved, map[string]string{"summary": "ok", "head_sha": shaA}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The Mac takes no land, and goes quiet past the window.
+	if c := mac("mbp-3", pipeline.Land); c != nil {
+		t.Fatalf("mbp took land: %+v", c)
+	}
+	clk.Advance(pipeline.RunnerSeenWindow + time.Minute)
+	if err := s.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	c := claim(t, s, "agent-1", dev...)
+	if c == nil || c.Item.ID != it.ID || c.Stage != pipeline.Land || c.Lease.Resources != nil {
+		t.Fatalf("devbox land claim: %+v", c)
+	}
+	if got := kindsOf(t, s, it.ID, KindUnservable, KindServable); !slices.Equal(got, []string{KindUnservable, KindServable}) {
+		t.Fatalf("events %v, want only the triage-time flag and its clearing", got)
+	}
+	if b := boardItem(t, s, it.ID); b.Unservable != nil {
+		t.Fatalf("flagged in land: %v", b.Unservable)
 	}
 }

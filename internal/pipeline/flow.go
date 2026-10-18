@@ -41,25 +41,26 @@ func usage(live []LiveLease) (claimed map[int64]bool, inUse map[string]int) {
 	return claimed, inUse
 }
 
-// loopBlocks is why no item can be claimed at all ("" when one can): Choose's control rule.
-func loopBlocks(c Control, live []LiveLease) string {
+// loopBlocks is why no item can be claimed at all ("" when one can): Choose's control rule. With
+// every agent slot busy, land is still claimed (AgentLeases); WaitReason checks that apart.
+func loopBlocks(c Control) string {
 	switch {
 	case c.Stopped:
 		return WaitStopped
-	case c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents:
+	case c.ActiveAgents <= 0:
 		return WaitNoSlot
 	}
 	return ""
 }
 
 // itemBlocks is what holds a waiting work item back whichever runner asks ("" for nothing), in
-// Choose's order: its dependencies, then the per-resource limits, then its stage's (unless
-// stageLimits is false: a frozen repo's fix is exempt from them).
+// Choose's order: its dependencies, then the limits of the resources it needs (Needs: land needs
+// none), then its stage's (unless stageLimits is false: a frozen repo's fix is exempt from them).
 func itemBlocks(c Control, it Item, deps map[int64]Stage, inUse map[string]int, stageLimits bool) string {
 	if len(WaitingOn(it, deps)) > 0 {
 		return WaitDeps
 	}
-	keys := slices.Clone(it.Resources)
+	keys := slices.Clone(it.Needs())
 	if stageLimits {
 		keys = append(keys, string(it.Stage))
 	}
@@ -78,7 +79,7 @@ func itemBlocks(c Control, it Item, deps map[int64]Stage, inUse map[string]int, 
 // no runner) come before its repo's (frozen) and the loop's (stopped, no free slot): once those
 // free up it would still wait for them. The limits come next: they change with every run. Last,
 // the free slots all held for work it does not need is no free slot, as ChooseWork applies them.
-// A frozen repo's fix waits only for a stop or 0 active agents and the resource limits, as
+// Land takes no agent slot, so neither busy nor held slots hold it back. A frozen repo's fix waits only for a stop or 0 active agents and the resource limits, as
 // chooseFix takes it.
 func WaitReason(c Control, it Item, deps map[int64]Stage, live []LiveLease, unservable []string, frozen Frozen, holds []SlotHold) string {
 	switch it.Stage {
@@ -103,13 +104,17 @@ func WaitReason(c Control, it Item, deps map[int64]Stage, live []LiveLease, unse
 		return WaitFrozen
 	}
 	fix := frozen.Fixes(it)
-	if r := loopBlocks(c, live); r != "" && !(fix && r == WaitNoSlot && c.ActiveAgents > 0) {
+	if r := loopBlocks(c); r != "" {
 		return r
+	}
+	land := it.Stage == Land
+	if !fix && !land && AgentLeases(live) >= c.ActiveAgents {
+		return WaitNoSlot
 	}
 	if r := itemBlocks(c, it, deps, inUse, !fix); r != "" {
 		return r
 	}
-	if !fix && len(holds) > 0 && c.ActiveAgents-len(live) <= len(holds) && !serves(Work{Item: &it}, holds) {
+	if !fix && !land && len(holds) > 0 && c.ActiveAgents-AgentLeases(live) <= len(holds) && !serves(Work{Item: &it}, holds) {
 		return WaitNoSlot
 	}
 	return WaitReady

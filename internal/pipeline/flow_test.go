@@ -53,8 +53,16 @@ func TestWaitReason(t *testing.T) {
 			[]LiveLease{{ItemID: 8, Stage: Build}, {ItemID: 9, Stage: PlanTurnStage}}, nil, nil, nil, WaitNoSlot},
 		{"stage limit", ctl, waiting(1, Triage, "P3", 0), nil, []LiveLease{{ItemID: 8, Stage: Triage}}, nil, nil, nil, "limit triage:1"},
 		{"resource limit", ctl, waiting(1, Build, "P3", 0, "voice"), nil, []LiveLease{{ItemID: 8, Stage: Review, Resources: []string{"voice"}}}, nil, nil, nil, "limit voice:1"},
-		{"resource limit before stage limit", ctl, waiting(1, Land, "P3", 0, "emulator"), nil,
-			[]LiveLease{{ItemID: 8, Stage: Land, Resources: []string{"emulator"}}}, nil, nil, nil, "limit emulator:1"},
+		{"resource limit before stage limit", ctl, waiting(1, Triage, "P3", 0, "emulator"), nil,
+			[]LiveLease{{ItemID: 8, Stage: Triage, Resources: []string{"emulator"}}}, nil, nil, nil, "limit emulator:1"},
+		// Land runs no agent: it needs none of the item's resources and takes no agent slot.
+		{"land ignores its resources' limits", ctl, waiting(1, Land, "P3", 0, "emulator"), nil,
+			[]LiveLease{{ItemID: 8, Stage: Build, Resources: []string{"emulator"}}}, nil, nil, nil, WaitReady},
+		{"land's own stage limit", ctl, waiting(1, Land, "P3", 0), nil, []LiveLease{{ItemID: 8, Stage: Land}}, nil, nil, nil, "limit land:1"},
+		{"land with every agent slot busy", two, waiting(1, Land, "P3", 0), nil,
+			[]LiveLease{{ItemID: 8, Stage: Build}, {ItemID: 9, Stage: Review}}, nil, nil, nil, WaitReady},
+		{"a land lease takes no agent slot", two, waiting(1, Build, "P3", 0), nil,
+			[]LiveLease{{ItemID: 8, Stage: Build}, {ItemID: 9, Stage: Land}}, nil, nil, nil, WaitReady},
 		{"below the limit", ctl, waiting(1, Review, "P3", 0), nil, []LiveLease{{ItemID: 8, Stage: Review}}, nil, nil, nil, WaitReady},
 		{"frozen repo", ctl, in(waiting(1, Build, "P3", 0), "o/r"), nil, nil, nil, frozen, nil, WaitFrozen},
 		{"another repo is not frozen", ctl, in(waiting(1, Build, "P3", 0), "o/other"), nil, nil, nil, frozen, nil, WaitReady},
@@ -75,6 +83,7 @@ func TestWaitReason(t *testing.T) {
 		{"the held slot's own work", two, waiting(1, Build, "P3", 0, "macos"), nil, []LiveLease{{ItemID: 8, Stage: Build}}, nil, nil, macHold, WaitReady},
 		{"more free slots than held", two, waiting(1, Build, "P3", 0), nil, nil, nil, nil, macHold, WaitReady},
 		{"a limit before the held slot", two, waiting(1, Triage, "P3", 0), nil, []LiveLease{{ItemID: 8, Stage: Triage}}, nil, nil, macHold, "limit triage:1"},
+		{"land ignores a held slot", two, waiting(1, Land, "P3", 0), nil, []LiveLease{{ItemID: 8, Stage: Build}}, nil, nil, macHold, WaitReady},
 		{"the fix ignores a held slot", two, in(waiting(5, Build, "P1", 0), "o/r"), nil, []LiveLease{{ItemID: 8, Stage: Build}}, nil, frozen, macHold, WaitReady},
 	}
 	for _, c := range cases {
@@ -108,7 +117,7 @@ func TestWaitReasonAgreesWithChoose(t *testing.T) {
 	three := DefaultControl()
 	three.ActiveAgents = 3 // one free slot, which macHold holds
 	macHold := []SlotHold{{Resource: "macos", Runner: "mac", ItemID: 13}}
-	items = append(items, waiting(13, Build, "P2", 0, "macos"))
+	items = append(items, waiting(13, Build, "P2", 0, "macos"), waiting(14, Land, "P2", 0, "voice"))
 	for _, ctl := range []Control{DefaultControl(), full, three} {
 		for _, holds := range [][]SlotHold{nil, macHold} {
 			for _, it := range items {
