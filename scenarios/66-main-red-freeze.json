@@ -17,7 +17,7 @@
 
     {"do": "add", "item": "b", "title": "Tidy the digest footer"},
     {"do": "triage", "item": "b"},
-    {"do": "script", "item": "b", "play": "wait"},
+    {"do": "script", "item": "b", "play": "wait_release"},
     {"do": "runner", "claims": "b"},
     {"do": "agent_running", "item": "b"},
     {"do": "add", "item": "c", "title": "Shorten the digest subject"},

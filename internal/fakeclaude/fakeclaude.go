@@ -53,7 +53,7 @@ const (
 	Hang            = "hang"       // write a file, then wait forever
 	// Wait reports hanging, waits until the harness releases the item (<dir>/<item id>.release),
 	// then plays good: a run still going while something else happens.
-	Wait       = "wait"
+	Wait       = "wait_release"
 	IgnoreTerm = "ignore_term" // like hang, but ignore SIGTERM
 	// TodosHang is hang after a to-do list (TodoWrite) and a described Bash call whose command
 	// holds SECRET_CMD_MARKER (which must never reach the board).
