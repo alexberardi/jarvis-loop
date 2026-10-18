@@ -88,7 +88,7 @@ Only these files change. Commit: `store: pantry table`.
   write `claude` or make the steps more exact.
 - `depends on:` lists the piece numbers it needs merged first (`1, 2`), and the existing loop
   items it must wait for as `#N` (`1, #30`), or `none`. No cycles. When the plan says a piece
-  waits on another item, name it here: the loop holds the piece until that item is done. Never
+  waits on another item, name it here: the loop holds the piece until that item is merged. Never
   write "check that #N merged first, stop and ask if not" into a piece's steps instead; an item
   that does not exist or is closed refuses the approve.
 - The piece's section, from its heading to the next, becomes the item's ask: make it stand on its

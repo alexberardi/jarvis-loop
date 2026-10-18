@@ -87,6 +87,8 @@ type Options struct {
 	// Stages are the stages the runner claims (default: triage, build and review, as a real
 	// runner).
 	Stages []string
+	// Slots are the runner's agent slots (default 1).
+	Slots int
 }
 
 // Stack is one sandboxed loop: loopd (store, API on a loopback port, Slack layer), a runner, a
@@ -334,8 +336,9 @@ func StartStack(opts Options) (st *Stack, err error) {
 		return nil, err
 	}
 	verify := true
+	slots := max(opts.Slots, 1)
 	cfg := runner.Config{
-		LoopdURL: s.LoopdURL, Token: runnerTok, OrchestratorToken: orchTok, Name: RunnerName, Capabilities: []string{}, Slots: 1,
+		LoopdURL: s.LoopdURL, Token: runnerTok, OrchestratorToken: orchTok, Name: RunnerName, Capabilities: []string{}, Slots: slots,
 		WorkRoot: filepath.Join(dir, "work"), Claude: opts.Bin.Claude, Guard: opts.Bin.Guard, Mode: runner.ModeAuto,
 		PollSeconds: 2, UserEmulator: "emulator-5554", VerifyPR: &verify,
 		LoopdTokens: tokPath, LoopdData: filepath.Join(dir, "loopd"), Stages: opts.Stages,
@@ -367,7 +370,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 	}
 	// The runner pushes the item's branch to the scratch remote with git, as it would to GitHub,
 	// and opens the PR through the fake (the runner's PR client), with its PR check on.
-	s.Runner = &runner.Runner{Cfg: rcfg, Client: &runner.Client{Base: s.LoopdURL, Token: runnerTok}, Clock: rclk,
+	s.Runner = &runner.Runner{Cfg: rcfg, Client: &runner.Client{Base: s.LoopdURL, Token: runnerTok, PollSeconds: rcfg.PollSeconds, Stages: rcfg.Stages}, Clock: rclk,
 		Log: log.With("component", "runner"), Env: agentEnv(s.scripts, opts.Bin.Env), PRs: s.GitHub,
 		VerifyPR: s.GitHub.Verify, Land: s.GitHub, Close: s.GitHub, HeartbeatEvery: 60 * time.Second}
 	s.user = &apiClient{base: s.LoopdURL, token: userTok}
@@ -761,6 +764,11 @@ func (s *Stack) PlanAgentState(id int64) []string {
 // ReleasePlan lets a plan's waiting fake agent (play "wait") finish its turn.
 func (s *Stack) ReleasePlan(id int64) error {
 	return os.WriteFile(filepath.Join(s.scripts, fmt.Sprintf("P%d.release", id)), nil, 0o644)
+}
+
+// Release lets an item's run that plays wait go on.
+func (s *Stack) Release(id int64) error {
+	return os.WriteFile(filepath.Join(s.scripts, fmt.Sprintf("%d.release", id)), nil, 0o644)
 }
 
 // Thread is an item's Slack thread ts ("" before its parent is posted).

@@ -89,6 +89,12 @@ type ClaimRequest struct {
 	// OnlyResources, when set, limits the claim to items that need at least one of them: a Mac
 	// runner with [macos] takes the macos items and leaves the rest to the dev box.
 	OnlyResources []string
+	// PollSeconds is how often the runner asks (0: it did not say); loopd keeps it with the
+	// runner for the held slots (SlotHolds).
+	PollSeconds int
+	// RunnerStages are the work stages the runner takes in all its lanes (none: it did not say);
+	// loopd keeps them with the runner so a slot is held only for work it would claim.
+	RunnerStages []Stage
 	// Stages, when set, limits the claim to these stages (a runner that only builds).
 	Stages []Stage
 	// Kinds is the work the runner takes: WorkItem, WorkPlan (plan turns), WorkOrchestrate.
@@ -125,24 +131,56 @@ type Work struct {
 	Item *Item
 	Turn *TurnCandidate
 	Orch *OrchCandidate
+	// Held, with nothing to claim, is why: the slots left are held (SlotHolds).
+	Held string
 }
 
 // ChooseWork picks an item (Choose), a queued plan turn or the queued orchestrate turn (orch, nil
 // when there is none to start). Turns share the active-agents limit with items (live includes the
 // running turns); a plan turn's priority is its plan's, and it beats an item of the same priority:
 // the user is in the conversation. The orchestrate turn beats everything (it gets the next free
-// slot), one at a time.
-func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest) (Work, bool) {
+// slot), one at a time. The fix of a frozen repo (frozen) beats even that: it may take a slot
+// over the active-agents number. holds are the slots held (SlotHolds): when they are all the free
+// slots left, the claim gets only an item needing a held resource.
+func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, holds []SlotHold, req ClaimRequest, frozen Frozen) (Work, bool) {
+	if req.wants(WorkItem) {
+		if it, ok := chooseFix(c, items, deps, live, req, frozen); ok {
+			return Work{Item: &it}, true
+		}
+	}
 	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
 		return Work{}, false
 	}
+	w, ok := chooseWork(c, items, deps, live, turns, orch, req, frozen)
+	if len(holds) == 0 || c.ActiveAgents-len(live) > len(holds) || (ok && serves(w, holds)) {
+		return w, ok
+	}
+	// The slots left are held: only held work, if this runner can take some.
+	if req.wants(WorkItem) {
+		held := req
+		held.OnlyResources = nil
+		for _, h := range holds {
+			if len(req.OnlyResources) == 0 || slices.Contains(req.OnlyResources, h.Resource) {
+				held.OnlyResources = append(held.OnlyResources, h.Resource)
+			}
+		}
+		if len(held.OnlyResources) > 0 {
+			if it, ok := Choose(c, items, deps, live, held, frozen); ok {
+				return Work{Item: &it}, true
+			}
+		}
+	}
+	return Work{Held: HeldReason(holds)}, false
+}
+
+func chooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest, frozen Frozen) (Work, bool) {
 	if orch != nil && req.wants(WorkOrchestrate) && !slices.ContainsFunc(live, func(l LiveLease) bool { return l.Stage == OrchestrateStage }) {
 		return Work{Orch: orch}, true
 	}
 	var it Item
 	okItem := false
 	if req.wants(WorkItem) {
-		it, okItem = Choose(c, items, deps, live, req)
+		it, okItem = Choose(c, items, deps, live, req, frozen)
 	}
 	var best *TurnCandidate
 	if req.wants(WorkPlan) {
@@ -176,12 +214,32 @@ var stageOrder = map[Stage]int{Land: 0, Review: 1, Build: 2, Triage: 3}
 
 // Choose picks the item a runner should get, or false when there is nothing for it. items are the
 // candidates (callers pass the waiting items; anything claimed or not in a work stage is skipped
-// here too); deps are the stages of the items they depend on; live are the leases still running.
-func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req ClaimRequest) (Item, bool) {
+// here too); deps are the stages of the items they depend on; live are the leases still running;
+// frozen are the repos whose main is red: their items are skipped, except each one's fix, which
+// goes first (chooseFix).
+func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req ClaimRequest, frozen Frozen) (Item, bool) {
+	if it, ok := chooseFix(c, items, deps, live, req, frozen); ok {
+		return it, true
+	}
 	// 1. Control.
 	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
 		return Item{}, false
 	}
+	return choose(c, items, deps, live, req, func(it Item) bool { return !frozen.Blocks(it) }, true)
+}
+
+// chooseFix is the main-red item of a frozen repo, when it waits and this runner may take it: it
+// goes before everything, and may take a slot over the active-agents number and its stage's limit
+// (the frozen repo's running work holds slots it cannot give back); a stop, 0 active agents, the
+// resource limits and review independence still apply.
+func chooseFix(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req ClaimRequest, frozen Frozen) (Item, bool) {
+	if len(frozen) == 0 || c.Stopped || c.ActiveAgents <= 0 {
+		return Item{}, false
+	}
+	return choose(c, items, deps, live, req, frozen.Fixes, false)
+}
+
+func choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req ClaimRequest, pick func(Item) bool, stageLimits bool) (Item, bool) {
 	claimed := map[int64]bool{}
 	inUse := map[string]int{}
 	for _, l := range live {
@@ -199,6 +257,9 @@ func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 	var best *Item
 	for i := range items {
 		it := &items[i]
+		if !pick(*it) {
+			continue
+		}
 		// 2. Eligible: waiting, in a work stage, resources ⊆ capabilities (and, with OnlyResources,
 		// needing one of them).
 		if !it.Stage.IsWork() || claimed[it.ID] {
@@ -213,7 +274,7 @@ func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 		if len(req.OnlyResources) > 0 && !slices.ContainsFunc(it.Resources, func(r string) bool { return slices.Contains(req.OnlyResources, r) }) {
 			continue
 		}
-		// Dependencies: every item it depends on is done.
+		// Dependencies: every item it depends on is merged (qa or done).
 		if len(WaitingOn(*it, deps)) > 0 {
 			continue
 		}
@@ -222,7 +283,7 @@ func Choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 			continue
 		}
 		// 4. Per-stage limits.
-		if atLimit(string(it.Stage)) {
+		if stageLimits && atLimit(string(it.Stage)) {
 			continue
 		}
 		// 5. Review independence.

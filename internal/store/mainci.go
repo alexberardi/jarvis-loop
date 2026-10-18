@@ -21,7 +21,7 @@ const (
 var MainCIResults = []string{"green", "red", "superseded", "timeout"}
 
 // mainCIKeys are the only data a main_ci event may carry.
-var mainCIKeys = []string{"result", "urls", "failing", "merge_sha", "p1_item"}
+var mainCIKeys = []string{"result", "urls", "failing", "merge_sha", "p1_item", "rerun", "last_green"}
 
 // MainCI records the result of main's CI on the commit an item was merged as (kind main_ci). Only
 // the runner whose land run merged the item may record it, once, after the merge (the item is done,
@@ -60,8 +60,25 @@ func (s *Store) MainCI(ctx context.Context, runnerName string, id int64, data ma
 		if n > 0 {
 			return errf(CodeAlreadyRecorded, "item %d already has main's CI result", id)
 		}
+		// A red main (still red after the runner re-ran the failed jobs) freezes the repo and files
+		// its P1, or reuses the open one; a green one after the red merge lifts the freeze.
+		switch data["result"] {
+		case "red":
+			delete(data, "p1_item")
+			p1, err := s.mainRed(tx, actor, it, data, s.clock.Now())
+			if err != nil {
+				return err
+			}
+			data["p1_item"] = float64(p1)
+		}
 		out = Event{ItemID: id, Actor: actor, Kind: "main_ci", From: string(it.Stage), To: string(it.Stage), Data: data}
-		return s.event(tx, out)
+		if err := s.event(tx, out); err != nil {
+			return err
+		}
+		if data["result"] == "green" {
+			return s.mainGreen(tx, it, data, s.clock.Now())
+		}
+		return nil
 	})
 	if err != nil {
 		return out, err
@@ -88,7 +105,7 @@ func validMainCI(data map[string]any) error {
 	if !slices.Contains(MainCIResults, res) {
 		return errf(pipeline.CodeInvalidField, "result must be one of %s", strings.Join(MainCIResults, ", "))
 	}
-	for _, k := range []string{"urls", "failing"} {
+	for _, k := range []string{"urls", "failing", "rerun"} {
 		v, present := data[k]
 		if !present {
 			continue
@@ -103,9 +120,11 @@ func validMainCI(data map[string]any) error {
 			}
 		}
 	}
-	if v, present := data["merge_sha"]; present {
-		if s, ok := v.(string); !ok || len(s) > 64 {
-			return errf(pipeline.CodeInvalidField, "merge_sha must be a commit sha")
+	for _, k := range []string{"merge_sha", "last_green"} {
+		if v, present := data[k]; present {
+			if s, ok := v.(string); !ok || len(s) > 64 {
+				return errf(pipeline.CodeInvalidField, "%s must be a commit sha", k)
+			}
 		}
 	}
 	if v, present := data["p1_item"]; present {

@@ -21,6 +21,10 @@ const LandWaitingAfter = 10 * time.Minute
 // without merging or reporting.
 var errNotLanding = errors.New("the item is no longer in land")
 
+// errFrozen: main is red in the item's repo and the item is not its fix: the run stops before it
+// can merge, and loopd ends its lease (the item waits in land until the freeze lifts).
+var errFrozen = errors.New("main is red in the item's repo: frozen")
+
 // landRun is one land claim.
 type landRun struct {
 	item    Item
@@ -30,6 +34,9 @@ type landRun struct {
 	repo    RepoConfig
 	mirror  string
 	log     *slog.Logger
+	// mainTip is main's head at the last pass of the gates: the merge's base, which watchMain
+	// names as the last green commit when main goes red and it was green.
+	mainTip string
 }
 
 // land works a land claim in-process: no agent, no worktree for one, no guard. It re-runs the
@@ -104,6 +111,14 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 			lr.log.Info("land stopped: the item is " + lr.item.Stage)
 			return
 		}
+		if errors.Is(err, errFrozen) {
+			// The heartbeat is how loopd ends the lease of a land run in a frozen repo.
+			if _, err := r.Client.Heartbeat(report, lr.lease, "land: main is red in "+lr.repo.Slug+"; not merging", nil); err != nil {
+				lr.log.Warn("heartbeat", "err", err)
+			}
+			lr.log.Info("land stopped: main is red in " + lr.repo.Slug)
+			return
+		}
 		if err != nil {
 			r.landAdvance(report, lr, failed("land could not read the PR's state: %s", clip(err.Error(), 800)), nil)
 			return
@@ -115,7 +130,7 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 			if d.Outcome == "merged" { // merged outside the loop: still watch main's CI
 				d.Fields["main_ci"] = "watching"
 				if r.landAdvance(report, lr, d, f.Paths) {
-					r.startMainWatch(ctx, lr, f.PR.MergeCommit)
+					r.startMainWatch(ctx, lr, f.PR.MergeCommit, "")
 				}
 				return
 			}
@@ -176,7 +191,7 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 			}
 			d := advance("merged", map[string]string{"merge_sha": after.MergeCommit, "head_sha": head, "main_ci": "watching"})
 			if r.landAdvance(report, lr, d, f.Paths) {
-				r.startMainWatch(ctx, lr, after.MergeCommit)
+				r.startMainWatch(ctx, lr, after.MergeCommit, lr.mainTip)
 			}
 			return
 		}
@@ -198,6 +213,9 @@ func (r *Runner) landFacts(ctx context.Context, lr *landRun) (LandFacts, error) 
 	if it.Stage != StageLand {
 		return f, errNotLanding
 	}
+	if d.Frozen != nil && d.Frozen.ItemID != it.ID {
+		return f, errFrozen
+	}
 	pr, err := r.Land.LandView(ctx, lr.repo.Slug, it.PR)
 	if err != nil {
 		return f, err
@@ -213,6 +231,11 @@ func (r *Runner) landFacts(ctx context.Context, lr *landRun) (LandFacts, error) 
 	err = r.Git.EnsureMirror(ctx, lr.mirror, lr.repo)
 	if err == nil {
 		f.Paths, err = r.Git.DiffPaths(ctx, lr.mirror, lr.repo.Base, pr.HeadRefOid, pr.Number)
+	}
+	if err == nil {
+		if _, tip, terr := r.Git.MergeBase(ctx, lr.mirror, lr.repo.Base, pr.HeadRefOid); terr == nil {
+			lr.mainTip = tip
+		}
 	}
 	unlock()
 	if err != nil {

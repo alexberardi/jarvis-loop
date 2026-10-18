@@ -313,7 +313,7 @@ var mainRedRe = regexp.MustCompile("(?m)^main's CI failed on `[0-9a-f]{7}`, the 
 // MainRedCommit is the merge commit a main-red P1 (filed by the runner: source finding) is about,
 // when it is one for slug; "" otherwise.
 func MainRedCommit(it Item, slug string) string {
-	if it.Source != "finding" || !strings.HasPrefix(it.Title, "main red after #") {
+	if it.Source != "finding" || !strings.HasPrefix(it.Title, "main red in ") && !strings.HasPrefix(it.Title, "main red after #") {
 		return ""
 	}
 	m := mainRedRe.FindStringSubmatch(it.Ask)

@@ -18,6 +18,8 @@
 .card .reason { font-size: 13px; margin-top: 4px; }
 .label { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 .note { color: var(--muted); font-size: 13px; margin: 4px; }
+.frozen { background: #b91c1c; color: #fff; border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; }
+.frozen a, .frozen code { color: #fff; }
 .orch { background: var(--lane); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
 .orch summary { font-weight: 600; cursor: pointer; }
 .orch h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 12px 0 4px; }
@@ -32,6 +34,9 @@
 <p class="sub">{{.Total}} items ·{{if .PlanCount}} {{.PlanCount}} open plans ·{{end}} {{stamp .Now}} · refreshes every 30 s (working now: every 5 s) · {{if .ShowClosed}}<a href="/board">hide closed</a>{{else}}<a href="/board?closed=1">show closed</a>{{end}}</p>
 {{- if .SecondOpinion.Runs}}
 <p class="sub">Second opinion (Gemini): {{template "second-opinion" .SecondOpinion}}</p>
+{{- end}}
+{{- range .Freezes}}
+<div class="frozen" role="alert"><strong>Main is red in {{.Repo}}</strong>{{with .Jobs}} (failing: {{join . ", "}}){{end}}: frozen since {{stamp .Since}}. Nothing else in it moves stages until main is green; <a href="/items/{{.ItemID}}">#{{.ItemID}} {{.ItemTitle}}</a> goes first.{{if .Queued}} {{.Queued}} finished run(s) wait to apply.{{end}} Lift by hand: <code>loop unfreeze {{.Repo}}</code></div>
 {{- end}}
 {{- template "working-section" .Working}}
 {{- with .Orch}}{{if .Show}}
@@ -69,6 +74,23 @@
 {{- end}}
 </div>
 {{- end}}
+</details>
+{{- end}}{{end}}
+{{- with .Runners}}{{if .Runners}}
+<details class="orch"{{if .Holds}} open{{end}}>
+<summary>Runners · {{len .Runners}} seen today{{with len .Holds}} · {{.}} {{if eq . 1}}slot{{else}}slots{{end}} held{{end}}</summary>
+{{- if .Holds}}
+<ul>
+{{- range .Holds}}
+<li>A slot is held for {{.Resource}} work: <a href="/board/items/{{.ItemID}}">#{{.ItemID}}</a> is waiting for {{.Runner}}.</li>
+{{- end}}
+</ul>
+{{- end}}
+<ul>
+{{- range .Runners}}
+<li>{{.Name}}{{if .Capabilities}} <span class="why">offers</span> {{range .Capabilities}}<span class="label">{{.}}</span> {{end}}{{end}}{{if .OnlyResources}}<span class="why">takes only</span> {{range .OnlyResources}}<span class="label">{{.}}</span> {{end}}{{end}}<span class="why">· seen {{age .Ago}} ago{{if not .Around}} (quiet){{end}}</span></li>
+{{- end}}
+</ul>
 </details>
 {{- end}}{{end}}
 <div class="lanes">
@@ -109,6 +131,9 @@
 </div>
 {{- if .Reason}}
 <div class="reason">{{.Reason}}</div>
+{{- end}}
+{{- range .ReopenedDeps}}
+<div class="reason">Depends on #{{.Dependency}}, which was reopened: {{.Words}} (the fix is #{{.ReopenItem}})</div>
 {{- end}}
 </article>
 {{- end}}

@@ -24,7 +24,10 @@ func TestChooseDependencies(t *testing.T) {
 		{"dependency done", []Item{after(waiting(2, Triage, "P3", 0), 1)}, map[int64]Stage{1: Done}, 2},
 		{"dependency in build", []Item{after(waiting(2, Triage, "P3", 0), 1)}, map[int64]Stage{1: Build}, 0},
 		{"dependency in triage", []Item{after(waiting(2, Triage, "P3", 0), 1)}, map[int64]Stage{1: Triage}, 0},
-		{"dependency in qa is not done", []Item{after(waiting(2, Build, "P3", 0), 1)}, map[int64]Stage{1: QA}, 0},
+		{"dependency in qa is merged", []Item{after(waiting(2, Build, "P3", 0), 1)}, map[int64]Stage{1: QA}, 2},
+		{"dependency in land is not merged", []Item{after(waiting(2, Build, "P3", 0), 1)}, map[int64]Stage{1: Land}, 0},
+		{"dependency in review is not merged", []Item{after(waiting(2, Build, "P3", 0), 1)}, map[int64]Stage{1: Review}, 0},
+		{"one done, one in qa", []Item{after(waiting(3, Triage, "P3", 0), 1, 2)}, map[int64]Stage{1: Done, 2: QA}, 3},
 		{"dependency held", []Item{after(waiting(2, Triage, "P3", 0), 1)}, map[int64]Stage{1: Held}, 0},
 		{"dependency closed", []Item{after(waiting(2, Triage, "P3", 0), 1)}, map[int64]Stage{1: Closed}, 0},
 		{"dependency unknown", []Item{after(waiting(2, Triage, "P3", 0), 1)}, nil, 0},
@@ -37,7 +40,7 @@ func TestChooseDependencies(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := Choose(ctl, tc.items, tc.stages, nil, allCaps)
+			got, ok := Choose(ctl, tc.items, tc.stages, nil, allCaps, nil)
 			if tc.want == 0 {
 				if ok {
 					t.Fatalf("want nothing, got item %d", got.ID)
@@ -53,9 +56,12 @@ func TestChooseDependencies(t *testing.T) {
 
 func TestWaitingOn(t *testing.T) {
 	it := after(item(Triage), 3, 1, 2)
-	got := WaitingOn(it, map[int64]Stage{1: Done, 2: QA})
+	got := WaitingOn(it, map[int64]Stage{1: Done, 2: Land, 4: QA})
 	if !slices.Equal(got, []int64{3, 2}) {
 		t.Fatalf("waiting on %v, want [3 2]", got)
+	}
+	if got := WaitingOn(after(item(Triage), 1, 2), map[int64]Stage{1: Done, 2: QA}); len(got) != 0 {
+		t.Fatalf("merged dependencies: waiting on %v", got)
 	}
 	if got := WaitingOn(item(Triage), nil); len(got) != 0 {
 		t.Fatalf("no dependencies: waiting on %v", got)
@@ -130,6 +136,10 @@ func TestWaitChains(t *testing.T) {
 	}{
 		{"no deps", 1, map[int64]WaitNode{1: n(Build, false)}, nil},
 		{"done dep skipped", 1, map[int64]WaitNode{1: n(Triage, false, 2), 2: n(Done, false)}, nil},
+		{"qa dep skipped: it is merged", 1, map[int64]WaitNode{1: n(Triage, false, 2), 2: n(QA, false)}, nil},
+		{"qa link in the middle is the root's way", 1,
+			map[int64]WaitNode{1: n(Triage, false, 2), 2: n(Review, false, 3), 3: n(QA, false)},
+			[]WaitChain{{Path: []int64{2}, Root: "queued for review"}}},
 		{"direct dep needs you", 1, map[int64]WaitNode{1: n(Triage, false, 2), 2: n(NeedsYou, false)},
 			[]WaitChain{{Path: []int64{2}, Root: "needs you"}}},
 		{"A→B→C needs you", 1, map[int64]WaitNode{1: n(Triage, false, 2), 2: n(Triage, false, 3), 3: n(NeedsYou, false)},
@@ -150,9 +160,9 @@ func TestWaitChains(t *testing.T) {
 			[]WaitChain{{Path: []int64{2, 1}, Root: "a cycle"}}},
 		{"roots by stage", 1,
 			map[int64]WaitNode{1: n(Triage, false, 2, 3, 4, 5, 6, 7), 2: n(Triage, false), 3: n(Triage, true), 4: n(Build, false),
-				5: n(Land, true), 6: n(QA, false), 7: n(Land, false)},
+				5: n(Land, true), 6: n(NeedsYou, false), 7: n(Land, false)},
 			[]WaitChain{{Path: []int64{2}, Root: "waiting for triage"}, {Path: []int64{3}, Root: "in triage"},
-				{Path: []int64{4}, Root: "ready, not claimed"}, {Path: []int64{5}, Root: "landing"}, {Path: []int64{6}, Root: "in qa"},
+				{Path: []int64{4}, Root: "ready, not claimed"}, {Path: []int64{5}, Root: "landing"}, {Path: []int64{6}, Root: "needs you"},
 				{Path: []int64{7}, Root: "queued to land"}}},
 		{"a done item waits on nothing", 1, map[int64]WaitNode{1: n(Done, false, 2), 2: n(Build, false)}, nil},
 	}

@@ -216,38 +216,45 @@ func (s *Store) OrchPriority(ctx context.Context, actor string, id int64, priori
 // OrchLink makes an open item wait for another open item (loop add --after, after the fact).
 func (s *Store) OrchLink(ctx context.Context, actor string, id, after int64, reason string) (pipeline.Item, error) {
 	return s.orch(ctx, actor, id, "link", reason, func(tx *sql.Tx, it pipeline.Item, _ []Event) (pipeline.Transition, error) {
-		if !isOpen(it.Stage) {
-			return pipeline.Transition{}, errf(pipeline.CodeWrongStage, "item is %s", it.Stage)
-		}
-		if after == id {
-			return pipeline.Transition{}, errf(pipeline.CodeInvalidField, "an item cannot wait for itself")
-		}
-		var stage pipeline.Stage
-		err := tx.QueryRow(`SELECT stage FROM items WHERE id = ?`, after).Scan(&stage)
-		if errors.Is(err, sql.ErrNoRows) {
-			return pipeline.Transition{}, errf(pipeline.CodeInvalidField, "after: no item #%d", after)
-		}
+		it, err := linkAfter(tx, it, after)
 		if err != nil {
-			return pipeline.Transition{}, err
-		}
-		if !isOpen(stage) {
-			return pipeline.Transition{}, errf(pipeline.CodeInvalidField, "after: #%d is %s; only an open item can be waited for", after, stage)
-		}
-		for _, d := range it.DependsOn {
-			if d == after {
-				return pipeline.Transition{}, errf(pipeline.CodeInvalidField, "#%d already waits for #%d", id, after)
-			}
-		}
-		it.DependsOn = append(append([]int64{}, it.DependsOn...), after)
-		if err := saveItem(tx, it); err != nil {
-			return pipeline.Transition{}, err
-		}
-		if err := checkDependencies(tx, it); err != nil {
 			return pipeline.Transition{}, err
 		}
 		return pipeline.Transition{Item: it, From: it.Stage, To: it.Stage, Kind: KindLinked,
 			Data: map[string]any{"after": after, "depends_on": it.DependsOn}}, nil
 	})
+}
+
+// linkAfter makes an open item wait for another open item, and saves it: checkDependencies reads
+// the graph from the table to refuse a cycle.
+func linkAfter(tx *sql.Tx, it pipeline.Item, after int64) (pipeline.Item, error) {
+	if !isOpen(it.Stage) {
+		return it, errf(pipeline.CodeWrongStage, "item is %s", it.Stage)
+	}
+	if after == it.ID {
+		return it, errf(pipeline.CodeInvalidField, "an item cannot wait for itself")
+	}
+	var stage pipeline.Stage
+	err := tx.QueryRow(`SELECT stage FROM items WHERE id = ?`, after).Scan(&stage)
+	if errors.Is(err, sql.ErrNoRows) {
+		return it, errf(pipeline.CodeInvalidField, "after: no item #%d", after)
+	}
+	if err != nil {
+		return it, err
+	}
+	if !isOpen(stage) {
+		return it, errf(pipeline.CodeInvalidField, "after: #%d is %s; only an open item can be waited for", after, stage)
+	}
+	for _, d := range it.DependsOn {
+		if d == after {
+			return it, errf(pipeline.CodeInvalidField, "#%d already waits for #%d", it.ID, after)
+		}
+	}
+	it.DependsOn = append(append([]int64{}, it.DependsOn...), after)
+	if err := saveItem(tx, it); err != nil {
+		return it, err
+	}
+	return it, checkDependencies(tx, it)
 }
 
 func isOpen(st pipeline.Stage) bool { return st != pipeline.Done && st != pipeline.Closed }

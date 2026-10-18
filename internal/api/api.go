@@ -95,6 +95,10 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /items/{id}/hold", user, s.hold)
 	route("POST /items/{id}/rebuild", both, s.rebuild)
 	route("POST /items/{id}/drop", user, s.drop)
+	route("POST /items/{id}/edit", user, s.edit)
+	route("POST /items/{id}/link", user, s.link)
+	route("POST /items/{id}/unlink", user, s.unlink)
+	route("POST /items/{id}/resources", user, s.setResources)
 	route("POST /items/{id}/qa", user, s.setQA)
 	route("POST /items/{id}/verified", user, s.verified)
 	route("POST /items/{id}/reopen", user, s.reopen)
@@ -107,6 +111,8 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /plans/{id}/drop", user, s.dropPlan)
 	route("POST /plans/{id}/turns/{turn}/result", runner, s.planTurnResult)
 	route("GET /control", reads, s.getControl)
+	route("GET /freezes", reads, s.listFreezes)
+	route("POST /unfreeze", user, s.unfreeze)
 	route("PUT /control", user, s.putControl)
 	// The orchestrator's own actions (orchestrator.go).
 	route("POST /orchestrator/items", orch, s.orchAdd)
@@ -220,6 +226,7 @@ var statusByCode = map[string]int{
 	store.CodeAlreadyRecorded:     http.StatusConflict,
 	store.CodeNotApprover:         http.StatusForbidden,
 	store.CodeUsed:                http.StatusConflict,
+	store.CodeNotFrozen:           http.StatusConflict,
 	pipeline.CodeLimit:            http.StatusConflict,
 	pipeline.CodeTooSoon:          http.StatusTooManyRequests,
 	CodeForbidden:                 http.StatusForbidden,
@@ -399,7 +406,12 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		Capabilities []string `json:"capabilities"`
 		// OnlyResources: only items needing one of these (a subset of the capabilities).
 		OnlyResources []string `json:"only_resources"`
-		Stages        []string `json:"stages"`
+		// PollSeconds: how often the runner asks (the held slots wait two of them for it).
+		PollSeconds int      `json:"poll_seconds"`
+		Stages      []string `json:"stages"`
+		// RunnerStages: the work stages the runner takes in all its lanes (the held slots count
+		// only its work in them); empty: it did not say.
+		RunnerStages []string `json:"runner_stages"`
 		// Kinds: item, plan (plan turns), orchestrate; empty is items only.
 		Kinds []string `json:"kinds"`
 	}
@@ -420,6 +432,14 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		stages = append(stages, pipeline.Stage(st))
+	}
+	var runnerStages []pipeline.Stage
+	for _, st := range body.RunnerStages {
+		if !pipeline.Stage(st).IsWork() {
+			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "runner_stages must be work stages (triage, build, review, land), got " + strconv.Quote(st)})
+			return
+		}
+		runnerStages = append(runnerStages, pipeline.Stage(st))
 	}
 	if body.Runner != "" && body.Runner != p.Name {
 		writeErr(w, http.StatusForbidden, "runner_mismatch", "this token belongs to runner "+strconv.Quote(p.Name))
@@ -446,7 +466,7 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, Stages: stages, Kinds: body.Kinds})
+	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -772,6 +792,87 @@ func (s *server) drop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, it)
 }
 
+// edit fixes an item's title or ask before build starts (store.Edit).
+func (s *server) edit(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Title *string `json:"title"`
+		Ask   *string `json:"ask"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.Edit(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Title, body.Ask)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// link makes an item wait for more items (store.Link).
+func (s *server) link(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		After []int64 `json:"after"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.Link(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.After)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// unlink stops an item waiting for one other (store.Unlink).
+func (s *server) unlink(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		After int64 `json:"after"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.Unlink(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.After)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// setResources replaces an item's resources after triage (store.SetResources); an empty list is none.
+func (s *server) setResources(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Resources []string `json:"resources"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.SetResources(r.Context(), PrincipalFrom(r.Context()).Actor(), id, strings.Join(body.Resources, ","))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
 // setQA marks an item needs_qa before it lands (store.SetQA).
 func (s *server) setQA(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
@@ -828,6 +929,32 @@ func (s *server) reopen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"item": it, "filed": filed})
+}
+
+// listFreezes are the repos frozen while their main is red.
+func (s *server) listFreezes(w http.ResponseWriter, r *http.Request) {
+	fz, err := s.st.Freezes(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, fz)
+}
+
+// unfreeze lifts a repo's freeze by hand (loop unfreeze <repo>): the user's word only.
+func (s *server) unfreeze(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Repo string `json:"repo"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	f, err := s.st.Unfreeze(r.Context(), PrincipalFrom(r.Context()).Actor(), body.Repo)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
 }
 
 func (s *server) getControl(w http.ResponseWriter, r *http.Request) {

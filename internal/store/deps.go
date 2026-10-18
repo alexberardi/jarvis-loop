@@ -105,7 +105,7 @@ func dependencyStages(q interface {
 	return out, rows.Err()
 }
 
-// waitingOn is what "waiting on #12" shows: the dependencies not done yet, while the item is open.
+// waitingOn is what "waiting on #12" shows: the dependencies not merged yet, while the item is open.
 func waitingOn(it pipeline.Item, stages map[int64]pipeline.Stage) []int64 {
 	if it.Stage == pipeline.Done || it.Stage == pipeline.Closed {
 		return []int64{}

@@ -383,7 +383,7 @@ func (r *Runner) heldNotes(ctx context.Context, ru *run, info *RunInfo, rel stri
 		return
 	}
 	var notes []string
-	from := ""
+	from, mainRed := "", false
 	for _, e := range d.Events {
 		switch {
 		case e.Outcome == "pr_opened":
@@ -392,6 +392,10 @@ func (r *Runner) heldNotes(ctx context.Context, ru *run, info *RunInfo, rel stri
 			by := "the user"
 			if strings.HasPrefix(e.Actor, "runner:") {
 				by = "the runner (land's held watch)"
+			}
+			mainRed = e.Data["main_red"] == true
+			if mainRed {
+				by = "loopd (CI failed while main was red; main is green now)"
 			}
 			if q, _ := e.Data["question"].(string); e.From == string(pipeline.NeedsYou) {
 				by += ", instead of an answer to: " + oneLine(q)
@@ -405,7 +409,7 @@ func (r *Runner) heldNotes(ctx context.Context, ru *run, info *RunInfo, rel stri
 		return
 	}
 	writeContext(ru, info, rel, "why the item came back to build, newest last", "# Sent back to build (from loopd)\n"+strings.Join(notes, ""))
-	info.HeldNotes, info.HeldFrom = rel, from
+	info.HeldNotes, info.HeldFrom, info.HeldMainRed = rel, from, mainRed
 }
 
 // reviewContext writes the review notes loopd recorded on the item's bounces to notesRel, and the
