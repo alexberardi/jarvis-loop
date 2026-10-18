@@ -210,6 +210,30 @@ func TestCheckBuckets(t *testing.T) {
 	}
 }
 
+// A red CI on a PR whose base was a red main that is green now: a rebase, not a rerun.
+func TestMainFixed(t *testing.T) {
+	run := func(c string) []WorkflowRun {
+		return []WorkflowRun{{Name: "ci", Status: "completed", Conclusion: c}}
+	}
+	for _, c := range []struct {
+		name           string
+		base, head     string
+		atBase, atHead []WorkflowRun
+		fixed          bool
+	}{
+		{"red then green", headA, headB, run("failure"), run("success"), true},
+		{"not behind main", headA, headA, run("failure"), run("failure"), false},
+		{"green at the base", headA, headB, run("success"), run("success"), false},
+		{"still red", headA, headB, run("failure"), run("failure"), false},
+		{"main still running", headA, headB, run("failure"), []WorkflowRun{{Name: "ci", Status: "in_progress"}}, false},
+		{"no runs at the base", headA, headB, nil, run("success"), false},
+	} {
+		if got := MainFixed(c.base, c.head, c.atBase, c.atHead); got != c.fixed {
+			t.Errorf("%s: %v, want %v", c.name, got, c.fixed)
+		}
+	}
+}
+
 func TestMainCIResult(t *testing.T) {
 	raw, err := os.ReadFile("testdata/gh/run_list.json")
 	if err != nil {

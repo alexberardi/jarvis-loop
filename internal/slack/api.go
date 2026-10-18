@@ -227,6 +227,13 @@ func (a *API) PostEphemeral(ctx context.Context, m Message) error {
 	return err
 }
 
+// OpenView opens a modal (views.open) for an interaction's trigger_id, which Slack honours for 3
+// seconds after the click.
+func (a *API) OpenView(ctx context.Context, triggerID string, view map[string]any) error {
+	_, err := a.call(ctx, "views.open", map[string]any{"trigger_id": triggerID, "view": view})
+	return err
+}
+
 // PinsAdd pins a message; a message that is already pinned is not an error.
 func (a *API) PinsAdd(ctx context.Context, channel, ts string) error {
 	if err := a.allowed(channel); err != nil {

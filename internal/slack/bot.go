@@ -487,15 +487,24 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		if it.Stage != pipeline.NeedsYou {
 			q = str(e.Data, "question")
 		}
+		rebuildable := pipeline.Rebuildable(pipeline.Item{ReturnStage: pipeline.Stage(e.From)}) || pipeline.Rebuildable(it)
 		reply := "Reply in this thread to answer."
+		if rebuildable {
+			reply = `Reply in this thread to answer, or start with "rebuild" (or use Rebuild…) to send it back to build with your note.`
+		}
 		if pipeline.Outcome(e.Outcome) == pipeline.Failed {
 			// A run that ended without a usable result is a runner error, not a question; any
 			// reply sends the item back to the stage that failed.
 			reply = `Reply "retry" to run it again, or drop.`
 		}
 		text := fmt.Sprintf("<@%s> %s needs you: %s\n%s", Approver, ref(id, it.Title), b.field(q, 1500, id), reply)
+		value := strconv.FormatInt(id, 10)
+		buttons := []any{dropButton(id, value)}
+		if rebuildable {
+			buttons = append([]any{rebuildButton(value)}, buttons...)
+		}
 		return Message{Text: text, Blocks: []map[string]any{section(text),
-			{"type": "actions", "block_id": "needs_you", "elements": []any{dropButton(id, strconv.FormatInt(id, 10))}},
+			{"type": "actions", "block_id": "needs_you", "elements": buttons},
 		}}, true
 	}
 	if e.Kind == "advanced" && pipeline.Outcome(e.Outcome) == pipeline.Hold {
@@ -758,6 +767,7 @@ func (b *Bot) heldMessage(e store.Event, d store.Detail) Message {
 		{"type": "actions", "block_id": "held", "elements": []any{
 			button("Approve merge", "approve", value, "primary"),
 			button("Keep holding", "keep_holding", value, ""),
+			rebuildButton(value),
 			dropButton(it.ID, value),
 		}},
 	}}
@@ -876,9 +886,20 @@ type slackEvent struct {
 }
 
 type interaction struct {
-	Type    string              `json:"type"`
-	User    struct{ ID string } `json:"user"`
-	Channel struct{ ID string } `json:"channel"`
+	Type      string              `json:"type"`
+	User      struct{ ID string } `json:"user"`
+	Channel   struct{ ID string } `json:"channel"`
+	TriggerID string              `json:"trigger_id"`
+	// View is a submitted modal (type view_submission).
+	View struct {
+		CallbackID      string `json:"callback_id"`
+		PrivateMetadata string `json:"private_metadata"`
+		State           struct {
+			Values map[string]map[string]struct {
+				Value *string `json:"value"`
+			} `json:"values"`
+		} `json:"state"`
+	} `json:"view"`
 	Message struct {
 		TS       string           `json:"ts"`
 		ThreadTS string           `json:"thread_ts"`
@@ -917,10 +938,15 @@ func (b *Bot) HandleEnvelope(ctx context.Context, env Envelope) {
 		}
 	case "interactive":
 		var p interaction
-		if json.Unmarshal(env.Payload, &p) != nil || p.Type != "block_actions" {
+		if json.Unmarshal(env.Payload, &p) != nil {
 			return
 		}
-		b.onActions(ctx, p)
+		switch p.Type {
+		case "block_actions":
+			b.onActions(ctx, p)
+		case "view_submission":
+			b.onViewSubmission(ctx, p)
+		}
 	}
 }
 
@@ -1014,6 +1040,14 @@ func (b *Bot) onMessage(ctx context.Context, m slackEvent) {
 		}
 		if waitsForTrust(d.Item) && IsTrustReply(text) {
 			b.trustReply(ctx, m, d.Item)
+			return
+		}
+		if pipeline.Rebuildable(d.Item) && IsRebuildNote(text) {
+			// The user's note for the builder, not an answer: back to build with it (a red CI's
+			// rerun would test the same merge again).
+			if _, err := b.c.Store.Rebuild(ctx, actorPrefix+m.User, id, text); err != nil {
+				b.threadReply(ctx, m.ThreadTS, "Could not send it back to build: "+Escape(errMessage(err)))
+			}
 			return
 		}
 		if _, err := b.c.Store.Answer(ctx, actorPrefix+m.User, id, text); err != nil {
@@ -1127,6 +1161,8 @@ func (b *Bot) onActions(ctx context.Context, p interaction) {
 			}
 		case "qa_reopen":
 			b.reopenButton(ctx, channel, user, itemID)
+		case "rebuild":
+			b.openRebuild(ctx, channel, user, p.TriggerID, itemID)
 		case "keep_holding":
 			b.cancelPending(itemID)
 			if _, err := b.c.Store.Hold(ctx, actor, itemID, "Keep holding"); err != nil {
@@ -1169,7 +1205,7 @@ func actionItem(actionID, blockID, value string) int64 {
 		id, _ := strconv.ParseInt(rest, 10, 64)
 		return id
 	}
-	if actionID == "approve" || actionID == "trust" || actionID == "keep_holding" || actionID == "drop" || actionID == "qa_verified" || actionID == "qa_reopen" {
+	if actionID == "approve" || actionID == "trust" || actionID == "keep_holding" || actionID == "rebuild" || actionID == "drop" || actionID == "qa_verified" || actionID == "qa_reopen" {
 		n, _, _ := strings.Cut(value, ":")
 		id, _ := strconv.ParseInt(n, 10, 64)
 		return id

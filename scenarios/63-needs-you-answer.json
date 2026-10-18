@@ -1,0 +1,28 @@
+{
+  "name": "needs-you-answer",
+  "about": "#131: in a needs-you thread, a reply that does not open with rebuild, rebase or fix is still the answer: \"re-run it, I think it's flaky\" returns the red-CI item to land, which reads CI again, as before. No rebuild.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "no_change"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "fail", "lint": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}},
+    {"do": "reply", "item": "a", "as": "approver", "text": "re-run it, I think it's flaky"},
+    {"do": "wait", "stage": {"a": "land"}}
+  ],
+  "expect": {
+    "stage": {"a": "land"},
+    "events": [{"item": "a", "kind": "answered", "actor": "approver", "data": {"answer": "^re-run it, I think it's flaky$"}, "count": 1}],
+    "no_events": [{"item": "a", "kind": "rebuild"}],
+    "messages": [{"thread": "a", "from": "bot", "text": "^Answered by you: re-run it, I think it's flaky → land\\.$"}]
+  }
+}

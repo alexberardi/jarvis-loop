@@ -534,8 +534,33 @@ func TestHumanTransitions(t *testing.T) {
 		_, err := ApplyRebuild(item(Held), " ")
 		wantCode(t, err, CodeMissingField)
 	})
-	t.Run("rebuild outside held", func(t *testing.T) {
-		for _, s := range []Stage{Land, Review, Build, NeedsYou, QA, Done, Closed} {
+	t.Run("rebuild from needs_you", func(t *testing.T) {
+		it := item(NeedsYou)
+		it.PR, it.Branch, it.ReturnStage, it.CIRedSHA = 12, "loop/7-t", Land, sha1
+		it.Question = "CI failed on 0123456 and the build changed nothing: rerun CI, fix main, or drop"
+		tr, err := ApplyRebuild(it, "rebuild, rebase on main")
+		wantCode(t, err, "")
+		got := tr.Item
+		if tr.From != NeedsYou || tr.To != Build || tr.Kind != "rebuild" || got.Stage != Build || got.ReturnStage != "" || got.Question != "" {
+			t.Fatalf("rebuild: %+v", tr)
+		}
+		if got.PR != 12 || got.Branch != "loop/7-t" || got.CIRedSHA != sha1 || got.BounceCount != 0 {
+			t.Fatalf("rebuild lost the PR or the red head: %+v", got)
+		}
+		if tr.Data["notes"] != "rebuild, rebase on main" || tr.Data["question"] != it.Question || tr.Data["approval_voided"] != nil {
+			t.Fatalf("data %+v", tr.Data)
+		}
+	})
+	t.Run("rebuild of a triage question", func(t *testing.T) {
+		for _, ret := range []Stage{Triage, ""} {
+			it := item(NeedsYou)
+			it.ReturnStage = ret
+			_, err := ApplyRebuild(it, "rebuild")
+			wantCode(t, err, CodeWrongStage)
+		}
+	})
+	t.Run("rebuild outside held and needs_you", func(t *testing.T) {
+		for _, s := range []Stage{Land, Review, Build, QA, Done, Closed} {
 			_, err := ApplyRebuild(item(s), "rebuild")
 			wantCode(t, err, CodeWrongStage)
 		}
@@ -774,6 +799,24 @@ func TestCIRedBackToBuildCounts(t *testing.T) {
 	_, err = ApplyAdvance(item(Land), ci("HEAD"), t0)
 	wantCode(t, err, CodeInvalidField)
 
+	// Land saw main red at the PR's base and green now: the item keeps main's green head for the
+	// question a build that changes nothing gets; a red CI without it clears it.
+	fixed := ci(sha1)
+	fixed.Fields["main_fixed_sha"] = sha2
+	tr, err = ApplyAdvance(item(Land), fixed, t0)
+	wantCode(t, err, "")
+	if tr.Item.CIMainFixed != sha2 || tr.Data["main_fixed_sha"] != sha2 {
+		t.Fatalf("main fixed: %+v %v", tr.Item, tr.Data)
+	}
+	again := tr.Item
+	again.Stage = Land
+	if tr, _ = ApplyAdvance(again, ci(sha1), t0); tr.Item.CIMainFixed != "" {
+		t.Fatalf("a red CI without main fixed kept it: %+v", tr.Item)
+	}
+	fixed.Fields["main_fixed_sha"] = "nope"
+	_, err = ApplyAdvance(item(Land), fixed, t0)
+	wantCode(t, err, CodeInvalidField)
+
 	// A conflict or missing-evidence back_to_build names no CI head and is not counted.
 	tr, err = ApplyAdvance(item(Land), Advance{Outcome: BackToBuild, Fields: map[string]string{"reason": "conflict"}}, t0)
 	wantCode(t, err, "")
@@ -795,6 +838,15 @@ func TestPROpenedOnTheCIRedHead(t *testing.T) {
 	}
 	if tr.Item.HeadSHA != sha2 {
 		t.Fatalf("head %q", tr.Item.HeadSHA)
+	}
+
+	// Land saw main red at the PR's base and green now: the question recommends a rebuild.
+	it.CIMainFixed = sha1
+	tr, err = ApplyAdvance(it, prOpened(sha2, []string{"M internal/x.go"}, nil), t0)
+	wantCode(t, err, "")
+	if want := "CI failed on fedcba9 and the build changed nothing, but main was red at this PR's base and is green now (`0123456`): " +
+		"rebuild (rebase on main), not a rerun, which tests the same merge again. Reply \"rebuild\" or use the Rebuild button, or drop."; tr.Item.Question != want {
+		t.Fatalf("question %q", tr.Item.Question)
 	}
 
 	// A new head goes to review and clears the mark.

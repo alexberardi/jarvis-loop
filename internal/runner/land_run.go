@@ -121,6 +121,10 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 			}
 			if d.Outcome == "back_to_build" && d.Fields["ci_head_sha"] != "" {
 				r.landCIFailure(ctx, lr, f.PR)
+				if sha := r.landMainFixed(ctx, lr, f.PR.HeadRefOid); sha != "" {
+					d.Fields["main_fixed_sha"] = sha
+					d.Fields["reason"] += fmt.Sprintf("; main was red at this PR's base and is green now at `%s`: rebase on main", short7(sha))
+				}
 			}
 			r.landAdvance(report, lr, d, f.Paths)
 			return
@@ -302,6 +306,32 @@ func (r *Runner) landCIFailure(ctx context.Context, lr *landRun, pr LandPR) {
 		return
 	}
 	lr.log.Info("attached the CI failure log", "label", label)
+}
+
+// landMainFixed is main's head when main was red at the PR's merge base and is green there now
+// (MainFixed), else "". Anything it cannot read counts as no.
+func (r *Runner) landMainFixed(ctx context.Context, lr *landRun, head string) string {
+	unlock := r.lockMirror(lr.mirror)
+	mb, tip, err := r.Git.MergeBase(ctx, lr.mirror, lr.repo.Base, head)
+	unlock()
+	if err != nil || mb == tip {
+		return ""
+	}
+	atBase, err := r.Land.CommitRuns(ctx, lr.repo.Slug, mb)
+	if err != nil {
+		lr.log.Warn("main's CI at the PR's base", "err", err)
+		return ""
+	}
+	atTip, err := r.Land.CommitRuns(ctx, lr.repo.Slug, tip)
+	if err != nil {
+		lr.log.Warn("main's CI at its head", "err", err)
+		return ""
+	}
+	if !MainFixed(mb, tip, atBase, atTip) {
+		return ""
+	}
+	lr.log.Info("red CI on a PR based on a red main that is green now", "base", short7(mb), "main", short7(tip))
+	return tip
 }
 
 func roundDur(d time.Duration) string {

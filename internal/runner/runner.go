@@ -568,9 +568,7 @@ func (r *Runner) prepareBuild(ctx context.Context, ru *run, info *RunInfo) error
 	if ru.item.BounceCount > 0 {
 		r.reviewContext(ctx, ru, info, filepath.Join(".loop", "review", "notes.md"), filepath.Join(".loop", "review", "pr-comments.md"))
 	}
-	if ru.item.PR > 0 {
-		r.heldNotes(ctx, ru, info, filepath.Join(".loop", "review", "held.md"))
-	}
+	r.heldNotes(ctx, ru, info, filepath.Join(".loop", "review", "held.md"))
 	r.answersContext(ctx, ru, info, filepath.Join(".loop", "context", "answers.md"))
 	r.planContext(ctx, ru, info)
 	return nil

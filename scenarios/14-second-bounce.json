@@ -21,7 +21,7 @@
     "events": [{"item": "a", "kind": "advanced", "outcome": "bounce", "actor": "runner", "count": 2}],
     "messages": [
       {"thread": "a", "text": "^Bounced back to build \\(1\\)"},
-      {"thread": "a", "text": "^<@U0C9AFPAMD4> #\\d+ Fix the digest wording needs you: `feature\\.txt:1`: add a test for the empty case\\.\\nReply in this thread to answer\\.$"}
+      {"thread": "a", "text": "^<@U0C9AFPAMD4> #\\d+ Fix the digest wording needs you: `feature\\.txt:1`: add a test for the empty case\\.\\nReply in this thread to answer, or start with \"rebuild\" \\(or use Rebuild…\\) to send it back to build with your note\\.$"}
     ],
     "pr": {"a": {"number": 101, "comments": 2, "edits": 1}},
     "prs": 1

@@ -368,7 +368,7 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 // ---- items ----
 
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
-	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of, ci_red_sha,
+	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of, ci_red_sha, ci_main_fixed,
 	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust`
 
 type scanner interface{ Scan(...any) error }
@@ -384,7 +384,7 @@ func scanItem(row scanner) (pipeline.Item, error) {
 	)
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
-		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf, &it.CIRedSHA,
+		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf, &it.CIRedSHA, &it.CIMainFixed,
 		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust)
 	if err != nil {
 		return it, err
@@ -468,10 +468,10 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 	}
 	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
-		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=?, trust=? WHERE id=?`,
+		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, ci_main_fixed=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=?, trust=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
-		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, trust, it.ID)
+		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, it.CIMainFixed, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, trust, it.ID)
 	return err
 }
 
@@ -750,10 +750,14 @@ func (s *Store) Hold(ctx context.Context, actor string, id int64, words string) 
 	})
 }
 
-// Rebuild sends a held item back to build with notes for the builder (the user's, or a runner's
-// on a held PR that turned conflicting).
+// Rebuild sends a held or needs_you item back to build with notes for the builder (the user's,
+// or a runner's on a held PR that turned conflicting: a runner's moves only a held item, so its
+// held watch never answers a question that came up meanwhile).
 func (s *Store) Rebuild(ctx context.Context, actor string, id int64, notes string) (pipeline.Item, error) {
 	return s.human(ctx, actor, id, "rebuild", func(it pipeline.Item) (pipeline.Transition, error) {
+		if strings.HasPrefix(actor, "runner:") && it.Stage != pipeline.Held {
+			return pipeline.Transition{}, &pipeline.Error{Code: pipeline.CodeWrongStage, Message: fmt.Sprintf("item is %s, not held", it.Stage)}
+		}
 		return pipeline.ApplyRebuild(it, notes)
 	})
 }

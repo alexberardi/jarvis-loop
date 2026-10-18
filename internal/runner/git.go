@@ -204,6 +204,17 @@ func (g Git) AddDetached(ctx context.Context, mirror, path, rev string) error {
 	return err
 }
 
+// MergeBase is the merge base of head with the remote's base branch, and that branch's head, from
+// the mirror (fetched by EnsureMirror).
+func (g Git) MergeBase(ctx context.Context, mirror, base, head string) (string, string, error) {
+	mb, err := g.run(ctx, mirror, "merge-base", "refs/remotes/origin/"+base, head)
+	if err != nil {
+		return "", "", err
+	}
+	tip, err := g.run(ctx, mirror, "rev-parse", "refs/remotes/origin/"+base)
+	return mb, tip, err
+}
+
 func (g Git) isAncestor(ctx context.Context, dir, a, b string) bool {
 	_, err := g.run(ctx, dir, "merge-base", "--is-ancestor", a, b)
 	return err == nil

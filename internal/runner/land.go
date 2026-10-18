@@ -348,6 +348,18 @@ func ParseRuns(raw []byte) ([]WorkflowRun, error) {
 	return runs, nil
 }
 
+// MainFixed reports whether main was red at the PR's merge base and is green at main's head now
+// (a later commit): a red CI on the PR may then be main's old failure, which a rebase on main
+// picks up the fix for and a rerun does not (it tests the same merge again).
+func MainFixed(mergeBase, mainHead string, atBase, atHead []WorkflowRun) bool {
+	if mergeBase == "" || mainHead == "" || mergeBase == mainHead {
+		return false
+	}
+	base, _ := MainResult(atBase)
+	head, _ := MainResult(atHead)
+	return base == "red" && head == "green"
+}
+
 // MainResult is main's CI on a merge commit: "" while there are no runs yet or any is still going,
 // "green" when every run passed (success, neutral, skipped), "superseded" when none failed but some
 // were cancelled (a newer push to main, or by hand: the commit was never fully checked), else "red"

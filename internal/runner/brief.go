@@ -100,6 +100,8 @@ type RunInfo struct {
 	Context []TriageFile
 	// HeldNotes is the file saying why a held item came back to build ("" when it did not).
 	HeldNotes string
+	// HeldFrom is the stage the newest of those notes sent it back from (held or needs_you).
+	HeldFrom string
 	// Answers is the file with the questions agents asked on the item and the user's answers (""
 	// when there were none).
 	Answers string
@@ -269,7 +271,12 @@ func Brief(stage string, it Item, r RunInfo) string {
 		case it.BounceCount > 0:
 			fmt.Fprintf(&b, "- Sent back %d time(s) by the runner's verify (nothing was pushed). Fix what `.loop/review/verify.md` shows on the same branch.\n", it.BounceCount)
 		}
-		if r.HeldNotes != "" {
+		switch {
+		case r.HeldNotes != "" && r.HeldFrom == string(pipeline.NeedsYou) && it.PR > 0:
+			fmt.Fprintf(&b, "- Sent back to build by the user instead of an answer to its question; PR #%d is open on this branch. Do what `%s` asks on the same branch; the runner updates that PR.\n", it.PR, r.HeldNotes)
+		case r.HeldNotes != "" && r.HeldFrom == string(pipeline.NeedsYou):
+			fmt.Fprintf(&b, "- Sent back to build by the user instead of an answer to its question. Do what `%s` asks.\n", r.HeldNotes)
+		case r.HeldNotes != "":
 			fmt.Fprintf(&b, "- Sent back from held; PR #%d is open on this branch. Do what `%s` asks (the user's note, or a conflict with `%s`) on the same branch; the runner updates that PR, and the user approves the new head.\n", it.PR, r.HeldNotes, r.Base)
 		}
 		if it.Trust != nil && it.Trust.allows(it.Trust.HeadSHA) {

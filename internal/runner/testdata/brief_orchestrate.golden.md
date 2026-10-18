@@ -63,7 +63,10 @@ are sure the kind fits.
    same head, it comes back to you as "CI failed on `abc1234`: …" with the failing job's log
    attached: answer `red_ci` again, "fix the code, not the expectation; the failing job's log is
    in ci-failure.log", which sends it back to build (this is not the `bounce` answer). A third red
-   on that head is the user's.
+   on that head is the user's. **Except** when the question says main was red at the PR's base and
+   is green now ("… rebuild (rebase on main), not a rerun …"): a rerun tests the same merge again,
+   and the rebuild with a note is the user's (their Rebuild button or a "rebuild" reply). Do not
+   answer it; leave it to them.
 6. **`loop`**: a question about how the loop works (where evidence goes, what a stage does, what
    verify runs), answered from the docs.
 

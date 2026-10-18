@@ -51,9 +51,11 @@ type GitHub struct {
 	merged map[string][]runner.MergedPR
 
 	// checks are the CI checks on a commit ("slug@sha" -> name -> pass, fail, pending, cancel,
-	// skip), set by scenario steps; mainCI is how every workflow run on a commit of main goes.
-	checks map[string]map[string]string
-	mainCI map[string]string
+	// skip), set by scenario steps; mainCI is how every workflow run on a commit of main goes,
+	// and mainCIAt how they went on one commit of main ("slug@sha"), whether merged or pushed.
+	checks   map[string]map[string]string
+	mainCI   map[string]string
+	mainCIAt map[string]map[string]string
 	// mainHead is where each repo's main should be: where it started, then each merge or
 	// scripted push. Anything else moving main is a failure.
 	mainHead map[string]string
@@ -72,7 +74,7 @@ var (
 
 // NewGitHub returns a fake over these remotes (owner/name -> bare repo).
 func NewGitHub(repos map[string]string) *GitHub {
-	g := &GitHub{next: 101, repos: repos, checks: map[string]map[string]string{}, mainCI: map[string]string{}, mainHead: map[string]string{}, runIDs: 9000,
+	g := &GitHub{next: 101, repos: repos, checks: map[string]map[string]string{}, mainCI: map[string]string{}, mainCIAt: map[string]map[string]string{}, mainHead: map[string]string{}, runIDs: 9000,
 		runs: map[int64]fakeRun{}}
 	for slug := range repos {
 		g.mainHead[slug] = g.RemoteHead(slug, "main")
@@ -301,6 +303,18 @@ func (g *GitHub) SetMainCI(runs map[string]string) {
 	}
 }
 
+// SetMainCIAt sets how the workflow runs on one commit of main went (name -> pass, fail, pending,
+// cancel), for that commit only: it wins over SetMainCI's.
+func (g *GitHub) SetMainCIAt(slug, sha string, runs map[string]string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	m := map[string]string{}
+	for k, v := range runs {
+		m[k] = v
+	}
+	g.mainCIAt[slug+"@"+sha] = m
+}
+
 // MainHead is where a repo's main should be.
 func (g *GitHub) MainHead(slug string) string {
 	g.mu.Lock()
@@ -412,15 +426,18 @@ func (g *GitHub) CommitRuns(_ context.Context, slug, sha string) ([]runner.Workf
 	if _, ok := g.repos[slug]; !ok {
 		return nil, fmt.Errorf("no repository %s", slug)
 	}
-	onMain := false
+	ci, onMain := g.mainCIAt[slug+"@"+sha]
+	if !onMain {
+		ci = g.mainCI
+	}
 	for _, p := range g.prs {
 		onMain = onMain || p.Repo == slug && p.MergeCommit == sha
 	}
 	if !onMain {
 		return nil, nil
 	}
-	names := make([]string, 0, len(g.mainCI))
-	for n := range g.mainCI {
+	names := make([]string, 0, len(ci))
+	for n := range ci {
 		names = append(names, n)
 	}
 	sort.Strings(names)
@@ -428,8 +445,8 @@ func (g *GitHub) CommitRuns(_ context.Context, slug, sha string) ([]runner.Workf
 	for i, n := range names {
 		id := int64(g.runIDs + i)
 		r := runner.WorkflowRun{ID: id, Name: n, Workflow: n, URL: fmt.Sprintf("https://github.com/%s/actions/runs/%d", slug, id)}
-		g.runs[id] = fakeRun{slug: slug, job: n, failed: g.mainCI[n] == "fail"}
-		switch g.mainCI[n] {
+		g.runs[id] = fakeRun{slug: slug, job: n, failed: ci[n] == "fail"}
+		switch ci[n] {
 		case "pass":
 			r.Status, r.Conclusion = "completed", "success"
 		case "fail":
