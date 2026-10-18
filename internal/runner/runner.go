@@ -338,6 +338,13 @@ type run struct {
 	builder      string
 	qwenRequests int64
 
+	// A Claude build's session (buildsession.go): the record of the item's interrupted session
+	// found at the claim, the one this run resumed (nil for a new session) and the branch's head
+	// the run started from.
+	prevSession *buildSession
+	resumedFrom *buildSession
+	startHead   string
+
 	reported int // refusals already sent
 	refusals int
 	// rejected is why the runner refused the agent's result, before publishing anything; work
@@ -417,8 +424,15 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 	ru.done = ctx.Done()
 	defer r.cleanup(cleanupCtx, ru, log)
 	r.pickBuilder(ctx, ru)
+	if ru.claudeBuild() {
+		ru.prevSession = r.loadBuildSession(ru)
+	}
 
 	brief, err := r.prepare(ctx, ru)
+	if err == nil && ru.resumedFrom != nil {
+		// The session has the brief already: its prompt is a note on the interruption alone.
+		err = os.WriteFile(filepath.Join(ru.dir, "brief.md"), []byte(ResumeNote(ru.resumedFrom)), 0o644)
+	}
 	if err != nil {
 		log.Error("prepare", "err", err)
 		r.advance(ctx, ru, "failed", map[string]string{"error": "the runner could not prepare the run: " + clip(err.Error(), 1500)}, nil)
@@ -427,6 +441,23 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 	log.Info("agent starting", "worktree", ru.wt, "branch", ru.branch, "mode", r.cfgOf(ru).Mode, "builder", ru.builder, "resume", ru.resume)
 	out := r.runAgentHarness(ctx, ru, brief)
 	log.Info("agent ended", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
+	if ru.resumedFrom != nil && r.sessionGone(ru, out) {
+		// claude no longer has the session (expired, its store cleared): a new one, with the whole
+		// brief, in the same claim.
+		log.Warn("the build's session to resume is gone; starting a new one", "session", ru.resume)
+		r.dropBuildSession(ru)
+		ru.resume, ru.resumedFrom = "", nil
+		keepFirstAttempt(ru.dir, log)
+		if err := r.writeBrief(ru, brief); err == nil {
+			err = r.writeArgv(ru)
+		}
+		if err != nil {
+			r.fail(cleanupCtx, ru, out, "the build's session could not be resumed, and a new one could not start: "+err.Error())
+			return
+		}
+		out = r.runAgentHarness(ctx, ru, brief)
+		log.Info("agent ended", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
+	}
 	// Reporting and saving work must finish even when the runner is shutting down.
 	r.report(cleanupCtx, ru, out, log)
 	why := ru.rejected
@@ -444,6 +475,12 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 	ru.first = out.stats
 	if ru.builder == pipeline.BuilderQwen && out.stats.sessionID != "" {
 		ru.resume = out.stats.sessionID // the retry continues the qwen session
+	} else if ru.resume != "" && ru.claudeBuild() {
+		ru.resume = "" // a claude retry starts a new session, with the whole brief
+		if err := r.writeArgv(ru); err != nil {
+			r.fail(cleanupCtx, ru, out, rejectedMsg(ru.stage, why, false)+"; the retry could not start: "+err.Error())
+			return
+		}
 	}
 	keepFirstAttempt(ru.dir, log)
 	brief = RetryBrief(brief, why)
@@ -610,19 +647,29 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 	if _, err := os.Stat(r.cfgOf(ru).Guard); err != nil {
 		return "", fmt.Errorf("the guard binary %s: %w", r.cfgOf(ru).Guard, err)
 	}
-	// The run's command line, kept with its log (the harness checks it is the same for every run
-	// of a stage).
-	argv, _ := json.Marshal(r.agentCommand(ru).Args[1:])
-	if err := os.WriteFile(filepath.Join(ru.dir, "argv.json"), argv, 0o600); err != nil {
+	if err := r.writeArgv(ru); err != nil {
 		return "", err
 	}
 	return brief, nil
+}
+
+// writeArgv keeps the run's command line with its log (the harness checks it is the same for
+// every run of a stage, but for a resumed session).
+func (r *Runner) writeArgv(ru *run) error {
+	argv, _ := json.Marshal(r.agentCommand(ru).Args[1:])
+	return os.WriteFile(filepath.Join(ru.dir, "argv.json"), argv, 0o600)
 }
 
 // prepareBuild makes the item's worktree on its branch (continuing an earlier run's commits),
 // with triage's notes and, after a bounce, the review's in .loop/review/ (and, after a held item
 // came back, why).
 func (r *Runner) prepareBuild(ctx context.Context, ru *run, info *RunInfo) error {
+	log := r.Log.With("item", ru.item.ID, "agent", ru.agent)
+	if s := ru.prevSession; s != nil && s.Reason == "" {
+		// The run never ended as far as the runner knows (it crashed, or was killed): save what it
+		// left in the old worktree before that is replaced.
+		r.saveCrashedWork(ctx, ru, s, log)
+	}
 	unlock := r.lockMirror(ru.mirror)
 	err := r.Git.EnsureMirror(ctx, ru.mirror, ru.repo)
 	ahead := 0
@@ -635,6 +682,17 @@ func (r *Runner) prepareBuild(ctx context.Context, ru *run, info *RunInfo) error
 	}
 	ru.repoDir = ru.wt
 	info.Resumed = ahead
+	if ru.claudeBuild() {
+		ru.startHead, _ = r.Git.Head(ctx, ru.wt)
+	}
+	if s := ru.prevSession; s != nil {
+		if why := s.resumable(ru.stage, ru.startHead); why != "" {
+			log.Info("not resuming the build's session", "session", s.Session, "why", why)
+			r.dropBuildSession(ru)
+		} else {
+			ru.resume, ru.resumedFrom = s.Session, s
+		}
+	}
 	info.Triage, info.TriageErr = r.fetchEvidence(ctx, ru, filepath.Join(".loop", "triage"))
 	for _, f := range info.Triage { // the newest CI failure log (land's, or triage's for a red main)
 		if strings.HasSuffix(f.Name, "-"+CIFailureLog) {
@@ -816,6 +874,7 @@ func (r *Runner) handle(ru *run, st *streamStats, line []byte) (string, string) 
 	case ev.Type == "system" && ev.Subtype == "init":
 		st.initMode = ev.PermissionMode
 		st.sessionID = ev.SessionID
+		r.recordBuildSession(ru, ev.SessionID)
 		if want := PermissionMode(r.cfgOf(ru).Mode); ev.PermissionMode != want {
 			return endModeMismatch, fmt.Sprintf("the session started in %q, not %q", ev.PermissionMode, want)
 		}
@@ -1198,6 +1257,13 @@ func (r *Runner) metrics(ru *run, out outcome, f map[string]string) map[string]s
 	if ru.first.sessionID != "" {
 		f["first_session_id"] = ru.first.sessionID
 	}
+	if ru.claudeBuild() {
+		// Resumed vs new sessions, for the flow panel.
+		f["resumed"] = strconv.FormatBool(ru.resumedFrom != nil)
+		if ru.resumedFrom != nil {
+			f["resumed_from"] = ru.resumedFrom.Session
+		}
+	}
 	if res := totalResult(ru, out); res != nil {
 		u := res.Usage
 		f["num_turns"] = strconv.Itoa(res.NumTurns)
@@ -1271,17 +1337,25 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 		}
 	}
 	switch out.reason {
+	case endStopped, endShutdown, endTimeCap:
+		// Interrupted: the next build resumes the session.
+	default:
+		r.dropBuildSession(ru)
+	}
+	switch out.reason {
 	case endStopped, endShutdown:
 		// The item returns to its queue (loopd ended the lease, or it will expire); keep the work.
 		r.flushRefusals(ctx, ru)
 		if ru.stage == StageBuild {
 			r.saveWIP(ctx, ru, out.reason, log)
+			r.buildInterrupted(ctx, ru, out.reason)
 		}
 		return
 	case endTimeCap:
 		detail := out.detail
 		if ru.stage == StageBuild {
 			r.saveWIP(ctx, ru, "time cap", log)
+			r.buildInterrupted(ctx, ru, out.reason)
 			detail += "; work so far is on " + ru.branch
 		}
 		r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{"error": detail + ". Last output: " + out.lastOutput()}), nil)

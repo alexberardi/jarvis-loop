@@ -167,7 +167,7 @@ Claude Code gives a runner no reading of plan usage (`/usage` is interactive onl
 | Slack | a pinned **Active agents** message in `#loop-digest` with a 0–6 dropdown and − / + buttons (Slack has no slider), and `/loop agents <n>` |
 | loopd's page (LAN) | a slider |
 
-**Stop:** running agents stop at their next heartbeat (within a minute), their work is saved as a WIP branch, and each item returns to its queue. **Resume** clears it.
+**Stop:** running agents stop at their next heartbeat (within a minute), their work is saved as a WIP branch, and each item returns to its queue; a Claude build resumes its session on the next claim on the same runner ([decision](decisions/2026-10-18-build-resume.md)). **Resume** clears it.
 
 **Automatic:** when an agent run ends with a usage-limit or rate-limit error, `loopd` sets the active-agents number to 0, posts the error with its reset time in `#loop-digest` with an @mention, and does not raise it again on its own.
 
