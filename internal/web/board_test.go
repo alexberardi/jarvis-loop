@@ -451,3 +451,32 @@ func TestBoardOrchestratorGolden(t *testing.T) {
 		t.Error("a panel for an orchestrator that never acted")
 	}
 }
+
+// The runner panel: the runners seen today and the slot held for the Mac's work (#192).
+func TestBoardRunnersGolden(t *testing.T) {
+	items := goldenItems()
+	v := boardView(items, goldenPlans(), now, false, "")
+	v.Runners = runnerView(store.RunnerPanel{
+		Runners: []pipeline.RunnerSeen{
+			{Name: "devbox", Capabilities: []string{"emulator", "gpu", "voice"}, PollSeconds: 30, LastSeen: now.Add(-5 * time.Second)},
+			{Name: "mbp", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}, PollSeconds: 30, LastSeen: now.Add(-20 * time.Second)},
+			{Name: "old-mini", Capabilities: []string{"ios"}, OnlyResources: []string{"ios"}, LastSeen: now.Add(-3 * time.Hour)},
+		},
+		Holds: []pipeline.SlotHold{{Resource: "macos", Runner: "mbp", ItemID: 61}},
+	}, now)
+	var b bytes.Buffer
+	if err := boardTmpl.Execute(&b, v); err != nil {
+		t.Fatal(err)
+	}
+	checkGolden(t, "board_runners.golden.html", b.Bytes())
+	out := b.String()
+	for _, want := range []string{"Runners · 3 seen today · 1 slot held", "A slot is held for macos work: <a href=\"/board/items/61\">#61</a> is waiting for mbp",
+		"old-mini", "(quiet)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the panel lacks %q", want)
+		}
+	}
+	if strings.Count(out, "(quiet)") != 1 {
+		t.Errorf("only old-mini is quiet")
+	}
+}

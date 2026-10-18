@@ -1,0 +1,28 @@
+{
+  "name": "slot-not-held-outside-mac-stages",
+  "about": "#192: the held slot counts only the Mac's own stages. With active_agents 2 and one slot taken, the Mac runner (only_resources [macos], seen just now) takes review only while the macos item waits in build, so the Mac would not claim it: nothing is held and the dev box's runner takes the last slot. (The control's stop makes the Mac's claim a check-in that takes nothing.)",
+  "stages": ["build"],
+  "steps": [
+    {"do": "add", "item": "busy", "title": "Something already building", "priority": "P1"},
+    {"do": "triage", "item": "busy"},
+    {"do": "add", "item": "plain", "title": "Fix a typo in the README", "priority": "P1"},
+    {"do": "triage", "item": "plain"},
+    {"do": "add", "item": "mac", "title": "Mac server app progress window", "priority": "P4"},
+    {"do": "triage", "item": "mac", "resources": "macos"},
+    {"do": "control", "active_agents": 2},
+    {"do": "hand_claim", "item": "busy"},
+
+    {"do": "control", "stopped": true},
+    {"do": "hand_claim", "via": "runner_listener", "capabilities": "macos", "only": "macos", "runner_stages": "review", "claims": "none"},
+    {"do": "control", "stopped": false},
+
+    {"do": "runner", "claims": "plain"}
+  ],
+  "expect": {
+    "stage": {"mac": "build", "plain": "review", "busy": "build"},
+    "events": [
+      {"item": "plain", "kind": "claimed", "actor": "runner:sandbox", "count": 1}
+    ],
+    "agent_runs": {"build": 1}
+  }
+}
