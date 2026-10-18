@@ -1,0 +1,38 @@
+{
+  "name": "runner-reload",
+  "about": "Adding a repo needs no restart (#189): the runner's only slot holds a build whose agent is half way through. A truncated runner.json is refused and the config kept. Then runner.json gains a repo (sandbox/extra) and a second slot, and loopd's --repos-file the repo with an alias, each reloaded as on SIGHUP: /loop add resolves the alias, the runner claims and builds the new repo's item in the new slot, and the live build, untouched, finishes and opens its PR.",
+  "extra_repo": true,
+  "steps": [
+    {"do": "add", "item": "a", "title": "Make the board faster"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "wait"},
+    {"do": "runner", "claims": "a"},
+    {"do": "agent_running", "item": "a"},
+    {"do": "add", "item": "refused", "title": "A pantry list", "repo_as": "pantry", "refused": "pantry"},
+    {"do": "reload_runner", "slots": 2, "add_repo": "extra", "invalid": true, "refused": "runner\\.json"},
+    {"do": "runner", "claims": "none"},
+    {"do": "reload_runner", "slots": 2, "add_repo": "extra"},
+    {"do": "reload_loopd", "text": "sandbox/extra: pantry\nsandbox/jarvis-node-mobile: mobile, node app\n"},
+    {"do": "add", "item": "b", "title": "A pantry list", "repo_as": "pantry"},
+    {"do": "triage", "item": "b"},
+    {"do": "runner", "claims": "b"},
+    {"do": "wait", "stage": {"b": "review"}},
+    {"do": "expect", "stage": {"a": "build"}, "leased": {"a": true}},
+    {"do": "release", "item": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review", "b": "review"},
+    "repo": {"a": "sandbox/demo", "b": "sandbox/extra"},
+    "leased": {"a": false, "b": false},
+    "prs": 2,
+    "agent_runs": {"build": 2},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "count": 1},
+      {"item": "b", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "count": 1}
+    ],
+    "no_events": [
+      {"item": "a", "kind": "stopped"}
+    ]
+  }
+}

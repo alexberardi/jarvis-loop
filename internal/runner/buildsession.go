@@ -38,7 +38,7 @@ type buildSession struct {
 const endCrashed = "crashed"
 
 func (r *Runner) buildSessionPath(id int64, stage string) string {
-	return filepath.Join(r.Cfg.WorkRoot, "sessions", fmt.Sprintf("%d-%s.json", id, stage))
+	return filepath.Join(r.Config().WorkRoot, "sessions", fmt.Sprintf("%d-%s.json", id, stage))
 }
 
 // claudeBuild: the run is a build by claude, whose session the runner keeps.

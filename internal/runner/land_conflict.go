@@ -20,7 +20,7 @@ const unionDocs = "docs/** merge=union\n"
 // head. A conflict anywhere else goes back to build.
 func (r *Runner) landConflict(ctx context.Context, lr *landRun, f LandFacts) (Decision, []string) {
 	base := "refs/remotes/origin/" + lr.repo.Base
-	wt := filepath.Join(r.Cfg.WorkRoot, fmt.Sprintf("%d-land", lr.item.ID))
+	wt := filepath.Join(r.Config().WorkRoot, fmt.Sprintf("%d-land", lr.item.ID))
 	unlock := r.lockMirror(lr.mirror)
 	defer unlock()
 	defer r.Git.RemoveWorktree(context.WithoutCancel(ctx), lr.mirror, wt)
@@ -45,7 +45,7 @@ func (r *Runner) landConflict(ctx context.Context, lr *landRun, f LandFacts) (De
 		if outside := outsideDocs(conflicted); len(outside) > 0 {
 			return advance("back_to_build", map[string]string{"reason": fmt.Sprintf("Merge conflict with %s outside docs/: %s", lr.repo.Base, strings.Join(outside, ", "))}), f.Paths
 		}
-		attrs := filepath.Join(r.Cfg.WorkRoot, "land-union.attributes")
+		attrs := filepath.Join(r.Config().WorkRoot, "land-union.attributes")
 		if err := os.WriteFile(attrs, []byte(unionDocs), 0o600); err != nil {
 			return failed("land: %v", err), nil
 		}

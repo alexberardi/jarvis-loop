@@ -13,7 +13,7 @@ active-agents number to 0 and never raising it again.
   `rate_limit_status` (`allowed`, `allowed_warning`, `rejected`), `rate_limit_type`
   (`five_hour`, `seven_day…`), `rate_limit_resets_at`, `rate_limit_utilization`. Tested on a recorded
   stream (`internal/runner/testdata/usage_stream.jsonl`).
-- loopd writes one row per run into `usage_runs` (migration 0021: item, stage, provider, model,
+- loopd writes one row per run into `usage_runs` (migration 0022: item, stage, provider, model,
   tokens, cost, the run's start and end, the warning). The migration backfills the rows from the
   runs recorded before it, from their events.
 - `usage_hits` records every limit a run hit: the window (from `rateLimitType`, else the text:

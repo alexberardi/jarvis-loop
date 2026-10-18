@@ -1020,7 +1020,7 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		sort.Strings(stages)
 		if _, err := tx.Exec(`INSERT INTO runners (name, capabilities, only_resources, poll_seconds, stages, last_seen) VALUES (?,?,?,?,?,?)
 			ON CONFLICT (name) DO UPDATE SET capabilities = excluded.capabilities, only_resources = excluded.only_resources,
-				poll_seconds = excluded.poll_seconds, stages = excluded.stages, last_seen = excluded.last_seen`,
+				poll_seconds = excluded.poll_seconds, stages = excluded.stages, last_seen = excluded.last_seen, state = ''`,
 			runnerName, strings.Join(caps, ","), strings.Join(only, ","), max(req.PollSeconds, 0), strings.Join(stages, ","), now.UnixNano()); err != nil {
 			return err
 		}

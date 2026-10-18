@@ -32,7 +32,7 @@ func (r *Runner) Wait() { r.bg.Wait() }
 // repo and files (or reuses) its main-red P1 from the failing jobs, the runs, the merge and the
 // last green commit (prev, when its CI was green).
 func (r *Runner) watchMain(ctx context.Context, lr *landRun, mergeSHA, prev string) {
-	wait := r.Cfg.mainWait
+	wait := r.Config().mainWait
 	if wait <= 0 {
 		wait = 30 * time.Minute
 	}

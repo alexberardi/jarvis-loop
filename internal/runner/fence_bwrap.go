@@ -11,10 +11,10 @@ import (
 const fenceName = "bubblewrap"
 
 func (r *Runner) fenceBinary() string {
-	if r.Cfg.Bwrap == "" {
+	if r.Config().Bwrap == "" {
 		return DefaultBwrap
 	}
-	return r.Cfg.Bwrap
+	return r.Config().Bwrap
 }
 
 // fenceCommand is the command under bubblewrap: a private /tmp, HOME and the work root bound
@@ -30,15 +30,15 @@ func (r *Runner) fenceCommand(f fenceSpec) (*exec.Cmd, error) {
 	}
 	// The runner's work root too, wherever it is: the mirrors' config and hooks are read by the
 	// runner's own (unfenced) git calls.
-	if fi, err := os.Stat(r.Cfg.WorkRoot); err == nil && fi.IsDir() {
-		args = append(args, "--ro-bind", r.Cfg.WorkRoot, r.Cfg.WorkRoot)
+	if fi, err := os.Stat(r.Config().WorkRoot); err == nil && fi.IsDir() {
+		args = append(args, "--ro-bind", r.Config().WorkRoot, r.Config().WorkRoot)
 	}
 	for _, p := range uniq(o.Visible) {
 		if _, err := os.Stat(p); err == nil {
 			args = append(args, "--ro-bind", p, p)
 		}
 	}
-	for _, p := range r.Cfg.VerifyMask {
+	for _, p := range r.Config().VerifyMask {
 		fi, err := os.Stat(p)
 		switch {
 		case err != nil:
@@ -53,7 +53,7 @@ func (r *Runner) fenceCommand(f fenceSpec) (*exec.Cmd, error) {
 	// away) whatever holds it.
 	admin := gitAdminDir(dir)
 	writable := append([]string{dir, f.cacheRoot}, o.Writable...)
-	writable = append(append(writable, r.Cfg.VerifyWritable...), admin)
+	writable = append(append(writable, r.Config().VerifyWritable...), admin)
 	for _, p := range uniq(writable) {
 		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
 			args = append(args, "--bind", p, p)

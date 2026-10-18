@@ -196,3 +196,19 @@ func (p *player) orchPanelProblems(want string) []string {
 	}
 	return nil
 }
+
+var runnerNotice = regexp.MustCompile(`<p class="runners">.*</p>`)
+
+func (p *player) runnersProblems(want string) []string {
+	page, _, err := p.s.boardSession()
+	if err != nil {
+		return []string{"board: " + err.Error()}
+	}
+	notices := strings.Join(runnerNotice.FindAllString(page, -1), "\n")
+	if ok, err := matches(want, notices); err != nil {
+		return []string{"board: " + err.Error()}
+	} else if !ok {
+		return []string{fmt.Sprintf("board: the runner notices do not match %q:\n%s", want, notices)}
+	}
+	return nil
+}
