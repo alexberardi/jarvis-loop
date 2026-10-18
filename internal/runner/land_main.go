@@ -2,21 +2,20 @@ package runner
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"time"
 )
 
 // startMainWatch watches main's CI on the merge commit in the background: the item is done and
 // its lease ended at the merge, so the runner's slot is free for other work meanwhile. Run (and
-// Wait) wait for it at shutdown.
-func (r *Runner) startMainWatch(ctx context.Context, lr *landRun, mergeSHA string) {
+// Wait) wait for it at shutdown. prev is main's head the merge was checked against ("" when not
+// known).
+func (r *Runner) startMainWatch(ctx context.Context, lr *landRun, mergeSHA, prev string) {
 	r.watching.Add(1)
 	r.bg.Add(1)
 	go func() {
 		defer r.bg.Done()
 		defer r.watching.Add(-1)
-		r.watchMain(ctx, lr, mergeSHA)
+		r.watchMain(ctx, lr, mergeSHA, prev)
 	}()
 }
 
@@ -27,19 +26,22 @@ func (r *Runner) Watching() int { return int(r.watching.Load()) }
 func (r *Runner) Wait() { r.bg.Wait() }
 
 // watchMain polls the Actions runs on the merge commit until all complete, up to the config's
-// land_main_wait, then records main_ci on the item: green, red (and files a P1 item naming the
-// failing runs, which the bot posts with an @mention of the approver), superseded (a run was
-// cancelled, none failed: no P1) or timeout.
-func (r *Runner) watchMain(ctx context.Context, lr *landRun, mergeSHA string) {
+// land_main_wait, then records main_ci on the item: green, red, superseded (a run was cancelled,
+// none failed) or timeout. A red result first gets one re-run of the failed jobs, to rule out a
+// flake: green then is green (rerun names the jobs), red again is red, and loopd then freezes the
+// repo and files (or reuses) its main-red P1 from the failing jobs, the runs, the merge and the
+// last green commit (prev, when its CI was green).
+func (r *Runner) watchMain(ctx context.Context, lr *landRun, mergeSHA, prev string) {
 	wait := r.Config().mainWait
 	if wait <= 0 {
 		wait = 30 * time.Minute
 	}
 	deadline := r.Clock.NewTimer(wait)
-	defer deadline.Stop()
+	defer func() { deadline.Stop() }()
 	report := context.WithoutCancel(ctx)
 	result, failing := "", []string(nil)
 	var runs []WorkflowRun
+	var rerun []string
 	for result == "" {
 		rs, err := r.Land.CommitRuns(ctx, lr.repo.Slug, mergeSHA)
 		if err != nil {
@@ -47,6 +49,13 @@ func (r *Runner) watchMain(ctx context.Context, lr *landRun, mergeSHA string) {
 		} else {
 			runs = rs
 			result, failing = MainResult(rs)
+			if result == "red" && rerun == nil {
+				if rerun = r.rerunFailed(ctx, lr, rs); len(rerun) > 0 {
+					result, failing = "", nil
+					deadline.Stop()
+					deadline = r.Clock.NewTimer(wait)
+				}
+			}
 			if result != "" {
 				break
 			}
@@ -73,26 +82,44 @@ func (r *Runner) watchMain(ctx context.Context, lr *landRun, mergeSHA string) {
 	if len(failing) > 0 {
 		data["failing"] = failing
 	}
-	if result == "red" {
-		title := clip(fmt.Sprintf("main red after #%d: %s", lr.item.PR, strings.Join(failing, ", ")), 200)
-		ask := MainRedAsk(lr.repo.Slug, lr.item.PR, lr.item.ID, mergeSHA, urls)
-		id, err := r.Client.AddItem(report, NewItem{Title: title, Ask: ask, Repo: lr.repo.Slug, Priority: "P1", Source: "finding"})
-		if err != nil {
-			lr.log.Error("filing the P1 for a red main", "err", err)
-		} else {
-			data["p1_item"] = id
+	if len(rerun) > 0 {
+		data["rerun"] = rerun
+	}
+	if result == "red" && prev != "" && prev != mergeSHA {
+		if rs, err := r.Land.CommitRuns(ctx, lr.repo.Slug, prev); err == nil {
+			if res, _ := MainResult(rs); res == "green" {
+				data["last_green"] = prev
+			}
 		}
 	}
 	if err := r.Client.Event(report, lr.item.ID, "main_ci", data); err != nil {
 		lr.log.Error("main_ci event", "err", err)
 		return
 	}
-	lr.log.Info("main CI", "result", result, "merge", short7(mergeSHA))
+	lr.log.Info("main CI", "result", result, "merge", short7(mergeSHA), "rerun", rerun)
 }
 
-// MainRedAsk is the ask of a red main's P1. MainRedCommit reads the commit back from it when the
-// runner triages the P1, to attach the failing CI log (it holds no lease on the P1 before).
-func MainRedAsk(slug string, pr int, item int64, mergeSHA string, urls []string) string {
-	return fmt.Sprintf("main's CI failed on `%s`, the squash merge of %s#%d.\n\nCaused by item #%d / merge %s.\n\nRuns:\n- %s\n",
-		short7(mergeSHA), slug, pr, item, mergeSHA, strings.Join(urls, "\n- "))
+// rerunFailed re-runs the failed jobs of main's failed runs, and names the jobs it re-ran (none
+// when GitHub refused every re-run: the red stands).
+func (r *Runner) rerunFailed(ctx context.Context, lr *landRun, runs []WorkflowRun) []string {
+	var names []string
+	for _, run := range runs {
+		switch run.Conclusion {
+		case "success", "neutral", "skipped", "cancelled":
+			continue
+		}
+		if err := r.Land.RerunFailed(ctx, lr.repo.Slug, run.ID); err != nil {
+			lr.log.Warn("re-running main's failed jobs", "run", run.ID, "err", err)
+			continue
+		}
+		name := run.Name
+		if name == "" {
+			name = run.Workflow
+		}
+		names = append(names, name)
+	}
+	if len(names) > 0 {
+		lr.log.Info("main red: re-running the failed jobs once", "jobs", names)
+	}
+	return names
 }

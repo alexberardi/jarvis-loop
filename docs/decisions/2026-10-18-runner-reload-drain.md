@@ -31,7 +31,7 @@ lost. On 2026-10-17 a restart to add three repos killed about 45 agent-minutes (
   and restarts once its runs end"), and the orchestrator's snapshot carries its `state`. The runner
   says so with `POST /runners/self/state` (a runner-token route, so a Mac runner on
   `--runner-addr` can too); the runner's next claim, after the restart, clears it. The `runners`
-  table gained `state` and `state_at` (migration 0019).
+  table gained `state` and `state_at` (migration 0020).
 - **loopd reloads its repos on SIGHUP**: `--repos-file` is read again and added to `--repos` as at
   start, then given to the store (triage's choices, the CLI's `--repo`) and the Slack bot (`/loop
   add`, plans). An invalid file is refused with a log line and the repos stay.

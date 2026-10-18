@@ -44,14 +44,17 @@ const (
 	// Plant in the shared mirror: its commondir, another worktree's commondir and a file in its
 	// worktrees dir, then good.
 	GitTamperShared = "git_tamper_shared"
-	Lying           = "lying"       // good, but the result's head_sha is not HEAD
-	Malformed       = "malformed"   // commit, then a result that is not JSON
-	NoResult        = "noresult"    // commit, exit 0, no result
-	Question        = "question"    // a question result
-	CommitAsk       = "commit_ask"  // commit, then a question (the commit stays in the runner's mirror)
-	Dirty           = "dirty"       // good, but a change left uncommitted
-	Hang            = "hang"        // write a file, then wait forever
-	IgnoreTerm      = "ignore_term" // like hang, but ignore SIGTERM
+	Lying           = "lying"      // good, but the result's head_sha is not HEAD
+	Malformed       = "malformed"  // commit, then a result that is not JSON
+	NoResult        = "noresult"   // commit, exit 0, no result
+	Question        = "question"   // a question result
+	CommitAsk       = "commit_ask" // commit, then a question (the commit stays in the runner's mirror)
+	Dirty           = "dirty"      // good, but a change left uncommitted
+	Hang            = "hang"       // write a file, then wait forever
+	// Wait reports hanging, waits until the harness releases the item (<dir>/<item id>.release),
+	// then plays good: a run still going while something else happens.
+	Wait       = "wait_release"
+	IgnoreTerm = "ignore_term" // like hang, but ignore SIGTERM
 	// TodosHang is hang after a to-do list (TodoWrite) and a described Bash call whose command
 	// holds SECRET_CMD_MARKER (which must never reach the board).
 	TodosHang = "todos_hang"
@@ -332,6 +335,16 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			}
 		}
 		os.Remove(filepath.Join(f.cwd, "wip.txt"))
+		scenario = Good
+	}
+	if scenario == Wait {
+		progress("hanging")
+		release := filepath.Join(os.Getenv("FAKE_CLAUDE_SCRIPTS"), item+".release")
+		for deadline := time.Now().Add(2 * time.Minute); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			if os.Remove(release) == nil {
+				break
+			}
+		}
 		scenario = Good
 	}
 	switch scenario {

@@ -127,8 +127,8 @@ func TestCIRuns(t *testing.T) {
 
 // The runner reads the merge commit back only from a P1 it filed itself for the item's repo.
 func TestMainRedCommit(t *testing.T) {
-	ask := MainRedAsk("o/r", 25, 24, mergeM, []string{"https://github.com/o/r/actions/runs/1"})
-	p1 := Item{Title: "main red after #25: ci", Ask: ask, Source: "finding"}
+	ask := pipeline.MainRedAsk(pipeline.MainRed{Slug: "o/r", PR: 25, Item: 24, MergeSHA: mergeM, Failing: []string{"ci"}, URLs: []string{"https://github.com/o/r/actions/runs/1"}})
+	p1 := Item{Title: pipeline.MainRedTitle("o/r", []string{"ci"}), Ask: ask, Source: "finding"}
 	if got := MainRedCommit(p1, "o/r"); got != mergeM {
 		t.Fatalf("commit %q", got)
 	}
@@ -229,8 +229,9 @@ func TestTriageOfMainRedAttachesTheCILog(t *testing.T) {
 		{ID: 301, Name: "docs", Status: "completed", Conclusion: "success"},
 	}, logs: map[int64]string{300: string(raw)}}
 	g.r.Land = gh
-	it, err := g.st.AddItem(g.ctx, "runner:devbox", store.NewItem{Title: "main red after #25: ci", Repo: "alex/demo", Source: "finding",
-		Ask: MainRedAsk("alex/demo", 25, 24, mergeM, []string{"https://github.com/alex/demo/actions/runs/300"})})
+	it, err := g.st.AddItem(g.ctx, "runner:devbox", store.NewItem{Title: "main red in alex/demo: ci", Repo: "alex/demo", Source: "finding",
+		Ask: pipeline.MainRedAsk(pipeline.MainRed{Slug: "alex/demo", PR: 25, Item: 24, MergeSHA: mergeM, Failing: []string{"ci"},
+			URLs: []string{"https://github.com/alex/demo/actions/runs/300"}})})
 	if err != nil {
 		t.Fatal(err)
 	}

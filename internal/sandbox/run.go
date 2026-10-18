@@ -37,7 +37,7 @@ func RunScenario(sc *Scenario, dir string, bin Binaries) Result {
 	if logf != nil {
 		logw = logf
 	}
-	s, err := StartStack(Options{Dir: filepath.Join(dir, "stack"), Bin: bin, Log: logw, Stages: sc.Stages, ExtraRepo: sc.ExtraRepo})
+	s, err := StartStack(Options{Dir: filepath.Join(dir, "stack"), Bin: bin, Log: logw, Stages: sc.Stages, Slots: sc.Slots, ExtraRepo: sc.ExtraRepo})
 	if err != nil {
 		res.Failures = []string{"starting the stack: " + err.Error()}
 		res.Seconds = time.Since(start).Seconds()

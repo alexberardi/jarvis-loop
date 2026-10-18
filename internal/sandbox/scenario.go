@@ -33,9 +33,11 @@ type Scenario struct {
 	Stages []string `json:"stages,omitempty"`
 	// ExtraRepo: the fake GitHub has a fourth repo (sandbox/extra) that loopd and the runner
 	// learn of only from a reload_loopd and a reload_runner step.
-	ExtraRepo bool    `json:"extra_repo,omitempty"`
-	Steps     []Step  `json:"steps"`
-	Final     *Expect `json:"expect,omitempty"`
+	ExtraRepo bool `json:"extra_repo,omitempty"`
+	// Slots are the runner's agent slots (default 1): two let a run go on while another starts.
+	Slots int     `json:"slots,omitempty"`
+	Steps []Step  `json:"steps"`
+	Final *Expect `json:"expect,omitempty"`
 }
 
 // Step is one thing that happens. Do says what; the other fields are its arguments. An "expect"
@@ -53,7 +55,8 @@ type Step struct {
 	// RepoAs: the CLI's --repo as typed (default the demo repo's config key); with Refused, the
 	// add must be refused (a regexp on the error) and adds no item
 	RepoAs string `json:"repo_as,omitempty"`
-	// triage: what the item needs from a runner (its resources, comma-separated)
+	// triage: what the item needs from a runner (its resources, comma-separated); resources: what
+	// the user sets them to (loop resources), "none" for none
 	Resources string `json:"resources,omitempty"`
 	// hand_claim: what the hand runner offers when it claims (comma-separated), and the only
 	// resources it takes (only_resources, as a Mac runner's); with Via "runner_listener" it claims
@@ -89,6 +92,9 @@ type Step struct {
 	// the workflow runs on main's commits go (name -> pass, fail, pending, cancel)
 	Checks map[string]string `json:"checks,omitempty"`
 	Main   map[string]string `json:"main,omitempty"`
+	// Rerun is how main's jobs go when the runner re-runs their failed jobs (name -> pass, fail,
+	// pending); a job not named goes as it went the first time.
+	Rerun map[string]string `json:"rerun,omitempty"`
 	// MainHead: Main is how the runs went on main's current head only (of the demo repo, or
 	// Slug), whether merged or pushed; it wins over the runs set for every commit.
 	MainHead bool `json:"main_head,omitempty"`
@@ -565,7 +571,7 @@ func (p *player) step(st Step) error {
 			if err != nil {
 				return err
 			}
-			return s.ReleaseItem(r.id)
+			return s.Release(r.id)
 		}
 		id, err := p.planRef(st.Plan)
 		if err != nil {
@@ -628,6 +634,9 @@ func (p *player) step(st Step) error {
 			s.GitHub.SetMainCIAt(slug, s.GitHub.MainHead(slug), st.Main)
 		case st.Main != nil:
 			s.GitHub.SetMainCI(st.Main)
+		}
+		if st.Rerun != nil {
+			s.GitHub.SetMainRerun(st.Rerun)
 		}
 		if st.Item == "" {
 			return nil
@@ -795,6 +804,13 @@ func (p *player) step(st Step) error {
 			return err
 		}
 		return s.Advance(d)
+	case "resources":
+		// The user's loop resources: replace what the item needs from a runner.
+		r, err := p.ref(st.Item)
+		if err != nil {
+			return err
+		}
+		return s.user.do("POST", fmt.Sprintf("/items/%d/resources", r.id), map[string]any{"resources": strings.Split(st.Resources, ",")}, nil)
 	case "control":
 		patch := map[string]any{}
 		if st.ActiveAgents != nil {
@@ -810,6 +826,12 @@ func (p *player) step(st Step) error {
 			patch["orchestrator_turns_per_day"] = *st.OrchTurnsPerDay
 		}
 		return s.user.do("PUT", "/control", patch, nil)
+	case "unfreeze":
+		slug := RepoSlug
+		if st.Slug != "" {
+			slug = st.Slug
+		}
+		return s.user.do("POST", "/unfreeze", map[string]string{"repo": slug}, nil)
 	case "expect", "wait":
 		return p.check(st.Expect)
 	case "orchestrator_message":

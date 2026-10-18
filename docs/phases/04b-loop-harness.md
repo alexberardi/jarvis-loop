@@ -84,8 +84,9 @@ a forbidden message), with a readable failure. The fake Slack's injection and re
 
 ## Scenario format (as built)
 
-A scenario file is `{"name", "about", ["stages"], ["extra_repo"], "steps": [...], "expect": {...}}`; `stages` are
-the stages the runner claims (default triage, build and review, as a real runner); `extra_repo` puts a
+A scenario file is `{"name", "about", ["stages"], ["slots"], ["extra_repo"], "steps": [...], "expect": {...}}`; `stages` are
+the stages the runner claims (default triage, build and review, as a real runner); `slots` its agent
+slots (default 1; 2 let one run go on while another starts); `extra_repo` puts a
 fourth repo (`sandbox/extra`) on the fake GitHub that loopd and the runner learn of only from a reload. Items are named by an
 alias (`"a"`) given when added; ids are the stack's own. An item the loop filed itself (a red
 main's P1) is named by its id: `"#2"`. Unknown fields are refused, so a typo
@@ -95,14 +96,15 @@ cannot silently check nothing. Steps (`"do"`):
 | --- | --- |
 | `add` `item`, `title`, [`priority`], [`via`: `cli`\|`slack`], [`text`], [`after`: aliases] | add an item (CLI: `POST /items` with repo `demo`; Slack: `/loop add <title>`, or `/loop add <text>` as typed, repo and priority words included); `after` makes it depend on those items (CLI: `depends_on`; Slack: `… after #1, #2`) |
 | `triage` / `review` `item`, [`resources`] | claim the stage by hand (a `hand` runner token, as `loop claim`/`loop advance`) and finish it: reproduced with evidence (`resources`: what it needs from a runner, e.g. `emulator`) / approved for the PR head |
+| `resources` `item`, `resources` | the user's `loop resources`: what the item needs from a runner becomes `resources` (comma-separated, `none` for none) |
 | `hand_claim` `item`, [`capabilities`] | the hand runner claims the item's build, offering `capabilities` (comma-separated, e.g. `macos`), and keeps the lease |
 | `land` `item`, `outcome` (`hold`\|`merged`\|`back_to_build`), [`reason`] | the land stage by hand, with the PR's changed paths (a scenario whose `stages` include `land` lets the runner's land script do it instead) |
-| `script` `item`, `play`, [`file`], [`for`], [`picks`] | how the fake claude plays the item's runs of a stage (`for`: `triage`, `build` (default), `review`). Build: `good`, `escape`, `hang`, `wait` (wip.txt, then good after `release`), `ignore_term`, `todos_hang` (hang after a to-do list and a described Bash call), `usage_limit`, `question`, `harness_question`, `exit3`, `lock_error` (git's stale `index.lock`), …; `file`: the path it changes; after a bounce it addresses `.loop/review/`. Triage: `reproduce` (default; `picks`: the repo it names when the item has none), `duplicate`, `triage_question`, `triage_bad_repo`. Review: `approve` (default), `bounce`, `review_commit` |
+| `script` `item`, `play`, [`file`], [`for`], [`picks`] | how the fake claude plays the item's runs of a stage (`for`: `triage`, `build` (default), `review`). Build: `good`, `escape`, `hang`, `wait` (wip.txt, then good after `release`), `wait_release` (hanging, then good after `release`), `ignore_term`, `todos_hang` (hang after a to-do list and a described Bash call), `usage_limit`, `question`, `harness_question`, `exit3`, `lock_error` (git's stale `index.lock`), …; `file`: the path it changes; after a bounce it addresses `.loop/review/`. Triage: `reproduce` (default; `picks`: the repo it names when the item has none), `duplicate`, `triage_question`, `triage_bad_repo`. Review: `approve` (default), `bounce`, `review_commit` |
 | `script` `plan`, `for` (`product`\|`engineering`), `play`, [`picks`] | how the fake claude plays the plan's turns of a persona. Product: `brief` (default: `out/brief.md` naming the turn's messages, ready; `picks`: the `repos` it sets). Engineering: `blueprint` (default: 3 pieces, 2 and 3 depending on 1, ready), `back_to_brief`, `cycle`. Both: `wait` (reports `waiting`, finishes after `release`), `plan_escape` (a write outside `out/` first, refused), `hang`, `usage_limit`, `exit3`. Every plan turn starts a session `fake-session-P<id>-<persona>` or resumes one, which must have been started in the same directory (else it exits as claude does: "No conversation found") |
 | `runner` [`claims`: alias\|`none`] | the runner polls once: closes the PRs of dropped items and reports deploys (as `Run` does each poll), then claims (and works in the background) or finds nothing. A plan's alias: it must claim that plan's next turn (a scenario whose `stages` include `plan`) |
 | `deploy` `build` (`base`\|`main`) | the runner restarts on a loop build: jarvis-loop's main where the stack started, or its main now; it reports `deployed` for the qa items awaiting a deploy whose merge that build contains (the sandbox's jarvis-loop has `qa_after_deploy`) |
 | `agent_running` `item` or `plan` | wait until the item's agent is mid-run (a hanging fake), or the plan's is waiting (`wait`) |
-| `release` `plan` or `item` | let the plan's waiting fake agent finish its turn, or the item's `wait` build (wip.txt, then waits) go on as `good` |
+| `release` `plan` or `item` | let the plan's waiting fake agent finish its turn, or the item's waiting build go on as `good`: `wait` (wip.txt, reports `waiting`) or `wait_release` (reports `hanging`) |
 | `reload_runner` [`slots`], [`add_repo`: `extra`], [`invalid`], [`refused`] | rewrite the runner's config file from its current config (more slots, the extra repo; `invalid`: truncated) and reload it, as SIGHUP does; `refused`: the reload must be refused (a regexp on the error) |
 | `reload_loopd` `text`, [`refused`] | write loopd's `--repos-file` and read the repos again, as SIGHUP does |
 | `drain` | the runner drains, as on SIGUSR1: no more claims, loopd shows it draining |
@@ -113,7 +115,8 @@ cannot silently check nothing. Steps (`"do"`):
 | `submit` `as`, [`text`] | `as` submits the newest modal their press opened (the Rebuild form), with `text` as its note (default: the note it opened with); recorded as kind `submit`. Waits for the modal to open |
 | `command` `text`, `as`, [`answer` regexp] | `/loop <text>`; the ephemeral answer must match |
 | `control` `active_agents`, `max_run_minutes`, `stopped` | `PUT /control` as the CLI |
-| `ci` [`item`, `checks`: {name: `pass`\|`fail`\|`pending`\|`cancel`\|`skip`}], [`main`: {name: `pass`\|`fail`\|`pending`}] | the CI checks on the item's PR head now (a new head has none), and how the workflow runs on main's merge commits go (phase 6). With `main_head: true`, `main` is how they went on main's current head only (merged or pushed; it wins over the runs for every commit) |
+| `unfreeze` [`slug`] | `loop unfreeze` (`POST /unfreeze`) for the demo repo (or `slug`): lift the freeze of a red main by hand |
+| `ci` [`item`, `checks`: {name: `pass`\|`fail`\|`pending`\|`cancel`\|`skip`}], [`main`: {name: `pass`\|`fail`\|`pending`}] | the CI checks on the item's PR head now (a new head has none), and how the workflow runs on main's merge commits go (phase 6). With `main_head: true`, `main` is how they went on main's current head only (merged or pushed; it wins over the runs for every commit). `rerun`: {name: `pass`\|`fail`\|`pending`} is how a main job goes once the runner re-runs its failed jobs (a job not named goes as it went the first time) |
 | `push` `item` or `branch` (`main`), `file`, `text` | someone else's commit on the item's branch, or on demo's main |
 | `github` [`refuse_merges`: n], [`item` + `merge_by_hand`], [`item` + `close_by_hand`] | GitHub refuses the next n merges; the item's PR is merged (or closed) on GitHub outside the loop |
 | `plan` `plan` (alias), `title`, [`priority`], [`text`] | start a plan (`POST /plans`, repos `sandbox/demo`) |

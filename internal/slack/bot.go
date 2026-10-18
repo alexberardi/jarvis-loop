@@ -227,6 +227,10 @@ func (b *Bot) handleEvent(ctx context.Context, e store.Event) {
 		return
 	}
 	if e.ItemID == 0 {
+		if e.Kind == store.KindFrozen || e.Kind == store.KindUnfrozen {
+			b.post(ctx, "freeze", b.freezeMessage(ctx, e))
+			return
+		}
 		if e.Kind == "control" {
 			if err := b.updateControl(ctx); err != nil {
 				b.c.Log.Error("slack: control message", "err", err.Error())
@@ -549,6 +553,9 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	if e.Kind == store.KindServable {
 		return Message{Text: fmt.Sprintf("A runner offers %s now; it can claim this from the %s queue.", b.field(strings.Join(listOf(e.Data, "missing"), " + "), 200, id), Escape(e.To))}, true
 	}
+	if line := b.freezeLine(ctx, e, id); line != "" {
+		return Message{Text: line}, true
+	}
 	if strings.HasPrefix(e.Actor, orchestratorPrefix) {
 		return Message{Text: b.orchestratorLine(ctx, e)}, true
 	}
@@ -586,7 +593,9 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	case "held":
 		text = fmt.Sprintf("Kept holding (%s).", by)
 	case "rebuild":
-		if strings.HasPrefix(e.Actor, "runner:") {
+		if e.Data["main_red"] == true {
+			text = "Back to build: " + f("notes", 400) + " (CI failed on this PR while main was red; main is green now)."
+		} else if strings.HasPrefix(e.Actor, "runner:") {
 			text = "Back to build: " + f("notes", 400)
 		} else {
 			text = fmt.Sprintf("Sent back to build by %s: '%s'.", by, f("notes", 600))
@@ -600,6 +609,38 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 			parts = append(parts, "Title: "+b.field(str(t, "to"), 300, id))
 		}
 		text = strings.Join(parts, "; ") + fmt.Sprintf(" (%s).", by)
+	case pipeline.KindEdited:
+		var parts []string
+		if t, ok := e.Data["title"].(map[string]any); ok {
+			parts = append(parts, "Title: "+b.field(str(t, "to"), 300, id))
+		}
+		if _, ok := e.Data["ask"].(map[string]any); ok {
+			if len(parts) == 0 {
+				parts = append(parts, "The ask changed")
+			} else {
+				parts = append(parts, "the ask changed")
+			}
+		}
+		text = strings.Join(parts, "; ") + fmt.Sprintf(" (%s).", by)
+	case store.KindLinked:
+		var refs []string
+		for _, x := range listOf(e.Data, "after") {
+			if n, err := strconv.ParseInt(x, 10, 64); err == nil {
+				refs = append(refs, b.refID(ctx, n))
+			}
+		}
+		text = fmt.Sprintf("Now waits on %s (%s).", strings.Join(refs, ", "), by)
+	case pipeline.KindUnlinked:
+		after, _ := e.Data["after"].(float64)
+		text = fmt.Sprintf("No longer waits on %s (%s).", b.refID(ctx, int64(after)), by)
+	case pipeline.KindResources:
+		list := func(k string) string {
+			if l := listOf(e.Data, k); len(l) > 0 {
+				return Escape(strings.Join(l, ", "))
+			}
+			return "none"
+		}
+		text = fmt.Sprintf("Resources %s → %s (%s).", list("from"), list("to"), by)
 	case "refused":
 		text = fmt.Sprintf("Refused %s from %s: %s", Escape(str(e.Data, "action")), by, f("message", 300))
 	case "guard_refused":

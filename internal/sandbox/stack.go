@@ -94,6 +94,8 @@ type Options struct {
 	Stages []string
 	// ExtraRepo makes ExtraSlug's remote on the fake GitHub, for a reload to add.
 	ExtraRepo bool
+	// Slots are the runner's agent slots (default 1).
+	Slots int
 }
 
 // Stack is one sandboxed loop: loopd (store, API on a loopback port, Slack layer), a runner, a
@@ -351,8 +353,9 @@ func StartStack(opts Options) (st *Stack, err error) {
 		return nil, err
 	}
 	verify := true
+	slots := max(opts.Slots, 1)
 	cfg := runner.Config{
-		LoopdURL: s.LoopdURL, Token: runnerTok, OrchestratorToken: orchTok, Name: RunnerName, Capabilities: []string{}, Slots: 1,
+		LoopdURL: s.LoopdURL, Token: runnerTok, OrchestratorToken: orchTok, Name: RunnerName, Capabilities: []string{}, Slots: slots,
 		WorkRoot: filepath.Join(dir, "work"), Claude: opts.Bin.Claude, Guard: opts.Bin.Guard, Mode: runner.ModeAuto,
 		PollSeconds: 2, UserEmulator: "emulator-5554", VerifyPR: &verify,
 		LoopdTokens: tokPath, LoopdData: filepath.Join(dir, "loopd"), Stages: opts.Stages,
@@ -756,12 +759,6 @@ func (s *Stack) PlanAgentState(id int64) []string {
 	return strings.Fields(string(b))
 }
 
-// ReleasePlan lets a plan's waiting fake agent (play "wait") finish its turn.
-// ReleaseItem lets an item's "wait" build go on.
-func (s *Stack) ReleaseItem(id int64) error {
-	return os.WriteFile(filepath.Join(s.scripts, fmt.Sprintf("%d.release", id)), nil, 0o644)
-}
-
 // ReloadRunner rewrites the runner's config file from its current config (slots > 0 sets the
 // slots, addRepo ExtraKey adds the extra repo, invalid truncates the file) and reloads it, as
 // SIGHUP does.
@@ -804,8 +801,14 @@ func (s *Stack) ReloadLoopd(text string) error {
 	return loopd.ReloadRepos(loopd.RepoSource{Flag: Repos, File: p}, s.Store, s.Bot, s.log)
 }
 
+// ReleasePlan lets a plan's waiting fake agent (play "wait") finish its turn.
 func (s *Stack) ReleasePlan(id int64) error {
 	return os.WriteFile(filepath.Join(s.scripts, fmt.Sprintf("P%d.release", id)), nil, 0o644)
+}
+
+// Release lets an item's waiting build (play "wait" or "wait_release") go on.
+func (s *Stack) Release(id int64) error {
+	return os.WriteFile(filepath.Join(s.scripts, fmt.Sprintf("%d.release", id)), nil, 0o644)
 }
 
 // Thread is an item's Slack thread ts ("" before its parent is posted).
