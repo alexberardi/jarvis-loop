@@ -38,6 +38,13 @@ func BoardHandler(st *store.Store, toks *api.Tokens, log *slog.Logger, board web
 	return api.Logged(log, web.NewBoard(st, toks, log, board))
 }
 
+// RunnerHandler serves the API to runner tokens only, and no status page or board: it is what
+// loopd's LAN listener for remote runners (--runner-addr) serves, so the main API stays on
+// loopback (docs/decisions/2026-10-17-mac-runners.md).
+func RunnerHandler(st *store.Store, toks *api.Tokens, log *slog.Logger) http.Handler {
+	return api.NewRunners(st, toks, log)
+}
+
 // Slack configures the Slack layer.
 type Slack struct {
 	// BaseURL is the Web API (slack.DefaultBaseURL; the harness's fake otherwise).

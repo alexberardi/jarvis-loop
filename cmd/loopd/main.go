@@ -47,6 +47,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	tokensPath := fs.String("tokens", "~/.config/jarvis-loop/tokens", "tokens file, 0600: token<TAB>kind<TAB>name per line")
 	lan := fs.Bool("lan", false, "allow listening on a non-loopback address")
 	boardAddr := fs.String("board-addr", "", "a second listener serving only the read-only board at /board (e.g. 0.0.0.0:7790, the LAN); off when empty")
+	runnerAddr := fs.String("runner-addr", "", "a listener for remote runners (e.g. 0.0.0.0:7781, the LAN): the API for runner tokens only, every other token refused; off when empty")
 	slackWorkspace := fs.String("slack-workspace", "", "the Slack workspace's address (https://<team>.slack.com), for the board's links to item threads; none without it")
 	slackEnv := fs.String("slack-env", "", "Slack env file, 0600, with SLACK_BOT_TOKEN and SLACK_APP_TOKEN; Slack is off without it")
 	orchEnv := fs.String("orchestrator-slack-env", "", "the @orchestrator Slack app's env file (docs/slack/orchestrator-manifest.yml), 0600, like --slack-env's; default: "+orchestratorEnvName+" next to --slack-env's file, the app off when it is absent; \"off\" turns it off")
@@ -62,6 +63,11 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	if *boardAddr != "" {
 		if _, _, err := net.SplitHostPort(*boardAddr); err != nil {
 			return fmt.Errorf("--board-addr: %w", err)
+		}
+	}
+	if *runnerAddr != "" {
+		if _, _, err := net.SplitHostPort(*runnerAddr); err != nil {
+			return fmt.Errorf("--runner-addr: %w", err)
 		}
 	}
 	if *slackWorkspace != "" {
@@ -148,6 +154,28 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		}
 		log.Info("board listening", "addr", boardLn.Addr().String())
 	}
+	var runnerSrv *http.Server
+	var runnerLn net.Listener
+	if *runnerAddr != "" {
+		// The remote runners' listener, for the LAN: runner tokens only, so it needs no --lan.
+		runnerSrv = &http.Server{
+			Addr:              *runnerAddr,
+			Handler:           loopd.RunnerHandler(st, toks, log),
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       5 * time.Minute, // evidence uploads
+			WriteTimeout:      5 * time.Minute,
+			IdleTimeout:       2 * time.Minute,
+			MaxHeaderBytes:    64 << 10,
+		}
+		if runnerLn, err = net.Listen("tcp", *runnerAddr); err != nil {
+			ln.Close()
+			if boardLn != nil {
+				boardLn.Close()
+			}
+			return fmt.Errorf("--runner-addr: %w", err)
+		}
+		log.Info("runner listener listening", "addr", runnerLn.Addr().String())
+	}
 
 	var bg sync.WaitGroup
 	defer bg.Wait()
@@ -159,6 +187,9 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 			ln.Close()
 			if boardLn != nil {
 				boardLn.Close()
+			}
+			if runnerLn != nil {
+				runnerLn.Close()
 			}
 			return err
 		}
@@ -180,13 +211,17 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		}
 	}()
 
-	// Either server failing stops both: loopd is up with both listeners or not at all.
+	// Any server failing stops them all: loopd is up with all its listeners or not at all.
 	servers := []*http.Server{srv}
-	errc := make(chan error, 2)
+	errc := make(chan error, 3)
 	go func() { errc <- srv.Serve(ln) }()
 	if boardSrv != nil {
 		servers = append(servers, boardSrv)
 		go func() { errc <- boardSrv.Serve(boardLn) }()
+	}
+	if runnerSrv != nil {
+		servers = append(servers, runnerSrv)
+		go func() { errc <- runnerSrv.Serve(runnerLn) }()
 	}
 	var serveErr error
 	select {
