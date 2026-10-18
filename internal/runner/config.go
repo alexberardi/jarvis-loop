@@ -504,6 +504,11 @@ func (c *Config) normalizeRegression() error {
 	if _, ok := c.Repos[g.MobileRepo]; g.MobileRepo != "" && !ok {
 		return fmt.Errorf("config: regression.mobile_repo %q is not a configured repo (use its key)", g.MobileRepo)
 	}
+	// A runner with the emulator takes mobile runs: without its own checkout, scripts/e2e would look
+	// for jarvis-node-mobile outside the run's checkouts.
+	if g.MobileRepo == "" && slices.Contains(c.Stages, StageRegression) && slices.Contains(c.Capabilities, "emulator") {
+		return fmt.Errorf("config: a runner with the emulator capability takes mobile regression runs, so regression.mobile_repo is required")
+	}
 	if g.TimeoutText != "" {
 		d, err := time.ParseDuration(g.TimeoutText)
 		if err != nil || d <= 0 || d >= pipeline.RegressionMaxRun {

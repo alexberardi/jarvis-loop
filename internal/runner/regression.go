@@ -354,8 +354,8 @@ func (r *Runner) runRegression(ctx context.Context, ru *run, reg Regression, log
 	tests, shots := e2e.RegressionTests(repos)
 	rep.Tests = tests
 	for name, rel := range shots {
-		path := filepath.Join(runDir, rel)
-		if fi, err := os.Lstat(path); err != nil || !fi.Mode().IsRegular() {
+		path, err := runDirShot(runDir, rel)
+		if err != nil {
 			log.Warn("regression screenshot not uploaded", "file", rel, "err", err)
 			r.dropShot(rep.Tests, name)
 			continue
@@ -372,6 +372,26 @@ func (r *Runner) runRegression(ctx context.Context, ru *run, reg Regression, log
 	}
 	log.Info("regression ended", "exit", exit, "tests", len(tests), "suite_errors", rep.Error)
 	return rep, nil
+}
+
+// runDirShot resolves a screenshot's path in the run dir, symlinks included: the report's path is
+// checked for "../" already, but a symlinked directory in .e2e/<run>/ could still lead out of it.
+func runDirShot(runDir, rel string) (string, error) {
+	root, err := filepath.EvalSymlinks(runDir)
+	if err != nil {
+		return "", err
+	}
+	path, err := filepath.EvalSymlinks(filepath.Join(runDir, rel))
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(path, root+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s leads out of the run dir", rel)
+	}
+	if fi, err := os.Stat(path); err != nil || !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("%s is not a regular file", rel)
+	}
+	return path, nil
 }
 
 func (r *Runner) dropShot(tests []RegressionTest, name string) {

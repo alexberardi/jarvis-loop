@@ -37,8 +37,9 @@ PR, nor nightly yet (#152 builds on this).
   runner's own limit (`regression.timeout`, default 150 m) ends it first.
 - **The runner runs it, no agent** (`internal/runner/regression.go`), stage `regression` in its
   `stages` and a `regression` section in its config: `repo` (the jarvis-server key) and
-  `mobile_repo` (jarvis-node-mobile's). It checks both out fresh at their base from its mirrors (the
-  mobile app only for mobile/all), runs the server repo's prepare and setup commands, takes the
+  `mobile_repo` (jarvis-node-mobile's; required when the runner offers the `emulator` capability, so
+  scripts/e2e never looks for the app outside the run's checkouts). It checks both out fresh at
+  their base from its mirrors (the mobile app only for mobile/all), runs the server repo's prepare and setup commands, takes the
   machine's **verify lock** (one emulator, one GPU), and runs
   `scripts/e2e <suite> --name loop-reg-<id> [--mobile-repo <checkout>]` in the **same fence as the
   verify steps** (it needs KVM, the harness cache and `~/.android`, which no agent sandbox has; the

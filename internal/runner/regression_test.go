@@ -93,6 +93,29 @@ func TestLatestE2EReport(t *testing.T) {
 	}
 }
 
+// A screenshot is uploaded only when it resolves to a regular file inside the run dir: a symlink
+// anywhere on its path (the file or a directory) that leads out of it is refused.
+func TestRunDirShot(t *testing.T) {
+	run, outside := t.TempDir(), t.TempDir()
+	os.MkdirAll(filepath.Join(run, "web", "a"), 0o755)
+	os.WriteFile(filepath.Join(run, "web", "a", "shot.png"), []byte("png"), 0o644)
+	os.WriteFile(filepath.Join(outside, "secret.png"), []byte("secret"), 0o644)
+	os.Symlink(outside, filepath.Join(run, "web", "out"))
+	os.Symlink(filepath.Join(outside, "secret.png"), filepath.Join(run, "web", "link.png"))
+	os.Symlink(filepath.Join(run, "web", "a", "shot.png"), filepath.Join(run, "web", "inside.png"))
+	if p, err := runDirShot(run, "web/a/shot.png"); err != nil || filepath.Base(p) != "shot.png" {
+		t.Fatalf("a shot in the run dir: %q %v", p, err)
+	}
+	if _, err := runDirShot(run, "web/inside.png"); err != nil {
+		t.Fatalf("a link that stays in the run dir: %v", err)
+	}
+	for _, rel := range []string{"web/out/secret.png", "web/link.png", "web/a", "web/missing.png"} {
+		if p, err := runDirShot(run, rel); err == nil {
+			t.Errorf("%s was uploadable as %s", rel, p)
+		}
+	}
+}
+
 func TestRegressionConfig(t *testing.T) {
 	two := strings.Replace(cfgBody, `}}}`, `},"jarvis-node-mobile":{"remote":"https://github.com/alexberardi/jarvis-node-mobile.git","slug":"alexberardi/jarvis-node-mobile"}}`, 1)
 	ok := strings.Replace(two, `"name"`, `"stages":["build","regression"],"regression":{"repo":"jarvis-server","mobile_repo":"jarvis-node-mobile"},"name"`, 1)
@@ -103,11 +126,17 @@ func TestRegressionConfig(t *testing.T) {
 	if c.Regression.Timeout() != DefaultRegressionTimeout {
 		t.Fatalf("timeout %s", c.Regression.Timeout())
 	}
+	// A web-only runner needs no mobile repo; one that takes mobile runs does.
+	web := strings.Replace(two, `"name"`, `"stages":["regression"],"regression":{"repo":"jarvis-server"},"name"`, 1)
+	if _, err := LoadConfig(writeCfg(t, web+"}", 0o600)); err != nil {
+		t.Fatalf("web only: %v", err)
+	}
 	for name, body := range map[string]string{
 		"stage without the section": strings.Replace(two, `"name"`, `"stages":["regression"],"name"`, 1),
 		"unknown repo":              strings.Replace(two, `"name"`, `"stages":["regression"],"regression":{"repo":"server"},"name"`, 1),
 		"unknown mobile repo":       strings.Replace(two, `"name"`, `"regression":{"repo":"jarvis-server","mobile_repo":"mobile"},"name"`, 1),
 		"timeout past loopd's cap":  strings.Replace(two, `"name"`, `"regression":{"repo":"jarvis-server","timeout":"4h"},"name"`, 1),
+		"emulator without mobile":   strings.Replace(strings.Replace(two, `["gpu"]`, `["emulator"]`, 1), `"name"`, `"stages":["regression"],"regression":{"repo":"jarvis-server"},"name"`, 1),
 	} {
 		if _, err := LoadConfig(writeCfg(t, body+"}", 0o600)); err == nil || !strings.Contains(err.Error(), "regression") {
 			t.Errorf("%s: %v", name, err)
