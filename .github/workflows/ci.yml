@@ -17,7 +17,9 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # On a 2-vCPU runner the race suite takes about 7 minutes and the scenarios 2 more, so 10 cut
+    # the job off mid-run with no failure in its log (#213).
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -43,7 +45,8 @@ jobs:
       - name: test (race)
         env:
           CGO_ENABLED: "1"
-        run: go test -race ./...
+        # Under the job's cap, so a hung test prints its goroutines instead of the job being cut off.
+        run: go test -race -timeout 12m ./...
       - name: build (CGO off)
         env:
           CGO_ENABLED: "0"
