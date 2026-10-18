@@ -37,6 +37,7 @@
                 {"kind": "evidence", "count": 1, "data": {"name": "^2-test-failed-1\\.png$"}}],
      "messages": [{"channel": "loop", "from": "bot", "text": "^Filed as #1: E2E failing: login\\.spec\\.ts › a wrong password is refused$"}]},
     {"do": "regression", "as": "approver", "text": "regression web"},
+    {"do": "expect", "events": [{"kind": "regression_queued", "count": 2}]},
     {"do": "runner", "claims": "regression"},
     {"do": "runner_idle"},
     {"do": "expect", "messages": [{"channel": "loop", "from": "bot", "text": "(?s)^\\*Regression R2 \\(web\\) :red_circle: failed.*Filed as #1\\."}]}

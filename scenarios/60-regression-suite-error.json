@@ -5,6 +5,7 @@
   "steps": [
     {"do": "e2e", "outcome": "suite_error"},
     {"do": "regression", "as": "approver", "text": "regression web"},
+    {"do": "expect", "events": [{"kind": "regression_queued", "count": 1}]},
     {"do": "runner", "claims": "regression"},
     {"do": "runner_idle"},
     {"do": "expect",
