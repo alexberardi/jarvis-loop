@@ -89,6 +89,12 @@ type ClaimRequest struct {
 	// OnlyResources, when set, limits the claim to items that need at least one of them: a Mac
 	// runner with [macos] takes the macos items and leaves the rest to the dev box.
 	OnlyResources []string
+	// PollSeconds is how often the runner asks (0: it did not say); loopd keeps it with the
+	// runner for the held slots (SlotHolds).
+	PollSeconds int
+	// RunnerStages are the work stages the runner takes in all its lanes (none: it did not say);
+	// loopd keeps them with the runner so a slot is held only for work it would claim.
+	RunnerStages []Stage
 	// Stages, when set, limits the claim to these stages (a runner that only builds).
 	Stages []Stage
 	// Kinds is the work the runner takes: WorkItem, WorkPlan (plan turns), WorkOrchestrate.
@@ -125,6 +131,8 @@ type Work struct {
 	Item *Item
 	Turn *TurnCandidate
 	Orch *OrchCandidate
+	// Held, with nothing to claim, is why: the slots left are held (SlotHolds).
+	Held string
 }
 
 // ChooseWork picks an item (Choose), a queued plan turn or the queued orchestrate turn (orch, nil
@@ -132,8 +140,9 @@ type Work struct {
 // running turns); a plan turn's priority is its plan's, and it beats an item of the same priority:
 // the user is in the conversation. The orchestrate turn beats everything (it gets the next free
 // slot), one at a time. The fix of a frozen repo (frozen) beats even that: it may take a slot
-// over the active-agents number.
-func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest, frozen Frozen) (Work, bool) {
+// over the active-agents number. holds are the slots held (SlotHolds): when they are all the free
+// slots left, the claim gets only an item needing a held resource.
+func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, holds []SlotHold, req ClaimRequest, frozen Frozen) (Work, bool) {
 	if req.wants(WorkItem) {
 		if it, ok := chooseFix(c, items, deps, live, req, frozen); ok {
 			return Work{Item: &it}, true
@@ -142,6 +151,29 @@ func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease,
 	if c.Stopped || c.ActiveAgents <= 0 || len(live) >= c.ActiveAgents {
 		return Work{}, false
 	}
+	w, ok := chooseWork(c, items, deps, live, turns, orch, req, frozen)
+	if len(holds) == 0 || c.ActiveAgents-len(live) > len(holds) || (ok && serves(w, holds)) {
+		return w, ok
+	}
+	// The slots left are held: only held work, if this runner can take some.
+	if req.wants(WorkItem) {
+		held := req
+		held.OnlyResources = nil
+		for _, h := range holds {
+			if len(req.OnlyResources) == 0 || slices.Contains(req.OnlyResources, h.Resource) {
+				held.OnlyResources = append(held.OnlyResources, h.Resource)
+			}
+		}
+		if len(held.OnlyResources) > 0 {
+			if it, ok := Choose(c, items, deps, live, held, frozen); ok {
+				return Work{Item: &it}, true
+			}
+		}
+	}
+	return Work{Held: HeldReason(holds)}, false
+}
+
+func chooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest, frozen Frozen) (Work, bool) {
 	if orch != nil && req.wants(WorkOrchestrate) && !slices.ContainsFunc(live, func(l LiveLease) bool { return l.Stage == OrchestrateStage }) {
 		return Work{Orch: orch}, true
 	}
@@ -242,7 +274,7 @@ func choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 		if len(req.OnlyResources) > 0 && !slices.ContainsFunc(it.Resources, func(r string) bool { return slices.Contains(req.OnlyResources, r) }) {
 			continue
 		}
-		// Dependencies: every item it depends on is done.
+		// Dependencies: every item it depends on is merged (qa or done).
 		if len(WaitingOn(*it, deps)) > 0 {
 			continue
 		}

@@ -175,8 +175,8 @@ standup reports its own spend.
    recorded situations against the fake claude's `persona` play, the skill as rules on the
    snapshot: they test how loopd carries out the persona's actions, not the model's judgment.
 5. **Board: the Orchestrator panel and "waiting on" for every card.** As built: each dependency
-   not done is followed to its root (`pipeline.WaitChains`; past the first link, the first
-   dependency not done of each item), "waiting on #12 → #35 → needs you". The panel
+   not merged (qa or done) is followed to its root (`pipeline.WaitChains`; past the first link,
+   the first unmerged dependency of each item), "waiting on #12 → #35 → needs you". The panel
    (`Store.OrchestratorBoard`, hidden until the orchestrator acts, open while an escalation is)
    lists its last 15 actions with reasons (its refusals and what the user did through it too),
    open escalations (about an item: until it changes stage or is done; about none: for a day), its

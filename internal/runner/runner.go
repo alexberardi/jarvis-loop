@@ -277,6 +277,9 @@ type run struct {
 	rejected string
 	retried  bool
 	spent    time.Duration
+	// noResult: the agent exited cleanly with no result.json; work resumes its session once
+	// (resumedForResult), which counts as the stage's one retry.
+	noResult, resumedForResult bool
 	// first is the refused attempt's numbers, which the run's metrics and footer add to the
 	// retry's.
 	first streamStats
@@ -397,6 +400,31 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 	}
 	// Reporting and saving work must finish even when the runner is shutting down.
 	r.report(cleanupCtx, ru, out, log)
+	if ru.noResult {
+		// No result.json after a clean exit (#208): resume the same session once, with a note, in
+		// place of the refused-result retry.
+		ru.noResult, ru.retried, ru.spent = false, true, r.Clock.Now().Sub(ru.started)
+		msg := fmt.Sprintf("the agent exited (code %d) without writing .loop/result.json", out.exitCode)
+		if ctx.Err() != nil || r.maxRun(ctx, ru)-ru.spent < MinRetryTime {
+			r.fail(cleanupCtx, ru, out, msg)
+			return
+		}
+		log.Warn("no result; resuming the session once", "session", out.stats.sessionID)
+		ru.first, ru.resume, ru.resumedForResult = out.stats, out.stats.sessionID, true
+		keepFirstAttempt(ru.dir, log)
+		err := os.WriteFile(filepath.Join(ru.dir, "brief.md"), []byte(NoResultNote), 0o644)
+		if err == nil {
+			err = r.writeArgv(ru)
+		}
+		if err != nil {
+			r.fail(cleanupCtx, ru, out, msg+"; resuming its session failed: "+err.Error())
+			return
+		}
+		out = r.runAgentHarness(ctx, ru, brief)
+		log.Info("agent ended (resumed for its result)", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
+		r.report(cleanupCtx, ru, out, log)
+		return
+	}
 	why := ru.rejected
 	if why == "" {
 		return
@@ -1218,6 +1246,9 @@ func (r *Runner) metrics(ru *run, out outcome, f map[string]string) map[string]s
 	if ru.retried {
 		f["result_retried"] = "true"
 	}
+	if ru.resumedForResult {
+		f["result_resumed"] = "true"
+	}
 	return f
 }
 
@@ -1317,7 +1348,17 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 	}
 	raw, err := readResult(filepath.Join(ru.wt, ".loop", "result.json"))
 	if err != nil {
-		r.fail(ctx, ru, out, fmt.Sprintf("the agent exited (code %d) without a usable .loop/result.json (%v)", out.exitCode, err))
+		if errors.Is(err, fs.ErrNotExist) && out.reason == endExited && out.exitCode == 0 && out.stats.sessionID != "" && !ru.retried {
+			// The agent ended its turn without a result, as one waiting on a background command
+			// does: work resumes its session once.
+			ru.noResult = true
+			return
+		}
+		msg := fmt.Sprintf("the agent exited (code %d) without a usable .loop/result.json (%v)", out.exitCode, err)
+		if ru.resumedForResult {
+			msg = fmt.Sprintf("the agent exited (code %d) after its session was resumed once, still without a usable .loop/result.json (%v)", out.exitCode, err)
+		}
+		r.fail(ctx, ru, out, msg)
 		return
 	}
 	switch ru.stage {

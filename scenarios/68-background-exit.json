@@ -1,0 +1,27 @@
+{
+  "name": "background-exit",
+  "about": "#208: a build ends its turn while a command runs in the background (\"I'll be notified when it finishes.\") and exits 0 with no .loop/result.json. The runner resumes the same session once (claude --resume <session>, a short note instead of the brief), in the same claim; the resumed run finishes and the PR opens. The first attempt's files are kept as stream-1.jsonl and brief-1.md.",
+  "steps": [
+    {"do": "add", "item": "a", "title": "Tidy the runner log"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "background"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review"},
+    "events": [
+      {"item": "a", "kind": "advanced", "actor": "runner", "outcome": "pr_opened",
+       "data": {"result_resumed": "^true$", "first_session_id": "^fake-session-background$", "session_id": "^fake-session-background$"}, "count": 1}
+    ],
+    "agent_runs": {"build": 1},
+    "run_files": [
+      {"item": "a", "stage": "build", "run": 1, "file": "brief-1.md", "text": "## Run everything in the foreground"},
+      {"item": "a", "stage": "build", "run": 1, "file": "stream-1.jsonl", "text": "I'll be notified when it finishes\\."},
+      {"item": "a", "stage": "build", "run": 1, "file": "argv.json", "text": "\"--resume\",\"fake-session-background\""},
+      {"item": "a", "stage": "build", "run": 1, "file": "brief.md",
+       "text": "^# Your run ended without a result\\n\\nYour last turn ended without `\\.loop/result\\.json`", "no_text": "## The item"}
+    ],
+    "prs": 1
+  }
+}

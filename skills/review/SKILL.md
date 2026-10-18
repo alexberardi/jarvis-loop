@@ -79,6 +79,13 @@ Write it for the user reading the PR on a phone: the verdict first, then what yo
 (the tests you ran, the revert check, the scenarios), then the findings. It is a comment, never a
 GitHub approval: you hold no GitHub credentials and never approve, merge or push.
 
+## Run everything in the foreground
+
+This is a one-shot run: it ends when you stop talking, and a command left in the background never
+reports back (the run exits with no result). So never use `run_in_background`, Monitor or a
+trailing `&`, and never end a turn saying you will wait for something. For a long check, raise the
+Bash `timeout` (up to 600000 ms), or split it (`go test -race ./internal/runner/...`).
+
 ## Keep the context small
 
 Every token you read stays in the conversation and is paid for again on every later turn, so:

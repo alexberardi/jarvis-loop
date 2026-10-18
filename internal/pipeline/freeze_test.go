@@ -66,11 +66,11 @@ func TestChooseFrozen(t *testing.T) {
 func TestChooseWorkFixBeatsOrchestrate(t *testing.T) {
 	req := ClaimRequest{Runner: "r", Agent: "a", Kinds: []string{WorkItem, WorkOrchestrate}}
 	items := []Item{inRepo(waiting(9, Triage, "P1", 0), "o/a")}
-	w, ok := ChooseWork(DefaultControl(), items, nil, nil, nil, &OrchCandidate{}, req, Frozen{"o/a": 9})
+	w, ok := ChooseWork(DefaultControl(), items, nil, nil, nil, &OrchCandidate{}, nil, req, Frozen{"o/a": 9})
 	if !ok || w.Item == nil || w.Item.ID != 9 {
 		t.Fatalf("got %+v, want the fix", w)
 	}
-	w, ok = ChooseWork(DefaultControl(), items, nil, nil, nil, &OrchCandidate{}, req, nil)
+	w, ok = ChooseWork(DefaultControl(), items, nil, nil, nil, &OrchCandidate{}, nil, req, nil)
 	if !ok || w.Orch == nil {
 		t.Fatalf("got %+v, want the orchestrate turn when nothing is frozen", w)
 	}
