@@ -11,8 +11,8 @@ import (
 // [macos]) takes only the work that needs them, so when the dev box fills the last agent slot
 // that work waits even though its runner is idle. loopd holds the last free slot for such a
 // resource R while (a) a runner taking only R has been seen within two of its poll intervals,
-// (b) an item needing R is claimable now (by that runner's claim: waiting, dependencies done,
-// not leased, limits allow) and (c) the claim at hand would not take it. Each R holds at most
+// (b) an item needing R is claimable now (by that runner's claim, in the stages it takes: waiting,
+// dependencies done, not leased, limits allow) and (c) the claim at hand would not take it. Each R holds at most
 // one slot; the slots held never outnumber the free ones.
 
 // DefaultPollSeconds is the poll interval of a runner that did not say (the runner's default).
@@ -51,7 +51,7 @@ func SlotHolds(c Control, items []Item, deps map[int64]Stage, live []LiveLease, 
 			if _, ok := byRes[res]; ok {
 				continue
 			}
-			req := ClaimRequest{Runner: r.Name, Capabilities: r.Capabilities, OnlyResources: []string{res}}
+			req := ClaimRequest{Runner: r.Name, Capabilities: r.Capabilities, OnlyResources: []string{res}, Stages: r.Stages}
 			if it, ok := Choose(c, items, deps, live, req); ok {
 				byRes[res] = SlotHold{Resource: res, Runner: r.Name, ItemID: it.ID}
 			}

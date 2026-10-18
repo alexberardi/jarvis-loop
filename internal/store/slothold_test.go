@@ -38,12 +38,29 @@ func TestClaimHoldsTheLastSlotForMacWork(t *testing.T) {
 	if c := claim(t, s, "agent-1", dev...); c == nil || c.Item.ID != busy.ID {
 		t.Fatalf("busy claim: %+v", c)
 	}
-	// The Mac runner checks in (asking for review work only, so it takes nothing yet).
-	macReq := pipeline.ClaimRequest{Runner: "mbp", Agent: "mbp-1", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"},
-		PollSeconds: 20, Stages: []pipeline.Stage{pipeline.Review}}
-	if c, err := s.Claim(ctx, "mbp", macReq); err != nil || c != nil {
-		t.Fatalf("mbp check-in: %+v %v", c, err)
+	// The Mac runner checks in while loopd is stopped, so it takes nothing yet. First it takes
+	// review only: the macos item waits in build, so nothing is held for it.
+	stopped, running := true, false
+	checkIn := func(stages ...pipeline.Stage) {
+		t.Helper()
+		if _, err := s.SetControl(ctx, user, ControlPatch{Stopped: &stopped}); err != nil {
+			t.Fatal(err)
+		}
+		macReq := pipeline.ClaimRequest{Runner: "mbp", Agent: "mbp-1", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"},
+			PollSeconds: 20, RunnerStages: stages, Stages: stages}
+		if c, err := s.Claim(ctx, "mbp", macReq); err != nil || c != nil {
+			t.Fatalf("mbp check-in: %+v %v", c, err)
+		}
+		if _, err := s.SetControl(ctx, user, ControlPatch{Stopped: &running}); err != nil {
+			t.Fatal(err)
+		}
 	}
+	checkIn(pipeline.Review)
+	if p, err := s.Runners(ctx); err != nil || len(p.Holds) != 0 {
+		t.Fatalf("a Mac that takes review only holds %+v %v", p.Holds, err)
+	}
+	// Then build and review, as the runbook's Mac: the slot is held for the macos item.
+	checkIn(pipeline.Review, pipeline.Build)
 
 	if c := claim(t, s, "agent-2", dev...); c != nil {
 		t.Fatalf("devbox took the held slot: #%d", c.Item.ID)
@@ -54,7 +71,8 @@ func TestClaimHoldsTheLastSlotForMacWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	if want := []pipeline.SlotHold{{Resource: "macos", Runner: "mbp", ItemID: mac.ID}}; !slices.Equal(p.Holds, want) || len(p.Runners) != 2 ||
-		p.Runners[1].Name != "mbp" || !slices.Equal(p.Runners[1].OnlyResources, []string{"macos"}) || p.Runners[1].PollSeconds != 20 {
+		p.Runners[1].Name != "mbp" || !slices.Equal(p.Runners[1].OnlyResources, []string{"macos"}) || p.Runners[1].PollSeconds != 20 ||
+		!slices.Equal(p.Runners[1].Stages, []pipeline.Stage{pipeline.Build, pipeline.Review}) {
 		t.Fatalf("panel %+v, want holds %+v", p, want)
 	}
 

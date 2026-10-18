@@ -55,10 +55,12 @@ type Step struct {
 	// hand_claim: what the hand runner offers when it claims (comma-separated), and the only
 	// resources it takes (only_resources, as a Mac runner's); with Via "runner_listener" it claims
 	// on the remote runners' listener (--runner-addr), and Claims "none" says it must get nothing.
+	// RunnerStages: the stages the hand runner takes (runner_stages) and claims in (default build).
 	// runner_listener: As ("user", "orchestrator", "board", "none" or "hand", the hand runner)
 	// reads GET /items on that listener; with Refused it must be refused (a regexp on the error).
 	Capabilities string `json:"capabilities,omitempty"`
 	Only         string `json:"only,omitempty"`
+	RunnerStages string `json:"runner_stages,omitempty"`
 	// script: how the fake claude plays the item's runs of a stage (default build), and the repo
 	// a triage run picks
 	For   string `json:"for,omitempty"` // the stage the script is for: triage, build (default), review
@@ -448,7 +450,13 @@ func (p *player) step(st Step) error {
 		default:
 			return fmt.Errorf("hand_claim via %q: want runner_listener or nothing", st.Via)
 		}
-		cl, err := hand.ClaimOnly(p.ctx, "hand-builder", caps, only, []string{"build"})
+		stages := []string{"build"}
+		if st.RunnerStages != "" {
+			c := *hand
+			c.Stages = strings.Split(st.RunnerStages, ",")
+			hand, stages = &c, c.Stages
+		}
+		cl, err := hand.ClaimOnly(p.ctx, "hand-builder", caps, only, stages)
 		if err != nil {
 			return err
 		}

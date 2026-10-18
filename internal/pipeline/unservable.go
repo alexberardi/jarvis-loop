@@ -18,9 +18,11 @@ const RunnerSeenWindow = 24 * time.Hour
 type RunnerSeen struct {
 	Name         string
 	Capabilities []string
-	// OnlyResources and PollSeconds are as it last claimed (slot holds, slothold.go).
+	// OnlyResources, PollSeconds and Stages are as it last claimed (slot holds, slothold.go);
+	// Stages are its work stages in all lanes (none: it did not say, so any).
 	OnlyResources []string
 	PollSeconds   int
+	Stages        []Stage
 	LastSeen      time.Time
 }
 

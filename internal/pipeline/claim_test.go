@@ -160,6 +160,8 @@ func TestSlotHold(t *testing.T) {
 	quiet.LastSeen = t0.Add(-61 * time.Second) // more than 2 × 30 s ago
 	fast := mbp
 	fast.PollSeconds, fast.LastSeen = 5, t0.Add(-11*time.Second)
+	macBR := mbp // the runbook's Mac: build and review, landing stays on the dev box
+	macBR.Stages = []Stage{Build, Review}
 	devboxSeen := RunnerSeen{Name: "devbox", Capabilities: []string{"gpu"}, LastSeen: t0}
 	oneLive := []LiveLease{{ItemID: 9, Stage: Build}}
 	macItem := waiting(2, Build, "P4", 0, "macos")
@@ -186,6 +188,9 @@ func TestSlotHold(t *testing.T) {
 		{"(a) the window is the runner's own poll interval", two, []Item{plain, macItem}, oneLive, []RunnerSeen{fast}, devbox, nil, 1},
 		{"(a) a runner without only_resources holds nothing", two, []Item{plain, macItem}, oneLive,
 			[]RunnerSeen{{Name: "both", Capabilities: []string{"macos", "gpu"}, LastSeen: t0}}, devbox, nil, 1},
+		{"(b) the macos item is in land and the Mac takes build and review", two, []Item{plain, waiting(2, Land, "P4", 0, "macos")}, oneLive, []RunnerSeen{macBR, devboxSeen}, devbox, nil, 1},
+		{"(b) the macos item is in triage and the Mac takes build and review", two, []Item{plain, waiting(2, Triage, "P4", 0, "macos")}, oneLive, []RunnerSeen{macBR, devboxSeen}, devbox, nil, 1},
+		{"(b) the macos item is in one of the Mac's stages", two, []Item{plain, macItem}, oneLive, []RunnerSeen{macBR, devboxSeen}, devbox, []string{"macos"}, 0},
 		{"(b) no macos item", two, []Item{plain}, oneLive, []RunnerSeen{mbp}, devbox, nil, 1},
 		{"(b) the macos item waits on a dependency", two, []Item{plain, blocked}, oneLive, []RunnerSeen{mbp}, devbox, nil, 1},
 		{"(b) the macos item is leased", two, []Item{plain, macItem}, []LiveLease{{ItemID: 2, Stage: Build, Resources: []string{"macos"}}}, []RunnerSeen{mbp}, devbox, nil, 1},

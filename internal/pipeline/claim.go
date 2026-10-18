@@ -92,6 +92,9 @@ type ClaimRequest struct {
 	// PollSeconds is how often the runner asks (0: it did not say); loopd keeps it with the
 	// runner for the held slots (SlotHolds).
 	PollSeconds int
+	// RunnerStages are the work stages the runner takes in all its lanes (none: it did not say);
+	// loopd keeps them with the runner so a slot is held only for work it would claim.
+	RunnerStages []Stage
 	// Stages, when set, limits the claim to these stages (a runner that only builds).
 	Stages []Stage
 	// Kinds is the work the runner takes: WorkItem, WorkPlan (plan turns), WorkOrchestrate.
