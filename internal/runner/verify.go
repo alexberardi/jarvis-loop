@@ -179,30 +179,30 @@ func (r *Runner) keepAlive(ctx context.Context, ru *run, note, step string, done
 // acquireVerifyLock takes the machine's verify lock (one verify at a time: the GPU model, the
 // emulator and the mobile build dir are single), heartbeating while it waits.
 func (r *Runner) acquireVerifyLock(ctx context.Context, ru *run) (func(), error) {
-	if f, err := tryLockFile(r.Cfg.VerifyLock); err != nil {
-		return nil, fmt.Errorf("the verify lock %s: %w", r.Cfg.VerifyLock, err)
+	if f, err := tryLockFile(r.cfgOf(ru).VerifyLock); err != nil {
+		return nil, fmt.Errorf("the verify lock %s: %w", r.cfgOf(ru).VerifyLock, err)
 	} else if f != nil {
 		return func() { closeLock(f) }, nil
 	}
-	r.Log.Info("waiting for the verify lock", "item", ru.item.ID, "lock", r.Cfg.VerifyLock)
+	r.Log.Info("waiting for the verify lock", "item", ru.item.ID, "lock", r.cfgOf(ru).VerifyLock)
 	var f *os.File
 	var lerr error
 	got := make(chan struct{})
 	go func() {
-		f, lerr = lockFile(r.Cfg.VerifyLock)
+		f, lerr = lockFile(r.cfgOf(ru).VerifyLock)
 		close(got)
 	}()
 	switch r.keepAlive(ctx, ru, "waiting for the verify lock", "waiting for the verify lock", got, VerifyLockWait) {
 	case waitDone:
 	case waitTimeout:
 		go func() { <-got; closeLock(f) }()
-		return nil, fmt.Errorf("another verify held %s for %s", r.Cfg.VerifyLock, VerifyLockWait)
+		return nil, fmt.Errorf("another verify held %s for %s", r.cfgOf(ru).VerifyLock, VerifyLockWait)
 	default:
 		go func() { <-got; closeLock(f) }()
 		return nil, errVerifyStopped
 	}
 	if lerr != nil {
-		return nil, fmt.Errorf("the verify lock %s: %w", r.Cfg.VerifyLock, lerr)
+		return nil, fmt.Errorf("the verify lock %s: %w", r.cfgOf(ru).VerifyLock, lerr)
 	}
 	return func() { closeLock(f) }, nil
 }
@@ -304,12 +304,12 @@ func (r *Runner) verifyStep(ctx context.Context, ru *run, n int, st VerifyStep, 
 	}
 	cwd := ru.wt
 	if st.Repo != "" {
-		rc, ok := r.Cfg.Repos[st.Repo]
+		rc, ok := r.cfgOf(ru).Repos[st.Repo]
 		if !ok {
 			return res, fmt.Errorf("verify %q: repo %q is not configured", st.Name, st.Repo)
 		}
 		mirror := r.mirrorPath(st.Repo)
-		cwd = filepath.Join(r.Cfg.WorkRoot, fmt.Sprintf("%d-verify-%s", ru.item.ID, Slug(st.Repo)))
+		cwd = filepath.Join(r.cfgOf(ru).WorkRoot, fmt.Sprintf("%d-verify-%s", ru.item.ID, Slug(st.Repo)))
 		unlock := r.lockMirror(mirror)
 		err := r.Git.EnsureMirror(ctx, mirror, rc)
 		if err == nil {
@@ -381,7 +381,7 @@ func (r *Runner) verifyStep(ctx context.Context, ru *run, n int, st VerifyStep, 
 	b, _ := os.ReadFile(logPath)
 	res.Log = logTail(string(b))
 	if !res.Passed() {
-		res.Masked = maskedRead(string(b), r.Cfg.VerifyMask)
+		res.Masked = maskedRead(string(b), r.cfgOf(ru).VerifyMask)
 	}
 	tailPath := filepath.Join(dir, tag+".log")
 	if err := os.WriteFile(tailPath, []byte(res.Log), 0o600); err != nil {

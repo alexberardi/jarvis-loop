@@ -85,6 +85,7 @@ func (s *server) routes() *http.ServeMux {
 	route("PATCH /items/{id}", both, s.patchItem)
 	route("POST /claim", runner, s.claim)
 	route("POST /leases/{id}/heartbeat", runner, s.heartbeat)
+	route("POST /runners/self/state", runner, s.runnerState)
 	route("POST /items/{id}/advance", runner, s.advance)
 	route("POST /items/{id}/evidence", runner, s.uploadEvidence)
 	route("POST /items/{id}/events", runner, s.runnerEvent)
@@ -486,6 +487,21 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"kind": c.Kind, "item": c.Item, "stage": c.Stage, "lease": c.Lease, "brief": Brief{Stage: c.Stage, Item: c.Item},
 	})
+}
+
+// runnerState records the calling runner's state: "draining" (loop-runner drain) or "" (working).
+func (s *server) runnerState(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		State string `json:"state"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if err := s.st.SetRunnerState(r.Context(), PrincipalFrom(r.Context()).Name, body.State); err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"state": body.State})
 }
 
 func (s *server) heartbeat(w http.ResponseWriter, r *http.Request) {

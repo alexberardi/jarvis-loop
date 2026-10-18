@@ -19,7 +19,7 @@ import (
 
 // trustedDir is where the runner keeps the result of item id's build that verify refused.
 func (r *Runner) trustedDir(id int64) string {
-	return filepath.Join(r.Cfg.WorkRoot, "trusted", strconv.FormatInt(id, 10))
+	return filepath.Join(r.Config().WorkRoot, "trusted", strconv.FormatInt(id, 10))
 }
 
 // saveTrustedResult keeps the refused build's result and evidence for head.

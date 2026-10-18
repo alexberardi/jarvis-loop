@@ -1307,6 +1307,20 @@ func TestAddRepoWords(t *testing.T) {
 	}
 }
 
+// SetRepos (loopd reloading --repos-file) applies to the next /loop add: a new alias names its repo.
+func TestAddAfterSetRepos(t *testing.T) {
+	e := newBotEnv(t)
+	repos := []string{"alexberardi/jarvis-loop", "alexberardi/jarvis-recipes-mobile"}
+	aliases := map[string]string{"recipes app": "alexberardi/jarvis-recipes-mobile"}
+	e.st.SetRepos(repos)
+	e.st.SetAliases(aliases)
+	e.b.SetRepos(repos, aliases)
+	out := e.command(Approver, "add recipes app: a pantry list")
+	if d := e.item(1); d.Item.Repo != "alexberardi/jarvis-recipes-mobile" || d.Item.Title != "a pantry list" {
+		t.Fatalf("add: %q %+v", out, d.Item)
+	}
+}
+
 func TestRepoText(t *testing.T) {
 	for _, c := range []struct {
 		repo  string

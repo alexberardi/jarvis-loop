@@ -45,13 +45,13 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 	lr := &landRun{item: cl.Item, lease: cl.Lease.ID, agent: agent, log: r.Log.With("item", cl.Item.ID, "stage", StageLand)}
 	// Reports must reach loopd even when the runner is shutting down mid-report.
 	report := context.WithoutCancel(ctx)
-	key, repo, ok := r.Cfg.Repo(cl.Item.Repo)
+	key, repo, ok := r.Config().Repo(cl.Item.Repo)
 	switch {
 	case !ok:
-		r.landAdvance(report, lr, failed("runner %s has no repo %q configured", r.Cfg.Name, cl.Item.Repo), nil)
+		r.landAdvance(report, lr, failed("runner %s has no repo %q configured", r.Config().Name, cl.Item.Repo), nil)
 		return
 	case r.Land == nil:
-		r.landAdvance(report, lr, failed("runner %s has no GitHub client for land (a --dry-run runner cannot land)", r.Cfg.Name), nil)
+		r.landAdvance(report, lr, failed("runner %s has no GitHub client for land (a --dry-run runner cannot land)", r.Config().Name), nil)
 		return
 	case cl.Item.PR <= 0:
 		r.landAdvance(report, lr, failed("the item has no PR to land"), nil)
@@ -60,7 +60,7 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 	lr.repoKey, lr.repo, lr.mirror = key, repo, r.mirrorPath(key)
 	lr.log.Info("land starting", "pr", cl.Item.PR, "repo", repo.Slug)
 
-	ciWait := r.Cfg.ciWait
+	ciWait := r.Config().ciWait
 	if ciWait <= 0 {
 		ciWait = 30 * time.Minute
 	}
