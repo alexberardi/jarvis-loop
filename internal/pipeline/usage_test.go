@@ -387,3 +387,45 @@ func TestChooseWorkPacedHeldSlot(t *testing.T) {
 		t.Fatalf("normal: got %+v, %v; want #2 with claude", w, ok)
 	}
 }
+
+// A slot is held only for work the pace lets run: paused, the last slot is not kept for a Mac
+// claude build, so a land claim goes on; not paused, the hold stands as before.
+func TestSlotHoldsPaced(t *testing.T) {
+	two := DefaultControl()
+	two.ActiveAgents = 2
+	live := []LiveLease{{ItemID: 9, Stage: Build, Claude: true}}
+	mbp := RunnerSeen{Name: "mbp", Capabilities: []string{"macos"}, OnlyResources: []string{"macos"}, PollSeconds: 30, LastSeen: t0.Add(-10 * time.Second)}
+	mac := sized(waiting(2, Build, "P4", 0, "macos"), "S", "")
+	bigMac := sized(waiting(4, Build, "P2", 0, "macos"), "L", "")
+	land := waiting(3, Land, "P2", time.Hour)
+	devbox := ClaimRequest{Runner: "devbox", Agent: "devbox-1", Kinds: []string{WorkItem}}
+	paused := Pace{Level: PacePaused}
+	for _, items := range [][]Item{{mac, land}, {bigMac, land}} {
+		holds := SlotHolds(two, paused, items, nil, live, []RunnerSeen{mbp}, nil, t0)
+		if len(holds) != 0 {
+			t.Fatalf("paused, #%d waiting: holds %+v, want none", items[0].ID, holds)
+		}
+		w, ok := ChooseWorkPaced(two, paused, items, nil, live, nil, nil, holds, devbox, nil)
+		if !ok || w.Item == nil || w.Item.ID != 3 {
+			t.Fatalf("paused, #%d waiting: devbox got %+v, %v; want the land #3", items[0].ID, w, ok)
+		}
+	}
+	// Slow with room for one more claude run: a P1 or size S Mac build holds the slot, a P2 L does not.
+	slow := Pace{Level: PaceSlow, Agents: 2}
+	if h := SlotHolds(two, slow, []Item{bigMac, land}, nil, live, []RunnerSeen{mbp}, nil, t0); len(h) != 0 {
+		t.Fatalf("slow, P2 L Mac build: holds %+v, want none", h)
+	}
+	p1Mac := sized(waiting(5, Build, "P1", 0, "macos"), "L", "")
+	if h := SlotHolds(two, slow, []Item{p1Mac, land}, nil, live, []RunnerSeen{mbp}, nil, t0); len(h) != 1 || h[0].ItemID != 5 {
+		t.Fatalf("slow, P1 Mac build: holds %+v, want #5 held", h)
+	}
+	// Not paced: the hold stands, and the devbox gets nothing.
+	normal := Pace{Agents: 2}
+	holds := SlotHolds(two, normal, []Item{mac, land}, nil, live, []RunnerSeen{mbp}, nil, t0)
+	if len(holds) != 1 || holds[0].ItemID != 2 {
+		t.Fatalf("normal: holds %+v, want #2 held", holds)
+	}
+	if w, ok := ChooseWorkPaced(two, normal, []Item{mac, land}, nil, live, nil, nil, holds, devbox, nil); ok || w.Held != "slot held for macos work" {
+		t.Fatalf("normal: devbox got %+v, %v; want the slot held", w, ok)
+	}
+}

@@ -76,6 +76,13 @@ agents are never touched.
   slot over the active-agents number, but under the pace like any item: it is a P1, so it goes
   while slow; while paused claude does not build it (a fix with `builder: qwen` still goes). A run
   in a frozen repo is in the ledger when it finishes, though its advance waits for the thaw.
+- **A held slot** (2026-10-18-slot-hold.md) is held only for an item the pace lets run:
+  `SlotHolds` picks the held item under the same pace as the claim. Paused, no slot is kept for a
+  Mac claude build nobody may start, so land and qwen builds on the other runners go on; slow, a
+  hold stands only for a P1, size S or triage item while claude has room. A runner's builders are
+  not recorded (only the claim at hand says them), so a build the pace would route to qwen holds
+  no slot while claude is paced; the Mac runner still takes it, routed, when it claims a slot that
+  is free anyway. The board's Runners panel shows the same holds.
 - Every change of level (and of the number at once while slow) is a `usage_pace` event (no item),
   recorded at the claim that saw it or at the limit hit; the Slack bot posts it in `#loop-digest`:
   the hit with an @mention, the reset and "paused until"; the budget reached; pacing with the

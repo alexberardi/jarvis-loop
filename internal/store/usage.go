@@ -157,14 +157,23 @@ func recordHit(tx *sql.Tx, ctl pipeline.Control, itemID int64, f map[string]stri
 	return h, err
 }
 
+// paceNow is claude's pace now and the usage it comes from, recording nothing (a read-only tx may
+// call it).
+func paceNow(tx *sql.Tx, ctl pipeline.Control, now time.Time) (pipeline.Pace, pipeline.UsageState, error) {
+	st, err := usageState(tx, ctl, pipeline.ProviderClaude, now)
+	if err != nil {
+		return pipeline.Pace{}, st, err
+	}
+	return pipeline.PaceFor(ctl, budgetOf(ctl, pipeline.ProviderClaude), st), st, nil
+}
+
 // pace is claude's pace now. It records a usage_pace event when the level changed since the last
 // one (or, when slow, the number at once did); extra goes on that event (a hit's item and error).
 func (s *Store) pace(tx *sql.Tx, ctl pipeline.Control, now time.Time, extra map[string]any) (pipeline.Pace, error) {
-	st, err := usageState(tx, ctl, pipeline.ProviderClaude, now)
+	p, st, err := paceNow(tx, ctl, now)
 	if err != nil {
-		return pipeline.Pace{}, err
+		return p, err
 	}
-	p := pipeline.PaceFor(ctl, budgetOf(ctl, pipeline.ProviderClaude), st)
 	var last struct{ Level, Agents int }
 	err = tx.QueryRow(`SELECT level, agents FROM usage_pace WHERE provider = ?`, pipeline.ProviderClaude).Scan(&last.Level, &last.Agents)
 	if err != nil && err != sql.ErrNoRows {

@@ -171,22 +171,7 @@ func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease,
 // (Work.RouteQwen). The active-agents number caps everything as before; a frozen repo's fix and
 // the work of a held slot are paced like any item.
 func ChooseWorkPaced(c Control, pace Pace, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, holds []SlotHold, req ClaimRequest, frozen Frozen) (Work, bool) {
-	claudeLive := 0
-	for _, l := range live {
-		if l.Claude {
-			claudeLive++
-		}
-	}
-	p := pacing{pace: pace, claudeOK: pace.Level == PaceNormal || pace.Level == PaceSlow && claudeLive < pace.Agents}
-	p.route = func(it Item) bool {
-		return pace.Level != PaceNormal && routable(it) && slices.Contains(req.Builders, BuilderQwen)
-	}
-	p.eligible = func(it Item) bool {
-		if !UsesClaude(it) || p.route(it) {
-			return true
-		}
-		return p.claudeOK && (pace.Level == PaceNormal || it.Priority == "P1" || it.Size == "S" || it.Stage == Triage)
-	}
+	p := newPacing(pace, live, req.Builders)
 	if req.wants(WorkItem) {
 		if it, ok := chooseFix(c, items, deps, live, req, frozen, p.eligible); ok {
 			return Work{Item: &it, RouteQwen: p.route(it)}, true
@@ -223,6 +208,27 @@ type pacing struct {
 	pace            Pace
 	claudeOK        bool
 	eligible, route func(Item) bool
+}
+
+// newPacing is the pace of a claim from a runner with builders, live being the leases running.
+func newPacing(pace Pace, live []LiveLease, builders []string) pacing {
+	claudeLive := 0
+	for _, l := range live {
+		if l.Claude {
+			claudeLive++
+		}
+	}
+	p := pacing{pace: pace, claudeOK: pace.Level == PaceNormal || pace.Level == PaceSlow && claudeLive < pace.Agents}
+	p.route = func(it Item) bool {
+		return pace.Level != PaceNormal && routable(it) && slices.Contains(builders, BuilderQwen)
+	}
+	p.eligible = func(it Item) bool {
+		if !UsesClaude(it) || p.route(it) {
+			return true
+		}
+		return p.claudeOK && (pace.Level == PaceNormal || it.Priority == "P1" || it.Size == "S" || it.Stage == Triage)
+	}
+	return p
 }
 
 func chooseWork(c Control, p pacing, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest, frozen Frozen) (Work, bool) {

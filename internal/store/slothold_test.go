@@ -75,6 +75,19 @@ func TestClaimHoldsTheLastSlotForMacWork(t *testing.T) {
 		!slices.Equal(p.Runners[1].Stages, []pipeline.Stage{pipeline.Build, pipeline.Review}) {
 		t.Fatalf("panel %+v, want holds %+v", p, want)
 	}
+	// Paused by a usage limit (#199), claude may not build the macos item, so nothing is held for
+	// it; at the reset the hold is back.
+	if _, err := s.w.Exec(`INSERT INTO usage_hits (at, provider, limit_window, reset_at, burn, item_id, error) VALUES (?,?,?,?,0,0,'')`,
+		clk.Now().UnixNano(), pipeline.ProviderClaude, pipeline.Window5h, clk.Now().Add(10*time.Second).UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.Runners(ctx); err != nil || len(p.Holds) != 0 {
+		t.Fatalf("paused, the panel holds %+v %v", p.Holds, err)
+	}
+	clk.Advance(11 * time.Second)
+	if p, err := s.Runners(ctx); err != nil || len(p.Holds) != 1 {
+		t.Fatalf("after the reset, the panel holds %+v %v, want the macos hold", p.Holds, err)
+	}
 
 	// The Mac goes quiet for more than two of its polls: the slot goes to whoever asks.
 	clk.Advance(41 * time.Second)

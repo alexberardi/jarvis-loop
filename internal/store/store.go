@@ -1089,7 +1089,7 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 
 // claimState is what a claim chooses from: the control, the waiting items and their dependencies'
 // stages, the live leases (items, plan and orchestrate turns), the frozen repos and the slots held
-// (SlotHolds).
+// (SlotHolds, under claude's pace now).
 type claimState struct {
 	ctl     pipeline.Control
 	waiting []pipeline.Item
@@ -1145,8 +1145,12 @@ func (s *Store) claimState(tx *sql.Tx, now time.Time) (claimState, error) {
 	if err != nil {
 		return cs, err
 	}
+	pace, _, err := paceNow(tx, ctl, now)
+	if err != nil {
+		return cs, err
+	}
 	return claimState{ctl: ctl, waiting: waiting, deps: deps, live: snap, runners: runners, frozen: frozen,
-		holds: pipeline.SlotHolds(ctl, waiting, deps, snap, runners, frozen, now)}, nil
+		holds: pipeline.SlotHolds(ctl, pace, waiting, deps, snap, runners, frozen, now)}, nil
 }
 
 // RunnerPanel is the board's runners: those seen within pipeline.RunnerSeenWindow, by name, and
