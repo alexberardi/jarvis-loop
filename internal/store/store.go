@@ -965,9 +965,9 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		}
 		caps := append([]string(nil), req.Capabilities...)
 		sort.Strings(caps)
-		if _, err := tx.Exec(`INSERT INTO runners (name, capabilities, last_seen) VALUES (?,?,?)
-			ON CONFLICT (name) DO UPDATE SET capabilities = excluded.capabilities, last_seen = excluded.last_seen`,
-			runnerName, strings.Join(caps, ","), now.UnixNano()); err != nil {
+		if _, err := tx.Exec(`INSERT INTO runners (name, capabilities, last_seen, slots) VALUES (?,?,?,?)
+			ON CONFLICT (name) DO UPDATE SET capabilities = excluded.capabilities, last_seen = excluded.last_seen, slots = excluded.slots`,
+			runnerName, strings.Join(caps, ","), now.UnixNano(), req.Slots); err != nil {
 			return err
 		}
 		if err := s.checkUnservable(tx, now); err != nil {
@@ -977,27 +977,9 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		if err != nil {
 			return err
 		}
-		live, err := liveLeases(tx)
+		snap, err := liveSnapshot(tx)
 		if err != nil {
 			return err
-		}
-		snap := make([]pipeline.LiveLease, len(live))
-		for i, l := range live {
-			snap[i] = pipeline.LiveLease{ItemID: l.ItemID, Stage: l.Stage, Resources: l.Resources}
-		}
-		turnLeases, err := livePlanLeases(tx)
-		if err != nil {
-			return err
-		}
-		for range turnLeases {
-			snap = append(snap, pipeline.LiveLease{Stage: pipeline.PlanTurnStage})
-		}
-		running, err := orchTurnWith(tx, OrchRunning)
-		if err != nil {
-			return err
-		}
-		if running != nil {
-			snap = append(snap, pipeline.LiveLease{Stage: pipeline.OrchestrateStage})
 		}
 		waiting, err := waitingItems(tx)
 		if err != nil {
@@ -1045,6 +1027,34 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 			Data: map[string]any{"runner": runnerName, "agent": req.Agent, "lease": l.ID}})
 	})
 	return out, err
+}
+
+// liveSnapshot is every running run as the claim rules count them: the item leases, then one per
+// running plan turn and the running orchestrate turn.
+func liveSnapshot(tx *sql.Tx) ([]pipeline.LiveLease, error) {
+	live, err := liveLeases(tx)
+	if err != nil {
+		return nil, err
+	}
+	snap := make([]pipeline.LiveLease, len(live))
+	for i, l := range live {
+		snap[i] = pipeline.LiveLease{ItemID: l.ItemID, Stage: l.Stage, Resources: l.Resources}
+	}
+	turnLeases, err := livePlanLeases(tx)
+	if err != nil {
+		return nil, err
+	}
+	for range turnLeases {
+		snap = append(snap, pipeline.LiveLease{Stage: pipeline.PlanTurnStage})
+	}
+	running, err := orchTurnWith(tx, OrchRunning)
+	if err != nil {
+		return nil, err
+	}
+	if running != nil {
+		snap = append(snap, pipeline.LiveLease{Stage: pipeline.OrchestrateStage})
+	}
+	return snap, nil
 }
 
 func liveLeases(tx *sql.Tx) ([]Lease, error) {
