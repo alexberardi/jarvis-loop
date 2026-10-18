@@ -18,6 +18,7 @@
 .card .reason { font-size: 13px; margin-top: 4px; }
 .label { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 .note { color: var(--muted); font-size: 13px; margin: 4px; }
+.runners { background: var(--lane); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; font-size: 14px; }
 .orch { background: var(--lane); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
 .orch summary { font-weight: 600; cursor: pointer; }
 .orch h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 12px 0 4px; }
@@ -30,6 +31,9 @@
 <body>
 <h1>Jarvis Loop</h1>
 <p class="sub">{{.Total}} items ·{{if .PlanCount}} {{.PlanCount}} open plans ·{{end}} {{stamp .Now}} · refreshes every 30 s (working now: every 5 s) · {{if .ShowClosed}}<a href="/board">hide closed</a>{{else}}<a href="/board?closed=1">show closed</a>{{end}}</p>
+{{- range .Draining}}
+<p class="runners">Runner <strong>{{.Name}}</strong> is {{.State}} since {{stamp .Since}}: it claims nothing new and restarts once its runs end.</p>
+{{- end}}
 {{- template "working-section" .Working}}
 {{- with .Orch}}{{if .Show}}
 <details class="orch"{{if .Escalations}} open{{end}}>

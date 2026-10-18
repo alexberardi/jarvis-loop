@@ -34,15 +34,15 @@ func (r *Runner) pickBuilder(ctx context.Context, ru *run) {
 	if ru.stage != StageBuild || ru.item.Builder != pipeline.BuilderQwen {
 		return
 	}
-	if r.Cfg.Qwen == nil {
+	if r.cfgOf(ru).Qwen == nil {
 		r.Log.Warn("a qwen item, but this runner has no qwen config: building with claude", "item", ru.item.ID)
 		if err := r.Client.Event(ctx, ru.item.ID, "builder_fallback", map[string]any{"from": pipeline.BuilderQwen, "to": pipeline.BuilderClaude,
-			"reason": "runner " + r.Cfg.Name + " has no qwen config", "this_run_only": true}); err != nil {
+			"reason": "runner " + r.cfgOf(ru).Name + " has no qwen config", "this_run_only": true}); err != nil {
 			r.Log.Warn("builder_fallback event", "item", ru.item.ID, "err", err)
 		}
 		return
 	}
-	if err := qwenUsable(ctx, r.Cfg.Qwen); err != nil {
+	if err := qwenUsable(ctx, r.cfgOf(ru).Qwen); err != nil {
 		r.Log.Warn("a qwen item, but qwen cannot run here: building with claude", "item", ru.item.ID, "err", err)
 		if err := r.Client.Event(ctx, ru.item.ID, "builder_fallback", map[string]any{"from": pipeline.BuilderQwen, "to": pipeline.BuilderClaude,
 			"reason": err.Error(), "this_run_only": true}); err != nil {
@@ -51,7 +51,7 @@ func (r *Runner) pickBuilder(ctx context.Context, ru *run) {
 		return
 	}
 	ru.builder = pipeline.BuilderQwen
-	ru.maxRun = time.Duration(r.Cfg.Qwen.MaxMinutes) * time.Minute
+	ru.maxRun = time.Duration(r.cfgOf(ru).Qwen.MaxMinutes) * time.Minute
 	// Resume the item's last qwen session when its store is still here (another runner, or a
 	// cleared work root, starts a new one).
 	if s := ru.item.BuildSession; s != "" {
@@ -100,7 +100,7 @@ func qwenUsable(ctx context.Context, q *QwenConfig) error {
 
 // openCodeHome is the item's OpenCode data, state and cache (XDG_*), kept across its runs.
 func (r *Runner) openCodeHome(ru *run) string {
-	return filepath.Join(r.Cfg.WorkRoot, "opencode", strconv.FormatInt(ru.item.ID, 10))
+	return filepath.Join(r.cfgOf(ru).WorkRoot, "opencode", strconv.FormatInt(ru.item.ID, 10))
 }
 
 // OpenCodeArgs is opencode's argv (after the binary) for a run: the brief comes on stdin.
@@ -145,7 +145,7 @@ func openCodeEnv(cfgDir, cfgFile, home string) []string {
 // openCodeCommand starts the run's proxy and builds the fenced opencode command; stop ends the
 // proxy once the run is over.
 func (r *Runner) openCodeCommand(ru *run) (cmd *exec.Cmd, stop func(), err error) {
-	q := r.Cfg.Qwen
+	q := r.cfgOf(ru).Qwen
 	bin := q.OpenCode
 	if !strings.Contains(bin, "/") {
 		if bin, err = exec.LookPath(bin); err != nil {

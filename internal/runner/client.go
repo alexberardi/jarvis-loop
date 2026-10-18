@@ -246,6 +246,12 @@ func (c *Client) Heartbeat(ctx context.Context, lease, note string, act *pipelin
 	return out.Stop, nil
 }
 
+// SetState tells loopd the runner's state: RunnerDraining, or "" (working; a claim says so too).
+func (c *Client) SetState(ctx context.Context, state string) error {
+	_, err := c.json(ctx, "POST", "/runners/self/state", map[string]any{"state": state}, nil)
+	return err
+}
+
 // Advance finishes the stage with an outcome.
 func (c *Client) Advance(ctx context.Context, id int64, outcome string, fields map[string]string, paths []string) error {
 	_, err := c.json(ctx, "POST", fmt.Sprintf("/items/%d/advance", id),

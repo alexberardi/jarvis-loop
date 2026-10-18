@@ -115,6 +115,7 @@ const (
 	PlanEscape    = "plan_escape"   // tries to write outside out/ (refused), then the persona's usual
 	// PlanWait waits until the harness releases it (the file <dir>/P<id>.release), reporting
 	// "waiting", then plays the persona's usual.
+	// A build run plays it too: wip.txt, then it waits for <dir>/<id>.release and plays good.
 	PlanWait = "wait"
 
 	// Orchestrate turns (a prompt with "- Orchestrate: turn <n>"; the script is
@@ -313,6 +314,18 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if scenario == HarnessHang {
 			scenario = Hang
 		}
+	}
+	if scenario == PlanWait && stage == "build" {
+		f.write("wip.txt", "half done\n")
+		progress("waiting")
+		release := filepath.Join(os.Getenv("FAKE_CLAUDE_SCRIPTS"), item+".release")
+		for deadline := time.Now().Add(2 * time.Minute); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			if os.Remove(release) == nil {
+				break
+			}
+		}
+		os.Remove(filepath.Join(f.cwd, "wip.txt"))
+		scenario = Good
 	}
 	switch scenario {
 	case TodosHang:

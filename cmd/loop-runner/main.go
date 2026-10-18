@@ -5,6 +5,12 @@
 // internal/runner.
 //
 //	loop-runner [--config ~/.config/jarvis-loop/runner.json] [--once] [--dry-run]
+//	loop-runner reload|drain [--config ...]
+//
+// SIGHUP (loop-runner reload) reloads the config for the next claim; live runs keep theirs, and an
+// invalid file is refused with a log line. SIGUSR1 (loop-runner drain) stops claiming, waits for
+// the live runs to end and exits 0, for the service manager to start the new binary
+// (docs/decisions/2026-10-18-runner-reload-drain.md). SIGINT and SIGTERM end the runs, as before.
 //
 // --once claims and works at most one item (and, after a merge, watches main's CI), then exits.
 // --dry-run opens no PR and skips the GitHub check (for runs with a fake claude and a local
@@ -33,9 +39,14 @@ func main() {
 	}
 }
 
+const defaultConfig = "~/.config/jarvis-loop/runner.json"
+
 func run(args []string) error {
+	if len(args) > 0 && (args[0] == "reload" || args[0] == "drain") {
+		return control(args[0], args[1:])
+	}
 	fs := flag.NewFlagSet("loop-runner", flag.ContinueOnError)
-	cfgPath := fs.String("config", "~/.config/jarvis-loop/runner.json", "runner config (0600)")
+	cfgPath := fs.String("config", defaultConfig, "runner config (0600)")
 	once := fs.Bool("once", false, "work at most one item, then exit")
 	dry := fs.Bool("dry-run", false, "open no PR and skip the GitHub PR check (fake claude, local remote)")
 	if err := fs.Parse(args); err != nil {
@@ -72,6 +83,11 @@ func run(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// SIGHUP reloads the config and SIGUSR1 drains; neither ends a run (control.go).
+	ctl := make(chan os.Signal, 4)
+	signal.Notify(ctl, syscall.SIGHUP, syscall.SIGUSR1)
+	defer signal.Stop(ctl)
+	go onSignals(ctx, r, ctl, log)
 	// Harness sessions end with their runs; this ends any left (keepers, then down).
 	defer r.CloseHarness()
 	// Probe the fence once: without it, setup, prepare, cleanup and verify commands refuse to run
@@ -95,5 +111,14 @@ func run(args []string) error {
 		r.Wait()
 		return err
 	}
-	return r.Run(ctx)
+	pid, err := writePID(cfg.WorkRoot)
+	if err != nil {
+		return err
+	}
+	defer removePID(pid)
+	err = r.Run(ctx)
+	if r.Draining() && ctx.Err() == nil {
+		log.Info("drained: the live runs ended; exiting for the service manager to restart the runner")
+	}
+	return err
 }

@@ -31,7 +31,7 @@ func (r *Runner) Wait() { r.bg.Wait() }
 // failing runs, which the bot posts with an @mention of the approver), superseded (a run was
 // cancelled, none failed: no P1) or timeout.
 func (r *Runner) watchMain(ctx context.Context, lr *landRun, mergeSHA string) {
-	wait := r.Cfg.mainWait
+	wait := r.Config().mainWait
 	if wait <= 0 {
 		wait = 30 * time.Minute
 	}

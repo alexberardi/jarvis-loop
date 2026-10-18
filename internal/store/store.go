@@ -966,7 +966,7 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		caps := append([]string(nil), req.Capabilities...)
 		sort.Strings(caps)
 		if _, err := tx.Exec(`INSERT INTO runners (name, capabilities, last_seen) VALUES (?,?,?)
-			ON CONFLICT (name) DO UPDATE SET capabilities = excluded.capabilities, last_seen = excluded.last_seen`,
+			ON CONFLICT (name) DO UPDATE SET capabilities = excluded.capabilities, last_seen = excluded.last_seen, state = ''`,
 			runnerName, strings.Join(caps, ","), now.UnixNano()); err != nil {
 			return err
 		}

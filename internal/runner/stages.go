@@ -99,7 +99,7 @@ func (r *Runner) prepareTriage(ctx context.Context, ru *run, info *RunInfo) erro
 	}
 	if ru.repoKey != "" {
 		k := ru.repoKey
-		rc := r.Cfg.Repos[k]
+		rc := r.cfgOf(ru).Repos[k]
 		mirror := r.mirrorPath(k)
 		dir := "repos/" + Slug(k)
 		unlock := r.lockMirror(mirror)
@@ -123,8 +123,8 @@ func (r *Runner) prepareTriage(ctx context.Context, ru *run, info *RunInfo) erro
 	r.answersContext(ctx, ru, info, filepath.Join(".loop", "context", "answers.md"))
 	r.planContext(ctx, ru, info)
 
-	all := make([]string, 0, len(r.Cfg.Repos))
-	for k := range r.Cfg.Repos {
+	all := make([]string, 0, len(r.cfgOf(ru).Repos))
+	for k := range r.cfgOf(ru).Repos {
 		all = append(all, k)
 	}
 	sort.Strings(all)
@@ -132,7 +132,7 @@ func (r *Runner) prepareTriage(ctx context.Context, ru *run, info *RunInfo) erro
 	if ru.repoKey != "" {
 		repos.WriteString("# The repos the loop works on\n\n| key | slug | group | base | what it is |\n| --- | --- | --- | --- | --- |\n")
 		for _, k := range all {
-			rc := r.Cfg.Repos[k]
+			rc := r.cfgOf(ru).Repos[k]
 			fmt.Fprintf(&repos, "| %s | %s | %s | %s | %s |\n", k, rc.Slug, cell(rc.Group), rc.Base, cell(rc.Description))
 		}
 		writeContext(ru, info, ".loop/context/repos.md", "the configured repos", repos.String())
@@ -142,7 +142,7 @@ func (r *Runner) prepareTriage(ctx context.Context, ru *run, info *RunInfo) erro
 		fmt.Fprintf(&repos, "# The repos the loop works on\n\nPick the one this item belongs to. \"Recent\" are the last %d merged PR titles.\n\n", RecentTitlesForRouting)
 		repos.WriteString("| key | slug | group | also called | what it is | recent |\n| --- | --- | --- | --- | --- | --- |\n")
 		for _, k := range all {
-			rc := r.Cfg.Repos[k]
+			rc := r.cfgOf(ru).Repos[k]
 			recent := strings.Join(titles[k], "; ")
 			if e := errs[k]; e != "" {
 				recent = "(could not fetch: " + e + ")"
@@ -231,7 +231,7 @@ func (r *Runner) recentTitles(ctx context.Context, keys []string) (map[string][]
 				mu.Unlock()
 				return
 			}
-			prs, err := r.PRs.MergedPRs(ctx, r.Cfg.Repos[k].Slug, RecentTitlesForRouting)
+			prs, err := r.PRs.MergedPRs(ctx, r.Config().Repos[k].Slug, RecentTitlesForRouting)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -491,7 +491,7 @@ func (r *Runner) reviewContext(ctx context.Context, ru *run, info *RunInfo, note
 // the outcome (with the repo triage picked, already checked against the configured repos).
 func (r *Runner) reportTriage(ctx context.Context, ru *run, out outcome, raw []byte) {
 	v, err := ValidateTriage(raw, TriageExpect{ItemRepo: ru.item.Repo, Resolve: func(name string) (string, bool) {
-		_, rc, ok := r.Cfg.Repo(name)
+		_, rc, ok := r.cfgOf(ru).Repo(name)
 		return rc.Slug, ok
 	}})
 	if err != nil {

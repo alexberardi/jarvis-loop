@@ -115,9 +115,15 @@ machines: no NFS or synced work root, no copied runner config.
 
    ```sh
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/net.alexberardi.loop-runner.plist
-   launchctl kickstart -k gui/$(id -u)/net.alexberardi.loop-runner   # restart after an update
+   loop-runner reload                                                # after editing runner.json
+   loop-runner drain                                                 # after an update: exits once its runs end
    launchctl bootout gui/$(id -u)/net.alexberardi.loop-runner        # stop
    ```
+
+   `reload` (SIGHUP) applies the config to the next claim and keeps the live runs; the log says
+   whether it took the file. `drain` (SIGUSR1) stops claiming and exits once the live runs end;
+   `KeepAlive` then starts the new binary. `launchctl kickstart -k` restarts at once and ends the
+   live runs: only for a stuck runner.
 
    On the MBP, sleep stops it; its lease expires and the item goes back to waiting (the mini, if
    running, takes it). "Prevent automatic sleeping when the display is off" on power keeps it up.
