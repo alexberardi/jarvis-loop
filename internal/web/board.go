@@ -184,6 +184,11 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, err)
 		return
 	}
+	rw, err := p.st.Runway(r.Context())
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
 	now := p.cfg.Clock.Now()
 	v := boardView(items, plans, now, r.URL.Query().Get("closed") == "1", p.cfg.SlackWorkspace)
 	v.Draining = draining
@@ -196,6 +201,7 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		p.log.Error("board usage", "err", err)
 	}
 	v.Runners = runnerView(runners, now)
+	v.Runway = runwayView(rw)
 	w.Header().Set("Content-Security-Policy", liveCSP)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := boardTmpl.Execute(w, v); err != nil {
@@ -409,11 +415,13 @@ type boardData struct {
 	// Draining are the runners that claim nothing new before a restart (loop-runner drain).
 	Draining []store.RunnerState
 	// Freezes are the repos frozen while their main is red: a red banner each.
-	Freezes    []store.Freeze
-	Working    workingSection
-	Orch       orchSection
-	Usage      usageSection
-	Runners    runnerSection
+	Freezes []store.Freeze
+	Working workingSection
+	Orch    orchSection
+	Usage   usageSection
+	Runners runnerSection
+	// Runway is how much the loop can do without the user (#205); nil: not shown.
+	Runway     *runwaySection
 	Columns    []column
 	ShowClosed bool
 	Now        time.Time
@@ -774,3 +782,17 @@ var (
 	planTmpl    = template.Must(template.New("plan.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plan.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
 	docTmpl     = template.Must(template.New("plandoc.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plandoc.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
 )
+
+// runwaySection is the board's runway line: the hours, and the user's waiting items that free the
+// most (the first boardRunwayTop).
+type runwaySection struct {
+	store.RunwayReport
+	Low bool
+}
+
+const boardRunwayTop = 3
+
+func runwayView(r store.RunwayReport) *runwaySection {
+	r.Unblockers = r.Unblockers[:min(len(r.Unblockers), boardRunwayTop)]
+	return &runwaySection{RunwayReport: r, Low: r.Threshold > 0 && r.Hours < float64(r.Threshold)}
+}

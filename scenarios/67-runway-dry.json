@@ -1,0 +1,36 @@
+{
+  "name": "runway-dry",
+  "about": "The runway warning (#205): every chain waits on one held item. a is held for approval; b, c and d wait on it. Once the user has been away 30 minutes loopd posts ONE warning in #loop (not one per sweep): the loop has run dry, approve #1 frees 4, with its Approve merge button. Twenty minutes later there is still only one. The approver presses Approve merge on the warning: a goes to land, through the same approval path as its held message.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Shorten the session timeout"},
+    {"do": "add", "item": "b", "title": "Session timeout setting", "after": ["a"]},
+    {"do": "add", "item": "c", "title": "Session timeout docs", "after": ["a"]},
+    {"do": "add", "item": "d", "title": "Session timeout metric", "after": ["a"]},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "good", "file": "internal/modules/auth/session.go"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "held", "b": "triage", "c": "triage", "d": "triage"}},
+    {"do": "clock", "advance": "31m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "events": [{"kind": "runway_low", "actor": "loopd", "count": 1}],
+     "messages": [{"channel": "loop", "from": "bot", "text": "(?s)<@U0C9AFPAMD4> :hourglass: \\*The loop has run dry\\*.*Approve #1 Shorten the session timeout at `[0-9a-f]{7}` → \\*frees 4\\*",
+                   "buttons": ["Approve merge"]}]},
+    {"do": "clock", "advance": "20m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "events": [{"kind": "runway_low", "count": 1}]},
+    {"do": "press", "message": "loop", "as": "approver", "button": "approve", "text": "has run dry"},
+    {"do": "expect", "stage": {"a": "land"}, "events": [{"item": "a", "kind": "approved", "actor": "approver", "count": 1}]}
+  ],
+  "expect": {
+    "stage": {"a": "land", "b": "triage"},
+    "events": [{"kind": "runway_low", "count": 1}]
+  }
+}

@@ -18,8 +18,8 @@ func (s *Store) loadControl(q interface {
 	var c pipeline.Control
 	var stopped int
 	var limits, rules, budgets string
-	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules, orchestrator_turns_per_day, budgets FROM control WHERE id = 1`).
-		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules, &c.OrchTurnsPerDay, &budgets)
+	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules, orchestrator_turns_per_day, runway_warn_hours, budgets FROM control WHERE id = 1`).
+		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules, &c.OrchTurnsPerDay, &c.RunwayWarnHours, &budgets)
 	if err != nil {
 		return c, err
 	}
@@ -72,8 +72,8 @@ func saveControl(tx *sql.Tx, c pipeline.Control, builtInRules bool) error {
 	if maps.EqualFunc(c.Budgets, pipeline.DefaultBudgets(), func(a, b pipeline.Budget) bool { return a == b }) {
 		budgets = nil
 	}
-	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=?, orchestrator_turns_per_day=?, budgets=? WHERE id = 1`,
-		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules), c.OrchTurnsPerDay, string(budgets))
+	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=?, orchestrator_turns_per_day=?, runway_warn_hours=?, budgets=? WHERE id = 1`,
+		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules), c.OrchTurnsPerDay, c.RunwayWarnHours, string(budgets))
 	return err
 }
 
@@ -117,6 +117,8 @@ type ControlPatch struct {
 	HoldRules     *[]pipeline.HoldRule `json:"hold_rules"`
 	// OrchTurnsPerDay is the orchestrator's daily cap of turns.
 	OrchTurnsPerDay *int `json:"orchestrator_turns_per_day"`
+	// RunwayWarnHours is the runway below which loopd warns the user when away (0: off).
+	RunwayWarnHours *int `json:"runway_warn_hours"`
 	// Budgets replace the budget of each provider they name (usage.go).
 	Budgets map[string]pipeline.Budget `json:"budgets"`
 }
@@ -145,6 +147,9 @@ func (s *Store) SetControl(ctx context.Context, actor string, p ControlPatch) (p
 		}
 		if p.OrchTurnsPerDay != nil {
 			c.OrchTurnsPerDay = *p.OrchTurnsPerDay
+		}
+		if p.RunwayWarnHours != nil {
+			c.RunwayWarnHours = *p.RunwayWarnHours
 		}
 		for k, v := range p.Limits {
 			c.Limits[k] = v

@@ -102,6 +102,7 @@ A runner is a small daemon on a machine that can do the work. It polls `loopd` c
 | Resource | Limit | Why |
 | --- | --- | --- |
 | agents in total | the active-agents number (0–6, default 4); land runs no agent and takes no slot | the user's throttle (Usage control) |
+| land | 3 at a time, in each runner's `land_slots` lanes (default 3) | land mostly waits on CI; one at a time drained the queue one CI run at a time ([2026-10-18](decisions/2026-10-18-land-never-waits.md)) |
 | `gpu` (the shared live model) | 2 | the installed engine has one slot; the house comes first |
 | `voice` (CPU whisper) | 1 | about 2.4 s of CPU per utterance at 8 threads |
 | `emulator` | 1 | a headless emulator plus a release build is heavy |
@@ -127,7 +128,7 @@ fence (credentials masked, no tokens, no pushing; fail closed), one at a time pe
 own config only: the logs and files they write are the item's evidence and are
 listed apart in the PR's Verification footer; a failure sends the build back (counted like a
 bounce) with nothing pushed. A change to a file the runner trusts (`deny_write`) is not verified
-until the approver OKs that exact commit (Trust button or `loop trust`); verify then runs it (the OK holds for that commit until verify reaches a verdict on it: the PR, or a real regression; *since 2026-10-18* the build claim after the OK runs no agent: the runner verifies the OK'd head with the result the refused build left, #203)
+until the approver OKs that exact commit (Trust button or `loop trust`); verify then runs it (the OK holds for that commit until verify reaches a verdict on it: the PR, or a real regression)
 and land holds the PR. Details: `docs/decisions/2026-10-15-all-repos.md`,
 `docs/decisions/2026-10-16-trusted-files.md`. While a build or review agent works,
 a repo with a `harness` lets it use the harness through the runner too: `loop-harness up | run | down`

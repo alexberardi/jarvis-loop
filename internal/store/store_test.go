@@ -626,6 +626,49 @@ func TestHoldRulesMigrationTagsJarvisServer(t *testing.T) {
 	}
 }
 
+// Migration 0022 raises land's limit from the old default of 1 to 3 (#213); a land limit the
+// user set to anything else stays, and a fresh database starts at 3.
+func TestLandLimitMigration(t *testing.T) {
+	for _, c := range []struct {
+		before string
+		want   int
+	}{
+		{`{"land":1,"review":2,"triage":1}`, 3},
+		{`{"land":2,"review":2,"triage":1}`, 2},
+		{`{"land":0,"review":2}`, 0},
+	} {
+		dir := t.TempDir()
+		clk := clock.NewFake(t0)
+		s, err := Open(dir, clk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// As a database at version 21 would look.
+		if _, err := s.w.Exec(`DELETE FROM schema_migrations WHERE version = 22`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.w.Exec(`UPDATE control SET limits = ?`, c.before); err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+		if s, err = Open(dir, clk); err != nil {
+			t.Fatal(err)
+		}
+		ctl, err := s.Control(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := ctl.Limits["land"]; got != c.want || ctl.Limits["review"] != 2 {
+			t.Errorf("%s: limits after %v, want land %d", c.before, ctl.Limits, c.want)
+		}
+		s.Close()
+	}
+	s, _ := open(t)
+	if ctl, _ := s.Control(context.Background()); ctl.Limits["land"] != 3 {
+		t.Fatalf("fresh limits %v, want land 3", ctl.Limits)
+	}
+}
+
 // toDone takes an item through every stage, merged by runnerName.
 func toDone(t *testing.T, s *Store, runnerName string) pipeline.Item {
 	t.Helper()
