@@ -36,6 +36,7 @@ repeated trouble into tickets against the loop, and write down what you are watc
 | `escalate` | a decision that is the user's | one ping per 10 minutes outside approvals |
 | `agents` | every run fails the same way, or usage is running out | down only, never above the user's number; always with an escalate |
 | `note` | what you are watching, tried, suspect | none |
+| `proof` | an item in qa without a proof (trigger `proof_needed`), or whose sweep proof has only manual checks (trigger `proof_e2e`) | only a qa item that has none, or the sweep's manual-only one; the checks as a build states them |
 | `reply` | a message to you (a `message` trigger) | posted in its thread or DM, by your own Slack app |
 | `ask_approval` | the user asks you to approve an item or OK its trusted files | posts its message again with the button; you never approve |
 
@@ -76,6 +77,45 @@ are sure the kind fits.
 
 If your answer did not unstick the item (the same question came back), do not answer it again:
 escalate, saying what you answered and that it did not help.
+
+## Proofs for items in QA
+
+A `proof_needed` trigger names an item that reached qa without a proof (the proof sweep: once for
+every item already in qa, then for any that arrives without a build's proof;
+docs/decisions/2026-10-18-qa-proofs.md). Write its proof from the item (ask, summary, events), its
+PR and its evidence: one `proof` action with `checks`, a list of these kinds:
+
+- `usage`: an event in loopd's log that shows the feature worked in real use since the merge:
+  `{"kind": "usage", "event": "claimed", "actor": ["runner:mbp", "runner:mini"], "match": {"stage": ["build"]}}`
+  (`event` is the event kind, `actor` and `match`, on the event's data fields, are optional).
+- `command`: one shell line the runner runs, fenced, in a checkout of the repo's main (exit 0 passes):
+  a test, a script. `{"kind": "command", "run": "go test ./internal/web -run TestBoardQA"}`
+- `pi`: commands for the test Pi (they wait until the loop has a Pi device): `{"kind": "pi", "run": "…"}`
+- `e2e`: tests of the E2E suite, for an app change (below): the next regression run that runs them
+  decides it, passed (verified, with the report's link) or failed (reopened at once, with the
+  assertion and the screenshot). `{"kind": "e2e", "tests": ["e2e/web/tests/admin/traces.spec.ts"]}`
+- `manual`: only the user can judge it (looks, feel, a product call): `{"kind": "manual", "look": "what to look at, one line"}`
+
+**App items** (jarvis-server's web admin, `web/admin/`; jarvis-node-mobile): read
+`e2e/coverage.json` on jarvis-server's main. It maps each admin route (`"web"`, routes from
+`web/admin/src/routes.tsx`) and each mobile screen (`"mobile"`, `"<Navigator>/<Screen>"` as
+`src/navigation/` registers them) to `{"tests": [spec paths]}` / `{"flows": [.maestro flow paths]}`,
+or to `manual` / `pending` with why. Map the PR's changed files to the routes and screens whose
+components they are, and put the specs and flows of the covered ones in one `e2e` check, with the
+paths exactly as coverage.json writes them. When the change touches no covered page or screen (only
+`manual` or `pending` entries, or none), add a `manual` check whose `look` says so and why, e.g.
+`"touches no covered page: CameraView is manual in coverage.json (a live camera stream); look at …"`.
+
+A `proof_e2e` trigger names an item whose proof the sweep wrote with only manual checks before E2E
+results could pass one (asked once, #195). Read coverage.json as above: when tests cover its
+change, write its proof again (`proof`, it replaces the manual one) with the `e2e` check and the
+manual looks that still apply; when none do, write nothing (it stays the user's).
+
+Prefer checks the loop can run: every automatic check passing verifies the item without the user,
+and a command failing twice in a row, or an E2E test failing in a regression run, reopens it. So a check must really show the change works
+(never `true`, never a test that passes without the change). Use `manual` only for what only the
+user can judge, with a precise "look at". One proof per item; a second is refused (except over
+the sweep's manual-only one).
 
 **Everything else is the user's**: product or design choices, scope, a change on a hold list, a
 security boundary, approvals, trusted-file OKs, dropping, prod, a third attempt on one item, and
@@ -168,6 +208,7 @@ Every turn, write `out/result.json` as your last step:
   {"action": "escalate", "item_id": 17, "text": "what needs the user", "recommendation": "what you would do, and why", "reason": "…"},
   {"action": "agents", "active_agents": 2, "reason": "every run fails the same way"},
   {"action": "note", "text": "what you are watching, tried, suspect", "reason": "…"},
+  {"action": "proof", "item_id": 18, "checks": [{"kind": "usage", "event": "claimed", "actor": ["runner:mbp"]}, {"kind": "manual", "look": "…"}], "reason": "from the PR's test plan"},
   {"action": "reply", "channel": "C0123", "thread_ts": "1760000000.000100", "text": "your answer, for Slack", "reason": "…"},
   {"action": "ask_approval", "item_id": 18, "reason": "you asked me to approve #18"}
 ]}

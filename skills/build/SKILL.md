@@ -62,6 +62,13 @@ unsure, stop and ask (outcome `question`) instead of guessing.
    (the brief names them), the runner runs them itself after you finish and before it pushes; a
    failure sends the item back to you with their output. Dependencies the repo's setup installs
    (`node_modules`, `.venv`) are already in the worktree.
+   State a **proof** in it (`proof`, contract below): how the loop can tell, once merged, that the
+   change works in real use (a loopd event, a command on main, the test Pi, E2E tests), and what
+   only the user can judge. An item that waits in qa is verified or reopened by it. For an app
+   change (jarvis-server's `web/admin/`, jarvis-node-mobile), read jarvis-server's
+   `e2e/coverage.json`: the specs and flows of the routes and screens you changed go in one `e2e`
+   check, with the paths as coverage.json writes them (the next regression run decides it); a change
+   that touches no covered page or screen gets a `manual` check whose `look` says why.
 
 ## Run everything in the foreground
 

@@ -520,17 +520,28 @@ func TestStopViaHeartbeatAndUsageLimit(t *testing.T) {
 		Stopped      bool `json:"stopped"`
 	}
 	e.do(userTok, "GET", "/control", nil, 200, &ctl)
-	if ctl.ActiveAgents != 0 {
-		t.Fatalf("usage_limit: active agents %d, want 0", ctl.ActiveAgents)
+	if ctl.ActiveAgents != 4 {
+		t.Fatalf("usage_limit: active agents %d, want the user's 4", ctl.ActiveAgents)
 	}
 	if c := e.claim(runnerTok, "a"); c != nil {
-		t.Fatal("claim at active agents 0")
+		t.Fatal("claim while claude is paused")
 	}
 	d := e.get(id)
 	if d.Item.Stage != "triage" || d.Events[len(d.Events)-1].Kind != "usage_limit" {
 		t.Fatalf("usage_limit item: %+v", d)
 	}
-	e.do(userTok, "PUT", "/control", map[string]any{"active_agents": 2}, 200, nil)
+	var u struct {
+		Pace struct {
+			Level int       `json:"level"`
+			Until time.Time `json:"until"`
+		} `json:"pace"`
+	}
+	e.do(userTok, "GET", "/usage", nil, 200, &u)
+	if u.Pace.Level != pipeline.PacePaused || !u.Pace.Until.Equal(t0.Add(pipeline.UnknownResetPause)) {
+		t.Fatalf("GET /usage pace %+v", u.Pace)
+	}
+	// The reset ("17:00" is not one the CLI writes: an hour) resumes claims on its own.
+	e.clock.Advance(pipeline.UnknownResetPause)
 	e.mustClaim("a", id, "triage")
 }
 
@@ -1068,6 +1079,50 @@ func TestTrust(t *testing.T) {
 	e.do(userTok, "POST", fmt.Sprintf("/items/%d/trust", id), map[string]any{"head_sha": shaA}, 200, nil)
 	if d := e.get(id); d.Item.Stage != "build" || d.Item.Risk != "hold" || !strings.Contains(d.Item.HoldReason, "trusted files changed") {
 		t.Fatalf("after trust: %+v", d.Item)
+	}
+}
+
+// QA proofs (docs/decisions/2026-10-18-qa-proofs.md): the orchestrator writes the proof of a qa
+// item that has none; the runners list the items due a check (proof_due=1) and report it
+// (proof_checked, any runner, no lease); with every automatic check passed the loop verifies it.
+func TestProofRoutes(t *testing.T) {
+	e := newEnv(t)
+	id := e.toLand("normal", []string{"M internal/x.go"})
+	e.mustClaim("lander", id, "land")
+	e.advance(id, "merged", map[string]string{"merge_sha": shaB, "head_sha": shaA, "needs_qa": "true"}, 200)
+	proof := fmt.Sprintf("/orchestrator/items/%d/proof", id)
+	checks := []any{map[string]any{"kind": "command", "run": "scripts/check"}}
+	e.refused(orchTok, "POST", proof, map[string]any{"checks": checks}, 400, "missing_field")
+	e.refused(runnerTok, "POST", proof, map[string]any{"checks": checks, "reason": "r"}, 403, "forbidden")
+	e.refused(orchTok, "POST", proof, map[string]any{"checks": []any{map[string]any{"kind": "magic"}}, "reason": "r"}, 400, "invalid_field")
+	due := func() []int64 {
+		e.t.Helper()
+		var out struct{ Items []struct{ ID int64 } }
+		e.do(runnerTok, "GET", "/items?proof_due=1", nil, 200, &out)
+		var ids []int64
+		for _, it := range out.Items {
+			ids = append(ids, it.ID)
+		}
+		return ids
+	}
+	if ids := due(); len(ids) != 0 {
+		t.Fatalf("due without a proof: %v", ids)
+	}
+	e.do(orchTok, "POST", proof, map[string]any{"checks": checks, "reason": "the PR's test plan"}, 200, nil)
+	if ids := due(); len(ids) != 1 || ids[0] != id {
+		t.Fatalf("due: %v", ids)
+	}
+	e.refused(runnerTok, "GET", "/items?proof_due=maybe", nil, 400, "invalid_field")
+	events := fmt.Sprintf("/items/%d/events", id)
+	ev := map[string]any{"kind": "proof_checked", "data": map[string]any{"results": []any{map[string]any{"check": 0, "state": "passed", "evidence": "exit 0"}}}}
+	e.refused(userTok, "POST", events, ev, 403, "forbidden")
+	e.refused(runnerTok, "POST", events, map[string]any{"kind": "proof_checked", "data": map[string]any{"verdict": "ok"}}, 400, "invalid_field")
+	e.do(otherTok, "POST", events, ev, 201, nil)
+	e.refused(runnerTok, "POST", events, ev, 409, "wrong_stage")
+	d := e.get(id)
+	last := d.Events[len(d.Events)-1]
+	if d.Item.Stage != "done" || last.Kind != "verified" || last.Actor != "loop (proof)" {
+		t.Fatalf("after the check: %s %+v", d.Item.Stage, last)
 	}
 }
 

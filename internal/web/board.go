@@ -4,6 +4,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -208,6 +209,11 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 	v.Freezes = fz
 	v.Working = workingView(work, now, 0)
 	v.Orch = orchView(orch, items)
+	if u, err := p.st.Usage(r.Context()); err == nil {
+		v.Usage = usageView(u)
+	} else {
+		p.log.Error("board usage", "err", err)
+	}
 	v.Runners = runnerView(runners, now)
 	v.Regressions = regressionView(regs, p.principal(r).Kind == api.KindUser, now)
 	v.Runway = runwayView(rw)
@@ -430,6 +436,7 @@ type boardData struct {
 	Freezes []store.Freeze
 	Working workingSection
 	Orch    orchSection
+	Usage   usageSection
 	Runners runnerSection
 	// Regressions are the latest regression runs, and the user's button to start one.
 	Regressions regressionSection
@@ -440,6 +447,69 @@ type boardData struct {
 	Now        time.Time
 	Total      int
 	PlanCount  int
+}
+
+// usageSection is the Usage panel: claude's 5h window and week against their budgets, the pace and
+// the forecast, the last days, and this week's costliest items (docs/decisions/2026-10-18-usage-awareness.md).
+type usageSection struct {
+	Show               bool
+	Window, Week, Pace string
+	Forecast           string
+	Paced              bool
+	Days               []usageDay
+	Items              []store.UsageItem
+	Hits               []pipeline.UsageHit
+}
+
+type usageDay struct {
+	Day                  string
+	Claude, Qwen         string
+	Cost                 float64
+	ClaudeRuns, QwenRuns int
+}
+
+func usageView(u store.UsageReport) usageSection {
+	st := u.Claude
+	v := usageSection{Show: len(u.Days) > 0 || len(u.Hits) > 0, Items: u.Items, Hits: u.Hits, Paced: u.Pace.Level != pipeline.PaceNormal}
+	of := func(burn, limit int64) string {
+		if limit <= 0 {
+			return pipeline.FormatTokens(burn) + " (no limit known yet)"
+		}
+		return fmt.Sprintf("%s of %s (%d%%)", pipeline.FormatTokens(burn), pipeline.FormatTokens(limit), burn*100/limit)
+	}
+	if st.WindowStart.IsZero() {
+		v.Window = "none open (the next claude run opens one)"
+	} else {
+		v.Window = fmt.Sprintf("%s · %s to %s", of(st.Burn5h, st.Limit5h), stamp(st.WindowStart), stamp(st.WindowEnd))
+	}
+	v.Week = of(st.BurnWeek, st.LimitWeek) + " · rolling 7 days"
+	if !st.WeekEnd.IsZero() {
+		v.Week = of(st.BurnWeek, st.LimitWeek) + " · resets " + stamp(st.WeekEnd)
+	}
+	v.Pace = u.Pace.Describe(time.UTC)
+	if u.Forecast != nil {
+		v.Forecast = "at this rate the 5h window runs out at " + stamp(*u.Forecast)
+	} else if st.Limit5h > 0 && !st.WindowStart.IsZero() {
+		v.Forecast = "at this rate the 5h window lasts to its reset"
+	}
+	byDay := map[string]*usageDay{}
+	for _, d := range u.Days {
+		row := byDay[d.Key]
+		if row == nil {
+			row = &usageDay{Day: d.Key}
+			byDay[d.Key] = row
+			v.Days = append(v.Days, usageDay{Day: d.Key})
+		}
+		if d.Provider == pipeline.ProviderClaude {
+			row.Claude, row.Cost, row.ClaudeRuns = pipeline.FormatTokens(d.Burn), d.CostUSD, d.Runs
+		} else {
+			row.Qwen, row.QwenRuns = pipeline.FormatTokens(d.Tokens), d.Runs
+		}
+	}
+	for i := range v.Days {
+		v.Days[i] = *byDay[v.Days[i].Day]
+	}
+	return v
 }
 
 // runnerSection is the runner panel: the runners seen within a day and the slots held for their
@@ -563,7 +633,7 @@ func str(m map[string]any, k string) string {
 }
 
 // lanes maps the board's columns to display stages (pipeline.Display). Planning holds the open
-// plans instead (planning is not an item stage); QA has no stage yet.
+// plans instead (planning is not an item stage). QA groups its cards (pipeline.QAGroup).
 var lanes = []struct {
 	name, note string
 	displays   []string
@@ -574,7 +644,7 @@ var lanes = []struct {
 	{"Review", "", []string{"review (queued)", "review", "land (queued)", "land"}},
 	{"Needs you", "", []string{"needs-you"}},
 	{"Approval", "", []string{"held"}},
-	{"QA", "No QA stage yet.", nil},
+	{"QA", "Nothing waits for a check.", []string{"qa"}},
 	{"Done", "", []string{"done", "closed"}},
 }
 
@@ -612,7 +682,17 @@ func boardView(items []store.BoardItem, plans []store.PlanRow, now time.Time, sh
 			if len(l.displays) > 1 {
 				c.Label = it.Display
 			}
+			if it.Display == "qa" {
+				c.Label, c.Reason = pipeline.QAGroup(it.Proof, it.AwaitingDeploy)
+			}
 			col.Cards = append(col.Cards, c)
+		}
+		if l.name == "QA" && len(col.Cards) > 0 {
+			// In the column's groups: waiting for a proof, needs you, failed.
+			slices.SortStableFunc(col.Cards, func(a, b card) int {
+				return slices.Index(pipeline.QAGroups, a.Label) - slices.Index(pipeline.QAGroups, b.Label)
+			})
+			col.Note = ""
 		}
 		v.Total += len(col.Cards)
 		v.Columns = append(v.Columns, col)
@@ -685,6 +765,10 @@ func itemView(d store.Detail, channel, ts string, now time.Time, slackBase strin
 	if it.Stage == pipeline.Held {
 		v.Reason = it.HoldReason
 	}
+	if it.Stage == pipeline.QA {
+		g, why := pipeline.QAGroup(it.Proof, it.AwaitingDeploy)
+		v.Reason = g + ": " + why
+	}
 	if d.Lease != nil {
 		v.ClaimedBy = d.Lease.Runner + "/" + d.Lease.Agent
 	}
@@ -723,7 +807,7 @@ var templateFS embed.FS
 //go:embed templates/live.js
 var liveJS []byte
 
-var funcs = template.FuncMap{"join": strings.Join, "age": age, "size": size, "stamp": stamp, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot, "dur": dur, "mins": mins}
+var funcs = template.FuncMap{"join": strings.Join, "age": age, "size": size, "stamp": stamp, "tokens": pipeline.FormatTokens, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot, "dur": dur, "mins": mins}
 
 var (
 	boardTmpl      = template.Must(template.New("board.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/board.tmpl", "templates/style.tmpl", "templates/working.tmpl"))

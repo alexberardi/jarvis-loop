@@ -11,7 +11,7 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/store"
 )
 
-// The runway warning (#205): loopd's runway_low event, posted once per dry spell in #loop by the
+// The runway warning (#205): loopd's runway_low event (one per real change in a dry spell, #227), posted in #loop by the
 // loop bot, so the Approve and Trust buttons it carries are the same ones (and the same approver
 // check) as on the item's own messages.
 

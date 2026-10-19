@@ -75,6 +75,9 @@ type Step struct {
 	Play  string `json:"play,omitempty"`
 	File  string `json:"file,omitempty"`
 	Picks string `json:"picks,omitempty"` // the repo a triage run picks
+	// Proof: the proof (a list of checks) the item's builds state; with For "proof", the one the
+	// orchestrator's proofs play writes for it (the proof sweep).
+	Proof json.RawMessage `json:"proof,omitempty"`
 	// runner: which item the claim must take ("none": nothing, "orchestrator": an orchestrate
 	// turn). script with For "orchestrate" sets the orchestrator's play (no item);
 	// orchestrator_message is the user's message (Text) to it, about Item when set.
@@ -121,6 +124,10 @@ type Step struct {
 	Stopped       *bool `json:"stopped,omitempty"`
 	// OrchTurnsPerDay is the orchestrator's daily cap of turns.
 	OrchTurnsPerDay *int `json:"orchestrator_turns_per_day,omitempty"`
+	// Budgets are usage budgets per provider (docs/decisions/2026-10-18-usage-awareness.md).
+	Budgets map[string]pipeline.Budget `json:"budgets,omitempty"`
+	// Size is the size triage gives (default S).
+	Size string `json:"size,omitempty"`
 
 	// plans (docs/phases/07-planning.md), driven through the API: Plan is a plan's alias. plan
 	// starts one (title, priority, text); plan_say is the user's message; plan_turn is a fake
@@ -488,7 +495,11 @@ func (p *player) step(st Step) error {
 		if err := s.hand.Upload(p.ctx, r.id, f, "repro.txt", "repro"); err != nil {
 			return err
 		}
-		return s.hand.Advance(p.ctx, r.id, "reproduced", map[string]string{"area": "sandbox", "size": "S", "risk": "normal", "resources": st.Resources}, nil)
+		size := "S"
+		if st.Size != "" {
+			size = st.Size
+		}
+		return s.hand.Advance(p.ctx, r.id, "reproduced", map[string]string{"area": "sandbox", "size": size, "risk": "normal", "resources": st.Resources}, nil)
 	case "hand_claim":
 		var caps, only []string
 		if st.Capabilities != "" {
@@ -547,7 +558,7 @@ func (p *player) step(st Step) error {
 		if err != nil {
 			return err
 		}
-		return s.SetScript(r.id, st.For, st.Play, st.File, st.Picks)
+		return s.SetScript(r.id, st.For, st.Play, st.File, st.Picks, st.Proof)
 	case "runner":
 		c, err := s.Poll(30 * time.Second)
 		if err != nil {
@@ -884,6 +895,9 @@ func (p *player) step(st Step) error {
 		}
 		if st.OrchTurnsPerDay != nil {
 			patch["orchestrator_turns_per_day"] = *st.OrchTurnsPerDay
+		}
+		if st.Budgets != nil {
+			patch["budgets"] = st.Budgets
 		}
 		return s.user.do("PUT", "/control", patch, nil)
 	case "unfreeze":

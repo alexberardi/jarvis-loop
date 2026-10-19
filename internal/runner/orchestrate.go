@@ -41,6 +41,7 @@ const (
 	ActEscalate = "escalate"
 	ActAgents   = "agents"
 	ActNote     = "note"
+	ActProof    = "proof"
 	// ActReply answers a message to the orchestrator in its thread (or DM); ActAskApproval has an
 	// item's approval (or trusted-file OK) message posted again with its button, when the user
 	// asks it to approve: it never may.
@@ -61,6 +62,7 @@ var orchFields = map[string]struct{ allowed, required []string }{
 	ActNote:        {[]string{"text"}, []string{"text"}},
 	ActReply:       {[]string{"channel", "thread_ts", "text"}, []string{"channel", "text"}},
 	ActAskApproval: {[]string{"item_id"}, []string{"item_id"}},
+	ActProof:       {[]string{"item_id", "checks"}, []string{"item_id", "checks"}},
 }
 
 // MaxOrchActions is the most actions one turn may ask for.
@@ -84,6 +86,8 @@ type OrchAction struct {
 	ActiveAgents   *int    `json:"active_agents,omitempty"`
 	Channel        string  `json:"channel,omitempty"`
 	ThreadTS       string  `json:"thread_ts,omitempty"`
+	// Checks is a proof action's checks, as a build states them (pipeline.ParseProof).
+	Checks json.RawMessage `json:"checks,omitempty"`
 }
 
 // OrchActionResult is how an action went, as loopd records it on the turn.
@@ -187,6 +191,9 @@ func (a OrchAction) route() (path string, body map[string]any) {
 	case ActAgents:
 		body["active_agents"] = a.ActiveAgents
 		return "/orchestrator/agents", body
+	case ActProof:
+		body["checks"] = a.Checks
+		return item + "proof", body
 	case ActReply:
 		body["channel"], body["thread_ts"], body["text"] = a.Channel, a.ThreadTS, a.Text
 		return "/orchestrator/replies", body
@@ -242,6 +249,7 @@ Every turn, write ` + "`out/result.json`" + ` as your last step:
   {"action": "escalate", "item_id": 17, "text": "what needs the user", "recommendation": "what you would do, and why", "reason": "…"},
   {"action": "agents", "active_agents": 2, "reason": "every run fails the same way"},
   {"action": "note", "text": "what you are watching, tried, suspect", "reason": "…"},
+  {"action": "proof", "item_id": 18, "checks": [{"kind": "usage", "event": "claimed", "actor": ["runner:mbp"]}, {"kind": "manual", "look": "…"}], "reason": "from the PR's test plan"},
   {"action": "reply", "channel": "C0123", "thread_ts": "1760000000.000100", "text": "your answer, for Slack", "reason": "…"},
   {"action": "ask_approval", "item_id": 18, "reason": "you asked me to approve #18"}
 ]}

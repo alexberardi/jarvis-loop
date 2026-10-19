@@ -29,7 +29,9 @@ runs outside the sandbox with the user's own git and gh login.
   remote), to the same name, never forced (`git push origin refs/heads/B:refs/heads/B`). Anything
   not under `loop/`, with `:`, `+`, spaces or glob characters, or not a valid ref name, is refused
   before git runs. A non-fast-forward is refused by the remote and fails the item; nothing is
-  overwritten. The runner then fetches and checks the remote branch is HEAD.
+  overwritten. The runner then fetches and checks the remote branch is HEAD. (Since 2026-10-19 a
+  reviewed rebase over the PR's recorded head is pushed with a lease pinned to that head:
+  [decision](2026-10-19-rebase-push-with-lease.md).)
 - **PR:** `gh pr list --head <branch> --state open`; if one is open (a bounced item), `gh pr edit
   <n> --title … --body-file …`; otherwise `gh pr create --repo <slug> --head <branch> --base <base>
   --title … --body-file …`. Then the existing check (`gh pr view`: open, head ref, head oid = HEAD),

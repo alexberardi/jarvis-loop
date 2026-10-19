@@ -240,3 +240,72 @@ func TestRunwayHeldRiskDependencyFreesNothing(t *testing.T) {
 		t.Fatalf("runway = %+v; want the risky item only, 1.2 h", rep)
 	}
 }
+
+// #227: a one-tick blip at the threshold, or a paused tick, does not re-send the same warning; a
+// new thing to unblock does.
+func TestRunwayWarnsOncePerRealChange(t *testing.T) {
+	s, clk := open(t)
+	ctx := context.Background()
+	heldChains(t, s)
+	// Items added now (the user's action), set to a stage later without one.
+	var free []int64
+	for range 4 {
+		it := add(t, s, "free", "P2")
+		setStage(t, s, it.ID, pipeline.Done)
+		free = append(free, it.ID)
+	}
+	held2 := add(t, s, "held too", "P2")
+	setStage(t, s, held2.ID, pipeline.Done)
+	clk.Advance(pipeline.RunwayAwayAfter)
+	s.OrchTick(ctx)
+	if evs := runwayEvents(t, s); len(evs) != 1 {
+		t.Fatalf("%d warnings, want 1", len(evs))
+	}
+
+	// A blip: enough work turns up for one tick, then is gone.
+	for _, id := range free {
+		setStage(t, s, id, pipeline.Build)
+	}
+	if rep, err := s.Runway(ctx); err != nil || rep.Hours < 3 {
+		t.Fatalf("runway = %+v, %v; want at least 3 h", rep, err)
+	}
+	clk.Advance(time.Minute)
+	s.OrchTick(ctx)
+	for _, id := range free {
+		setStage(t, s, id, pipeline.Done)
+	}
+	clk.Advance(time.Minute)
+	s.OrchTick(ctx)
+	if evs := runwayEvents(t, s); len(evs) != 1 {
+		t.Fatalf("%d warnings after a one-tick blip, want 1", len(evs))
+	}
+
+	// A paused tick, then the loop runs again.
+	stop, run := true, false
+	if _, err := s.SetControl(WithVia(ctx, orch), user, ControlPatch{Stopped: &stop}); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(time.Minute)
+	s.OrchTick(ctx)
+	if _, err := s.SetControl(WithVia(ctx, orch), user, ControlPatch{Stopped: &run}); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(time.Minute)
+	s.OrchTick(ctx)
+	if evs := runwayEvents(t, s); len(evs) != 1 {
+		t.Fatalf("%d warnings after a paused tick, want 1", len(evs))
+	}
+
+	// Something new to unblock: a second held item.
+	setStage(t, s, held2.ID, pipeline.Held)
+	if _, err := s.w.Exec(`UPDATE items SET risk = ? WHERE id = ?`, pipeline.RiskHold, held2.ID); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(time.Minute)
+	s.OrchTick(ctx)
+	clk.Advance(time.Minute)
+	s.OrchTick(ctx)
+	if evs := runwayEvents(t, s); len(evs) != 2 {
+		t.Fatalf("%d warnings after a new unblocker, want 2", len(evs))
+	}
+}

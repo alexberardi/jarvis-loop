@@ -716,9 +716,12 @@ func TestUsageLimit(t *testing.T) {
 	if ev == nil || !strings.Contains(fmt.Sprint(ev.Data["error"]), "rate limit") || ev.Data["reset"] == "" {
 		t.Fatalf("usage_limit event %+v", ev)
 	}
+	if ev.Data["limit_window"] != "5h" || ev.Data["paused_until"] == nil {
+		t.Fatalf("usage_limit event: no window or pause %+v", ev.Data)
+	}
 	ctl, _ := g.st.Control(g.ctx)
-	if ctl.ActiveAgents != 0 {
-		t.Fatalf("active agents %d", ctl.ActiveAgents)
+	if ctl.ActiveAgents != 4 {
+		t.Fatalf("active agents %d, want the user's 4", ctl.ActiveAgents)
 	}
 }
 

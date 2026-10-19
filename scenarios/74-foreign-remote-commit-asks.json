@@ -1,0 +1,40 @@
+{
+  "name": "foreign-remote-commit-asks",
+  "about": "Item #233: as in rebase-after-trust-pushes, the build rebases the PR's branch and the rebased head waits on the user's Trust, but meanwhile someone else pushes a commit to the branch. The remote is no longer the PR's recorded head, so after the Trust the runner does not force anything: the branches have diverged, the run fails and the item goes to the user.",
+  "stages": ["build", "review"],
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "shoot dark mode too", "text": "[mobile] shoot dark mode too"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "rebase_trusted", "file": "tools/shoot"},
+    {"do": "script", "item": "a", "for": "review", "play": "bounce"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}},
+    {"do": "press", "item": "a", "as": "approver", "button": "trust"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"}},
+    {"do": "push", "slug": "sandbox/jarvis-node-mobile", "branch": "main", "file": "docs/notes.md", "text": "main moved on\n"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}},
+    {"do": "push", "item": "a", "file": "docs/theirs.md", "text": "a commit the loop never recorded\n"},
+    {"do": "press", "item": "a", "as": "approver", "button": "trust"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "needs_you"},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "count": 1},
+      {"item": "a", "kind": "advanced", "actor": "runner", "count": 1,
+       "data": {"error": "^the runner could not prepare the run: loop/1-shoot-dark-mode-too in the runner's mirror and on the remote have diverged; reconcile them by hand$"}}
+    ],
+    "no_events": [{"item": "a", "kind": "branch_rewritten"}],
+    "pr": {"a": {"state": "OPEN", "edits": 0, "merge_calls": 0}},
+    "prs": 1
+  }
+}

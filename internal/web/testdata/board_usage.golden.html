@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="refresh" content="30">
+<title>Jarvis Loop board</title>
+<style>
+:root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --card: #fff; --lane: #f5f5f4; --accent: #2563eb; --warn: #b45309; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --card: #292524; --lane: #231f1d; --accent: #60a5fa; --warn: #fbbf24; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+a { color: var(--accent); }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+.muted { color: var(--muted); }
+.reason { color: var(--warn); }
+</style>
+<style>
+.working { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 8px; margin-bottom: 16px; }
+.working > h2, .working > .note { grid-column: 1 / -1; }
+.working > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 0 0; }
+.working > .note { color: var(--muted); font-size: 13px; margin: 0; }
+.work { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; min-width: 0; }
+.work .meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.work .label { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.work .title { font-weight: 600; text-decoration: none; color: var(--fg); display: block; overflow-wrap: anywhere; }
+.work ul, .work ol { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; overflow-wrap: anywhere; }
+.work .todos .completed { color: var(--muted); text-decoration: line-through; }
+.work .todos .in_progress { font-weight: 600; }
+.work .calls li { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12px; }
+.work .said { margin: 6px 0 0; font-size: 13px; font-style: italic; overflow-wrap: anywhere; }
+</style>
+<style>
+.lanes { display: flex; gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 8px; align-items: flex-start; }
+.lane { flex: 0 0 min(85vw, 300px); scroll-snap-align: start; background: var(--lane); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.lane h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 4px 8px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+.card .title { font-weight: 600; text-decoration: none; color: var(--fg); display: block; }
+.meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.card .reason { font-size: 13px; margin-top: 4px; }
+.label { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.note { color: var(--muted); font-size: 13px; margin: 4px; }
+.runners { background: var(--lane); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; font-size: 14px; }
+.frozen { background: #b91c1c; color: #fff; border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; }
+.frozen a, .frozen code { color: #fff; }
+.orch { background: var(--lane); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
+.orch summary { font-weight: 600; cursor: pointer; }
+.orch h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 12px 0 4px; }
+.orch ul { margin: 0; padding-left: 18px; font-size: 14px; }
+.orch li { margin-bottom: 4px; }
+.orch .why { color: var(--muted); }
+.orch .notes > div { border-top: 1px solid var(--line); padding: 4px 0; font-size: 14px; }
+</style>
+</head>
+<body>
+<h1>Jarvis Loop</h1>
+<p class="sub">16 items · 3 open plans · 2026-10-15 12:00 UTC · refreshes every 30 s (working now: every 5 s) · <a href="/board?closed=1">show closed</a> · <a href="/board/flow">flow</a></p>
+<section class="working" id="working" data-live="/board/working">
+<h2>Working now · 0</h2>
+<p class="note">Nothing running.</p>
+
+</section>
+<script src="/board/live.js" defer></script>
+
+<details class="orch usage" open>
+<summary>Usage · claude pacing: the 5h window is at 88% of its budget; 2 at once</summary>
+<ul>
+<li>5h window: 8.8M of 10.0M (88%) · 2026-10-15 09:00 UTC to 2026-10-15 14:00 UTC <span class="why">· at this rate the 5h window runs out at 2026-10-15 12:50 UTC</span></li>
+<li>Week: 41.0M (no limit known yet) · rolling 7 days</li>
+</ul>
+<h3>Days</h3>
+<ul>
+<li><span class="muted">2026-10-15</span> claude 9.1M burn, $12.50, 14 runs · qwen 1.2M tokens, 3 runs</li>
+<li><span class="muted">2026-10-14</span> claude 31.9M burn, $40.25, 1 run</li>
+</ul>
+<h3>Costliest items this week</h3>
+<ul>
+<li><a href="/board/items/12">#12 Rework the &lt;hold&gt; list</a> <span class="muted">6.4M burn · $9.10 · 4 runs</span></li>
+</ul>
+<h3>Limits hit</h3>
+<ul>
+<li><span class="muted">2026-10-14 10:00 UTC</span> 5h limit at 10.0M burn · reset 2026-10-14 12:00 UTC</li>
+</ul>
+</details>
+<div class="lanes">
+<section class="lane">
+<h2>Planning · 3</h2>
+<article class="card">
+<a class="title" href="/board/plans/3">P3 Pantry &lt;list&gt;</a>
+<div class="meta"><span>jarvis-server</span>
+<span>P2</span>
+<span class="label">brief</span><span>your turn</span>
+<span>active 20m ago</span>
+</div>
+</article>
+<article class="card">
+<a class="title" href="/board/plans/2">P2 Plan pages</a>
+<div class="meta"><span>jarvis-loop</span><span>jarvis-server</span>
+<span>P3</span>
+<span class="label">split</span>
+<span>active 26h ago</span>
+</div>
+</article>
+<article class="card">
+<a class="title" href="/board/plans/1">P1 Blueprint in progress</a>
+<div class="meta">
+<span>P3</span>
+<span class="label">blueprint</span><span>agent&#39;s turn</span>
+<span>active 0m ago</span>
+</div>
+</article>
+</section>
+<section class="lane">
+<h2>Triage · 3</h2>
+<article class="card">
+<a class="title" href="/board/items/1">#1 Wake word &lt;misses&gt; at night</a>
+<div class="meta">
+<span>P0</span>
+<span>5m</span><span class="label">intake</span>
+</div>
+</article>
+<article class="card">
+<a class="title" href="/board/items/2">#2 Route to the right repo</a>
+<div class="meta"><span>jarvis-loop</span>
+<span>P1</span>
+<span>2h</span><span class="label">triage</span><span>devbox/triage-1</span>
+</div>
+</article>
+<article class="card">
+<a class="title" href="/board/items/12">#12 Show the plan link</a>
+<div class="meta"><span>jarvis-loop</span>
+<span>P2</span>
+<span>1h</span><span class="label">intake</span><a class="label" href="/board/plans/2">plan P2</a><span class="label">builder: qwen</span><span class="label">waiting on #5 → in review</span><span class="label">waiting on #8 → held for approval</span>
+</div>
+</article>
+</section>
+<section class="lane">
+<h2>Build · 4</h2>
+<article class="card">
+<a class="title" href="/board/items/3">#3 Mobile settings crash</a>
+<div class="meta"><span>jarvis-node-mobile</span>
+<span>P1</span>
+<span>3d</span><span class="label">build</span><span>devbox/builder-2</span>
+</div>
+</article>
+<article class="card">
+<a class="title" href="/board/items/4">#4 Retry the TTS call</a>
+<div class="meta"><span>jarvis-server</span>
+<span>P2</span>
+<span>26h</span><span class="label">ready</span><span class="label">waiting on #12 → #5 → in review</span>
+</div>
+</article>
+<article class="card">
+<a class="title" href="/board/items/13">#13 Mac app progress window</a>
+<div class="meta"><span>jarvis-server</span>
+<span>P4</span>
+<span>6h</span><span class="label">ready</span><span class="label">no runner offers macos</span>
+</div>
+</article>
+<article class="card">
+<a class="title" href="/board/items/14">#14 Pair screen copy</a>
+<div class="meta"><span>jarvis-server</span>
+<span>P2</span>
+<span>3h</span><span class="label">build</span><span>devbox/builder-1</span>
+</div>
+<div class="reason">Depends on #9, which was reopened: the code is still &lt;small&gt; on the phone (the fix is #15)</div>
+</article>
+</section>
+<section class="lane">
+<h2>Review · 2</h2>
+<article class="card">
+<a class="title" href="/board/items/5">#5 Board page</a>
+<div class="meta"><span>jarvis-loop</span>
+<span>P2</span>
+<span>2d</span><span class="label">review</span><span>devbox/reviewer-1</span><a href="https://github.com/alexberardi/jarvis-loop/pull/14">PR #14</a>
+</div>
+</article>
+<article class="card">
+<a class="title" href="/board/items/6">#6 Bump sqlite</a>
+<div class="meta"><span>jarvis-server</span>
+<span>P3</span>
+<span>4d</span><span class="label">land (queued)</span><a href="https://github.com/alexberardi/jarvis-server/pull/31">PR #31</a>
+</div>
+</article>
+</section>
+<section class="lane">
+<h2>Needs you · 1</h2>
+<article class="card">
+<a class="title" href="/board/items/7">#7 Which emulator?</a>
+<div class="meta"><span>jarvis-server</span>
+<span>P1</span>
+<span>24h</span>
+</div>
+<div class="reason">Should the test use the sandbox emulator or a fake?</div>
+</article>
+</section>
+<section class="lane">
+<h2>Approval · 1</h2>
+<article class="card">
+<a class="title" href="/board/items/8">#8 Token rotation</a>
+<div class="meta"><span>jarvis-loop</span>
+<span>P2</span>
+<span>6d</span><a href="https://github.com/alexberardi/jarvis-loop/pull/12">PR #12</a>
+</div>
+<div class="reason">triage: risk hold; touches internal/api/auth.go</div>
+</article>
+</section>
+<section class="lane">
+<h2>QA · 4</h2>
+<article class="card">
+<a class="title" href="/board/items/18">#18 Mac runners</a>
+<div class="meta"><span>jarvis-loop</span>
+<span>P1</span>
+<span>2d</span><span class="label">waiting for a proof</span><a href="https://github.com/alexberardi/jarvis-loop/pull/60">PR #60</a>
+</div>
+<div class="reason">waits for: usage: `claimed` by runner:mbp or runner:mini</div>
+</article>
+<article class="card">
+<a class="title" href="/board/items/19">#19 Board colours</a>
+<div class="meta"><span>jarvis-loop</span>
+<span>P2</span>
+<span>3d</span><span class="label">needs you</span><a href="https://github.com/alexberardi/jarvis-loop/pull/61">PR #61</a>
+</div>
+<div class="reason">look at the QA column on a phone</div>
+</article>
+<article class="card">
+<a class="title" href="/board/items/21">#21 Old QA item</a>
+<div class="meta"><span>jarvis-server</span>
+<span>P3</span>
+<span>5d</span><span class="label">needs you</span><a href="https://github.com/alexberardi/jarvis-server/pull/40">PR #40</a>
+</div>
+<div class="reason">no proof: your check</div>
+</article>
+<article class="card">
+<a class="title" href="/board/items/20">#20 Rebuild button</a>
+<div class="meta"><span>jarvis-loop</span>
+<span>P2</span>
+<span>3d</span><span class="label">failed</span><a href="https://github.com/alexberardi/jarvis-loop/pull/62">PR #62</a>
+</div>
+<div class="reason">failed once, checked again before it reopens: command: `scripts/loop-sandbox run scenarios/64-rebuild-button.json`: exit 1 after 9s: 1 of 1 failed</div>
+</article>
+</section>
+<section class="lane">
+<h2>Done · 1</h2>
+<article class="card">
+<a class="title" href="/board/items/9">#9 Fix the digest time</a>
+<div class="meta"><span>jarvis-loop</span>
+<span>P2</span>
+<span>10d</span><span class="label">done</span><a href="https://github.com/alexberardi/jarvis-loop/pull/9">PR #9</a>
+</div>
+</article>
+</section>
+</div>
+</body>
+</html>

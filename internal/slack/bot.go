@@ -247,8 +247,10 @@ func (b *Bot) handleEvent(ctx context.Context, e store.Event) {
 			if err := b.updateControl(ctx); err != nil {
 				b.c.Log.Error("slack: control message", "err", err.Error())
 			}
-			if str(e.Data, "reason") == "usage_limit" {
-				b.post(ctx, "usage limit", b.usageLimitMessage(ctx, e))
+		}
+		if e.Kind == store.KindUsagePace {
+			if m, ok := b.paceMessage(ctx, e); ok {
+				b.post(ctx, "usage pace", m)
 			}
 		}
 		return
@@ -576,6 +578,9 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	if strings.HasPrefix(e.Actor, orchestratorPrefix) {
 		return Message{Text: b.orchestratorLine(ctx, e)}, true
 	}
+	if e.Kind == store.KindProofChecked {
+		return b.proofCheckedMessage(e, d)
+	}
 	by := who(e.Actor)
 	if via := str(e.Data, "via"); strings.HasPrefix(via, orchestratorPrefix) {
 		by += " via orchestrator"
@@ -585,6 +590,9 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	switch e.Kind {
 	case "claimed":
 		text = fmt.Sprintf("Claimed for %s.", e.From)
+		if str(e.Data, "routed") == pipeline.BuilderQwen {
+			text = fmt.Sprintf("Claimed for %s, with qwen this run (%s).", e.From, f("pace", 200))
+		}
 	case "evidence":
 		// Never the contents or the file name: a count and a link-free pointer.
 		text = fmt.Sprintf("Evidence %v attached (`loop show %d`).", e.Data["n"], id)
@@ -594,10 +602,14 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		text = fmt.Sprintf("Stopped; back in the %s queue.", e.From)
 	case "usage_limit":
 		text = "Usage limit hit: " + f("error", 300)
-		if r := str(e.Data, "reset"); r != "" {
-			text += " (resets " + f("reset", 100) + ")"
+		if r := b.resetText(str(e.Data, "reset")); r != "" {
+			text += " (resets " + b.field(r, 100, id) + ")"
 		}
-		text += ". Active agents set to 0; back in the queue."
+		text += ". Back in the queue"
+		if t, err := time.Parse(time.RFC3339, str(e.Data, "paused_until")); err == nil {
+			text += "; claude claims paused until " + t.In(b.c.Location).Format("Mon 15:04")
+		}
+		text += "."
 	case "answered":
 		text = fmt.Sprintf("Answered by %s: %s → %s.", by, f("answer", 600), e.To)
 		if e.Data["accepted"] != nil {
@@ -775,6 +787,12 @@ func (b *Bot) orchestratorLine(ctx context.Context, e store.Event) string {
 		what = "filed this item"
 	case store.KindOrchSeenAgain:
 		what = "saw this again"
+	case "proof_set":
+		what = "wrote its proof (the proof sweep): " + b.field(strings.Join(listOf(e.Data, "checks"), "; "), 600, e.ItemID)
+		if e.Data["replaced"] != nil {
+			what = "rewrote its proof with checks the loop can run (it was " + b.field(strings.Join(listOf(e.Data, "replaced"), "; "), 300, e.ItemID) +
+				"): " + b.field(strings.Join(listOf(e.Data, "checks"), "; "), 600, e.ItemID)
+		}
 	case "refused":
 		return fmt.Sprintf("Orchestrator: tried to %s; refused: %s", Escape(str(e.Data, "action")), f("message", 300))
 	default:
@@ -836,26 +854,77 @@ func (b *Bot) heldMessage(e store.Event, d store.Detail) Message {
 
 // usageLimitMessage tells the approver in #loop-digest that a usage limit set the active agents
 // to 0, with the reset time when the run reported one. Nothing raises the number again on its own.
-func (b *Bot) usageLimitMessage(ctx context.Context, e store.Event) Message {
+// resetText is a limit's reset as the user reads it: the CLI's exact time (RFC 3339, from its
+// rate_limit_event) on the user's clock, or the CLI's own words ("3:45pm").
+func (b *Bot) resetText(r string) string {
+	if t, err := time.Parse(time.RFC3339, r); err == nil {
+		return t.In(b.c.Location).Format("Mon 15:04")
+	}
+	return r
+}
+
+// paceMessage is the #loop-digest note of a change of claude's pace (store.KindUsagePace): a
+// limit hit (with an @mention and the reset), the budget reached, pacing, back to normal.
+func (b *Bot) paceMessage(ctx context.Context, e store.Event) (Message, bool) {
 	var id int64
-	switch v := e.Data["item"].(type) {
-	case float64:
-		id = int64(v)
-	case int64:
-		id = v
-	case int:
+	if v, ok := e.Data["item"].(float64); ok {
 		id = int64(v)
 	}
-	text := fmt.Sprintf("<@%s> Usage limit hit", Approver)
-	if id != 0 {
-		text += " on " + b.refID(ctx, id)
+	num := func(k string) int {
+		v, _ := e.Data[k].(float64)
+		return int(v)
 	}
-	text += ": " + b.field(str(e.Data, "error"), 300, id)
-	if r := str(e.Data, "reset"); r != "" {
-		text += " (resets " + b.field(r, 100, id) + ")"
+	at := func(k string) string {
+		t, err := time.Parse(time.RFC3339, str(e.Data, k))
+		if err != nil {
+			return ""
+		}
+		return t.In(b.c.Location).Format("Mon 15:04")
 	}
-	text += ".\nActive agents set to 0. Raise it with `/loop agents <n>` or the control message once the limit resets."
-	return Message{Channel: ChannelDigest, Text: text, Blocks: []map[string]any{section(text)}}
+	window := "the 5h window"
+	if str(e.Data, "window") == pipeline.WindowWeek {
+		window = "the week"
+	}
+	until := "until " + at("until")
+	if at("until") == "" {
+		until = "until the window frees up"
+	}
+	const goOn = "; qwen builds and landing go on, and running agents finish their stage."
+	var text string
+	switch num("level") {
+	case pipeline.PacePaused:
+		if e.Data["hit"] == true {
+			text = fmt.Sprintf("<@%s> Usage limit hit", Approver)
+			if id != 0 {
+				text += " on " + b.refID(ctx, id)
+			}
+			if er := str(e.Data, "error"); er != "" {
+				text += ": " + b.field(er, 300, id)
+			}
+			if r := b.resetText(str(e.Data, "reset")); r != "" {
+				text += " (resets " + b.field(r, 100, id) + ")"
+			}
+			text += ".\nClaude claims paused " + until + goOn
+		} else {
+			text = fmt.Sprintf("<@%s> Claude budget reached: %s is at %d%% of its budget.\nClaude claims paused %s%s", Approver, window, num("percent"), until, goOn)
+		}
+	case pipeline.PaceSlow:
+		if num("percent") > 0 {
+			text = fmt.Sprintf("Pacing claude: %s is at %d%% of its budget", window, num("percent"))
+		} else {
+			text = "Pacing claude: the CLI warned that a limit is close"
+		}
+		if f := at("forecast"); f != "" {
+			text += " (at this rate it runs out at " + f + ")"
+		}
+		text += fmt.Sprintf(".\nClaude runs at once: %d of %d; P1 and size S items first; P3–P5 builds of size S or M go to qwen.", num("agents"), num("active_agents"))
+	default:
+		if num("from_level") == pipeline.PaceNormal {
+			return Message{}, false
+		}
+		text = "Claude claims back to normal."
+	}
+	return Message{Channel: ChannelDigest, Text: text, Blocks: []map[string]any{section(text)}}, true
 }
 
 // ---- the control message ----

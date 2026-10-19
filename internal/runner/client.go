@@ -121,7 +121,7 @@ func (c *Client) json(ctx context.Context, method, path string, in, out any) (in
 // are not item stages: they ask for plan or orchestrate turns too (kinds), and alone, for those
 // only.
 func (c *Client) Claim(ctx context.Context, agent string, caps, stages []string) (*Claim, error) {
-	return c.claim(ctx, agent, caps, nil, stages, 0, nil, 0)
+	return c.claim(ctx, agent, caps, nil, stages, 0, nil, nil, 0)
 }
 
 // ClaimFor is the runner's claim in stages under cfg, the config of this claim (a reload
@@ -130,14 +130,24 @@ func (c *Client) Claim(ctx context.Context, agent string, caps, stages []string)
 // interval (it holds a slot for a Mac runner's work only while the runner has asked within two
 // of them) and its configured stages (the work ones, from either lane: it holds a slot only for
 // work the runner would take in them).
+//
+// A runner with qwen (cfg.Qwen) claiming builds says it can build with it too
+// (pipeline.BuilderQwen): a paced claim may route a build there.
 func (c *Client) ClaimFor(ctx context.Context, agent string, cfg *Config, stages []string) (*Claim, error) {
-	return c.claim(ctx, agent, cfg.Capabilities, cfg.OnlyResources, stages, cfg.PollSeconds, cfg.Stages, cfg.Slots)
+	var builders []string
+	if cfg.Qwen != nil && (len(stages) == 0 || slices.Contains(stages, StageBuild)) {
+		builders = []string{pipeline.BuilderQwen}
+	}
+	return c.claim(ctx, agent, cfg.Capabilities, cfg.OnlyResources, stages, cfg.PollSeconds, cfg.Stages, builders, cfg.Slots)
 }
 
-func (c *Client) claim(ctx context.Context, agent string, caps, only, stages []string, pollSeconds int, cfgStages []string, slots int) (*Claim, error) {
+func (c *Client) claim(ctx context.Context, agent string, caps, only, stages []string, pollSeconds int, cfgStages, builders []string, slots int) (*Claim, error) {
 	body := map[string]any{"agent": agent, "capabilities": caps, "stages": stages}
 	if len(only) > 0 {
 		body["only_resources"] = only
+	}
+	if len(builders) > 0 {
+		body["builders"] = builders
 	}
 	if slots > 0 {
 		body["slots"] = slots
@@ -402,6 +412,15 @@ func (c *Client) AwaitingDeploy(ctx context.Context) ([]BoardRow, error) {
 		Items []BoardRow `json:"items"`
 	}
 	_, err := c.json(ctx, "GET", "/items?awaiting_deploy=1", nil, &out)
+	return out.Items, err
+}
+
+// ProofsDue lists the qa items whose proof is due a check (GET /items?proof_due=1).
+func (c *Client) ProofsDue(ctx context.Context) ([]BoardRow, error) {
+	var out struct {
+		Items []BoardRow `json:"items"`
+	}
+	_, err := c.json(ctx, "GET", "/items?proof_due=1", nil, &out)
 	return out.Items, err
 }
 

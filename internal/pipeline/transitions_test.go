@@ -164,8 +164,8 @@ func TestApplyAdvance(t *testing.T) {
 			if tr.Outcome != tc.outcome {
 				t.Fatalf("outcome %q, want %q", tr.Outcome, tc.outcome)
 			}
-			if got := tr.ActiveAgentsZero; got != (tc.outcome == UsageLimit) {
-				t.Fatalf("ActiveAgentsZero = %v", got)
+			if got := tr.UsagePause; got != (tc.outcome == UsageLimit) {
+				t.Fatalf("UsagePause = %v", got)
 			}
 		})
 	}

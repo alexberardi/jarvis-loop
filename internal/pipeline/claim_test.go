@@ -224,7 +224,7 @@ func TestSlotHold(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			holds := SlotHolds(tc.ctl, tc.items, deps, tc.live, tc.runners, nil, t0)
+			holds := SlotHolds(tc.ctl, Pace{}, tc.items, deps, tc.live, tc.runners, nil, t0)
 			var got []string
 			for _, h := range holds {
 				got = append(got, h.Resource)
@@ -255,10 +255,10 @@ func TestSlotHoldFrozen(t *testing.T) {
 	live := []LiveLease{{ItemID: 9, Stage: Build}}
 	macItem := waiting(2, Build, "P4", 0, "macos")
 	macItem.Repo = "o/mac"
-	if h := SlotHolds(two, []Item{macItem}, nil, live, []RunnerSeen{mbp}, Frozen{"o/mac": 5}, t0); len(h) != 0 {
+	if h := SlotHolds(two, Pace{}, []Item{macItem}, nil, live, []RunnerSeen{mbp}, Frozen{"o/mac": 5}, t0); len(h) != 0 {
 		t.Fatalf("frozen: holds %+v, want none", h)
 	}
-	if h := SlotHolds(two, []Item{macItem}, nil, live, []RunnerSeen{mbp}, Frozen{"o/mac": 2}, t0); len(h) != 1 || h[0].ItemID != 2 {
+	if h := SlotHolds(two, Pace{}, []Item{macItem}, nil, live, []RunnerSeen{mbp}, Frozen{"o/mac": 2}, t0); len(h) != 1 || h[0].ItemID != 2 {
 		t.Fatalf("the fix: holds %+v, want macos #2", h)
 	}
 }
@@ -316,7 +316,7 @@ func TestLandTakesNoAgentSlot(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			holds := SlotHolds(ctl, tc.items, nil, tc.live, tc.runners, nil, t0)
+			holds := SlotHolds(ctl, Pace{}, tc.items, nil, tc.live, tc.runners, nil, t0)
 			var got []string
 			for _, h := range holds {
 				got = append(got, h.Resource)
@@ -359,7 +359,7 @@ func TestLandProceedsPastSixBuilds(t *testing.T) {
 	items := []Item{waiting(1, Land, "P2", 0), waiting(2, Land, "P2", 0, "macos"), waiting(3, Land, "P3", 0), waiting(4, Land, "P3", 0), waiting(5, Build, "P1", 0, "macos")}
 	devboxLand := ClaimRequest{Runner: "devbox", Agent: "devbox-land", Capabilities: []string{"gpu"}, Stages: []Stage{Land}}
 	for _, want := range []int64{1, 2, 3} {
-		holds := SlotHolds(ctl, items, nil, live, []RunnerSeen{macBR}, nil, t0)
+		holds := SlotHolds(ctl, Pace{}, items, nil, live, []RunnerSeen{macBR}, nil, t0)
 		w, ok := ChooseWork(ctl, items, nil, live, nil, nil, nil, holds, devboxLand, nil)
 		if !ok || w.Item.ID != want {
 			t.Fatalf("land claim: %+v (ok %v), want #%d", w, ok, want)
@@ -369,7 +369,7 @@ func TestLandProceedsPastSixBuilds(t *testing.T) {
 	if w, ok := ChooseWork(ctl, items, nil, live, nil, nil, nil, nil, devboxLand, nil); ok {
 		t.Fatalf("over the land limit: got %+v", w)
 	}
-	if holds := SlotHolds(ctl, items, nil, live, []RunnerSeen{macBR}, nil, t0); len(holds) != 0 {
+	if holds := SlotHolds(ctl, Pace{}, items, nil, live, []RunnerSeen{macBR}, nil, t0); len(holds) != 0 {
 		t.Fatalf("with every agent slot busy nothing is held: %+v", holds)
 	}
 }

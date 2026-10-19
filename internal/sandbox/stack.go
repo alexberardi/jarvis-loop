@@ -576,7 +576,7 @@ func (s *Stack) Poll(timeout time.Duration) (Claimed, error) {
 		defer close(ended)
 		defer s.runEnded(run)
 		// As Run does each poll: close the PRs of dropped items, report the deploys, check the held
-		// PRs, then claim.
+		// PRs and the due proofs (the land lane's runner), then claim.
 		if err := s.Runner.CloseDropped(s.ctx); err != nil {
 			s.log.Warn("close dropped PRs", "err", err)
 		}
@@ -585,6 +585,11 @@ func (s *Stack) Poll(timeout time.Duration) (Claimed, error) {
 		}
 		if err := s.Runner.ReportDeployed(s.ctx); err != nil {
 			s.log.Warn("report deployed", "err", err)
+		}
+		if len(landLane) > 0 {
+			if err := s.Runner.CheckProofs(s.ctx); err != nil {
+				s.log.Warn("check proofs", "err", err)
+			}
 		}
 		if stages == nil {
 			return
@@ -726,9 +731,14 @@ func (s *Stack) claimedSince(id int64) (Claimed, bool) {
 }
 
 // SetScript sets how the fake claude plays item id's next runs of a stage ("" or "build": its
-// build runs); repo is the repo a triage run picks for an item that has none.
-func (s *Stack) SetScript(id int64, stage, play, file, repo string) error {
-	b, _ := json.Marshal(map[string]string{"play": play, "file": file, "repo": repo})
+// build runs); repo is the repo a triage run picks for an item that has none; proof is the proof a
+// build states (for "proof": the one the orchestrator's proofs play writes for the item).
+func (s *Stack) SetScript(id int64, stage, play, file, repo string, proof json.RawMessage) error {
+	m := map[string]any{"play": play, "file": file, "repo": repo}
+	if len(proof) > 0 {
+		m["proof"] = proof
+	}
+	b, _ := json.Marshal(m)
 	name := fmt.Sprintf("%d.json", id)
 	if stage != "" && stage != runner.StageBuild {
 		name = fmt.Sprintf("%d-%s.json", id, stage)

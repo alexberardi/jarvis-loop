@@ -15,6 +15,7 @@ import (
 
 	"github.com/alexberardi/jarvis-loop/internal/api"
 	"github.com/alexberardi/jarvis-loop/internal/clock"
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 	"github.com/alexberardi/jarvis-loop/internal/store"
 )
 
@@ -262,6 +263,74 @@ func TestCLIAfter(t *testing.T) {
 	}
 	if code, _, errs := c.run(userTok, "add", "d", "--after", "x"); code != 2 || !strings.Contains(errs, "not an item id") {
 		t.Fatalf("bad --after: %d %q", code, errs)
+	}
+}
+
+func TestCLIBudgetAndUsage(t *testing.T) {
+	st, err := store.Open(t.TempDir(), clock.NewFake(time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	toks, _ := api.ParseTokens(strings.NewReader(userTok + "\tuser\talex\n" + runnerTok + "\trunner\tdevbox\n"))
+	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler)))
+	defer srv.Close()
+	c := cli{t: t, url: srv.URL}
+
+	if out := c.ok(userTok, "budget"); out != "claude budget: per 5h 100% of the last limit · per week 100% of the last limit · pacing from 85%\n" {
+		t.Fatalf("budget: %q", out)
+	}
+	if out := c.ok(userTok, "budget", "claude", "--per-5h", "2M", "--per-week", "80%", "--pace-at", "90"); out != "claude budget: per 5h 2.0M · per week 80% of the last limit · pacing from 90%\n" {
+		t.Fatalf("budget set: %q", out)
+	}
+	if out := c.ok(userTok, "budget", "--per-5h", "off"); !strings.Contains(out, "per 5h none · per week 80%") {
+		t.Fatalf("budget off: %q", out)
+	}
+	if code, _, errs := c.run(userTok, "budget", "--per-5h", "lots"); code != 2 || !strings.Contains(errs, "tokens") {
+		t.Fatalf("bad budget: %d %q", code, errs)
+	}
+	if code, _, errs := c.run(userTok, "budget", "--per-week", "150%"); code != 1 || !strings.Contains(errs, "0 to 100") {
+		t.Fatalf("budget 150%%: %d %q", code, errs)
+	}
+	out := c.ok(userTok, "usage")
+	for _, want := range []string{"claude 5h window: none open", "claude week: 0 (no limit known yet), rolling 7 days", "pace: normal", "budget: per 5h none"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("usage lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestUsageLines(t *testing.T) {
+	now := time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC)
+	fc := now.Add(40 * time.Minute)
+	u := usageReport{
+		Claude: pipeline.UsageState{Now: now, WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(3 * time.Hour), Burn5h: 8_700_000, Limit5h: 10_000_000,
+			WeekStart: now.Add(-3 * 24 * time.Hour), WeekEnd: now.Add(4 * 24 * time.Hour), BurnWeek: 40_000_000},
+		Pace:     pipeline.Pace{Level: pipeline.PaceSlow, Agents: 3, Window: "5h", Percent: 87},
+		Budget:   pipeline.Budget{Per5hPct: 100, PerWeekPct: 100},
+		Forecast: &fc,
+		Hits:     []pipeline.UsageHit{{At: now.Add(-6 * time.Hour), Window: "5h", Burn: 10_000_000, ResetAt: now.Add(-5 * time.Hour)}},
+	}
+	u.Items = append(u.Items, struct {
+		ItemID  int64   `json:"item_id"`
+		Title   string  `json:"title"`
+		Burn    int64   `json:"burn"`
+		CostUSD float64 `json:"cost_usd"`
+		Runs    int     `json:"runs"`
+	}{12, "the big one", 3_100_000, 4.1, 5})
+	got := strings.Join(usageLines(u, time.UTC), "\n")
+	want := strings.Join([]string{
+		"claude 5h window: 8.7M of 10.0M (87%), Sun 18:00–23:00 · at this rate it runs out at 20:40",
+		"claude week: 40.0M (no limit known yet), resets Thu 20:00",
+		"pace: pacing: the 5h window is at 87% of its budget; 3 at once",
+		"budget: per 5h 100% of the last limit · per week 100% of the last limit · pacing from 85%",
+		"costliest items (7 days):",
+		"  #12 the big one  burn 3.1M  $4.10  5 runs",
+		"limits hit:",
+		"  Sun 14:00 5h limit at burn 10.0M, reset Sun 15:00",
+	}, "\n")
+	if got != want {
+		t.Fatalf("usage lines:\n%s\nwant:\n%s", got, want)
 	}
 }
 
