@@ -45,6 +45,9 @@ panel (`/board/flow`, linked from the board's header) and the API the same numbe
   slots × the window for a runner seen in it, and idle what of it was not busy. That overstates
   idle for a runner that was off part of the window (loopd does not record when a runner came up);
   the loop-wide share (busy ÷ active agents × window) is on the tile.
+  A regression run (#82) takes a slot too: the wait reasons count it (it is a live lease in
+  `liveSnapshot`), but its minutes are not in busy yet (they are in the regressions table, not
+  the leases); a follow-up if regressions become frequent.
 - **Killed runs** are the leases (and plan-turn leases) that ended `expired`, `overtime`,
   `stopped`, `dropped` or `frozen` (a land run stopped before its merge because its repo froze) in
   the window; their whole run time is the lost agent-minutes. A run that ended `queued` (its
