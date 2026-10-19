@@ -1,0 +1,40 @@
+{
+  "name": "rebase-after-trust-pushes",
+  "about": "Item #233 (as on #155): a trusted-file change is OK'd and opened, review bounces it, main moves on and the build rebases the branch. The rebased head waits on a new Trust; after it the runner's mirror and the remote have diverged, but the mirror's head is the one the user OK'd and the remote is the PR's recorded head, so the runner pushes the rebase with a lease pinned to that head, records branch_rewritten (old, new, the range-diff) and the PR goes back to review. Nobody force-pushes by hand.",
+  "stages": ["build", "review"],
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "shoot dark mode too", "text": "[mobile] shoot dark mode too"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "rebase_trusted", "file": "tools/shoot"},
+    {"do": "script", "item": "a", "for": "review", "play": "bounce"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}},
+    {"do": "press", "item": "a", "as": "approver", "button": "trust"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"}},
+    {"do": "push", "slug": "sandbox/jarvis-node-mobile", "branch": "main", "file": "docs/notes.md", "text": "main moved on\n"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "failed", "actor": "runner", "data": {"trust_sha": "^[0-9a-f]{40}$"}, "count": 2}]},
+    {"do": "press", "item": "a", "as": "approver", "button": "trust"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review"},
+    "events": [
+      {"item": "a", "kind": "branch_rewritten", "actor": "runner", "count": 1,
+       "data": {"old": "^[0-9a-f]{40}$", "new": "^[0-9a-f]{40}$", "range_diff": "^1:  [0-9a-f]+ = 1:  [0-9a-f]+ harness: shoot dark mode too$"}},
+      {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "count": 2},
+      {"item": "a", "kind": "trusted", "count": 2}
+    ],
+    "pr": {"a": {"state": "OPEN", "edits": 1, "merge_calls": 0}},
+    "prs": 1
+  }
+}

@@ -90,6 +90,9 @@ const (
 	// TrustedChangeEager is TrustedChange by an agent that ignores the brief's line about the
 	// OK: every run commits another change to the file (#144, #142).
 	TrustedChangeEager = "trusted_change_eager"
+	// RebaseTrusted is TrustedChange, but a rerun after a bounce rebases the branch onto the base's
+	// head and commits nothing more (#233, as on #155): a rewritten head that needs a new OK.
+	RebaseTrusted = "rebase_trusted"
 	// Harness is good, after using the repo's harness through the runner: loop-harness up, then a
 	// run that writes .loop/evidence/harness.txt. HarnessHang does the same, then hangs.
 	Harness     = "harness"
@@ -491,7 +494,9 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	resumed := strings.TrimSpace(git(f.cwd, "rev-list", "--count", "origin/"+base+"..HEAD")) != "0"
 	if scenario == NoChange && resumed {
 		// Nothing to fix: no commit.
-	} else if scenario == TrustedChange || scenario == TrustedChangeEager {
+	} else if scenario == RebaseTrusted && resumed && exists(filepath.Join(f.cwd, ".loop", "review", "notes.md")) {
+		f.bash("git -c user.name=fake -c user.email=fake@example.com rebase -q origin/" + base)
+	} else if scenario == TrustedChange || scenario == TrustedChangeEager || scenario == RebaseTrusted {
 		if !resumed || scenario == TrustedChangeEager || !bytes.Contains(brief, []byte(trustedBrief)) {
 			f.bash("mkdir -p \"$(dirname " + shellQuote(change) + ")\" && echo 'shoot --dark' >> " + shellQuote(change) + " && git add " + shellQuote(change) +
 				" && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'harness: shoot dark mode too'")
@@ -1089,4 +1094,9 @@ func (f *fake) orchestrate(play, turn string, brief []byte, progress func(string
 	f.write("out/result.json", string(res))
 	f.result("Turn done.")
 	return 0
+}
+
+func exists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
