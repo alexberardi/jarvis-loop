@@ -23,6 +23,10 @@ type Control struct {
 	RunwayWarnHours int `json:"runway_warn_hours"`
 	// Budgets are the usage budgets per provider (usage.go).
 	Budgets map[string]Budget `json:"budgets"`
+	// RegressionNightly schedules the overnight regression every night (overnight.go), at
+	// RegressionAt ("HH:MM" on the loop's clock; "": DefaultRegressionAt) or once the queue is quiet, whichever is later.
+	RegressionNightly bool   `json:"regression_nightly"`
+	RegressionAt      string `json:"regression_at"`
 }
 
 // LimitKeys are the resources and stages that can carry a limit. Build has none: it is bounded
@@ -40,7 +44,16 @@ func DefaultControl() Control {
 
 		OrchTurnsPerDay: DefaultOrchTurnsPerDay,
 		RunwayWarnHours: DefaultRunwayWarnHours,
+		RegressionAt:    DefaultRegressionAt,
 	}
+}
+
+// RegressionTime is the set time of a scheduled overnight run ("": DefaultRegressionAt).
+func (c Control) RegressionTime() string {
+	if c.RegressionAt == "" {
+		return DefaultRegressionAt
+	}
+	return c.RegressionAt
 }
 
 // MaxRun is the per-run time cap.
@@ -59,6 +72,9 @@ func (c Control) Validate() error {
 	}
 	if c.RunwayWarnHours < 0 || c.RunwayWarnHours > MaxRunwayWarnHours {
 		return errf(CodeInvalidField, "runway_warn_hours must be 0 to %d", MaxRunwayWarnHours)
+	}
+	if _, err := ParseClock(c.RegressionTime()); err != nil {
+		return err
 	}
 	for k, v := range c.Limits {
 		if !slices.Contains(LimitKeys, k) {
@@ -99,6 +115,8 @@ type LiveLease struct {
 	Resources []string
 	// Claude: the run is claude's (everything but land and qwen builds), for the paced number.
 	Claude bool
+	// Holds: the lease holds every claim but land's (a running overnight regression, HoldsClaims).
+	Holds bool
 }
 
 // ClaimRequest is a runner asking for work.
@@ -179,8 +197,13 @@ func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease,
 // triage (short, and an item has no size before it) and P1 plan turns; paused: claude takes nothing. Either way land, qwen builds and regression runs (no agent) go on, and a P3–P5
 // build of size S or M with no builder set goes to qwen this run when the runner has it
 // (Work.RouteQwen). The active-agents number caps everything as before; a frozen repo's fix and
-// the work of a held slot are paced like any item.
+// the work of a held slot are paced like any item. While an overnight regression runs
+// (HoldsClaims), only land is claimed.
 func ChooseWorkPaced(c Control, pace Pace, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, reg *RegCandidate, holds []SlotHold, req ClaimRequest, frozen Frozen) (Work, bool) {
+	if HoldsClaims(live) {
+		// The overnight run has the emulator, the sandbox ports and the CPU: only land goes on.
+		return chooseLand(c, items, deps, live, req, frozen)
+	}
 	p := newPacing(pace, live, req.Builders)
 	if req.wants(WorkItem) {
 		if it, ok := chooseFix(c, items, deps, live, req, frozen, p.eligible); ok {
