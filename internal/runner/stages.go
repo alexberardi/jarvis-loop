@@ -270,6 +270,11 @@ func (r *Runner) prepareReview(ctx context.Context, ru *run, info *RunInfo) erro
 	if err == nil {
 		diff, err = r.Git.run(ctx, ru.wt, "diff", "refs/remotes/origin/"+ru.repo.Base+"..."+it.HeadSHA)
 	}
+	if err == nil && it.Approval != nil && it.Approval.HeadSHA != "" && it.Approval.HeadSHA != it.HeadSHA {
+		// The user approved an older head: what changed since is the delta loopd decides on.
+		d := r.Git.ApprovalDelta(ctx, ru.mirror, ru.repo.Base, it.Approval.HeadSHA, it.HeadSHA)
+		ru.carry = &d
+	}
 	unlock()
 	if err != nil {
 		return err
@@ -298,6 +303,11 @@ func (r *Runner) prepareReview(ctx context.Context, ru *run, info *RunInfo) erro
 	}
 	if errText != "" {
 		info.ContextErrs = append(info.ContextErrs, "the item's evidence: "+errText)
+	}
+	if ru.carry != nil {
+		writeContext(ru, info, ".loop/context/approval-delta.md",
+			fmt.Sprintf("what changed since the user approved `%s` (loopd carries the approval to this head only if it is merges of %s alone)", short7(it.Approval.HeadSHA), ru.repo.Base),
+			ApprovalDeltaDoc(*ru.carry, it.Approval.By, ru.repo.Base))
 	}
 	if it.BounceCount > 0 {
 		r.reviewContext(ctx, ru, info, filepath.Join(".loop", "context", "previous-reviews.md"), "")
@@ -575,6 +585,18 @@ func (r *Runner) reportReview(ctx context.Context, ru *run, out outcome, raw []b
 			return
 		}
 	}
+	if ru.carry != nil && v.Outcome == "approved" {
+		// The runner's own file (an agent's file of that name is replaced): the delta loopd decides on.
+		p := filepath.Join(ru.wt, ".loop", "evidence", ApprovalDeltaFile)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err == nil {
+			_ = os.Remove(p)
+			err = os.WriteFile(p, []byte(ApprovalDeltaDoc(*ru.carry, it.Approval.By, ru.repo.Base)), 0o644)
+		}
+		if err != nil {
+			r.fail(ctx, ru, out, "the approval delta: "+err.Error())
+			return
+		}
+	}
 	files, err := r.evidence(ru, v)
 	if err != nil {
 		r.reject(ctx, ru, out, "evidence: "+err.Error())
@@ -606,6 +628,11 @@ func (r *Runner) reportReview(ctx context.Context, ru *run, out outcome, raw []b
 		}
 		if len(v.NotVerified) > 0 {
 			fields["not_verified"] = clip(strings.Join(v.NotVerified, "; "), 1000)
+		}
+		if d := ru.carry; d != nil {
+			fields["carry_from"], fields["carry_merges"] = d.From, strings.Join(d.Merges, " ")
+			fields["carry_conflicts"], fields["carry_changed"] = strings.Join(d.Conflicts, "\n"), strings.Join(d.Changed, "\n")
+			fields["carry_problem"] = clip(d.Problem, 500)
 		}
 	} else {
 		fields["notes"] = clip(v.Notes, MaxNotes)

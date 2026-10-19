@@ -671,6 +671,17 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		}
 	case "low_cache_hit":
 		text = fmt.Sprintf("Low prompt-cache hit ratio on this run (%s over %s turns).", Escape(str(e.Data, "cache_hit_ratio")), Escape(str(e.Data, "num_turns")))
+	case pipeline.KindApprovalCarried:
+		text = fmt.Sprintf("Approval carried from `%s` to `%s` (approved by %s): since then the PR only merged the base branch in", short(str(e.Data, "from_sha")), short(str(e.Data, "to_sha")), who(str(e.Data, "by")))
+		if c := listOf(e.Data, "conflicts"); len(c) > 0 {
+			text += ", conflicts resolved in " + b.field(strings.Join(c, ", "), 300, id)
+		}
+		text += fmt.Sprintf(", and review approved the new head (delta: `approval-delta.md`, `loop show %d`).", id)
+	case pipeline.KindApprovalNotCarried:
+		text = fmt.Sprintf("The approval of `%s` does not carry to `%s`: %s. The new head needs your approval.",
+			short(str(e.Data, "from_sha")), short(str(e.Data, "to_sha")), f("reason", 400))
+	case pipeline.KindHeldMerge:
+		text = "Back to review: " + f("notes", 400)
 	case "approval_cancelled":
 		text = fmt.Sprintf("Reply approval cancelled by %s; still held.", by)
 	case "land_waiting":

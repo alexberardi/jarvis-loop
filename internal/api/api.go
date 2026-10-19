@@ -60,6 +60,7 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /items/{id}/trust", user, s.trust)
 	route("POST /items/{id}/hold", user, s.hold)
 	route("POST /items/{id}/rebuild", both, s.rebuild)
+	route("POST /items/{id}/held-merge", runner, s.heldMerge)
 	route("POST /items/{id}/drop", user, s.drop)
 	route("POST /items/{id}/edit", user, s.edit)
 	route("POST /items/{id}/link", user, s.link)
@@ -664,6 +665,29 @@ func (s *server) rebuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, err := s.st.Rebuild(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Notes)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// heldMerge records a runner's merge of the base into a held item's PR (store.HeldMerge): the new
+// head goes to review. Like a runner's rebuild it holds no lease: only a held item moves, and only
+// to review, which checks the new head before land.
+func (s *server) heldMerge(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		HeadSHA string `json:"head_sha"`
+		Notes   string `json:"notes"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.HeldMerge(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.HeadSHA, body.Notes)
 	if err != nil {
 		s.fail(w, err)
 		return

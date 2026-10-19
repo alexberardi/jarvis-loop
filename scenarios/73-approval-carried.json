@@ -1,0 +1,223 @@
+{
+  "name": "approval-carried",
+  "about": "The approver approves a held PR (held on the reviewer's needs_review). Before land merges it, main changes the PR's file: land sends it back to build, the build merges origin/main in and resolves the conflict inside its hunk only. Review computes the delta from the approved commit (approval-delta.md): only a merge of main, no conflict on the hold list. loopd carries the approval to the new head and land merges it without asking the user again.",
+  "stages": [
+    "build",
+    "review",
+    "land"
+  ],
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Reword the digest"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "good"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "for": "review",
+      "play": "approve_hold"
+    },
+    {
+      "do": "ci",
+      "main": {
+        "ci": "pass"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "ci",
+      "item": "a",
+      "checks": {
+        "check": "pass"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "held"
+      }
+    },
+    {
+      "do": "press",
+      "item": "a",
+      "as": "approver",
+      "button": "approve"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "land"
+      },
+      "events": [
+        {
+          "item": "a",
+          "kind": "approved",
+          "actor": "approver"
+        }
+      ]
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "for": "review",
+      "play": "approve"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "merge_main"
+    },
+    {
+      "do": "push",
+      "branch": "main",
+      "file": "feature.txt",
+      "text": "main's own version of the change\n"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "build"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "review"
+      }
+    },
+    {
+      "do": "ci",
+      "item": "a",
+      "checks": {
+        "check": "pass"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "land"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "done"
+    },
+    "agent_runs": {
+      "build": 2,
+      "review": 2,
+      "land": 0
+    },
+    "pr": {
+      "a": {
+        "state": "MERGED",
+        "merge_calls": 1
+      }
+    },
+    "events": [
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "back_to_build",
+        "actor": "runner",
+        "data": {
+          "reason": "^Merge conflict with main outside docs/: feature\\.txt$"
+        },
+        "count": 1
+      },
+      {
+        "item": "a",
+        "kind": "approval_carried",
+        "actor": "runner",
+        "data": {
+          "from_sha": "^[0-9a-f]{40}$",
+          "to_sha": "^[0-9a-f]{40}$",
+          
+          "conflicts": "feature\\.txt"
+        },
+        "count": 1
+      },
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "merged",
+        "actor": "runner",
+        "count": 1
+      }
+    ],
+    "no_events": [
+      {
+        "item": "a",
+        "kind": "approval_not_carried"
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "text": "^Approval carried from `[0-9a-f]{7}` to `[0-9a-f]{7}` \\(approved by you\\): since then the PR only merged the base branch in, conflicts resolved in feature\\.txt, and review approved the new head \\(delta: `approval-delta\\.md`, `loop show \\d+`\\)\\.$"
+      },
+      {
+        "thread": "a",
+        "text": "^Merged .*sandbox/demo#101> as `[0-9a-f]{7}`"
+      }
+    ]
+  }
+}

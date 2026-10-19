@@ -313,12 +313,15 @@ type run struct {
 	item Item
 	// trustUsed is the commit verify ran on the approver's trust OK (reported with the outcome).
 	trustUsed string
-	stage     string
-	lease     string
-	agent     string
-	repoKey   string // "" for a triage run of an item with no repo: every configured repo is checked out
-	repo      RepoConfig
-	branch    string
+	// carry is a review's delta from the head the user approved, when that is not the head
+	// reviewed (carry.go).
+	carry   *ApprovalDelta
+	stage   string
+	lease   string
+	agent   string
+	repoKey string // "" for a triage run of an item with no repo: every configured repo is checked out
+	repo    RepoConfig
+	branch  string
 	// wt is the agent's working directory: the item's worktree (build), the PR's head (review),
 	// or a plain directory with the repos checked out under repos/<key>/ (triage).
 	wt string

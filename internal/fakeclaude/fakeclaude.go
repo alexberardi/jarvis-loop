@@ -93,6 +93,12 @@ const (
 	// result, as the agents of #208 did; resumed with the runner's note, it plays the stage's usual.
 	// It plays in any stage.
 	Background = "background"
+	// MergeMain is good on a fresh branch; on a rerun (a held PR's conflict rebuild) it merges
+	// origin/<base> into the branch and resolves each conflict by keeping both sides of the hunk,
+	// changing nothing else. MergeMainExtra does the same and also adds a file in the merge commit:
+	// a change outside the conflict resolution.
+	MergeMain      = "merge_main"
+	MergeMainExtra = "merge_main_extra"
 
 	// Triage plays (a triage run of a build play plays Reproduce).
 	Reproduce      = "reproduce"       // reproduced, with notes and a repro file; picks the script's repo when the item has none
@@ -474,6 +480,14 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if !resumed || scenario == TrustedChangeEager || !bytes.Contains(brief, []byte(trustedBrief)) {
 			f.bash("mkdir -p \"$(dirname " + shellQuote(change) + ")\" && echo 'shoot --dark' >> " + shellQuote(change) + " && git add " + shellQuote(change) +
 				" && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'harness: shoot dark mode too'")
+		}
+	} else if (scenario == MergeMain || scenario == MergeMainExtra) && resumed {
+		id := "git -c user.name=fake -c user.email=fake@example.com "
+		f.bash(id + "merge -q --no-ff --no-edit origin/" + base + " || { for c in $(git diff --name-only --diff-filter=U); do " +
+			`sed -i -e '/^<<<<<<< /d' -e '/^=======$/d' -e '/^>>>>>>> /d' "$c" && git add "$c"; done; ` + id + "commit -q --no-edit; }")
+		if scenario == MergeMainExtra {
+			f.write("extra.txt", "slipped into the merge\n")
+			f.bash("git add extra.txt && " + id + "commit -q --amend --no-edit")
 		}
 	} else if ents, err := os.ReadDir(filepath.Join(f.cwd, ".loop", "review")); err == nil && len(ents) > 0 {
 		var names []string

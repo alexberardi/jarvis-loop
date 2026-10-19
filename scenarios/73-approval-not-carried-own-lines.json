@@ -1,0 +1,206 @@
+{
+  "name": "approval-not-carried-own-lines",
+  "about": "As approval-carried, but the build's merge of origin/main also adds a file in the merge commit: a change outside the conflict resolution. Review's delta names it; loopd drops the approval, land holds the new head and the approver is asked again. Nothing is merged.",
+  "stages": [
+    "build",
+    "review",
+    "land"
+  ],
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Reword the digest"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "good"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "for": "review",
+      "play": "approve_hold"
+    },
+    {
+      "do": "ci",
+      "main": {
+        "ci": "pass"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "ci",
+      "item": "a",
+      "checks": {
+        "check": "pass"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "held"
+      }
+    },
+    {
+      "do": "press",
+      "item": "a",
+      "as": "approver",
+      "button": "approve"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "land"
+      },
+      "events": [
+        {
+          "item": "a",
+          "kind": "approved",
+          "actor": "approver"
+        }
+      ]
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "for": "review",
+      "play": "approve"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "merge_main_extra"
+    },
+    {
+      "do": "push",
+      "branch": "main",
+      "file": "feature.txt",
+      "text": "main's own version of the change\n"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "build"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "review"
+      }
+    },
+    {
+      "do": "ci",
+      "item": "a",
+      "checks": {
+        "check": "pass"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "land"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "held"
+    },
+    "pr": {
+      "a": {
+        "state": "OPEN",
+        "merge_calls": 0
+      }
+    },
+    "events": [
+      {
+        "item": "a",
+        "kind": "approval_not_carried",
+        "actor": "runner",
+        "data": {
+          "reason": "^the PR's own lines changed outside the conflict hunks: extra\\.txt$"
+        },
+        "count": 1
+      },
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "hold",
+        "actor": "runner",
+        "count": 2
+      }
+    ],
+    "no_events": [
+      {
+        "item": "a",
+        "kind": "approval_carried"
+      },
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "merged"
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "text": "^The approval of `[0-9a-f]{7}` does not carry to `[0-9a-f]{7}`: the PR's own lines changed outside the conflict hunks: extra\\.txt\\. The new head needs your approval\\.$"
+      }
+    ]
+  }
+}

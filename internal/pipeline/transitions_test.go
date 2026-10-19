@@ -254,8 +254,10 @@ func TestPROpenedRecordsBuilderAndVoidsApproval(t *testing.T) {
 	if tr.Item.BuilderAgent != "builder-2" || tr.Item.PR != 142 || tr.Item.Branch != "fix/x" || tr.Item.HeadSHA != sha2 || tr.Item.Repo != "jarvis-server" {
 		t.Fatalf("pr_opened not recorded: %+v", tr.Item)
 	}
-	if tr.Item.Approval != nil {
-		t.Fatalf("approval for the old head must be void after a new head sha")
+	// Void: it stays for the old head only, for review to carry (carry_test.go); checkMerge
+	// refuses the new head on it.
+	if a := tr.Item.Approval; a == nil || a.HeadSHA != sha1 || tr.Data["approval_voided"] != true {
+		t.Fatalf("approval for the old head must be void after a new head sha: %+v %+v", a, tr.Data)
 	}
 	if tr.Item.Risk != RiskNormal || tr.Item.HoldReason != "" {
 		t.Fatalf("clean paths made it hold: %+v", tr.Item)
@@ -410,7 +412,7 @@ func TestBackToReview(t *testing.T) {
 		Fields: map[string]string{"notes": "head moved", "head_sha": sha2}, ChangedPaths: []string{"M internal/modules/auth/x.go"},
 		HoldRules: DefaultHoldRules()}, t0)
 	wantCode(t, err, "")
-	if tr.To != Review || tr.Item.HeadSHA != sha2 || tr.Item.Approval != nil || tr.Data["approval_voided"] != true {
+	if tr.To != Review || tr.Item.HeadSHA != sha2 || tr.Item.Approval.HeadSHA != sha1 || tr.Data["approval_voided"] != true {
 		t.Fatalf("back to review: %+v %+v", tr.Item, tr.Data)
 	}
 	if tr.Item.Risk != RiskHold || !strings.Contains(tr.Item.HoldReason, "auth: M internal/modules/auth/x.go") {
@@ -517,7 +519,7 @@ func TestHumanTransitions(t *testing.T) {
 		it := item(Held)
 		it.PR, it.Branch, it.Risk, it.HoldReason = 12, "loop/7-t", RiskHold, "land: on the hold list"
 		it.Approval = &Approval{By: "alex", HeadSHA: sha1}
-		tr, err := ApplyRebuild(it, " rebase and fix the typo ")
+		tr, err := ApplyRebuild(it, " rebase and fix the typo ", false)
 		wantCode(t, err, "")
 		got := tr.Item
 		if tr.From != Held || tr.To != Build || tr.Kind != "rebuild" || got.Stage != Build || got.BounceCount != 0 || got.Approval != nil {
@@ -531,14 +533,14 @@ func TestHumanTransitions(t *testing.T) {
 		}
 	})
 	t.Run("rebuild needs notes", func(t *testing.T) {
-		_, err := ApplyRebuild(item(Held), " ")
+		_, err := ApplyRebuild(item(Held), " ", false)
 		wantCode(t, err, CodeMissingField)
 	})
 	t.Run("rebuild from needs_you", func(t *testing.T) {
 		it := item(NeedsYou)
 		it.PR, it.Branch, it.ReturnStage, it.CIRedSHA = 12, "loop/7-t", Land, sha1
 		it.Question = "CI failed on 0123456 and the build changed nothing: rerun CI, fix main, or drop"
-		tr, err := ApplyRebuild(it, "rebuild, rebase on main")
+		tr, err := ApplyRebuild(it, "rebuild, rebase on main", false)
 		wantCode(t, err, "")
 		got := tr.Item
 		if tr.From != NeedsYou || tr.To != Build || tr.Kind != "rebuild" || got.Stage != Build || got.ReturnStage != "" || got.Question != "" {
@@ -555,13 +557,13 @@ func TestHumanTransitions(t *testing.T) {
 		for _, ret := range []Stage{Triage, ""} {
 			it := item(NeedsYou)
 			it.ReturnStage = ret
-			_, err := ApplyRebuild(it, "rebuild")
+			_, err := ApplyRebuild(it, "rebuild", false)
 			wantCode(t, err, CodeWrongStage)
 		}
 	})
 	t.Run("rebuild outside held and needs_you", func(t *testing.T) {
 		for _, s := range []Stage{Land, Review, Build, QA, Done, Closed} {
-			_, err := ApplyRebuild(item(s), "rebuild")
+			_, err := ApplyRebuild(item(s), "rebuild", false)
 			wantCode(t, err, CodeWrongStage)
 		}
 	})
