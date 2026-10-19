@@ -293,7 +293,7 @@ func TestChooseWorkPaced(t *testing.T) {
 			[]LiveLease{{ItemID: 5}, {ItemID: 6}, {ItemID: 7}, {ItemID: 8}}, nil, nil, req, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			w, ok := ChooseWorkPaced(ctl, tc.pace, tc.items, nil, tc.live, tc.turns, tc.orch, nil, tc.req, nil)
+			w, ok := ChooseWorkPaced(ctl, tc.pace, tc.items, nil, tc.live, tc.turns, tc.orch, nil, nil, tc.req, nil)
 			var got int64
 			switch {
 			case !ok:
@@ -352,7 +352,7 @@ func TestChooseWorkPacedFrozen(t *testing.T) {
 		{"paused, every slot taken: land, which takes no slot (#210)", Pace{Level: PacePaused}, full, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			w, ok := ChooseWorkPaced(DefaultControl(), tc.pace, []Item{fix, other, land}, nil, tc.live, nil, nil, nil, req, frozen)
+			w, ok := ChooseWorkPaced(DefaultControl(), tc.pace, []Item{fix, other, land}, nil, tc.live, nil, nil, nil, nil, req, frozen)
 			var got int64
 			if ok && w.Item != nil {
 				got = w.Item.ID
@@ -361,6 +361,22 @@ func TestChooseWorkPacedFrozen(t *testing.T) {
 				t.Fatalf("got %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// A regression run starts no agent, so the pace leaves it alone: paused, the queued run is still
+// claimed, while the claude build beside it waits.
+func TestChooseWorkPacedRegression(t *testing.T) {
+	req := ClaimRequest{Runner: "devbox", Agent: "a", Kinds: []string{WorkItem, WorkRegression}}
+	reg := &RegCandidate{RunID: 7, Suite: SuiteWeb}
+	build := waiting(1, Build, "P1", 0)
+	paused := Pace{Level: PacePaused}
+	w, ok := ChooseWorkPaced(DefaultControl(), paused, []Item{build}, nil, nil, nil, nil, reg, nil, req, nil)
+	if !ok || w.Reg == nil || w.Reg.RunID != 7 {
+		t.Fatalf("paused: got %+v, %v; want regression run 7", w, ok)
+	}
+	if w, ok := ChooseWorkPaced(DefaultControl(), paused, []Item{build}, nil, nil, nil, nil, nil, nil, req, nil); ok {
+		t.Fatalf("paused, no regression: got %+v, want nothing", w)
 	}
 }
 
@@ -376,14 +392,14 @@ func TestChooseWorkPacedHeldSlot(t *testing.T) {
 	qwenReq := req
 	qwenReq.Builders = []string{BuilderQwen}
 	paused := Pace{Level: PacePaused}
-	if w, ok := ChooseWorkPaced(two, paused, []Item{mac}, nil, live, nil, nil, holds, req, nil); ok {
+	if w, ok := ChooseWorkPaced(two, paused, []Item{mac}, nil, live, nil, nil, nil, holds, req, nil); ok {
 		t.Fatalf("paused: got %+v, want nothing", w)
 	}
-	w, ok := ChooseWorkPaced(two, paused, []Item{mac}, nil, live, nil, nil, holds, qwenReq, nil)
+	w, ok := ChooseWorkPaced(two, paused, []Item{mac}, nil, live, nil, nil, nil, holds, qwenReq, nil)
 	if !ok || w.Item == nil || w.Item.ID != 2 || !w.RouteQwen {
 		t.Fatalf("paused, qwen on the runner: got %+v, %v; want #2 routed to qwen", w, ok)
 	}
-	if w, ok := ChooseWorkPaced(two, Pace{Agents: 2}, []Item{mac}, nil, live, nil, nil, holds, req, nil); !ok || w.Item == nil || w.Item.ID != 2 || w.RouteQwen {
+	if w, ok := ChooseWorkPaced(two, Pace{Agents: 2}, []Item{mac}, nil, live, nil, nil, nil, holds, req, nil); !ok || w.Item == nil || w.Item.ID != 2 || w.RouteQwen {
 		t.Fatalf("normal: got %+v, %v; want #2 with claude", w, ok)
 	}
 }
@@ -406,7 +422,7 @@ func TestSlotHoldsPaced(t *testing.T) {
 		if len(holds) != 0 {
 			t.Fatalf("paused, #%d waiting: holds %+v, want none", items[0].ID, holds)
 		}
-		w, ok := ChooseWorkPaced(two, paused, items, nil, live, nil, nil, holds, devbox, nil)
+		w, ok := ChooseWorkPaced(two, paused, items, nil, live, nil, nil, nil, holds, devbox, nil)
 		if !ok || w.Item == nil || w.Item.ID != 3 || !w.RouteQwen {
 			t.Fatalf("paused, #%d waiting: devbox got %+v, %v; want #3 with qwen", items[0].ID, w, ok)
 		}
@@ -426,7 +442,7 @@ func TestSlotHoldsPaced(t *testing.T) {
 	if len(holds) != 1 || holds[0].ItemID != 2 {
 		t.Fatalf("normal: holds %+v, want #2 held", holds)
 	}
-	if w, ok := ChooseWorkPaced(two, normal, []Item{mac, qwenBuild}, nil, live, nil, nil, holds, devbox, nil); ok || w.Held != "slot held for macos work" {
+	if w, ok := ChooseWorkPaced(two, normal, []Item{mac, qwenBuild}, nil, live, nil, nil, nil, holds, devbox, nil); ok || w.Held != "slot held for macos work" {
 		t.Fatalf("normal: devbox got %+v, %v; want the slot held", w, ok)
 	}
 }

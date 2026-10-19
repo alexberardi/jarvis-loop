@@ -154,31 +154,33 @@ type Work struct {
 	Item *Item
 	Turn *TurnCandidate
 	Orch *OrchCandidate
+	Reg  *RegCandidate
 	// RouteQwen: build the item with qwen this run (a paced claim, ChooseWorkPaced).
 	RouteQwen bool
 	// Held, with nothing to claim, is why: the slots left are held (SlotHolds).
 	Held string
 }
 
-// ChooseWork picks an item (Choose), a queued plan turn or the queued orchestrate turn (orch, nil
-// when there is none to start). Turns share the active-agents limit with items (live includes the
+// ChooseWork picks an item (Choose), a queued plan turn, the queued orchestrate turn (orch, nil
+// when there is none to start) or the queued regression run (reg, nil when there is none). Turns share the active-agents limit with items (live includes the
 // running turns; land leases take no agent slot, and a land item is claimed when the agent slots are
 // full or held); a plan turn's priority is its plan's, and it beats an item of the same priority:
 // the user is in the conversation. The orchestrate turn beats everything (it gets the next free
-// slot), one at a time. The fix of a frozen repo (frozen) beats even that: it may take a slot
+// slot), one at a time; the regression run comes next (the user asked for it now), one at a time
+// and only for a runner with the resources its suite needs. The fix of a frozen repo (frozen) beats even that: it may take a slot
 // over the active-agents number. holds are the slots held (SlotHolds): when they are all the free
 // slots left, the claim gets only an item needing a held resource.
-func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, holds []SlotHold, req ClaimRequest, frozen Frozen) (Work, bool) {
-	return ChooseWorkPaced(c, Pace{Level: PaceNormal, Agents: c.ActiveAgents}, items, deps, live, turns, orch, holds, req, frozen)
+func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, reg *RegCandidate, holds []SlotHold, req ClaimRequest, frozen Frozen) (Work, bool) {
+	return ChooseWorkPaced(c, Pace{Level: PaceNormal, Agents: c.ActiveAgents}, items, deps, live, turns, orch, reg, holds, req, frozen)
 }
 
 // ChooseWorkPaced is ChooseWork under a claude pace (PaceFor). Slow: claude's runs at once are at
 // most pace.Agents (live counts the Claude leases), and claude takes only P1 and size S items,
-// triage (short, and an item has no size before it) and P1 plan turns; paused: claude takes nothing. Either way land and qwen builds go on, and a P3–P5
+// triage (short, and an item has no size before it) and P1 plan turns; paused: claude takes nothing. Either way land, qwen builds and regression runs (no agent) go on, and a P3–P5
 // build of size S or M with no builder set goes to qwen this run when the runner has it
 // (Work.RouteQwen). The active-agents number caps everything as before; a frozen repo's fix and
 // the work of a held slot are paced like any item.
-func ChooseWorkPaced(c Control, pace Pace, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, holds []SlotHold, req ClaimRequest, frozen Frozen) (Work, bool) {
+func ChooseWorkPaced(c Control, pace Pace, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, reg *RegCandidate, holds []SlotHold, req ClaimRequest, frozen Frozen) (Work, bool) {
 	p := newPacing(pace, live, req.Builders)
 	if req.wants(WorkItem) {
 		if it, ok := chooseFix(c, items, deps, live, req, frozen, p.eligible); ok {
@@ -191,7 +193,7 @@ func ChooseWorkPaced(c Control, pace Pace, items []Item, deps map[int64]Stage, l
 	if AgentLeases(live) >= c.ActiveAgents {
 		return chooseLand(c, items, deps, live, req, frozen)
 	}
-	w, ok := chooseWork(c, p, items, deps, live, turns, orch, req, frozen)
+	w, ok := chooseWork(c, p, items, deps, live, turns, orch, reg, req, frozen)
 	if len(holds) == 0 || c.ActiveAgents-AgentLeases(live) > len(holds) || (ok && (serves(w, holds) || w.Item != nil && w.Item.Stage == Land)) {
 		return w, ok
 	}
@@ -270,9 +272,12 @@ func chooseLand(c Control, items []Item, deps map[int64]Stage, live []LiveLease,
 	return Work{Item: &it}, true
 }
 
-func chooseWork(c Control, p pacing, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, req ClaimRequest, frozen Frozen) (Work, bool) {
+func chooseWork(c Control, p pacing, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, reg *RegCandidate, req ClaimRequest, frozen Frozen) (Work, bool) {
 	if orch != nil && p.claudeOK && req.wants(WorkOrchestrate) && !slices.ContainsFunc(live, func(l LiveLease) bool { return l.Stage == OrchestrateStage }) {
 		return Work{Orch: orch}, true
+	}
+	if regressionFits(c, reg, live, req) {
+		return Work{Reg: reg}, true
 	}
 	var it Item
 	okItem := false

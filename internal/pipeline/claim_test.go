@@ -232,7 +232,7 @@ func TestSlotHold(t *testing.T) {
 			if !slices.Equal(got, tc.holds) {
 				t.Fatalf("holds %+v, want %v", holds, tc.holds)
 			}
-			w, ok := ChooseWork(tc.ctl, tc.items, deps, tc.live, nil, nil, holds, tc.req, nil)
+			w, ok := ChooseWork(tc.ctl, tc.items, deps, tc.live, nil, nil, nil, holds, tc.req, nil)
 			var id int64
 			if ok {
 				id = w.Item.ID
@@ -270,7 +270,7 @@ func TestSlotHoldTurns(t *testing.T) {
 	holds := []SlotHold{{Resource: "macos", Runner: "mbp", ItemID: 2}}
 	req := ClaimRequest{Runner: "devbox", Agent: "a", Kinds: []string{WorkItem, WorkPlan, WorkOrchestrate}}
 	turns := []TurnCandidate{{TurnID: 5, PlanID: 5, Priority: "P1", CreatedAt: t0}}
-	if w, ok := ChooseWork(two, nil, nil, []LiveLease{{ItemID: 9, Stage: Build}}, turns, &OrchCandidate{}, holds, req, nil); ok {
+	if w, ok := ChooseWork(two, nil, nil, []LiveLease{{ItemID: 9, Stage: Build}}, turns, &OrchCandidate{}, nil, holds, req, nil); ok {
 		t.Fatalf("got %+v, want nothing", w)
 	}
 }
@@ -324,7 +324,7 @@ func TestLandTakesNoAgentSlot(t *testing.T) {
 			if !slices.Equal(got, tc.holds) {
 				t.Fatalf("holds %+v, want %v", holds, tc.holds)
 			}
-			w, ok := ChooseWork(ctl, tc.items, nil, tc.live, nil, nil, holds, tc.req, nil)
+			w, ok := ChooseWork(ctl, tc.items, nil, tc.live, nil, nil, nil, holds, tc.req, nil)
 			var id int64
 			if ok {
 				id = w.Item.ID
@@ -339,7 +339,7 @@ func TestLandTakesNoAgentSlot(t *testing.T) {
 	}
 	stopped := ctl
 	stopped.Stopped = true
-	if w, ok := ChooseWork(stopped, []Item{land}, nil, agents, nil, nil, nil, landReq, nil); ok {
+	if w, ok := ChooseWork(stopped, []Item{land}, nil, agents, nil, nil, nil, nil, landReq, nil); ok {
 		t.Fatalf("stopped: got %+v, want nothing", w)
 	}
 }
@@ -360,13 +360,13 @@ func TestLandProceedsPastSixBuilds(t *testing.T) {
 	devboxLand := ClaimRequest{Runner: "devbox", Agent: "devbox-land", Capabilities: []string{"gpu"}, Stages: []Stage{Land}}
 	for _, want := range []int64{1, 2, 3} {
 		holds := SlotHolds(ctl, Pace{}, items, nil, live, []RunnerSeen{macBR}, nil, t0)
-		w, ok := ChooseWork(ctl, items, nil, live, nil, nil, holds, devboxLand, nil)
+		w, ok := ChooseWork(ctl, items, nil, live, nil, nil, nil, holds, devboxLand, nil)
 		if !ok || w.Item.ID != want {
 			t.Fatalf("land claim: %+v (ok %v), want #%d", w, ok, want)
 		}
 		live = append(live, LiveLease{ItemID: want, Stage: Land, Resources: w.Item.Needs()})
 	}
-	if w, ok := ChooseWork(ctl, items, nil, live, nil, nil, nil, devboxLand, nil); ok {
+	if w, ok := ChooseWork(ctl, items, nil, live, nil, nil, nil, nil, devboxLand, nil); ok {
 		t.Fatalf("over the land limit: got %+v", w)
 	}
 	if holds := SlotHolds(ctl, Pace{}, items, nil, live, []RunnerSeen{macBR}, nil, t0); len(holds) != 0 {

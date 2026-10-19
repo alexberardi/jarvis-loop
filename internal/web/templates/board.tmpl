@@ -130,6 +130,28 @@
 </ul>
 </details>
 {{- end}}{{end}}
+{{- with .Regressions}}{{if .Show}}
+<details class="orch"{{if .Open}} open{{end}}>
+<summary>Regressions{{with .Open}} · R{{.ID}} ({{.Suite}}) {{.Status}}{{end}}</summary>
+{{- if .CanRun}}
+{{- if .Open}}
+<p class="note">One run at a time: R{{.Open.ID}} is {{.Open.Status}}.</p>
+{{- else}}
+<form method="post" action="/board/regressions">
+<label>Suite <select name="suite">{{range .Suites}}<option value="{{.}}"{{if eq . "all"}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+<button type="submit">Run regression</button>
+</form>
+{{- end}}
+{{- end}}
+{{- if .Runs}}
+<ul>
+{{- range .Runs}}
+<li><a href="/board/regressions/{{.ID}}">R{{.ID}}</a> {{.Suite}} <span class="label">{{.Status}}</span>{{if or (eq .Status "passed") (eq .Status "failed")}} {{.Passed}} passed, {{.Failed}} failed, {{.Skipped}} skipped{{end}}{{with .Error}} <span class="reason">{{.}}</span>{{end}} <span class="why">· {{age .Ago}} ago</span></li>
+{{- end}}
+</ul>
+{{- end}}
+</details>
+{{- end}}{{end}}
 <div class="lanes">
 {{- range .Columns}}
 <section class="lane">

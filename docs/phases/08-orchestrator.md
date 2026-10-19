@@ -182,7 +182,13 @@ standup reports its own spend.
    open escalations (about an item: until it changes stage or is done; about none: for a day), its
    tickets (open first) and its notebook through the board's markdown allow-list. "Last turn" is
    its newest action or note until piece 3 records turns.
-6. **Standup and `@jarvis-loop` questions.**
+6. **Standup and `@jarvis-loop` questions.** As built (docs/decisions/2026-10-18-standup.md): a
+   message trigger carries its channel, thread and whether the approver wrote it; the turn
+   answers with a `reply` action in that thread (and `ask_approval` when asked to approve). The
+   09:00 standup is composed by loopd from the store (no model call) and posted by `@orchestrator`
+   in `#loop-digest`: the 24 hours to 09:00, its spend from each turn's recorded cost and tokens.
+   The digest counts the items instead of listing them. Scenarios `68-orchestrator-answers-in-thread`
+   and `68-standup`.
 
 ## Harness
 

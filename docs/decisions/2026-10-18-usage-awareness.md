@@ -13,7 +13,7 @@ active-agents number to 0 and never raising it again.
   `rate_limit_status` (`allowed`, `allowed_warning`, `rejected`), `rate_limit_type`
   (`five_hour`, `seven_day…`), `rate_limit_resets_at`, `rate_limit_utilization`. Tested on a recorded
   stream (`internal/runner/testdata/usage_stream.jsonl`).
-- loopd writes one row per run into `usage_runs` (migration 0022: item, stage, provider, model,
+- loopd writes one row per run into `usage_runs` (migration 0025: item, stage, provider, model,
   tokens, cost, the run's start and end, the warning). The migration backfills the rows from the
   runs recorded before it, from their events.
 - `usage_hits` records every limit a run hit: the window (from `rateLimitType`, else the text:
@@ -69,7 +69,7 @@ agents are never touched.
   next build is claude's again once the pace is normal. L items, a plan's `builder: claude` and a
   qwen item's fallback to claude are never routed.
 - **Paused** at a budget, or while a limit hit's reset is ahead: claude takes nothing. Qwen builds
-  (the item's or routed) and land (a script) go on. A reset the CLI did not give, or gave in a form
+  (the item's or routed), land (a script) and regression runs (`scripts/e2e`, no agent) go on. A reset the CLI did not give, or gave in a form
   we cannot read or in the past, pauses for an hour: the next run then either works or hits the
   limit again at once, which costs nothing.
 - **A frozen repo's main-red fix** (2026-10-18-main-red-freeze.md) still goes first and may take a

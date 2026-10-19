@@ -205,7 +205,7 @@ func TestUsageBackfillFromEvents(t *testing.T) {
 	s, _ := open(t)
 	it := add(t, s, "x", "")
 	triageWith(t, s, it, claudeRun(1234))
-	body, err := os.ReadFile("migrations/0024_usage.sql")
+	body, err := os.ReadFile("migrations/0025_usage.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

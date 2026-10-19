@@ -1,0 +1,59 @@
+{
+  "name": "orchestrator-answers-in-thread",
+  "about": "Questions to @orchestrator are answered where they were asked (docs/phases/08-orchestrator.md, piece 6): the message trigger carries its channel, thread and whether the approver wrote it, and the turn's reply action posts in that thread through the orchestrator's own app. The approver's \"what's stuck?\" in an item's #loop thread gets one reply in that thread, from the snapshot; someone else's \"drop #1\" in a DM gets an answer there and no drop; the approver's \"approve #2\" gets the approval message posted again with its button (ask_approval), never an approval.",
+  "stages": ["build", "review", "land", "orchestrate"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Round the kitchen timer"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "question"},
+    {"do": "add", "item": "b", "title": "Support Kasa plugs"},
+    {"do": "triage", "item": "b"},
+    {"do": "script", "item": "b", "play": "good", "file": "internal/modules/auth/kasa.go"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "script", "for": "orchestrate", "play": "persona"},
+
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "b", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you", "b": "held"}},
+
+    {"do": "tell_orchestrator", "as": "approver", "where": "thread", "item": "a", "text": "what's stuck?"},
+    {"do": "tell_orchestrator", "as": "other", "where": "dm", "text": "drop #1"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "messages": [
+       {"thread": "a", "from": "orchestrator", "text": "^Stuck: #1 needs you: Should the timer round up or down\\?; #2 waits on your approval\\.$"}
+     ]},
+    {"do": "expect",
+     "messages": [
+       {"channel": "DORCHESTRATORU0SANDBOXOTHER", "from": "orchestrator", "text": "^Only the approver can have me do that\\.$"}
+     ],
+     "events": [{"kind": "orchestrator.reply", "count": 2},
+                {"kind": "orchestrator.reply", "data": {"text": "^Only the approver"}, "count": 1}]},
+
+    {"do": "tell_orchestrator", "as": "approver", "where": "thread", "item": "b", "text": "approve #2"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"b": "held"},
+     "messages": [{"thread": "b", "from": "orchestrator", "text": "^Approvals are yours: I posted #2's approval message again in its thread, with the button\\.$"}]},
+    {"do": "expect",
+     "messages": [
+       {"thread": "b", "from": "bot", "text": "^Orchestrator: approvals are yours, so here is its approval message again — you asked me to approve #2", "buttons": ["Approve merge", "Keep holding", "Drop"]}
+     ],
+     "events": [{"item": "b", "kind": "orchestrator.approval_asked", "actor": "orchestrator", "count": 1}],
+     "no_events": [{"item": "b", "kind": "approved"}]}
+  ],
+  "expect": {
+    "no_events": [{"item": "a", "kind": "dropped"}],
+    "agent_runs": {"orchestrate": 3}
+  }
+}

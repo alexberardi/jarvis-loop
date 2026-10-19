@@ -77,6 +77,11 @@ type OrchTurnResult struct {
 	SessionID string             `json:"session_id"`
 	Error     string             `json:"error"`
 	Actions   []OrchActionResult `json:"actions"`
+	// The turn's spend as claude reported it (0 when it did not): cost, and tokens in (cache
+	// reads and writes included) and out.
+	CostUSD      float64 `json:"total_cost_usd,omitempty"`
+	InputTokens  int64   `json:"usage_input,omitempty"`
+	OutputTokens int64   `json:"usage_output,omitempty"`
 }
 
 // MaxOrchActions caps the actions a result reports.
@@ -254,13 +259,13 @@ func (s *Store) orchHook(tx *sql.Tx, e Event) error {
 
 // orchFingerprint is what the sweep compares: the newest event the orchestrator did not cause
 // (its own actions and its turns' bookkeeping are left out, so a turn's notes do not start the
-// next one).
+// next one; so are the regression runs', which change no item).
 func orchFingerprint(q interface {
 	QueryRow(string, ...any) *sql.Row
 }) (string, error) {
 	var n int64
 	err := q.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM events WHERE actor NOT LIKE 'orchestrator:%'
-		AND kind NOT LIKE 'orchestrat%'`).Scan(&n)
+		AND kind NOT LIKE 'orchestrat%' AND kind NOT LIKE 'regression%'`).Scan(&n)
 	return strconv.FormatInt(n, 10), err
 }
 
@@ -476,6 +481,9 @@ func (s *Store) OrchestrateResult(ctx context.Context, runnerName string, turnID
 		data := map[string]any{"turn": t.ID, "lease": t.lease.ID, "actions": len(t.Actions), "refused": refused, "session": t.Session}
 		if t.Error != "" {
 			data["error"] = t.Error
+		}
+		if r.CostUSD > 0 || r.InputTokens > 0 || r.OutputTokens > 0 {
+			data["total_cost_usd"], data["usage_input"], data["usage_output"] = r.CostUSD, r.InputTokens, r.OutputTokens
 		}
 		out = t
 		return s.event(tx, Event{Actor: "runner:" + runnerName, Kind: kind, Data: data})

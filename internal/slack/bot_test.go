@@ -1052,38 +1052,38 @@ func TestDigest(t *testing.T) {
 
 	e.clk.Advance(3 * time.Hour) // 11:30: no boundary yet
 	e.b.Tick(e.ctx)
-	if posts := only(t, e.calls(), "chat.postMessage"); len(posts) != 0 {
+	if posts := digests(t, e.calls()); len(posts) != 0 {
 		t.Fatalf("early digest %+v", posts)
 	}
 	e.clk.Advance(30 * time.Minute) // 12:00
 	e.b.Tick(e.ctx)
-	posts := only(t, e.calls(), "chat.postMessage")
+	posts := digests(t, e.calls())
 	if len(posts) != 1 || posts[0].Body["channel"] != ChannelDigest {
 		t.Fatalf("digest %+v", posts)
 	}
 	txt := allText(posts[0])
-	for _, want := range []string{"New (3)", fmt.Sprintf("#%d fresh item", idNew), "Held (1)", fmt.Sprintf("#%d held item", idHeld),
-		"Needs you (1)", "Active agents: 4 of 6", "08:00–12:00"} {
+	for _, want := range []string{"held 1 · needs you 1 · new 3", "Active agents: 4 of 6", "08:00–12:00"} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("digest lacks %q: %s", want, txt)
 		}
 	}
-	if strings.Contains(txt, "Merged") || strings.Contains(txt, "Failing") {
-		t.Errorf("empty sections shown: %s", txt)
+	// The items themselves are the standup's (standup.go): the digest only counts them.
+	if strings.Contains(txt, "merged") || strings.Contains(txt, "failing") || strings.Contains(txt, "fresh item") || strings.Contains(txt, "held item") {
+		t.Errorf("empty counts or items shown: %s", txt)
 	}
 
 	// No double post: again in the same window, or after a restart.
 	e.clk.Advance(time.Minute)
 	e.b.Tick(e.ctx)
 	e.newBot().Tick(e.ctx)
-	if posts := only(t, e.calls(), "chat.postMessage"); len(posts) != 0 {
+	if posts := digests(t, e.calls()); len(posts) != 0 {
 		t.Fatalf("double digest %+v", posts)
 	}
 
 	// Nothing to report: no message, but the window moves on.
 	e.clk.Advance(4 * time.Hour)
 	e.b.Tick(e.ctx)
-	if posts := only(t, e.calls(), "chat.postMessage"); len(posts) != 0 {
+	if posts := digests(t, e.calls()); len(posts) != 0 {
 		t.Fatalf("empty digest %+v", posts)
 	}
 	if st, _ := e.st.SlackState(e.ctx); !st.LastDigest.Equal(t0.Add(8 * time.Hour)) {
@@ -1096,16 +1096,28 @@ func TestDigest(t *testing.T) {
 	e.calls()
 	e.clk.Advance(4 * time.Hour)
 	e.b.Tick(e.ctx)
-	posts = only(t, e.calls(), "chat.postMessage")
+	posts = digests(t, e.calls())
 	if len(posts) != 1 {
 		t.Fatalf("posts %+v", posts)
 	}
 	txt = allText(posts[0])
-	for _, want := range []string{"Failing (1)", "Last /loop usage: 42%"} {
+	for _, want := range []string{"failing 1", "Last /loop usage: 42%"} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("digest lacks %q: %s", want, txt)
 		}
 	}
+}
+
+// digests are the digest posts among calls (the standup posts to #loop-digest too).
+func digests(t *testing.T, calls []call) []call {
+	t.Helper()
+	var out []call
+	for _, c := range only(t, calls, "chat.postMessage") {
+		if strings.HasPrefix(allText(c), "*Loop digest*") {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func TestDigestAlignsToNewYork(t *testing.T) {
@@ -1180,6 +1192,7 @@ func TestAnswerThroughSocketMode(t *testing.T) {
 
 func TestDigestThatCannotBePostedIsSkippedAfterRetries(t *testing.T) {
 	e := newBotEnv(t)
+	e.st.RecordStandup(e.ctx, t0.Add(time.Hour), true) // today's standup is not due: only the digest posts
 	e.b.Tick(e.ctx)
 	e.clk.Advance(time.Hour)
 	e.add("something")

@@ -1,0 +1,41 @@
+{
+  "name": "standup",
+  "about": "The daily standup (docs/phases/08-orchestrator.md, piece 6; docs/decisions/2026-10-18-standup.md): at 09:00 New York, loopd posts it in #loop-digest from the @orchestrator app, composed from the store: merged in the 24 hours to 09:00, in flight with its stage and age, waiting and on what, what needs the user, what the orchestrator did and its own spend (its turns against the cap, claude's cost and tokens). The stack starts at 09:00, which only starts the clock; the next 09:00 posts it, once that day. The 4-hourly digest no longer lists the items, it counts them.",
+  "stages": ["build", "orchestrate"],
+  "steps": [
+    {"do": "clock", "advance": "1m"},
+    {"do": "add", "item": "a", "title": "Round the kitchen timer"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "question"},
+    {"do": "script", "for": "orchestrate", "play": "persona"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "add", "item": "b", "title": "Support Kasa plugs"},
+    {"do": "triage", "item": "b"},
+    {"do": "add", "item": "c", "title": "Kasa scenes", "after": ["b"]},
+    {"do": "expect", "stage": {"a": "needs_you", "b": "build", "c": "triage"}},
+
+    {"do": "clock", "advance": "3h"},
+    {"do": "expect",
+     "messages": [{"channel": "digest", "from": "bot", "text": "^\\*Loop digest\\* · Thu Oct 15 08:00–12:00 \\(New York\\)\\n\\nneeds you 1 · new 3\\n"}]},
+
+    {"do": "clock", "advance": "20h58m"},
+    {"do": "expect",
+     "no_messages": [{"channel": "digest", "text": "^\\*Standup\\*"}, {"channel": "digest", "text": "Kitchen timer|Kasa"}],
+     "events": [{"kind": "standup", "data": {"posted": "^false$"}, "count": 1}]},
+
+    {"do": "clock", "advance": "1m"},
+    {"do": "expect",
+     "messages": [{"channel": "digest", "from": "orchestrator",
+                   "text": "^\\*Standup\\* · Fri Oct 16 \\(New York\\) · since Thu 09:00\\n\\n\\*In flight \\(1\\)\\*\\n• #2 Support Kasa plugs — build · 23h in stage\\n\\n\\*Waiting \\(1\\)\\*\\n• #3 Kasa scenes — waiting on #2 → ready, not claimed\\n\\n\\*Needs you \\(1\\)\\*\\n• #1 Round the kitchen timer — needs you: Should the timer round up or down\\?\\n\\n\\*What I did\\*\\nNothing\\.\\n\\n\\*My spend\\*\\n1 turn \\(cap 150 a day\\) · \\$0\\.42 · 100k tokens in, 4k out\\n?$"}],
+     "events": [{"kind": "standup", "data": {"posted": "^true$"}, "count": 1}]},
+
+    {"do": "clock", "advance": "4h"}
+  ],
+  "expect": {
+    "events": [{"kind": "standup", "data": {"posted": "^true$"}, "count": 1}],
+    "agent_runs": {"orchestrate": 1}
+  }
+}

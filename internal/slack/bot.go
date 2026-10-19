@@ -71,6 +71,8 @@ type Bot struct {
 	planHeaders map[int64]string
 	digestTS    time.Time // the boundary the failures below are for
 	digestNG    int       // failed attempts to post that digest
+	standupTS   time.Time // the 09:00 the failures below are for
+	standupNG   int       // failed attempts to post that standup
 	self        string    // the loop bot's own user id, once toOrchestrator has needed it
 }
 
@@ -160,10 +162,12 @@ func (b *Bot) Drain(ctx context.Context) {
 	}
 }
 
-// Tick applies reply approvals whose window has passed and posts the digest when one is due.
+// Tick applies reply approvals whose window has passed and posts the digest and the standup when
+// one is due.
 func (b *Bot) Tick(ctx context.Context) {
 	b.applyDue(ctx)
 	b.digest(ctx)
+	b.standup(ctx)
 }
 
 // ---- Slack calls with bounded retries ----
@@ -229,6 +233,10 @@ func (b *Bot) handleEvent(ctx context.Context, e store.Event) {
 	if e.ItemID == 0 {
 		if e.Kind == store.KindFrozen || e.Kind == store.KindUnfrozen {
 			b.post(ctx, "freeze", b.freezeMessage(ctx, e))
+			return
+		}
+		if e.Kind == store.KindRegDone {
+			b.regressionReport(ctx, e)
 			return
 		}
 		if e.Kind == store.KindRunwayLow {
@@ -1203,11 +1211,15 @@ func (b *Bot) onMention(ctx context.Context, m slackEvent) {
 			return
 		}
 	}
+	text := incoming(m.Text)
+	if suite, ok := pipeline.ParseRegression(text); ok {
+		b.regressionMention(ctx, m, suite)
+		return
+	}
 	if !IsApprover(m.User) {
 		b.refuse(ctx, m.Channel, m.User, 0, "add")
 		return
 	}
-	text := incoming(m.Text)
 	if _, err := b.add(ctx, m.User, text); err != nil {
 		b.ephemeral(ctx, m.Channel, m.User, Escape(errMessage(err))+" Try: @jarvis-loop <what to do>")
 	}
@@ -1252,6 +1264,10 @@ func (b *Bot) onActions(ctx context.Context, p interaction) {
 	for _, a := range p.Actions {
 		if strings.HasPrefix(a.ActionID, "plan_") {
 			b.onPlanAction(ctx, channel, msgTS, user, a.ActionID, a.Value)
+			continue
+		}
+		if a.ActionID == "regression_file" {
+			b.onRegressionFile(ctx, channel, msgTS, user, a.Value)
 			continue
 		}
 		itemID := actionItem(a.ActionID, a.BlockID, a.Value)

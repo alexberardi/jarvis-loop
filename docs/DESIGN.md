@@ -159,7 +159,7 @@ Slack is the user's whole interface: add work, answer questions and approve merg
 | set priority | words when adding, or the dropdown on the item's first message |
 | see the board | `/loop status`; `/loop show <id>` for one item; on the LAN, the web board at `/board` (a "Working now" card per running agent, refreshed every 5 s; columns per stage, read-only, refreshes every 30 s) |
 | turn spending up or down | the pinned **Active agents** message, `/loop agents <n>`, `/loop stop` |
-| catch up | a digest every 4 hours in `#loop-digest`: merged, held, failing, new, waiting for your check (qa), estimated spend |
+| catch up | a standup at 09:00 in `#loop-digest` (the orchestrator's: merged, in flight, waiting and on what, needs you, what it did, its spend); a digest every 4 hours with the counts, main's CI and estimated spend |
 
 **What never goes to Slack** (a third party): full logs, model-call transcripts, sandbox credentials, tokens, and host names from `HOSTS.local.md`. The bot posts summaries, PR links and small evidence (a cropped screenshot, one failing scenario line); everything else is a link to `loopd` that works only on the LAN, or through the tunnel later.
 
@@ -237,7 +237,7 @@ Each phase is usable on its own and proves one thing before the next builds on i
 5. **Triage and review.** The two agent stages around build; bounce and needs-you. *Proves:* bad fixes and stale reports get caught before the user sees them.
 6. **Land.** The landing script, held merges through Slack. *Proves:* end to end without a human in the middle.
 7. **Move to the prod box.** `loopd` runs there as its own service; the dev box becomes just a runner. *Proves:* the split, and survives the dev box rebooting.
-8. **Nightly regressions, at 19:00 America/New_York.** The scenarios, admin, desktop and mobile shots on `main`, with failures filed as items. *Proves:* the loop finds work on its own.
+8. **Nightly regressions, at 19:00 America/New_York.** The scenarios, admin, desktop and mobile shots on `main`, with failures filed as items. *Proves:* the loop finds work on its own. The manual trigger comes first: `@jarvis-loop regression [web|mobile|all]` or the board's button runs jarvis-server's `scripts/e2e` on a runner and reports it in `#loop`, a failure filed with one press ([decision](decisions/2026-10-18-regression-trigger.md)).
    Then **6b, every active repo** (2026-10-15): routing triage, the runner's verify step, setup commands, repo aliases in Slack and the hold rules for the mobile apps, docs, installer and packages. *Proves:* an item about any of them goes from a Slack message to a merged PR with the same gates.
 9. **Later:** a Mac runner, the Cloudflare Tunnel.
 

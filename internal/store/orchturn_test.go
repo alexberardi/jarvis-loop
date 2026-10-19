@@ -378,3 +378,26 @@ func TestOrchSnapshotItemResources(t *testing.T) {
 		t.Fatalf("snapshot items: %+v", snap.Items)
 	}
 }
+
+// A turn's spend (claude's cost and tokens, as the runner read them) goes on its done or failed
+// event, for the standup's spend line.
+func TestOrchTurnSpend(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	add(t, s, "a", "P1")
+	if err := s.QueueOrchestrate(ctx, pipeline.TriggerMessage, "what's stuck?"); err != nil {
+		t.Fatal(err)
+	}
+	cl := claimKinds(t, s, "o", pipeline.WorkOrchestrate)
+	if cl == nil || cl.Orch == nil {
+		t.Fatalf("claim: %+v", cl)
+	}
+	if _, err := s.OrchestrateResult(ctx, runner, cl.Orch.ID, OrchTurnResult{SessionID: "s", Actions: []OrchActionResult{},
+		CostUSD: 0.42, InputTokens: 100000, OutputTokens: 4000}); err != nil {
+		t.Fatal(err)
+	}
+	e, ok, err := s.LastEvent(ctx, KindOrchDone)
+	if err != nil || !ok || e.Data["total_cost_usd"] != 0.42 || e.Data["usage_input"] != float64(100000) || e.Data["usage_output"] != float64(4000) {
+		t.Fatalf("done event: %+v %v", e.Data, err)
+	}
+}
