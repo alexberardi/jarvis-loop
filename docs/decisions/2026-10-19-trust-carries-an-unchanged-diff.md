@@ -13,9 +13,13 @@ enforced by a test (`pipeline/trust_test.go`, `runner/trustcarry_test.go`) or by
 ## What was chosen
 
 - **The refusal records the digest of what the user looks at.** The runner's refusal also sends
-  `trusted_diff_sha256`: the sha256 of `git diff origin/<base>...<head> -- <trusted paths>`, the
-  uncut diff it attaches as `trusted-files.diff` (that file is cut at 1 MB; the digest is not).
-  loopd stores it on the item's trust as `diff_sha256` (it must be 64 lowercase hex).
+  `trusted_diff_sha256`: the sha256 of `git diff --full-index --binary --no-textconv --no-ext-diff
+  origin/<base>...<head> -- <trusted paths>`, the uncut diff it attaches as `trusted-files.diff`
+  (that file is cut at 1 MB; the digest is not). The flags make the diff bind the bytes: for a
+  binary trusted file, or one the branch marks `-diff` (or gives a textconv driver) in
+  `.gitattributes`, git's default diff prints only "Binary files differ" and abbreviated (7-hex)
+  blob ids, which an agent could brute-force to carry the OK to content the user never saw. Full
+  40-hex ids, a real binary patch and no driver leave nothing to collide. loopd stores it on the item's trust as `diff_sha256` (it must be 64 lowercase hex).
 - **The runner carries the OK only to the same bytes.** When verify meets a trusted-file change on a
   head the OK does not allow (another head, or the OK was used), it carries the OK when the
   approver gave one, it has a digest, the head changes the same trusted paths, and the diff of

@@ -9,9 +9,12 @@ import (
 
 // trustedDiff is the diff of head's trusted files against the merge base with the base branch:
 // what the refusal attaches for the user (uncut), and what a carried OK must match byte for byte.
+// Full blob ids and real binary patches, with no textconv or external driver, so the digest binds
+// the bytes even of a binary trusted file or one the branch marks -diff in .gitattributes (whose
+// default diff names only "Binary files differ" and abbreviated, brute-forceable ids).
 func (r *Runner) trustedDiff(ctx context.Context, ru *run, head string, paths []string) (string, error) {
 	rng := "refs/remotes/origin/" + ru.repo.Base + "..." + head
-	return r.Git.run(ctx, ru.wt, append([]string{"diff", rng, "--"}, paths...)...)
+	return r.Git.run(ctx, ru.wt, append([]string{"diff", "--full-index", "--binary", "--no-textconv", "--no-ext-diff", rng, "--"}, paths...)...)
 }
 
 func diffSHA256(diff string) string {

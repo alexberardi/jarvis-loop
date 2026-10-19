@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/alexberardi/jarvis-loop/internal/fakeclaude"
@@ -96,4 +97,69 @@ func TestVerifyCarriesTheOKToAnUnchangedTrustedDiff(t *testing.T) {
 	write("scripts/harness.sh", "echo agent!\n")
 	again := commit("touch the harness again")
 	refused("changed trusted diff", ok, again)
+}
+
+// A trusted path the branch marks -diff in .gitattributes still gets a digest that binds its bytes
+// (#277 review): the diff carries full blob ids and a binary patch, not "Binary files differ" with
+// abbreviated ids an agent could collide, and a later head that changes those bytes is refused.
+func TestTrustedDiffBindsTheBytesOfANoDiffPath(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	g.verifyRepo(VerifyStep{Name: "harness", Run: "touch ran"})
+	rc := g.r.Cfg.Repos["demo"]
+	rc.DenyWrite = []string{"scripts"}
+	g.r.Cfg.Repos["demo"] = rc
+	id := g.toBuild("Change the harness")
+	cl, err := g.r.Client.Claim(g.ctx, "a", nil, []string{StageBuild})
+	if err != nil || cl == nil || cl.Item.ID != id {
+		t.Fatalf("claim %+v %v", cl, err)
+	}
+	ru, err := g.r.newRun(cl, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt := ru.wt
+	if err := os.MkdirAll(filepath.Join(wt, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(wt, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commit := func(msg string) string {
+		gitT(t, wt, "add", "-A", ".gitattributes", "scripts")
+		gitT(t, wt, "commit", "-q", "-m", msg)
+		return gitT(t, wt, "rev-parse", "HEAD")
+	}
+	gitT(t, wt, "init", "-q", "-b", "main", ".")
+	write(".gitattributes", "scripts/** -diff\n")
+	write("scripts/harness.sh", "echo base\n")
+	base := commit("base")
+	gitT(t, wt, "update-ref", "refs/remotes/origin/main", base)
+
+	write("scripts/harness.sh", "echo agent\n")
+	trusted := commit("change the harness")
+	paths := []string{"scripts/harness.sh"}
+	diff, err := g.r.trustedDiff(g.ctx, ru, trusted, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldID := gitT(t, wt, "rev-parse", base+":scripts/harness.sh")
+	newID := gitT(t, wt, "rev-parse", trusted+":scripts/harness.sh")
+	if !strings.Contains(diff, "index "+oldID+".."+newID) || !strings.Contains(diff, "GIT binary patch") {
+		t.Fatalf("trusted diff does not bind the bytes:\n%s", diff)
+	}
+	ru.item.Trust = &ItemTrust{HeadSHA: trusted, By: "user:alex", Used: true, Paths: paths, DiffSHA256: diffSHA256(diff)}
+
+	write("scripts/harness.sh", "echo agent!\n")
+	again := commit("touch the harness again")
+	_, err = g.r.runVerify(g.ctx, ru, again, []string{"M scripts/harness.sh"})
+	var refusal *trustRefusal
+	if !errors.As(err, &refusal) || refusal.head != again || ru.trustCarried != "" {
+		t.Fatalf("changed -diff trusted file: runVerify %v, carried %q", err, ru.trustCarried)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "ran")); err == nil {
+		t.Fatal("verify ran")
+	}
 }
