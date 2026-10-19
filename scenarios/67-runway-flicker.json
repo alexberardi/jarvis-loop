@@ -1,0 +1,230 @@
+{
+  "name": "runway-flicker",
+  "about": "One runway warning per real change (#227): every chain waits on held a, so loopd warns once. The user pauses the loop for two minutes and starts it again (a paused tick used to clear the warning, and the next low tick re-sent the same one): half an hour later there is still one warning. Then e asks a question, a new thing to unblock: once the user is away again loopd sends a second warning naming it, and only one.",
+  "stages": [
+    "build",
+    "review",
+    "land"
+  ],
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Shorten the session timeout"
+    },
+    {
+      "do": "add",
+      "item": "b",
+      "title": "Session timeout setting",
+      "after": [
+        "a"
+      ]
+    },
+    {
+      "do": "add",
+      "item": "c",
+      "title": "Session timeout docs",
+      "after": [
+        "a"
+      ]
+    },
+    {
+      "do": "add",
+      "item": "d",
+      "title": "Session timeout metric",
+      "after": [
+        "a"
+      ]
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "good",
+      "file": "internal/modules/auth/session.go"
+    },
+    {
+      "do": "ci",
+      "main": {
+        "ci": "pass"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "ci",
+      "item": "a",
+      "checks": {
+        "check": "pass"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "held",
+        "b": "triage",
+        "c": "triage",
+        "d": "triage"
+      }
+    },
+    {
+      "do": "clock",
+      "advance": "31m"
+    },
+    {
+      "do": "runner",
+      "claims": "none"
+    },
+    {
+      "do": "expect",
+      "events": [
+        {
+          "kind": "runway_low",
+          "actor": "loopd",
+          "count": 1
+        }
+      ],
+      "messages": [
+        {
+          "channel": "loop",
+          "from": "bot",
+          "text": "(?s)<@U0C9AFPAMD4> :hourglass: \\*The loop has run dry\\*.*Approve #1 Shorten the session timeout at `[0-9a-f]{7}` \u2192 \\*frees 4\\*",
+          "buttons": [
+            "Approve merge"
+          ]
+        }
+      ]
+    },
+    {
+      "do": "control",
+      "stopped": true
+    },
+    {
+      "do": "clock",
+      "advance": "2m"
+    },
+    {
+      "do": "control",
+      "stopped": false
+    },
+    {
+      "do": "clock",
+      "advance": "31m"
+    },
+    {
+      "do": "runner",
+      "claims": "none"
+    },
+    {
+      "do": "expect",
+      "events": [
+        {
+          "kind": "runway_low",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "do": "add",
+      "item": "e",
+      "title": "Session timeout warning"
+    },
+    {
+      "do": "triage",
+      "item": "e"
+    },
+    {
+      "do": "script",
+      "item": "e",
+      "play": "question"
+    },
+    {
+      "do": "runner",
+      "claims": "e"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "e": "needs_you"
+      }
+    },
+    {
+      "do": "clock",
+      "advance": "31m"
+    },
+    {
+      "do": "runner",
+      "claims": "none"
+    },
+    {
+      "do": "expect",
+      "events": [
+        {
+          "kind": "runway_low",
+          "count": 2
+        }
+      ],
+      "messages": [
+        {
+          "channel": "loop",
+          "from": "bot",
+          "text": "(?s):hourglass:.*Answer #5 Session timeout warning"
+        }
+      ]
+    },
+    {
+      "do": "clock",
+      "advance": "20m"
+    },
+    {
+      "do": "runner",
+      "claims": "none"
+    },
+    {
+      "do": "expect",
+      "events": [
+        {
+          "kind": "runway_low",
+          "count": 2
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "held",
+      "e": "needs_you"
+    },
+    "events": [
+      {
+        "kind": "runway_low",
+        "count": 2
+      }
+    ]
+  }
+}
