@@ -1,0 +1,27 @@
+{
+  "name": "plan-gemini-unavailable",
+  "about": "#191: Gemini's critique never holds a blueprint back. With the gemini block on and the fake agy out of quota (exit 1, RESOURCE_EXHAUSTED), the engineering turn's blueprint is posted as the persona wrote it, with Approve blueprint v1, and the reply opens with 'Gemini second opinion unavailable (quota): posted without it.' No answer turn runs and there is no critique document; agy's stderr stays in the run dir.",
+  "stages": ["triage", "build", "review", "plan"],
+  "steps": [
+    {"do": "plan_post", "as": "approver", "plan": "p", "text": "A pantry list in demo\nSo I know what to buy."},
+    {"do": "runner", "claims": "p"},
+    {"do": "runner_idle"},
+    {"do": "plan_approve", "plan": "p", "doc": "brief", "text": "yes"},
+    {"do": "gemini", "play": "quota"},
+    {"do": "runner", "claims": "p"},
+    {"do": "runner_idle"},
+    {"do": "wait", "plans": {"p": {"stage": "blueprint", "turn": "you", "docs": {"brief": 1, "blueprint": 1}}},
+     "messages": [{"plan": "p", "from": "bot", "text": "^_Gemini second opinion unavailable \\(quota\\): posted without it\\._\\n\\nHere is the blueprint \\(turn 2\\): three pieces\\.\\n\\nReady for your approval: blueprint v1", "buttons": ["Approve blueprint v1"]}]},
+    {"do": "expect",
+     "no_events": [{"plan": "p", "kind": "plan_doc", "data": {"kind": "^critique$"}}],
+     "run_files": [{"plan": "p", "stage": "engineering", "file": "gemini-critique-stderr.log", "text": "RESOURCE_EXHAUSTED"},
+                   {"plan": "p", "stage": "engineering", "file": "brief.md", "no_text": "Gemini's critique"}],
+     "no_messages": [{"plan": "p", "text": "RESOURCE_EXHAUSTED|critique v"}]},
+    {"do": "plan_approve", "plan": "p", "doc": "blueprint", "text": "go"},
+    {"do": "expect", "plans": {"p": {"stage": "split", "items": 3, "turn": "none"}}}
+  ],
+  "expect": {
+    "plans": {"p": {"stage": "split", "items": 3}},
+    "agent_runs": {"product": 1, "engineering": 1}
+  }
+}
