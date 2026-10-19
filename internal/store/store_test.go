@@ -672,6 +672,12 @@ func toDone(t *testing.T, s *Store, runnerName string) pipeline.Item {
 // toMerged is toDone with a hook after the item is added, and extra fields for merged.
 func toMerged(t *testing.T, s *Store, runnerName string, after func(pipeline.Item), mergedFields map[string]string) pipeline.Item {
 	t.Helper()
+	return toMergedBuild(t, s, runnerName, after, nil, mergedFields)
+}
+
+// toMergedBuild is toMerged with extra fields for the build's pr_opened (a proof).
+func toMergedBuild(t *testing.T, s *Store, runnerName string, after func(pipeline.Item), buildFields, mergedFields map[string]string) pipeline.Item {
+	t.Helper()
 	ctx := context.Background()
 	it := add(t, s, "ship it", "")
 	if after != nil {
@@ -697,7 +703,11 @@ func toMerged(t *testing.T, s *Store, runnerName string, after func(pipeline.Ite
 		}
 	}
 	step("triager", pipeline.Reproduced, map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": ""}, nil, true)
-	step("builder", pipeline.PROpened, map[string]string{"repo": "o/r", "pr": "7", "branch": "loop/1-x", "head_sha": shaA}, []string{"M x.go"}, true)
+	built := map[string]string{"repo": "o/r", "pr": "7", "branch": "loop/1-x", "head_sha": shaA}
+	for k, v := range buildFields {
+		built[k] = v
+	}
+	step("builder", pipeline.PROpened, built, []string{"M x.go"}, true)
 	step("reviewer", pipeline.Approved, map[string]string{"summary": "ok", "head_sha": shaA}, nil, false)
 	step("lander", pipeline.Merged, merged, []string{"M x.go"}, false)
 	return it

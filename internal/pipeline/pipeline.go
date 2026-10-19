@@ -163,6 +163,9 @@ type Item struct {
 	// itself): the user is asked to check after a runner reports a build that contains the merge
 	// (docs/decisions/2026-10-16-qa-after-deploy.md).
 	AwaitingDeploy bool `json:"awaiting_deploy,omitempty"`
+	// Proof is how the loop can tell, once merged, that the change works (proof.go): the build's,
+	// or the proof sweep's for an item that reached qa without one.
+	Proof *Proof `json:"proof,omitempty"`
 	// CIRedSHA is the head land sent back to build for red CI; a pr_opened with the same head
 	// goes to the user, not review (the build changed nothing, so CI would stay red).
 	CIRedSHA string `json:"ci_red_sha,omitempty"`
@@ -446,6 +449,14 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		}
 		if err := needEvidence(); err != nil {
 			return Transition{}, err
+		}
+		// The build's proof; a rebuild that states none keeps the one it had.
+		if raw := strings.TrimSpace(a.Fields["proof"]); raw != "" {
+			p, err := ParseProof(raw, ProofByBuild)
+			if err != nil {
+				return Transition{}, err
+			}
+			it.Proof = p
 		}
 		raiseRisk(&it, holdReasons(paths, extra...))
 		voidApproval(&it, data, sha)

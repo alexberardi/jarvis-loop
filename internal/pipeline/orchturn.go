@@ -35,6 +35,7 @@ const (
 	TriggerMessage      = "message"       // the user wrote to the orchestrator
 	TriggerSweep        = "sweep"         // the 15-minute sweep, with something changed
 	TriggerDue          = "due"           // a wait the orchestrator was told about ended (a retry's backoff)
+	TriggerProof        = "proof_needed"  // an item is in qa without a proof: write one (the proof sweep)
 )
 
 // MaxTriggers caps the reasons one turn collects: past it, the snapshot has the rest.

@@ -75,6 +75,9 @@ type Step struct {
 	Play  string `json:"play,omitempty"`
 	File  string `json:"file,omitempty"`
 	Picks string `json:"picks,omitempty"` // the repo a triage run picks
+	// Proof: the proof (a list of checks) the item's builds state; with For "proof", the one the
+	// orchestrator's proofs play writes for it (the proof sweep).
+	Proof json.RawMessage `json:"proof,omitempty"`
 	// runner: which item the claim must take ("none": nothing, "orchestrator": an orchestrate
 	// turn). script with For "orchestrate" sets the orchestrator's play (no item);
 	// orchestrator_message is the user's message (Text) to it, about Item when set.
@@ -545,7 +548,7 @@ func (p *player) step(st Step) error {
 		if err != nil {
 			return err
 		}
-		return s.SetScript(r.id, st.For, st.Play, st.File, st.Picks)
+		return s.SetScript(r.id, st.For, st.Play, st.File, st.Picks, st.Proof)
 	case "runner":
 		c, err := s.Poll(30 * time.Second)
 		if err != nil {

@@ -356,7 +356,7 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
 	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of, ci_red_sha, ci_main_fixed,
-	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust`
+	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust, proof`
 
 type scanner interface{ Scan(...any) error }
 
@@ -365,14 +365,14 @@ func scanItem(row scanner) (pipeline.Item, error) {
 		it                  pipeline.Item
 		stage, ret          string
 		resources, approval string
-		trust               string
+		trust, proof        string
 		dependsOn           string
 		created, updated    int64
 	)
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
 		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf, &it.CIRedSHA, &it.CIMainFixed,
-		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust)
+		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust, &proof)
 	if err != nil {
 		return it, err
 	}
@@ -390,6 +390,12 @@ func scanItem(row scanner) (pipeline.Item, error) {
 	if trust != "" {
 		it.Trust = &pipeline.Trust{}
 		if err := json.Unmarshal([]byte(trust), it.Trust); err != nil {
+			return it, err
+		}
+	}
+	if proof != "" {
+		it.Proof = &pipeline.Proof{}
+		if err := json.Unmarshal([]byte(proof), it.Proof); err != nil {
 			return it, err
 		}
 	}
@@ -453,12 +459,20 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 		}
 		trust = string(b)
 	}
+	proof := ""
+	if it.Proof != nil {
+		b, err := json.Marshal(it.Proof)
+		if err != nil {
+			return err
+		}
+		proof = string(b)
+	}
 	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
-		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, ci_main_fixed=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=?, trust=? WHERE id=?`,
+		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, ci_main_fixed=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=?, trust=?, proof=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
-		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, it.CIMainFixed, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, trust, it.ID)
+		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, it.CIMainFixed, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, trust, proof, it.ID)
 	return err
 }
 

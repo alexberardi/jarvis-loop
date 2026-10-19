@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,16 +70,29 @@ esac
 	}
 }
 
+// The build's proof is in the footer, so review sees what the loop will check once merged.
+func TestPRBodyProof(t *testing.T) {
+	p, err := pipeline.ParseProof(`[{"kind":"usage","event":"claimed","actor":["runner:mbp"]},{"kind":"manual","look":"the board on a phone"}]`, pipeline.ProofByBuild)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := PRBody("body", 4, nil, nil, RunStats{Seconds: 5}, nil, p)
+	want := "\n**Proof** (what the loop checks once this is merged and in qa):\n\n- usage: `claimed` by runner:mbp\n- look at the board on a phone\n\nRun: 5s"
+	if !strings.Contains(b, want) {
+		t.Fatalf("got:\n%s", b)
+	}
+}
+
 func TestPRBody(t *testing.T) {
 	ev := []EvidenceFile{{Name: "after.png"}, {Name: "test.log"}}
 	b := PRBody("## What\n\nFixed.\n\n", 12, ev, map[string]string{"after.png": "after,\n phone"},
-		RunStats{Turns: 41, CacheHit: 0.973, Seconds: 754, CostUSD: 3.214, HasResult: true}, nil)
+		RunStats{Turns: 41, CacheHit: 0.973, Seconds: 754, CostUSD: 3.214, HasResult: true}, nil, nil)
 	want := "## What\n\nFixed.\n\n---\n\n### Verification\n\nEvidence files (on loop item #12):\n\n- `after.png`: after, phone\n- `test.log`\n\n" +
 		"Run: 41 turns, prompt-cache hit 97%, 12m 34s, about $3.21 (estimate).\n\n*Built by a jarvis-loop agent; pushed and opened by the runner.*\n"
 	if b != want {
 		t.Fatalf("got:\n%s", b)
 	}
-	if b := PRBody("x", 1, nil, nil, RunStats{Seconds: 9}, nil); !strings.Contains(b, "No evidence files.") || !strings.Contains(b, "Run: 9s (no usage numbers).") {
+	if b := PRBody("x", 1, nil, nil, RunStats{Seconds: 9}, nil, nil); !strings.Contains(b, "No evidence files.") || !strings.Contains(b, "Run: 9s (no usage numbers).") {
 		t.Fatalf("got:\n%s", b)
 	}
 }
@@ -92,7 +106,7 @@ func TestPRBodyVerify(t *testing.T) {
 		{Name: "mobile shots", Seconds: 300, LogFile: EvidenceFile{Name: "verify-3-mobile-shots.log"},
 			Evidence: []EvidenceFile{{Name: "verify-3-mobile-shots-home-light.png"}, {Name: "verify-3-mobile-shots-index.json"}}},
 	}
-	b := PRBody("body", 4, []EvidenceFile{{Name: "after.txt"}}, nil, RunStats{Seconds: 5}, vs)
+	b := PRBody("body", 4, []EvidenceFile{{Name: "after.txt"}}, nil, RunStats{Seconds: 5}, vs, nil)
 	want := "**Runner verify** (run by the runner after the agent, outside its sandbox, from the runner's config):\n\n" +
 		"- unit tests: passed (1m 02s); `verify-1-unit-tests.log`\n" +
 		"- admin screenshots: skipped (no changed path matches web/**)\n" +

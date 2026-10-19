@@ -57,6 +57,9 @@ unsure, stop and ask (outcome `question`) instead of guessing.
    (the brief names them), the runner runs them itself after you finish and before it pushes; a
    failure sends the item back to you with their output. Dependencies the repo's setup installs
    (`node_modules`, `.venv`) are already in the worktree.
+   State a **proof** in it (`proof`, contract below): how the loop can tell, once merged, that the
+   change works in real use (a loopd event, a command on main, the test Pi, E2E tests), and what
+   only the user can judge. An item that waits in qa is verified or reopened by it.
 
 ## Run everything in the foreground
 
@@ -101,11 +104,14 @@ Commit your work on the item's branch (the runner pushes it and opens the PR; yo
 {"outcome": "ready_for_pr", "pr_title": "one line, at most 256 characters",
  "pr_body": "markdown, at most 60,000 characters: what changed, the tests, what was not verified; name evidence files by file name",
  "summary": "one paragraph", "not_verified": ["…"], "evidence": [{"file": "evidence/after.png", "label": "after, phone"}],
- "needs_review": false}
+ "needs_review": false,
+ "proof": [{"kind": "command", "run": "go test ./internal/web -run TestBoardQA"}, {"kind": "manual", "look": "the QA column on a phone"}]}
 ```
 
 ```json
 {"outcome": "question", "question": "…"}
 ```
 
-`ready_for_pr` means everything is committed: the runner refuses a worktree with uncommitted changes, and reports git's own HEAD and changed files. It adds a Verification footer (the evidence files, the run's numbers) to your `pr_body`. Set `needs_review` to true when the change touches something the user should look at before it merges. No other fields.
+`ready_for_pr` means everything is committed: the runner refuses a worktree with uncommitted changes, and reports git's own HEAD and changed files. It adds a Verification footer (the evidence files, the run's numbers, your proof) to your `pr_body`. Set `needs_review` to true when the change touches something the user should look at before it merges. No other fields.
+
+`proof` (optional, at most 10 checks) is how the loop can tell, once merged, that the change works; an item that waits in qa is checked with it. Kinds: `usage` (`event`: a loopd event kind seen since the merge, with optional `actor` and `match` lists on its data fields: `{"kind": "usage", "event": "claimed", "actor": ["runner:mbp"]}`); `command` (`run`: one shell line the runner runs fenced in a checkout of main, exit 0 passes); `pi` (`run`, for the test Pi; it waits until the loop has one); `e2e` (`tests`: E2E suite test names; they wait until it runs); `manual` (`look`: one line, what only the user can judge). Every automatic check passing verifies the item without the user; a command failing twice in a row reopens it. So make each check really show the change works, and use `manual` only for looks, feel or a product call.

@@ -241,6 +241,13 @@ func goldenItems() []store.BoardItem {
 			Question: "Should the test use the sandbox emulator or a fake?", SlackChannel: "C0LOOP", SlackTS: "1760000001.000200", UpdatedAt: now},
 		{BoardRow: row(8, "Token rotation", "P2", "held", "held", "alexberardi/jarvis-loop", 12, "", 6*day),
 			HoldReason: "triage: risk hold; touches internal/api/auth.go", UpdatedAt: now},
+		{BoardRow: row(18, "Mac runners", "P1", "qa", "qa", "alexberardi/jarvis-loop", 60, "", 2*day), UpdatedAt: now,
+			Proof: &pipeline.Proof{By: "build", Checks: []pipeline.ProofCheck{{Kind: "usage", Event: "claimed", Actor: []string{"runner:mbp", "runner:mini"}, State: "pending"}}}},
+		{BoardRow: row(19, "Board colours", "P2", "qa", "qa", "alexberardi/jarvis-loop", 61, "", 3*day), UpdatedAt: now,
+			Proof: &pipeline.Proof{By: "sweep", Checks: []pipeline.ProofCheck{{Kind: "command", Run: "go test ./internal/web", State: "passed"}, {Kind: "manual", Look: "the QA column on a phone", State: "manual"}}}},
+		{BoardRow: row(20, "Rebuild button", "P2", "qa", "qa", "alexberardi/jarvis-loop", 62, "", 3*day), UpdatedAt: now,
+			Proof: &pipeline.Proof{By: "build", Checks: []pipeline.ProofCheck{{Kind: "command", Run: "scripts/loop-sandbox run scenarios/64-rebuild-button.json", State: "failed", Fails: 1, Evidence: "exit 1 after 9s: 1 of 1 failed"}}}},
+		{BoardRow: row(21, "Old QA item", "P3", "qa", "qa", "alexberardi/jarvis-server", 40, "", 5*day), UpdatedAt: now, AwaitingDeploy: false},
 		{BoardRow: row(9, "Fix the digest time", "P2", "done", "done", "alexberardi/jarvis-loop", 9, "", 10*day), UpdatedAt: now.Add(-13 * day)},
 		{BoardRow: row(10, "Old done item", "P2", "done", "done", "alexberardi/jarvis-loop", 3, "", 30*day), UpdatedAt: now.Add(-15 * day)},
 		{BoardRow: row(11, "Not worth it", "P3", "closed", "closed", "", 0, "", 8*day), UpdatedAt: now.Add(-2 * day)},
@@ -336,14 +343,30 @@ func TestBoardColumns(t *testing.T) {
 	if strings.Join(names, ",") != "Planning,Triage,Build,Review,Needs you,Approval,QA,Done" {
 		t.Errorf("columns %v", names)
 	}
-	want := map[string][]int64{"Triage": {1, 2, 12}, "Build": {3, 4, 13, 14}, "Review": {5, 6}, "Needs you": {7}, "Approval": {8}, "Done": {9}}
+	want := map[string][]int64{"Triage": {1, 2, 12}, "Build": {3, 4, 13, 14}, "Review": {5, 6}, "Needs you": {7}, "Approval": {8}, "QA": {18, 19, 21, 20}, "Done": {9}}
 	for k, ids := range want {
 		if !slicesEqual(got[k], ids) {
 			t.Errorf("%s: %v, want %v", k, got[k], ids)
 		}
 	}
-	if len(got["Planning"]) != 0 || len(got["QA"]) != 0 {
-		t.Errorf("planning/QA hold items: %v", got)
+	if len(got["Planning"]) != 0 {
+		t.Errorf("planning holds items: %v", got)
+	}
+	// The QA column's cards say their group and why.
+	for _, c := range v.Columns {
+		if c.Name != "QA" {
+			continue
+		}
+		var lines []string
+		for _, cd := range c.Cards {
+			lines = append(lines, cd.Label+": "+cd.Reason)
+		}
+		want := "waiting for a proof: waits for: usage: `claimed` by runner:mbp or runner:mini|" +
+			"needs you: look at the QA column on a phone|needs you: no proof: your check|" +
+			"failed: failed once, checked again before it reopens: command: `scripts/loop-sandbox run scenarios/64-rebuild-button.json`: exit 1 after 9s: 1 of 1 failed"
+		if got := strings.Join(lines, "|"); got != want {
+			t.Errorf("QA cards:\n%s\nwant\n%s", got, want)
+		}
 	}
 	// No open plans: the Planning column says so.
 	if c := boardView(goldenItems(), nil, now, false, "").Columns[0]; c.Name != "Planning" || c.Note != "No open plans." || c.Count() != 0 {
@@ -392,6 +415,25 @@ func TestItemGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkGolden(t, "item_held.golden.html", b.Bytes())
+}
+
+// A qa item's page shows its QA group and its proof: each check with its state and evidence.
+func TestItemProofGolden(t *testing.T) {
+	at := now.Add(-time.Hour)
+	d := store.Detail{
+		Item: pipeline.Item{ID: 16, Title: "Rebuild button", Repo: "alexberardi/jarvis-loop", Priority: "P2", Stage: pipeline.QA, PR: 62,
+			Risk: "normal", CreatedAt: at, UpdatedAt: now, Proof: &pipeline.Proof{By: "build", CheckedAt: &at, Checks: []pipeline.ProofCheck{
+				{Kind: "usage", Event: "rebuild", Match: map[string][]string{"source": {"needs_you"}}, State: "passed", Evidence: "seen 2 time(s) since the merge (newest: event 913)", CheckedAt: &at},
+				{Kind: "command", Run: "scripts/loop-sandbox run scenarios/64-rebuild-button.json", State: "failed", Fails: 1, Evidence: "exit 1 after 9s: 1 of 1 failed\n<details>", CheckedAt: &at},
+				{Kind: "manual", Look: "the button's colour", State: "manual"},
+			}}},
+		Display: "qa",
+	}
+	var b bytes.Buffer
+	if err := itemTmpl.Execute(&b, itemView(d, "", "", now, "")); err != nil {
+		t.Fatal(err)
+	}
+	checkGolden(t, "item_qa.golden.html", b.Bytes())
 }
 
 // goldenOrch is the orchestrator's panel: an action of each shape, an open escalation, a ticket it
