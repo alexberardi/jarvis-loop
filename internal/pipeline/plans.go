@@ -40,10 +40,12 @@ func (s PlanStage) Open() bool { return s == PlanBrief || s == PlanBlueprint || 
 // Talking reports whether the plan is in a conversation: its turns run.
 func (s PlanStage) Talking() bool { return s == PlanBrief || s == PlanBlueprint }
 
-// The documents a plan has.
+// The documents a plan has. A critique is Gemini's critique of a blueprint and engineering's
+// answers (docs/decisions/2026-10-19-gemini-plan-critique.md): a record, never approved.
 const (
 	DocBrief     = "brief"
 	DocBlueprint = "blueprint"
+	DocCritique  = "critique"
 )
 
 // The personas that run a plan's turns.
@@ -263,6 +265,9 @@ type TurnResult struct {
 	// Brief and Blueprint are the document's new markdown, when the turn wrote one.
 	Brief     string `json:"brief,omitempty"`
 	Blueprint string `json:"blueprint,omitempty"`
+	// Critique (engineering only) is the runner's markdown of Gemini's critique of the blueprint
+	// and the persona's answers.
+	Critique string `json:"critique,omitempty"`
 	// Ready: the agent thinks the document is ready to approve (post the Approve button).
 	Ready bool `json:"ready,omitempty"`
 	// BackToBrief (engineering only) sends the plan back to the brief, with why.
@@ -320,6 +325,9 @@ func ApplyTurnResult(p Plan, t PlanTurn, r TurnResult, latest map[string]PlanDoc
 		if r.Blueprint != "" {
 			return fail("only engineering writes the blueprint")
 		}
+		if r.Critique != "" {
+			return fail("only engineering writes the critique")
+		}
 		if back != "" {
 			return fail("only engineering sends a plan back to the brief")
 		}
@@ -359,7 +367,7 @@ func ApplyTurnResult(p Plan, t PlanTurn, r TurnResult, latest map[string]PlanDoc
 		for _, x := range []struct {
 			name string
 			set  bool
-		}{{"brief", r.Brief != ""}, {"blueprint", r.Blueprint != ""}, {"ready", r.Ready}, {"back_to_brief", back != ""}, {"repos", len(r.Repos) > 0}} {
+		}{{"brief", r.Brief != ""}, {"blueprint", r.Blueprint != ""}, {"critique", r.Critique != ""}, {"ready", r.Ready}, {"back_to_brief", back != ""}, {"repos", len(r.Repos) > 0}} {
 			if x.set {
 				o.Ignored = append(o.Ignored, x.name)
 			}
@@ -381,6 +389,11 @@ func ApplyTurnResult(p Plan, t PlanTurn, r TurnResult, latest map[string]PlanDoc
 	}
 	if r.Ready && !ok {
 		return fail("ready, but there is no " + kind + " yet")
+	}
+	if c := r.Critique; c != "" && t.Persona == PersonaEngineering {
+		if have, ok := latest[DocCritique]; !ok || have.SHA256 != DocSHA256(c) {
+			o.Docs = append(o.Docs, PlanDoc{PlanID: p.ID, Kind: DocCritique, Version: have.Version + 1, Markdown: c, SHA256: DocSHA256(c), CreatedAt: now})
+		}
 	}
 	o.Ready = r.Ready
 	if back != "" {
