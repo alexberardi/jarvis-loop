@@ -226,10 +226,16 @@ func (r *Runner) runVerify(ctx context.Context, ru *run, head string, changed []
 	}
 	if paths := trustedPaths(ru.repo.DenyWrite, changed); len(paths) > 0 {
 		if !ru.item.Trust.allows(head) {
-			return nil, &trustRefusal{head: head, paths: paths}
+			// Another head than the one OK'd: the OK carries only to the same trusted diff.
+			sum := r.carriedTrust(ctx, ru, head, paths)
+			if sum == "" {
+				return nil, &trustRefusal{head: head, paths: paths}
+			}
+			r.Log.Info("the user's OK carries: the trusted files' diff is unchanged", "item", ru.item.ID, "from", ru.item.Trust.HeadSHA, "head", head)
+			ru.trustCarried, ru.trustDiffSHA = head, sum
 		}
-		// The approver OK'd this exact commit: verify runs the agent's version once, and the
-		// report says so (loopd uses the OK up).
+		// The approver OK'd this commit (or its trusted diff): verify runs the agent's version once,
+		// and the report says so (loopd uses the OK up).
 		r.Log.Info("verify runs a trusted-file change on the user's OK", "item", ru.item.ID, "head", head, "by", ru.item.Trust.By)
 		ru.trustUsed = head
 	}
@@ -488,9 +494,11 @@ func (r *Runner) refuseTrusted(ctx context.Context, ru *run, out outcome, tr *tr
 	if err != nil {
 		stat = "(git diff --stat failed: " + clip(err.Error(), 200) + ")"
 	}
-	if diff, err := r.Git.run(ctx, ru.wt, append([]string{"diff", rng, "--"}, tr.paths...)...); err != nil {
+	sum := ""
+	if diff, err := r.trustedDiff(ctx, ru, tr.head, tr.paths); err != nil {
 		r.Log.Warn("trusted files' diff", "item", ru.item.ID, "err", err)
 	} else if diff != "" {
+		sum = diffSHA256(diff) // of the uncut diff: a later head with the same one carries the OK
 		f := filepath.Join(ru.dir, "trusted-files.diff")
 		if len(diff) > maxTrustedDiff {
 			diff = diff[:maxTrustedDiff] + "\n[cut at 1 MB]"
@@ -507,5 +515,5 @@ func (r *Runner) refuseTrusted(ctx context.Context, ru *run, out outcome, tr *tr
 		tr.Error(), ru.item.ID, tr.head, ru.item.ID, tr.head)
 	r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{
 		"error": msg, pipeline.FieldTrustSHA: tr.head, pipeline.FieldTrustPaths: strings.Join(tr.paths, ","),
-		pipeline.FieldTrustDiffstat: clip(stat, 2000)}), nil)
+		pipeline.FieldTrustDiffstat: clip(stat, 2000), pipeline.FieldTrustDiffSHA: sum}), nil)
 }

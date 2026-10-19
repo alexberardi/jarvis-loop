@@ -93,6 +93,12 @@ const (
 	// RebaseTrusted is TrustedChange, but a rerun after a bounce rebases the branch onto the base's
 	// head and commits nothing more (#233, as on #155): a rewritten head that needs a new OK.
 	RebaseTrusted = "rebase_trusted"
+	// RebaseTrustedEdit is RebaseTrusted whose rerun also changes the trusted file again after the
+	// rebase: a rewritten head with a new trusted diff, which needs a new OK (#277).
+	RebaseTrustedEdit = "rebase_trusted_edit"
+	// TrustedThenFix is TrustedChange whose rerun after a bounce fixes the review in another file
+	// only: a new head whose trusted files' diff is unchanged, so the OK carries (#277).
+	TrustedThenFix = "trusted_then_fix"
 	// Harness is good, after using the repo's harness through the runner: loop-harness up, then a
 	// run that writes .loop/evidence/harness.txt. HarnessHang does the same, then hangs.
 	Harness     = "harness"
@@ -501,9 +507,16 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	resumed := strings.TrimSpace(git(f.cwd, "rev-list", "--count", "origin/"+base+"..HEAD")) != "0"
 	if scenario == NoChange && resumed {
 		// Nothing to fix: no commit.
-	} else if scenario == RebaseTrusted && resumed && exists(filepath.Join(f.cwd, ".loop", "review", "notes.md")) {
+	} else if (scenario == RebaseTrusted || scenario == RebaseTrustedEdit) && resumed && exists(filepath.Join(f.cwd, ".loop", "review", "notes.md")) {
 		f.bash("git -c user.name=fake -c user.email=fake@example.com rebase -q origin/" + base)
-	} else if scenario == TrustedChange || scenario == TrustedChangeEager || scenario == RebaseTrusted {
+		if scenario == RebaseTrustedEdit {
+			f.bash("echo 'shoot --light' >> " + shellQuote(change) + " && git add " + shellQuote(change) +
+				" && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'harness: shoot light mode too'")
+		}
+	} else if scenario == TrustedThenFix && resumed && exists(filepath.Join(f.cwd, ".loop", "review", "notes.md")) {
+		f.bash("mkdir -p docs && echo 'addressed the review' >> docs/review.md && git add docs/review.md" +
+			" && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'fix: address the review'")
+	} else if scenario == TrustedChange || scenario == TrustedChangeEager || scenario == RebaseTrusted || scenario == RebaseTrustedEdit || scenario == TrustedThenFix {
 		if !resumed || scenario == TrustedChangeEager || !bytes.Contains(brief, []byte(trustedBrief)) {
 			f.bash("mkdir -p \"$(dirname " + shellQuote(change) + ")\" && echo 'shoot --dark' >> " + shellQuote(change) + " && git add " + shellQuote(change) +
 				" && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'harness: shoot dark mode too'")

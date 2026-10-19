@@ -644,6 +644,9 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		text = fmt.Sprintf("Approved by %s for `%s`: '%s' → land.", by, short(str(e.Data, "head_sha")), f("words", 300))
 	case "trusted":
 		text = fmt.Sprintf("Trusted files OK'd by %s for `%s`: verify runs that commit once → build.", by, short(str(e.Data, "head_sha")))
+	case pipeline.KindTrustCarried:
+		text = fmt.Sprintf("Trusted files' diff unchanged since `%s`: the OK %s gave carries to `%s`, so verify ran it without asking again.",
+			short(str(e.Data, "from")), who(str(e.Data, "by")), short(str(e.Data, "to")))
 	case "held":
 		text = fmt.Sprintf("Kept holding (%s).", by)
 	case "rebuild":
