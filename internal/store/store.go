@@ -191,6 +191,14 @@ func (s *Store) Close() error {
 	return errors.Join(s.w.Close(), errR)
 }
 
+// migrationProbes tell, for a migration that once shared its number with another, whether it
+// already ran (a count > 0), instead of its version: 0025_proofs (#194) and 0025_usage (#199) both
+// merged as 0025, so a database's version 25 may be either one.
+var migrationProbes = map[string]string{
+	"0025_proofs.sql": `SELECT COUNT(*) FROM pragma_table_info('items') WHERE name = 'proof'`,
+	"0026_usage.sql":  `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'usage_runs'`,
+}
+
 func (s *Store) migrate() error {
 	if _, err := s.w.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`); err != nil {
 		return err
@@ -217,13 +225,22 @@ func (s *Store) migrate() error {
 		}
 		err = s.tx(context.Background(), func(tx *sql.Tx) error {
 			var n int
-			if err := tx.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, v).Scan(&n); err != nil || n > 0 {
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, v).Scan(&n); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(string(body)); err != nil {
-				return fmt.Errorf("%s: %w", e.Name(), err)
+			applied := n > 0
+			if probe, ok := migrationProbes[e.Name()]; ok {
+				if err := tx.QueryRow(probe).Scan(&n); err != nil {
+					return err
+				}
+				applied = n > 0
 			}
-			_, err := tx.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, v, s.clock.Now().UnixNano())
+			if !applied {
+				if _, err := tx.Exec(string(body)); err != nil {
+					return fmt.Errorf("%s: %w", e.Name(), err)
+				}
+			}
+			_, err := tx.Exec(`INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)`, v, s.clock.Now().UnixNano())
 			return err
 		})
 		if err != nil {
