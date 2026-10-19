@@ -200,8 +200,14 @@ type RegressionConfig struct {
 	// the app itself.
 	Repo       string `json:"repo"`
 	MobileRepo string `json:"mobile_repo,omitempty"`
-	// TimeoutText is a Go duration (default 150m): the run is ended after it.
+	// TimeoutText is a Go duration (default 150m): the run is ended after it (an overnight run's
+	// each lane).
 	TimeoutText string `json:"timeout,omitempty"`
+	// PipelineCommand replaces the overnight run's pipeline-scenarios command (PipelineCommand):
+	// a bash command line run in the server checkout with LOOP_PIPELINE_SANDBOX, LOOP_PIPELINE_FILTER
+	// (a rerun's) and LOOP_PIPELINE_OUT (where tools/pipeline run --json's summary goes) set. The
+	// loop's harness points it at a stand-in.
+	PipelineCommand string `json:"pipeline_command,omitempty"`
 
 	timeout time.Duration
 }

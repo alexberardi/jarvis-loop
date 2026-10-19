@@ -483,7 +483,8 @@ func ApplyE2EResults(it Item, run E2ERun, now time.Time) (tr Transition, decided
 					continue
 				}
 				n++
-				if t.Status == "passed" {
+				// Flaky: it failed, then passed on the overnight run's rerun; not a failure.
+				if t.Status == "passed" || t.Status == "flaky" {
 					passed++
 				} else if bad == nil {
 					bad = t

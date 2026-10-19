@@ -145,11 +145,24 @@
 <button type="submit">Run regression</button>
 </form>
 {{- end}}
+<form method="post" action="/board/regressions/tonight">
+{{- if .Scheduled}}
+<input type="hidden" name="on" value="0"><button type="submit">Cancel tonight's run</button>
+{{- else}}
+<input type="hidden" name="on" value="1"><button type="submit">Run overnight tonight</button>
+{{- end}}
+</form>
+{{- end}}
+{{- with .Scheduled}}
+<p class="note">Overnight R{{.ID}} scheduled: from {{clock .NotBefore}}, once the queue has been quiet for 10 minutes; it holds new work while it runs, and its report comes in the morning.</p>
+{{- end}}
+{{- if .Nightly}}
+<p class="note">Every night: on (the control's regression_nightly).</p>
 {{- end}}
 {{- if .Runs}}
 <ul>
 {{- range .Runs}}
-<li><a href="/board/regressions/{{.ID}}">R{{.ID}}</a> {{.Suite}} <span class="label">{{.Status}}</span>{{if or (eq .Status "passed") (eq .Status "failed")}} {{.Passed}} passed, {{.Failed}} failed, {{.Skipped}} skipped{{end}}{{with .Error}} <span class="reason">{{.}}</span>{{end}} <span class="why">· {{age .Ago}} ago</span></li>
+<li><a href="/board/regressions/{{.ID}}">R{{.ID}}</a> {{.Suite}} <span class="label">{{.Status}}</span>{{if or (eq .Status "passed") (eq .Status "failed")}} {{.Passed}} passed, {{.Failed}} failed,{{if .Flaky}} {{.Flaky}} flaky,{{end}} {{.Skipped}} skipped{{end}}{{with .Error}} <span class="reason">{{.}}</span>{{end}} <span class="why">· {{age .Ago}} ago</span></li>
 {{- end}}
 </ul>
 {{- end}}

@@ -37,9 +37,12 @@ type Scenario struct {
 	// learn of only from a reload_loopd and a reload_runner step.
 	ExtraRepo bool `json:"extra_repo,omitempty"`
 	// Slots are the runner's agent slots (default 1): two let a run go on while another starts.
-	Slots int     `json:"slots,omitempty"`
-	Steps []Step  `json:"steps"`
-	Final *Expect `json:"expect,omitempty"`
+	Slots int `json:"slots,omitempty"`
+	// Capabilities are the runner's (default none): the overnight regression needs emulator, gpu
+	// and voice.
+	Capabilities []string `json:"capabilities,omitempty"`
+	Steps        []Step   `json:"steps"`
+	Final        *Expect  `json:"expect,omitempty"`
 }
 
 // Step is one thing that happens. Do says what; the other fields are its arguments. An "expect"
