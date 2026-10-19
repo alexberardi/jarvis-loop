@@ -1,6 +1,7 @@
 // Package fakeagy is a stand-in for the Antigravity CLI's headless mode (`agy -p <prompt> --model
 // <m> --mode plan --sandbox --output-format json --json-schema <file>`), the runner's Gemini
-// second opinion (docs/decisions/2026-10-18-gemini-second-opinion.md), for the runner's tests and
+// second opinion (docs/decisions/2026-10-18-gemini-second-opinion.md) and its critique of a
+// plan's blueprint (docs/decisions/2026-10-19-gemini-plan-critique.md), for the runner's tests and
 // the loop's harness. It prints the JSON agy prints ({response, status, usage}), never talks to a
 // model, and plays the scenario in <FAKE_CLAUDE_SCRIPTS>/agy.json ({"play": "..."}; default ok).
 // Each call appends its arguments, its working directory and whether it could write there to
@@ -15,12 +16,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 )
 
 // Plays.
 const (
-	OK      = "ok"      // two findings on the diff's first file: one high, one low
+	OK      = "ok"      // two findings on the diff's first file: one high, one low (a plan's critique: three points)
 	None    = "none"    // no findings
 	Quota   = "quota"   // exit 1 with a quota error on stderr, as a free plan's limit
 	Garbage = "garbage" // exit 0, but stdout is not agy's JSON
@@ -77,6 +79,22 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		}
 		time.Sleep(2 * time.Minute)
 		return 1
+	}
+	// A plan's critique (the schema asks for points): three points on the blueprint.
+	if b, _ := os.ReadFile(schema); strings.Contains(string(b), `"points"`) {
+		points := []any{}
+		if play == OK {
+			points = []any{
+				map[string]any{"severity": "high", "section": "piece 1", "kind": "missing", "point": "No piece tests the migration on a copy of real data."},
+				map[string]any{"severity": "medium", "section": "piece 3", "kind": "order", "point": "The page reads the API: it should depend on piece 2, not only 1."},
+				map[string]any{"severity": "low", "section": "Risks", "kind": "risk", "point": "'None' is not a risk analysis."},
+			}
+		}
+		resp, _ := json.Marshal(map[string]any{"points": points})
+		b, _ := json.Marshal(map[string]any{"response": string(resp), "status": "success",
+			"usage": map[string]any{"input_tokens": 2100, "output_tokens": 260, "total_tokens": 2360}})
+		fmt.Fprintln(stdout, string(b))
+		return 0
 	}
 	findings := []any{}
 	if play == OK {

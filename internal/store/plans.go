@@ -1043,8 +1043,8 @@ func (s *Store) GetPlan(ctx context.Context, id int64) (PlanDetail, error) {
 
 // GetPlanDoc returns a version of a plan's document, with its markdown; version 0 is the latest.
 func (s *Store) GetPlanDoc(ctx context.Context, id int64, kind string, version int) (pipeline.PlanDoc, error) {
-	if kind != pipeline.DocBrief && kind != pipeline.DocBlueprint {
-		return pipeline.PlanDoc{}, errf(pipeline.CodeInvalidField, "kind must be brief or blueprint, not %q", kind)
+	if kind != pipeline.DocBrief && kind != pipeline.DocBlueprint && kind != pipeline.DocCritique {
+		return pipeline.PlanDoc{}, errf(pipeline.CodeInvalidField, "kind must be brief, blueprint or critique, not %q", kind)
 	}
 	if _, err := loadPlan(s.r, id); err != nil {
 		return pipeline.PlanDoc{}, err

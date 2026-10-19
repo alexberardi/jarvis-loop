@@ -80,7 +80,8 @@ worktree read-only and masks the other credential stores.
 
 ## Not decided here
 
-- Gemini on plan blueprints (#191) reuses the `gemini` block and `runAgy`.
+- Gemini on plan blueprints (#191) reuses the `gemini` block and agy's call (`agyCall`):
+  [decision](2026-10-19-gemini-plan-critique.md).
 - Usage awareness (#199) may move agy's usage from the event into its counters.
 - Whether agy's own `--sandbox` nests under bubblewrap on the dev box was not tried with the real
   agy; if it does not, set `"fence": false` (agy then runs with the runner's environment minus

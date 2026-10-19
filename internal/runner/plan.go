@@ -221,7 +221,11 @@ func (r *Runner) preparePlan(ctx context.Context, ru *run) (string, error) {
 	}
 	ri := &RunInfo{}
 	writeContext(ru, ri, ".loop/context/repos.md", "the configured repos", r.reposTable())
-	for _, kind := range []string{pipeline.DocBrief, pipeline.DocBlueprint} {
+	kinds := []string{pipeline.DocBrief, pipeline.DocBlueprint}
+	if ru.turn.Persona == pipeline.PersonaEngineering {
+		kinds = append(kinds, pipeline.DocCritique) // Gemini's last critique, and its answers
+	}
+	for _, kind := range kinds {
 		d, err := r.Client.PlanDoc(ctx, ru.plan.ID, kind)
 		switch {
 		case err != nil:
@@ -381,7 +385,9 @@ func (r *Runner) reportPlan(ctx context.Context, ru *run, out outcome, log *slog
 		return
 	}
 	res.SessionID = out.stats.sessionID
-	r.sendTurn(ctx, ru, res, log)
+	if res, ok := r.critique(ctx, ru, res, log); ok {
+		r.sendTurn(ctx, ru, res, log)
+	}
 }
 
 // postTurn fails the turn with why; the session id is kept, so the next turn resumes it.
@@ -477,21 +483,31 @@ func ValidatePlanResult(raw []byte, persona, outDir string, slugs []string) (pip
 		}
 	}
 	if v.Blueprint != "" {
-		if res.Blueprint, err = loadPlanDoc(outDir, v.Blueprint); err != nil {
-			return res, fmt.Errorf("blueprint: %v", err)
-		}
-		pieces, err := pipeline.ParseBlueprint(res.Blueprint)
-		if err != nil {
-			return res, fmt.Errorf("blueprint: %v", err)
-		}
-		for _, pc := range pieces {
-			if pc.Repo != "" && !slices.Contains(slugs, pc.Repo) {
-				return res, fmt.Errorf("blueprint: piece %d's repo %q is not a configured repo", pc.N, pc.Repo)
-			}
+		if res.Blueprint, err = loadBlueprint(outDir, v.Blueprint, slugs); err != nil {
+			return res, err
 		}
 	}
 	res.Ready, res.BackToBrief = v.Ready, back
 	return res, nil
+}
+
+// loadBlueprint loads a blueprint the agent wrote in out/ and checks its pieces: they parse, do
+// not loop, and name configured repos.
+func loadBlueprint(outDir, name string, slugs []string) (string, error) {
+	md, err := loadPlanDoc(outDir, name)
+	if err != nil {
+		return "", fmt.Errorf("blueprint: %v", err)
+	}
+	pieces, err := pipeline.ParseBlueprint(md)
+	if err != nil {
+		return "", fmt.Errorf("blueprint: %v", err)
+	}
+	for _, pc := range pieces {
+		if pc.Repo != "" && !slices.Contains(slugs, pc.Repo) {
+			return "", fmt.Errorf("blueprint: piece %d's repo %q is not a configured repo", pc.N, pc.Repo)
+		}
+	}
+	return md, nil
 }
 
 // loadPlanDoc reads a document the agent wrote: a plain file directly in out/ ("brief.md"

@@ -130,7 +130,14 @@ const (
 	PlanBlueprint = "blueprint"     // engineering: a 3-piece blueprint (2 and 3 depend on 1), ready
 	BackToBrief   = "back_to_brief" // engineering: sends the plan back to the brief
 	PlanCycle     = "cycle"         // engineering: a blueprint whose pieces depend on each other
-	PlanEscape    = "plan_escape"   // tries to write outside out/ (refused), then the persona's usual
+	// PlanKeep plays blueprint while the plan has none (.loop/context/blueprint.md), then keeps
+	// the latest: ready, writing no blueprint.
+	PlanKeep = "keep"
+	// Answering Gemini's critique (a prompt with "## Gemini's critique"), every engineering play
+	// agrees with the odd points and disagrees with the even ones, revising the blueprint;
+	// PlanUnanswered writes no result then, and plays the blueprint before.
+	PlanUnanswered = "unanswered"
+	PlanEscape     = "plan_escape" // tries to write outside out/ (refused), then the persona's usual
 	// PlanWait waits until the harness releases it (the file <dir>/P<id>.release), reporting
 	// "waiting", then plays the persona's usual.
 	// A build run plays it too: wip.txt, then it waits for <dir>/<id>.release and plays good.
@@ -163,7 +170,7 @@ var stagePlays = map[string][]string{
 	"review": {Approve, Bounce, ReviewCommit, ApproveHold, ApproveQA, ApproveToolState, ApproveNamesDir, ApproveNamesDirOnce, Hang, UsageLimit, Exit3, Background},
 	// Plan personas.
 	"product":     {PlanBrief, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
-	"engineering": {PlanBlueprint, BackToBrief, PlanCycle, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
+	"engineering": {PlanBlueprint, BackToBrief, PlanCycle, PlanKeep, PlanUnanswered, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
 	"adjudicate":  {Agree, Disagree, Hang, UsageLimit, Exit3},
 	"orchestrate": {OrchReact, OrchNote, OrchAgentsUp, OrchInvalid, OrchInvalidOnce, OrchPersona, OrchProofs, Hang, UsageLimit, Exit3},
 }
@@ -914,7 +921,10 @@ func (f *fake) planTurn(play, persona, plan string, brief []byte, sc script, pro
 	if play == PlanEscape {
 		f.write("notes.md", "outside out/\n")
 	}
-	if play == PlanWait || play == PlanEscape {
+	if bytes.HasPrefix(brief, []byte("## Gemini's critique")) {
+		return f.answerCritique(play)
+	}
+	if play == PlanWait || play == PlanEscape || play == PlanUnanswered {
 		play = stagePlays[persona][0]
 	}
 	var msgs []string
@@ -927,6 +937,14 @@ func (f *fake) planTurn(play, persona, plan string, brief []byte, sc script, pro
 	title := find(`(?m)^- Plan: P\d+: (.*)$`, brief)
 	f.bash("ls -a .loop/context")
 	r := map[string]any{}
+	if play == PlanKeep {
+		if _, err := os.Stat(filepath.Join(f.cwd, ".loop", "context", "blueprint.md")); err == nil {
+			play = ""
+			r = map[string]any{"reply": fmt.Sprintf("The blueprint stands (turn %s).", turn), "ready": true}
+		} else {
+			play = PlanBlueprint
+		}
+	}
 	switch play {
 	case PlanBrief:
 		f.write("out/brief.md", fmt.Sprintf("# %s\n\nTurn %s heard: %s\n", title, turn, strings.Join(msgs, " / ")))
@@ -951,6 +969,46 @@ func (f *fake) planTurn(play, persona, plan string, brief []byte, sc script, pro
 	res, _ := json.Marshal(r)
 	f.write("out/result.json", string(res))
 	f.result("Turn done.")
+	return 0
+}
+
+// answerCritique plays engineering's answers to Gemini's critique in
+// .loop/context/gemini-critique.json: it takes the odd points (revising out/blueprint.md) and
+// answers the even ones.
+func (f *fake) answerCritique(play string) int {
+	f.bash("cat .loop/context/gemini-critique.json")
+	if play == PlanUnanswered {
+		f.result("I could not get to it.")
+		return 0
+	}
+	b, _ := os.ReadFile(filepath.Join(f.cwd, ".loop", "context", "gemini-critique.json"))
+	var in struct {
+		Points []struct {
+			ID int `json:"id"`
+		} `json:"points"`
+	}
+	json.Unmarshal(b, &in)
+	answers, taken, lines := []any{}, []string{}, []string{}
+	for _, p := range in.Points {
+		a := map[string]any{"id": p.ID, "verdict": "agree", "why": fmt.Sprintf("Right: point %d is now in the blueprint.", p.ID)}
+		if p.ID%2 == 0 {
+			a["verdict"], a["why"] = "disagree", "The pieces already cover it."
+		}
+		answers = append(answers, a)
+		lines = append(lines, fmt.Sprintf("%d: %s", p.ID, a["verdict"]))
+		if a["verdict"] == "agree" {
+			taken = append(taken, fmt.Sprintf("- Gemini's point %d, taken.\n", p.ID))
+		}
+	}
+	r := map[string]any{"reply": "Gemini's points: " + strings.Join(lines, "; ") + ".", "answers": answers}
+	if len(taken) > 0 {
+		bp, _ := os.ReadFile(filepath.Join(f.cwd, "out", "blueprint.md"))
+		f.write("out/blueprint.md", string(bp)+"\n"+strings.Join(taken, ""))
+		r["blueprint"] = "blueprint.md"
+	}
+	res, _ := json.Marshal(r)
+	f.write("out/result.json", string(res))
+	f.result("Answered.")
 	return 0
 }
 
