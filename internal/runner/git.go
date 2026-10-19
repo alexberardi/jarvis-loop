@@ -166,10 +166,16 @@ func (g Git) revParse(ctx context.Context, dir, ref string) string {
 // AddWorktree makes a fresh worktree on branch and says how many commits the branch already has
 // over the base. It continues the item's branch when an earlier run left one: in the mirror (the
 // agent's commits, pushed or not) or on the remote (a WIP push, or a bounced PR), whichever
-// contains the other. If they diverged, it refuses (one of them would be lost), unless the loop
-// recorded both: the remote is the PR's previous head (rec.Prev) and the mirror's is one the loop
-// knows the runner made since (an OK'd or approved head, rec.Heads), as after a reviewed rebase
-// whose push waited on the user's Trust. publish then pushes it with a lease (Rewrites).
+// contains the other. If they diverged, it refuses (one of them would be lost), unless the remote
+// is the PR's previous head (rec.Prev), the one loopd recorded:
+//   - the mirror's is one the loop knows the runner made since (an OK'd or approved head,
+//     rec.Heads), as after a reviewed rebase whose push waited on the user's Trust, or the same
+//     patches as the remote's on a newer base (this runner's rebase whose push failed): the run
+//     continues the mirror's, and publish pushes it with a lease (Rewrites);
+//   - otherwise the remote's is the truth (another runner rebased and pushed it, and this mirror is
+//     stale): the mirror's branch is kept under BackupRef and reset to the remote's.
+//
+// A remote at any other head is someone else's push, and the divergence is refused.
 func (g Git) AddWorktree(ctx context.Context, mirror, path, branch, base string, rec Recorded) (int, error) {
 	if err := g.clearLeftover(ctx, mirror, path); err != nil {
 		return 0, err
@@ -190,6 +196,16 @@ func (g Git) AddWorktree(ctx context.Context, mirror, path, branch, base string,
 			start = remote
 		case rec.covers(g.revParse(ctx, mirror, local), g.revParse(ctx, mirror, remote)):
 			start = local
+		case rec.Prev != "" && g.revParse(ctx, mirror, remote) == rec.Prev:
+			if g.rebasedOver(ctx, mirror, base, local, remote) {
+				start = local
+				break
+			}
+			sha := g.revParse(ctx, mirror, local)
+			if _, err := g.run(ctx, mirror, "update-ref", BackupRef(branch, sha), sha); err != nil {
+				return 0, fmt.Errorf("keeping the mirror's %s before resetting it to the remote's: %w", branch, err)
+			}
+			start = remote
 		default:
 			return 0, fmt.Errorf("%s in the runner's mirror and on the remote have diverged; reconcile them by hand", branch)
 		}
@@ -215,6 +231,38 @@ func (g Git) AddWorktree(ctx context.Context, mirror, path, branch, base string,
 	}
 	_, err := g.run(ctx, mirror, "worktree", "add", "-q", "--no-track", "-B", branch, path, start)
 	return ahead, err
+}
+
+// BackupRef is where AddWorktree keeps a mirror's branch head it replaced with the remote's:
+// refs/backup/<item>-<sha> (the item's id from loop/<id>-<slug>). Nothing in the runner deletes it.
+func BackupRef(branch, sha string) string {
+	name := strings.TrimPrefix(branch, "loop/")
+	if id, _, ok := strings.Cut(name, "-"); ok && id != "" {
+		name = id
+	}
+	return "refs/backup/" + name + "-" + sha
+}
+
+// rebasedOver reports whether local has the same patches as remote (git range-diff over the base:
+// every commit matched, none changed) on a newer base than remote's: remote's merge base with the
+// base branch is a strict ancestor of local's.
+func (g Git) rebasedOver(ctx context.Context, mirror, base, local, remote string) bool {
+	baseRef := "refs/remotes/origin/" + base
+	mbLocal, err1 := g.run(ctx, mirror, "merge-base", baseRef, local)
+	mbRemote, err2 := g.run(ctx, mirror, "merge-base", baseRef, remote)
+	if err1 != nil || err2 != nil || mbLocal == mbRemote || !g.isAncestor(ctx, mirror, mbRemote, mbLocal) {
+		return false
+	}
+	rd, err := g.RangeDiff(ctx, mirror, base, remote, local)
+	if err != nil || strings.TrimSpace(rd) == "" {
+		return false
+	}
+	for _, line := range strings.Split(strings.TrimSpace(rd), "\n") {
+		if f := strings.Fields(line); len(f) < 3 || f[2] != "=" {
+			return false
+		}
+	}
+	return true
 }
 
 // AddDetached makes a fresh worktree at rev, detached: triage's checkouts and review's PR head.
