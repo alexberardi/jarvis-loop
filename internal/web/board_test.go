@@ -601,3 +601,16 @@ func TestBoardRunwayLine(t *testing.T) {
 		t.Error("board shows more than the top 3 unblockers")
 	}
 }
+
+// Every stage's items land in some lane, claimed or not: a stage no lane lists vanishes from the board.
+func TestEveryStageHasALane(t *testing.T) {
+	for _, s := range pipeline.AllStages {
+		for _, claimed := range []bool{false, true} {
+			d := pipeline.Display(s, claimed)
+			it := store.BoardItem{BoardRow: store.BoardRow{ID: 99, Stage: string(s), Display: d}, UpdatedAt: now}
+			if v := boardView([]store.BoardItem{it}, nil, now, true, ""); v.Total == 0 {
+				t.Errorf("stage %s (display %q) appears in no lane", s, d)
+			}
+		}
+	}
+}

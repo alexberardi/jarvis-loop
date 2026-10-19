@@ -14,10 +14,10 @@
     {"do": "runner", "claims": "a"},
     {"do": "runner_idle"},
     {"do": "expect", "stage": {"a": "qa"},
-     "board": {"a": {"column": "QA", "card": "(?s)make the digest shorter.*PR #101</a>.*class=\"reason\">Merged; waiting for a deploy that contains it, then for your check\\.<"}}},
+     "board": {"a": {"column": "QA", "card": "(?s)make the digest shorter.*PR #101</a>.*class=\"reason\">waits for the deploy, then your check \\(no proof\\)<"}}},
     {"do": "deploy", "build": "main"},
     {"do": "expect", "stage": {"a": "qa"},
-     "board": {"a": {"column": "QA", "card": "class=\"reason\">Merged; waiting for your check\\.<"}}},
+     "board": {"a": {"column": "QA", "card": "class=\"reason\">no proof: your check<"}}},
     {"do": "runner", "claims": "none"},
     {"do": "press", "item": "a", "button": "qa_verified", "as": "approver"}
   ],
