@@ -866,6 +866,14 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 				return err
 			}
 		}
+		// Every poll keeps the overnight run's quiet clock, whoever polls.
+		sched, err := s.overnight(tx, cs, turns, now)
+		if err != nil {
+			return err
+		}
+		if reg == nil && slices.Contains(req.Kinds, pipeline.WorkRegression) {
+			reg = sched
+		}
 		w, ok := pipeline.ChooseWorkPaced(ctl, pace, waiting, deps, snap, turns, orch, reg, cs.holds, req, cs.frozen)
 		if !ok {
 			return nil
@@ -958,7 +966,7 @@ func (s *Store) claimState(tx *sql.Tx, now time.Time) (claimState, error) {
 		return cs, err
 	}
 	if reg != nil && reg.Status == RegRunning {
-		snap = append(snap, pipeline.LiveLease{Stage: pipeline.RegressionStage, Resources: reg.Resources()})
+		snap = append(snap, pipeline.LiveLease{Stage: pipeline.RegressionStage, Resources: reg.Resources(), Holds: reg.Overnight()})
 	}
 	waiting, err := waitingItems(tx)
 	if err != nil {
@@ -1083,8 +1091,9 @@ func (s *Store) Sweep(ctx context.Context) error {
 	err = s.r.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM leases WHERE ended_at IS NULL AND (expires_at <= ?1 OR claimed_at <= ?2))
 		+ (SELECT COUNT(*) FROM plan_leases WHERE ended_at IS NULL AND (expires_at <= ?1 OR claimed_at <= ?2))
 		+ (SELECT COUNT(*) FROM orch_turns WHERE status = 'running' AND (expires_at <= ?1 OR claimed_at <= ?2))
-		+ (SELECT COUNT(*) FROM regressions WHERE status = 'running' AND (expires_at <= ?1 OR claimed_at <= ?3))`,
-		now.UnixNano(), now.Add(-ctl.MaxRun()).UnixNano(), now.Add(-pipeline.RegressionMaxRun).UnixNano()).Scan(&due)
+		+ (SELECT COUNT(*) FROM regressions WHERE status = 'running' AND (expires_at <= ?1 OR claimed_at <= ?4 OR claimed_at <= ?3 AND suite != ?5))`,
+		now.UnixNano(), now.Add(-ctl.MaxRun()).UnixNano(), now.Add(-pipeline.RegressionMaxRun).UnixNano(),
+		now.Add(-pipeline.OvernightMaxRun).UnixNano(), pipeline.SuiteOvernight).Scan(&due)
 	if err != nil || due == 0 {
 		return err
 	}

@@ -102,6 +102,9 @@ func (s *server) routes() *http.ServeMux {
 	// Regression runs (regression.go).
 	route("POST /regressions", user, s.queueRegression)
 	route("GET /regressions", reads, s.listRegressions)
+	route("POST /regressions/scheduled", user, s.scheduleRegression)
+	route("DELETE /regressions/scheduled", user, s.cancelScheduledRegression)
+	route("GET /regressions/scheduled", reads, s.scheduledRegression)
 	route("GET /regressions/{id}", reads, s.getRegression)
 	route("GET /regressions/{id}/files/{n}", reads, s.downloadRegressionFile)
 	route("POST /regressions/{id}/files", runner, s.uploadRegressionFile)

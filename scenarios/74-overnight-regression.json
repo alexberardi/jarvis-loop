@@ -1,0 +1,45 @@
+{
+  "name": "overnight-regression",
+  "about": "The overnight regression (docs/decisions/2026-10-19-overnight-regression.md). Someone else's '@jarvis-loop regression tonight' is refused. The approver's schedules R1 for 01:00 (acknowledged to them only); a second ask is refused, one is scheduled at a time. The runner (emulator, gpu, voice) polls through the day and the evening and gets nothing: the set time has not come. At 01:00 the queue has been quiet since the morning, so the runner takes it and runs every lane in the fence: the stand-in scripts/e2e all (a web failure with its screenshot, a mobile pass and skip), scripts/e2e voice (a failure with its reply.wav) and the pipeline scenarios (a failure), then each lane's failures once more: the web test passes on the rerun (flaky), the others fail again. Nothing reaches #loop at night; at 08:30 one report: the totals, flaky apart, the duration, per-lane totals, each failure with its assertion, its screenshot or recording and File it, and the flaky test listed apart without a button. The board's report page shows the flaky section and the recording.",
+  "stages": ["triage", "build", "review", "regression"],
+  "capabilities": ["emulator", "gpu", "voice"],
+  "steps": [
+    {"do": "e2e", "outcome": "overnight"},
+    {"do": "regression", "as": "other", "text": "regression tonight"},
+    {"do": "expect",
+     "messages": [{"channel": "loop", "kind": "ephemeral", "to": "other", "text": "^Sorry, only the approver can do that\\.$"}],
+     "events": [{"kind": "refused", "actor": "other", "data": {"action": "regression_schedule"}}],
+     "no_events": [{"kind": "regression_scheduled"}]},
+    {"do": "regression", "as": "approver", "text": "regression tonight"},
+    {"do": "regression", "as": "approver", "text": "regression tonight"},
+    {"do": "expect",
+     "messages": [
+       {"channel": "loop", "kind": "ephemeral", "to": "approver", "text": "^Regression R1 \\(overnight\\) scheduled: it starts at 01:00 on Fri Oct 16 or once the queue has been quiet for 10 minutes, whichever is later, and holds new work while it runs; its report comes to #loop in the morning\\.$"},
+       {"channel": "loop", "kind": "ephemeral", "to": "approver", "text": "^No overnight regression scheduled: regression R1 \\(overnight\\) is already scheduled for 01:00 on Fri Oct 16$"}
+     ],
+     "events": [{"kind": "regression_scheduled", "count": 1, "data": {"via": "^slack$", "suite": "^overnight$"}}],
+     "no_events": [{"kind": "regression_queued"}]},
+
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "15h50m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "10m"},
+    {"do": "runner", "claims": "regression"},
+    {"do": "runner_idle"},
+    {"do": "expect",
+     "events": [{"kind": "regression_claimed", "count": 1},
+                {"kind": "regression_done", "actor": "runner", "data": {"status": "^failed$", "passed": "^4$", "failed": "^2$", "flaky": "^1$", "skipped": "^2$"}}],
+     "no_messages": [{"channel": "loop", "from": "bot", "text": "Overnight regression"}]},
+
+    {"do": "clock", "advance": "7h30m"},
+    {"do": "expect",
+     "messages": [{"channel": "loop", "from": "bot", "buttons": ["File it", "File it"],
+       "text": "(?s)^\\*Overnight regression R1 :red_circle: failed\\*: 4 passed, 2 failed, 1 flaky, 2 skipped(?: in \\d+m)? · jarvis-server `[0-9a-f]{7}` · jarvis-node-mobile `[0-9a-f]{7}` · full report: /board/regressions/1 on loopd\\nweb 1 passed, 1 flaky · mobile 1 passed, 1 skipped · pipeline 1 passed, 1 failed, 1 skipped · voice 1 passed, 1 failed.*\\*voice: lights\\*.*no reply about the lights was heard.*\\(recording on the board\\).*\\*pipeline: remember that\\*.*no remember call.*\\*Flaky\\* \\(failed, then passed on the rerun\\): web: login\\.spec\\.ts › a wrong password is refused\\.$"}],
+     "board_regression": {"1": "(?s)Regression R1 \\(overnight\\): failed.*4 passed, 2 failed, 1 flaky, 2 skipped.*<h3>voice: lights</h3>.*>recording</a>.*<h2>Flaky · 1</h2>.*<h3>web: login\\.spec\\.ts › a wrong password is refused</h3>.*first run: Error: expected Wrong password.*e2e-report\\.md"}}
+  ],
+  "expect": {
+    "events": [{"kind": "regression_done", "count": 1}, {"kind": "regression_scheduled", "count": 1}],
+    "no_events": [{"kind": "created"}],
+    "agent_runs": {}
+  }
+}

@@ -57,7 +57,7 @@ func TestBoardRunRegression(t *testing.T) {
 	if resp, body := postForm(t, srv.URL+"/board/regressions", user, url.Values{"suite": {"all"}}); resp.StatusCode != http.StatusConflict || !strings.Contains(body, "one runs at a time") {
 		t.Fatalf("second post: %d %s", resp.StatusCode, body)
 	}
-	if _, page := get(t, srv.URL+"/board", user); !strings.Contains(page, "One run at a time: R1 is queued.") || strings.Contains(page, "<form") {
+	if _, page := get(t, srv.URL+"/board", user); !strings.Contains(page, "One run at a time: R1 is queued.") || strings.Contains(page, `action="/board/regressions">`) {
 		t.Fatalf("the open run:\n%s", page)
 	}
 
@@ -91,5 +91,44 @@ func TestBoardRunRegression(t *testing.T) {
 	}
 	if resp, _ := get(t, srv.URL+"/board/regressions/9", board); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("missing run: %d", resp.StatusCode)
+	}
+}
+
+func TestBoardTonight(t *testing.T) {
+	srv, st := boardSetup(t)
+	ctx := context.Background()
+	user := &http.Cookie{Name: "loop_board", Value: userTok}
+	board := &http.Cookie{Name: "loop_board", Value: boardTok}
+	if resp, _ := postForm(t, srv.URL+"/board/regressions/tonight", board, url.Values{"on": {"1"}}); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("board token: %d", resp.StatusCode)
+	}
+	if _, page := get(t, srv.URL+"/board", user); !strings.Contains(page, `<input type="hidden" name="on" value="1"><button type="submit">Run overnight tonight</button>`) {
+		t.Fatalf("no toggle:\n%s", page)
+	}
+	if resp, _ := postForm(t, srv.URL+"/board/regressions/tonight", user, url.Values{"on": {"1"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("schedule: %d", resp.StatusCode)
+	}
+	r, _ := st.ScheduledRegression(ctx)
+	if r == nil || r.Via != "board" || r.RequestedBy != "user:alex" {
+		t.Fatalf("scheduled %+v", r)
+	}
+	if resp, _ := postForm(t, srv.URL+"/board/regressions/tonight", user, url.Values{"on": {"1"}}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("second schedule: %d", resp.StatusCode)
+	}
+	_, page := get(t, srv.URL+"/board", user)
+	if !strings.Contains(page, "Cancel tonight's run") || !strings.Contains(page, "Overnight R1 scheduled: from 01:00 ") {
+		t.Fatalf("scheduled panel:\n%s", page)
+	}
+	if _, page := get(t, srv.URL+"/board", board); !strings.Contains(page, "Overnight R1 scheduled") || strings.Contains(page, "Cancel tonight") {
+		t.Fatalf("the board token's panel:\n%s", page)
+	}
+	if resp, _ := postForm(t, srv.URL+"/board/regressions/tonight", user, url.Values{"on": {"0"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("cancel: %d", resp.StatusCode)
+	}
+	if r, _ := st.ScheduledRegression(ctx); r != nil {
+		t.Fatalf("still scheduled: %+v", r)
+	}
+	if resp, _ := postForm(t, srv.URL+"/board/regressions/tonight", user, url.Values{"on": {"0"}}); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("cancel with none: %d", resp.StatusCode)
 	}
 }
