@@ -496,6 +496,59 @@ func TestBoardOrchestratorGolden(t *testing.T) {
 	}
 }
 
+func goldenUsage() store.UsageReport {
+	fc := now.Add(50 * time.Minute)
+	return store.UsageReport{
+		Now: now,
+		Claude: pipeline.UsageState{Now: now, WindowStart: now.Add(-3 * time.Hour), WindowEnd: now.Add(2 * time.Hour), Burn5h: 8_800_000, Limit5h: 10_000_000,
+			WeekStart: now.Add(-WeekAgo), BurnWeek: 41_000_000},
+		Pace:     pipeline.Pace{Level: pipeline.PaceSlow, Agents: 2, Window: pipeline.Window5h, Percent: 88},
+		Forecast: &fc,
+		Days: []store.UsageTotal{
+			{Key: "2026-10-15", Provider: "claude", Burn: 9_100_000, Tokens: 60_000_000, CostUSD: 12.5, Runs: 14},
+			{Key: "2026-10-15", Provider: "qwen", Burn: 1_200_000, Tokens: 1_200_000, Runs: 3},
+			{Key: "2026-10-14", Provider: "claude", Burn: 31_900_000, Tokens: 200_000_000, CostUSD: 40.25, Runs: 1},
+		},
+		Items: []store.UsageItem{{ItemID: 12, Title: "Rework the <hold> list", Burn: 6_400_000, CostUSD: 9.1, Runs: 4}},
+		Hits:  []pipeline.UsageHit{{At: now.Add(-26 * time.Hour), Provider: "claude", Window: pipeline.Window5h, Burn: 10_000_000, ResetAt: now.Add(-24 * time.Hour)}},
+	}
+}
+
+// WeekAgo is a rolling week.
+const WeekAgo = 7 * 24 * time.Hour
+
+func TestBoardUsageGolden(t *testing.T) {
+	v := boardView(goldenItems(), goldenPlans(), now, false, "")
+	v.Usage = usageView(goldenUsage())
+	var b bytes.Buffer
+	if err := boardTmpl.Execute(&b, v); err != nil {
+		t.Fatal(err)
+	}
+	checkGolden(t, "board_usage.golden.html", b.Bytes())
+	out := b.String()
+	for _, want := range []string{
+		"Usage · claude pacing: the 5h window is at 88% of its budget; 2 at once",
+		"5h window: 8.8M of 10.0M (88%)", "at this rate the 5h window runs out at",
+		"Week: 41.0M (no limit known yet) · rolling 7 days",
+		"claude 9.1M burn, $12.50, 14 runs · qwen 1.2M tokens, 3 runs", "claude 31.9M burn, $40.25, 1 run</li>",
+		"#12 Rework the &lt;hold&gt; list", "5h limit at 10.0M burn",
+		`<details class="orch usage" open>`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the usage panel lacks %q", want)
+		}
+	}
+	// No usage yet: no panel.
+	v.Usage = usageView(store.UsageReport{})
+	b.Reset()
+	if err := boardTmpl.Execute(&b, v); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.String(), "Usage ·") {
+		t.Error("a usage panel with no usage")
+	}
+}
+
 // The runner panel: the runners seen today and the slot held for the Mac's work (#192).
 func TestBoardRunnersGolden(t *testing.T) {
 	items := goldenItems()

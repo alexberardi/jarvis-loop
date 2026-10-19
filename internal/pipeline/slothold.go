@@ -34,8 +34,11 @@ func (r RunnerSeen) Around(now time.Time) bool {
 	return now.Sub(r.LastSeen) <= 2*time.Duration(poll)*time.Second
 }
 
-// SlotHolds is the slots held now, by resource. items, deps, live and frozen are as for Choose.
-func SlotHolds(c Control, items []Item, deps map[int64]Stage, live []LiveLease, runners []RunnerSeen, frozen Frozen, now time.Time) []SlotHold {
+// SlotHolds is the slots held now, by resource. items, deps, live and frozen are as for Choose;
+// pace is claude's (PaceFor): a slot is held only for an item the pace lets that runner take, so a
+// pause does not keep a slot for a claude build nobody may start. A runner's builders are not
+// recorded, so a build the pace would send to qwen holds no slot while claude is paced.
+func SlotHolds(c Control, pace Pace, items []Item, deps map[int64]Stage, live []LiveLease, runners []RunnerSeen, frozen Frozen, now time.Time) []SlotHold {
 	free := c.ActiveAgents - AgentLeases(live)
 	if c.Stopped || free <= 0 {
 		return nil
@@ -57,7 +60,7 @@ func SlotHolds(c Control, items []Item, deps map[int64]Stage, live []LiveLease, 
 				continue
 			}
 			req := ClaimRequest{Runner: r.Name, Capabilities: r.Capabilities, OnlyResources: []string{res}, Stages: stages}
-			if it, ok := Choose(c, items, deps, live, req, frozen); ok {
+			if it, ok := choosePaced(c, items, deps, live, req, frozen, newPacing(pace, live, nil).eligible); ok {
 				byRes[res] = SlotHold{Resource: res, Runner: r.Name, ItemID: it.ID}
 			}
 		}

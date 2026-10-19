@@ -80,6 +80,7 @@ func (s *server) routes() *http.ServeMux {
 	route("GET /freezes", reads, s.listFreezes)
 	route("POST /unfreeze", user, s.unfreeze)
 	route("PUT /control", user, s.putControl)
+	route("GET /usage", reads, s.getUsage)
 	// The orchestrator's own actions (orchestrator.go).
 	route("POST /orchestrator/items", orch, s.orchAdd)
 	route("POST /orchestrator/items/{id}/answer", orch, s.orchAnswer)
@@ -366,9 +367,17 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		RunnerStages []string `json:"runner_stages"`
 		// Kinds: item, plan (plan turns), orchestrate, regression; empty is items only.
 		Kinds []string `json:"kinds"`
+		// Builders: the other builders the runner can run (qwen), for a paced claim's route.
+		Builders []string `json:"builders"`
 	}
 	if !decode(w, r, &body) {
 		return
+	}
+	for _, b := range body.Builders {
+		if b != pipeline.BuilderQwen {
+			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "builders may be qwen, got " + strconv.Quote(b)})
+			return
+		}
 	}
 	for _, k := range body.Kinds {
 		if !validKind(k) {
@@ -418,7 +427,7 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds})
+	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds, Builders: body.Builders})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -888,6 +897,16 @@ func (s *server) getControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
+}
+
+// getUsage is the usage report: claude's windows, pace and forecast, the days, stages and items.
+func (s *server) getUsage(w http.ResponseWriter, r *http.Request) {
+	u, err := s.st.Usage(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, u)
 }
 
 func (s *server) putControl(w http.ResponseWriter, r *http.Request) {

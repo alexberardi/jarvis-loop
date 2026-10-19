@@ -1,11 +1,12 @@
 {
   "name": "usage-limit",
-  "about": "The agent hits the plan's session limit: the item goes back to its queue, the active agents go to 0, the pinned control message shows 0, and #loop-digest tells the approver with the reset time.",
+  "about": "The agent hits the plan's session limit: the item goes back to its queue and claude claims pause until the reset the CLI reported (the active agents stay the user's 4); #loop-digest tells the approver with the reset time. While paused a P3 build of size S goes to qwen for that run (the sandbox runner has a qwen block), and the P2 waits; at the reset claims resume on their own and the P2 builds with claude (docs/decisions/2026-10-18-usage-awareness.md).",
   "steps": [
     {
       "do": "add",
       "item": "a",
-      "title": "Explain the hold list"
+      "title": "Explain the hold list",
+      "priority": "P2"
     },
     {
       "do": "add",
@@ -38,28 +39,61 @@
         {
           "channel": "digest",
           "pinned": true,
-          "text": "^Active agents: 0 of 6$"
+          "text": "^Active agents: 4 of 6$"
         },
         {
           "channel": "digest",
           "from": "bot",
           "pinned": false,
-          "text": "^<@U0C9AFPAMD4> Usage limit hit on #\\d+ Explain the hold list: .+ \\(resets .+\\)\\.\\nActive agents set to 0\\."
+          "text": "^<@U0C9AFPAMD4> Usage limit hit on #\\d+ Explain the hold list: .+ \\(resets Thu 11:45\\)\\.\\nClaude claims paused until Thu 11:45; qwen builds and landing go on"
         }
       ]
     },
     {
       "do": "runner",
+      "claims": "b"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "runner",
       "claims": "none"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "good"
+    },
+    {
+      "do": "clock",
+      "advance": "3h"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "messages": [
+        {
+          "channel": "digest",
+          "from": "bot",
+          "text": "^Claude claims back to normal\\.$"
+        }
+      ]
     }
   ],
   "expect": {
     "stage": {
-      "a": "build",
-      "b": "build"
+      "a": "review",
+      "b": "review"
     },
     "control": {
-      "active_agents": 0
+      "active_agents": 4
     },
     "events": [
       {
@@ -68,29 +102,54 @@
         "actor": "runner",
         "data": {
           "error": "rate limit|session limit",
-          "reset": "."
+          "reset": ".",
+          "limit_window": "^5h$",
+          "paused_until": "^2026-10-15T15:45:00Z$"
         }
       },
       {
-        "kind": "control",
+        "kind": "usage_pace",
         "actor": "loopd",
         "data": {
-          "reason": "^usage_limit$"
+          "until": "^2026-10-15T15:45:00Z$",
+          "limit_window": "^5h$"
+        }
+      },
+      {
+        "item": "b",
+        "kind": "claimed",
+        "data": {
+          "routed": "^qwen$"
+        }
+      },
+      {
+        "item": "b",
+        "kind": "advanced",
+        "data": {
+          "builder": "^qwen$"
         }
       }
     ],
     "messages": [
       {
         "thread": "a",
-        "text": "^Usage limit hit: .*\\. Active agents set to 0; back in the queue\\.$"
+        "text": "^Usage limit hit: .*\\(resets Thu 11:45\\)\\. Back in the queue; claude claims paused until Thu 11:45\\.$"
+      },
+      {
+        "thread": "b",
+        "text": "^Claimed for build, with qwen this run \\(paused until Thu 11:45 \\(the usage limit was hit\\)\\)\\.$"
       }
     ],
     "no_messages": [
       {
         "thread": "a",
         "text": "needs you"
+      },
+      {
+        "channel": "digest",
+        "text": "Active agents: 0 of 6"
       }
     ],
-    "prs": 0
+    "prs": 2
   }
 }

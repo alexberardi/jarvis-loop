@@ -878,7 +878,10 @@ type streamStats struct {
 	toolResults int
 	limit       *LimitHit
 	result      *resultEvent
-	act         liveActivity
+	// model is the session's (the init event's); rateLimit the CLI's last rate-limit reading.
+	model     string
+	rateLimit *rateLimit
+	act       liveActivity
 	// A qwen run's tokens (OpenCode's step_finish events); claude's are in result.
 	qwenInput, qwenOutput int64
 }
@@ -912,14 +915,20 @@ func CacheHitRatio(input, creation, read int64) float64 {
 
 // handle reads one stream-json line; it returns a reason to end the run early, or "".
 func (r *Runner) handle(ru *run, st *streamStats, line []byte) (string, string) {
-	if hit, ok := MatchUsageLimit(line); ok && st.limit == nil {
-		st.limit = &hit
+	if hit, ok := MatchUsageLimit(line); ok {
+		if st.limit == nil {
+			st.limit = &hit
+		} else {
+			st.limit.merge(hit)
+		}
 	}
 	var ev struct {
-		Type           string `json:"type"`
-		Subtype        string `json:"subtype"`
-		PermissionMode string `json:"permissionMode"`
-		SessionID      string `json:"session_id"`
+		Type           string     `json:"type"`
+		Subtype        string     `json:"subtype"`
+		PermissionMode string     `json:"permissionMode"`
+		SessionID      string     `json:"session_id"`
+		Model          string     `json:"model"`
+		RateLimit      *rateLimit `json:"rate_limit_info"`
 		Message        *struct {
 			Content json.RawMessage `json:"content"`
 		} `json:"message"`
@@ -931,6 +940,7 @@ func (r *Runner) handle(ru *run, st *streamStats, line []byte) (string, string) 
 	case ev.Type == "system" && ev.Subtype == "init":
 		st.initMode = ev.PermissionMode
 		st.sessionID = ev.SessionID
+		st.model = ev.Model
 		r.recordBuildSession(ru, ev.SessionID)
 		if want := PermissionMode(r.cfgOf(ru).Mode); ev.PermissionMode != want {
 			return endModeMismatch, fmt.Sprintf("the session started in %q, not %q", ev.PermissionMode, want)
@@ -968,6 +978,8 @@ func (r *Runner) handle(ru *run, st *streamStats, line []byte) (string, string) 
 				}
 			}
 		}
+	case ev.Type == "rate_limit_event" && ev.RateLimit != nil:
+		st.rateLimit = ev.RateLimit
 	case ev.Type == "result":
 		var res resultEvent
 		if json.Unmarshal(line, &res) == nil {
@@ -1314,6 +1326,23 @@ func (r *Runner) metrics(ru *run, out outcome, f map[string]string) map[string]s
 	if ru.first.sessionID != "" {
 		f["first_session_id"] = ru.first.sessionID
 	}
+	// The usage ledger's (docs/decisions/2026-10-18-usage-awareness.md): the model, and the CLI's
+	// last rate-limit reading, whose allowed_warning is the early sign of a limit.
+	if m := firstNonEmpty(out.stats.model, ru.first.model); m != "" {
+		f["model"] = m
+	}
+	if rl := out.stats.rateLimit; rl != nil {
+		f["rate_limit_status"] = rl.Status
+		if rl.Type != "" {
+			f["rate_limit_type"] = rl.Type
+		}
+		if rl.ResetsAt > 0 {
+			f["rate_limit_resets_at"] = unixReset(int64(rl.ResetsAt))
+		}
+		if rl.Utilization != nil {
+			f["rate_limit_utilization"] = strconv.FormatFloat(*rl.Utilization, 'f', -1, 64)
+		}
+	}
 	if ru.claudeBuild() {
 		// Resumed vs new sessions, for the flow panel.
 		f["resumed"] = strconv.FormatBool(ru.resumedFrom != nil)
@@ -1434,6 +1463,9 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 		f := map[string]string{"error": hit.Error}
 		if hit.Reset != "" {
 			f["reset"] = hit.Reset
+		}
+		if hit.Window != "" {
+			f["limit_window"] = hit.Window
 		}
 		r.advance(ctx, ru, "usage_limit", r.metrics(ru, out, f), nil)
 		return

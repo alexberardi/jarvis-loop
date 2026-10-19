@@ -124,6 +124,10 @@ type Step struct {
 	Stopped       *bool `json:"stopped,omitempty"`
 	// OrchTurnsPerDay is the orchestrator's daily cap of turns.
 	OrchTurnsPerDay *int `json:"orchestrator_turns_per_day,omitempty"`
+	// Budgets are usage budgets per provider (docs/decisions/2026-10-18-usage-awareness.md).
+	Budgets map[string]pipeline.Budget `json:"budgets,omitempty"`
+	// Size is the size triage gives (default S).
+	Size string `json:"size,omitempty"`
 
 	// plans (docs/phases/07-planning.md), driven through the API: Plan is a plan's alias. plan
 	// starts one (title, priority, text); plan_say is the user's message; plan_turn is a fake
@@ -489,7 +493,11 @@ func (p *player) step(st Step) error {
 		if err := s.hand.Upload(p.ctx, r.id, f, "repro.txt", "repro"); err != nil {
 			return err
 		}
-		return s.hand.Advance(p.ctx, r.id, "reproduced", map[string]string{"area": "sandbox", "size": "S", "risk": "normal", "resources": st.Resources}, nil)
+		size := "S"
+		if st.Size != "" {
+			size = st.Size
+		}
+		return s.hand.Advance(p.ctx, r.id, "reproduced", map[string]string{"area": "sandbox", "size": size, "risk": "normal", "resources": st.Resources}, nil)
 	case "hand_claim":
 		var caps, only []string
 		if st.Capabilities != "" {
@@ -885,6 +893,9 @@ func (p *player) step(st Step) error {
 		}
 		if st.OrchTurnsPerDay != nil {
 			patch["orchestrator_turns_per_day"] = *st.OrchTurnsPerDay
+		}
+		if st.Budgets != nil {
+			patch["budgets"] = st.Budgets
 		}
 		return s.user.do("PUT", "/control", patch, nil)
 	case "unfreeze":

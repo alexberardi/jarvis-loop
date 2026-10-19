@@ -626,9 +626,11 @@ type Lease struct {
 	EndReason string         `json:"end_reason,omitempty"`
 	// Activity is what the run is doing, from its latest heartbeat (nil: none sent, or ended).
 	Activity *pipeline.Activity `json:"activity,omitempty"`
+	// Builder is the run's builder when it is not claude's (qwen: the item's, or a paced claim's route).
+	Builder string `json:"builder,omitempty"`
 }
 
-const leaseCols = `id, item_id, stage, runner, agent, resources, claimed_at, expires_at, note, ended_at, end_reason, activity`
+const leaseCols = `id, item_id, stage, runner, agent, resources, claimed_at, expires_at, note, ended_at, end_reason, activity, builder`
 
 func scanLease(row scanner) (Lease, error) {
 	var (
@@ -638,7 +640,7 @@ func scanLease(row scanner) (Lease, error) {
 		ended            sql.NullInt64
 		activity         string
 	)
-	if err := row.Scan(&l.ID, &l.ItemID, &stage, &l.Runner, &l.Agent, &resources, &claimed, &expires, &l.Note, &ended, &l.EndReason, &activity); err != nil {
+	if err := row.Scan(&l.ID, &l.ItemID, &stage, &l.Runner, &l.Agent, &resources, &claimed, &expires, &l.Note, &ended, &l.EndReason, &activity, &l.Builder); err != nil {
 		return l, err
 	}
 	l.Activity = parseActivity(activity)
@@ -843,6 +845,10 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		if err != nil {
 			return err
 		}
+		pace, err := s.pace(tx, cs.ctl, now, nil)
+		if err != nil {
+			return err
+		}
 		ctl, waiting, deps, snap := cs.ctl, cs.waiting, cs.deps, cs.live
 		turns, err := turnCandidates(tx)
 		if err != nil {
@@ -860,7 +866,7 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 				return err
 			}
 		}
-		w, ok := pipeline.ChooseWork(ctl, waiting, deps, snap, turns, orch, reg, cs.holds, req, cs.frozen)
+		w, ok := pipeline.ChooseWorkPaced(ctl, pace, waiting, deps, snap, turns, orch, reg, cs.holds, req, cs.frozen)
 		if !ok {
 			return nil
 		}
@@ -881,22 +887,33 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		if err != nil {
 			return err
 		}
+		builder := it.Builder
+		if w.RouteQwen {
+			// This run only: the item's builder stays unset, so it builds with claude again once
+			// the pace is back to normal.
+			it.Builder, builder = pipeline.BuilderQwen, pipeline.BuilderQwen
+		}
 		l := Lease{ID: id, ItemID: it.ID, Stage: it.Stage, Runner: runnerName, Agent: req.Agent,
-			Resources: it.Needs(), ClaimedAt: now, ExpiresAt: now.Add(LeaseTTL)}
-		if _, err := tx.Exec(`INSERT INTO leases (id, item_id, stage, runner, agent, resources, claimed_at, expires_at) VALUES (?,?,?,?,?,?,?,?)`,
-			l.ID, l.ItemID, string(l.Stage), l.Runner, l.Agent, strings.Join(l.Resources, ","), now.UnixNano(), l.ExpiresAt.UnixNano()); err != nil {
+			Resources: it.Needs(), ClaimedAt: now, ExpiresAt: now.Add(LeaseTTL), Builder: builder}
+		if _, err := tx.Exec(`INSERT INTO leases (id, item_id, stage, runner, agent, resources, claimed_at, expires_at, builder) VALUES (?,?,?,?,?,?,?,?,?)`,
+			l.ID, l.ItemID, string(l.Stage), l.Runner, l.Agent, strings.Join(l.Resources, ","), now.UnixNano(), l.ExpiresAt.UnixNano(), builder); err != nil {
 			return err
 		}
 		out = &Claim{Kind: pipeline.WorkItem, Item: it, Stage: it.Stage, Lease: l}
+		data := map[string]any{"runner": runnerName, "agent": req.Agent, "lease": l.ID}
+		if w.RouteQwen {
+			data["routed"] = pipeline.BuilderQwen
+			data["pace"] = pace.Describe(usageZone())
+		}
 		return s.event(tx, Event{ItemID: it.ID, Actor: "runner:" + runnerName, Kind: "claimed", From: string(it.Stage), To: string(it.Stage),
-			Data: map[string]any{"runner": runnerName, "agent": req.Agent, "lease": l.ID}})
+			Data: data})
 	})
 	return out, err
 }
 
 // claimState is what a claim chooses from: the control, the waiting items and their dependencies'
 // stages, the live leases (items, plan and orchestrate turns), the frozen repos and the slots held
-// (SlotHolds).
+// (SlotHolds, under claude's pace now).
 type claimState struct {
 	ctl     pipeline.Control
 	waiting []pipeline.Item
@@ -919,21 +936,22 @@ func (s *Store) claimState(tx *sql.Tx, now time.Time) (claimState, error) {
 	}
 	snap := make([]pipeline.LiveLease, len(live))
 	for i, l := range live {
-		snap[i] = pipeline.LiveLease{ItemID: l.ItemID, Stage: l.Stage, Resources: l.Resources}
+		snap[i] = pipeline.LiveLease{ItemID: l.ItemID, Stage: l.Stage, Resources: l.Resources,
+			Claude: l.Stage != pipeline.Land && l.Builder != pipeline.BuilderQwen}
 	}
 	turnLeases, err := livePlanLeases(tx)
 	if err != nil {
 		return cs, err
 	}
 	for range turnLeases {
-		snap = append(snap, pipeline.LiveLease{Stage: pipeline.PlanTurnStage})
+		snap = append(snap, pipeline.LiveLease{Stage: pipeline.PlanTurnStage, Claude: true})
 	}
 	running, err := orchTurnWith(tx, OrchRunning)
 	if err != nil {
 		return cs, err
 	}
 	if running != nil {
-		snap = append(snap, pipeline.LiveLease{Stage: pipeline.OrchestrateStage})
+		snap = append(snap, pipeline.LiveLease{Stage: pipeline.OrchestrateStage, Claude: true})
 	}
 	reg, err := openRegression(tx)
 	if err != nil {
@@ -958,8 +976,12 @@ func (s *Store) claimState(tx *sql.Tx, now time.Time) (claimState, error) {
 	if err != nil {
 		return cs, err
 	}
+	pace, _, err := paceNow(tx, ctl, now)
+	if err != nil {
+		return cs, err
+	}
 	return claimState{ctl: ctl, waiting: waiting, deps: deps, live: snap, runners: runners, frozen: frozen,
-		holds: pipeline.SlotHolds(ctl, waiting, deps, snap, runners, frozen, now)}, nil
+		holds: pipeline.SlotHolds(ctl, pace, waiting, deps, snap, runners, frozen, now)}, nil
 }
 
 // RunnerPanel is the board's runners: those seen within pipeline.RunnerSeenWindow, by name, and
@@ -1278,6 +1300,12 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 		if err != nil {
 			return err
 		}
+		// The usage ledger: the run burned its tokens now, whether its result applies now or waits.
+		if u, ok := usageRunFrom(id, string(l.Stage), fields, now); ok {
+			if err := insertUsageRun(tx, u); err != nil {
+				return err
+			}
+		}
 		// In a repo whose main is red the run's result waits, checked now, applied once main is
 		// green. A usage limit is about the runner's account, not the repo, and a merge has already
 		// happened on GitHub (main's CI on it must be taken): both apply now.
@@ -1311,6 +1339,25 @@ func (s *Store) applyAdvance(tx *sql.Tx, actor string, id int64, leaseID string,
 		return err
 	}
 	tr.Data["lease"] = leaseID
+	// A limit hit: claude claims pause until its reset.
+	var hit *pipeline.UsageHit
+	var ctl pipeline.Control
+	if tr.UsagePause {
+		var err error
+		if ctl, err = s.loadControl(tx); err != nil {
+			return err
+		}
+		h, err := recordHit(tx, ctl, id, fields, now)
+		if err != nil {
+			return err
+		}
+		hit = &h
+		until := h.ResetAt
+		if until.IsZero() {
+			until = now.Add(pipeline.UnknownResetPause)
+		}
+		tr.Data["paused_until"] = until.Format(time.RFC3339)
+	}
 	if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
 		return err
 	}
@@ -1331,22 +1378,9 @@ func (s *Store) applyAdvance(tx *sql.Tx, actor string, id int64, leaseID string,
 	if err := s.planItemSettled(tx, tr.Item); err != nil {
 		return err
 	}
-	if tr.ActiveAgentsZero {
-		ctl, err := s.loadControl(tx)
-		if err != nil {
-			return err
-		}
-		before := ctl
-		ctl.ActiveAgents = 0
-		builtIn, err := builtInRules(tx)
-		if err != nil {
-			return err
-		}
-		if err := saveControl(tx, ctl, builtIn); err != nil {
-			return err
-		}
-		if err := s.event(tx, Event{Actor: "loopd", Kind: "control", Data: map[string]any{
-			"from": before, "to": ctl, "reason": "usage_limit", "item": id, "error": fields["error"], "reset": fields["reset"]}}); err != nil {
+	if hit != nil {
+		if _, err := s.pace(tx, ctl, now, map[string]any{"item": id, "error": fields["error"], "reset": fields["reset"],
+			"limit_window": hit.Window, "burn": hit.Burn}); err != nil {
 			return err
 		}
 	}

@@ -240,8 +240,9 @@ type Transition struct {
 	Kind string
 	// Data is recorded on the event.
 	Data map[string]any
-	// ActiveAgentsZero: the outcome turns the active-agents number to 0 (usage_limit).
-	ActiveAgentsZero bool
+	// UsagePause: the outcome is a usage limit: loopd records it and pauses claude claims until its
+	// reset (usage.go); the active-agents number stays the user's.
+	UsagePause bool
 	// Also are more events to record after the transition's own (builder_fallback).
 	Also []Note
 }
@@ -616,7 +617,7 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 			return Transition{}, err
 		}
 		tr.Kind = "usage_limit"
-		tr.ActiveAgentsZero = true
+		tr.UsagePause = true
 	case Failed:
 		msg, err := f.need("error")
 		if err != nil {

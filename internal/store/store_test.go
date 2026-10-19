@@ -292,7 +292,7 @@ func TestMaxRunTime(t *testing.T) {
 }
 
 func TestStopAndUsageLimit(t *testing.T) {
-	s, _ := open(t)
+	s, clk := open(t)
 	ctx := context.Background()
 	it := add(t, s, "x", "")
 	c := claim(t, s, "a")
@@ -321,16 +321,22 @@ func TestStopAndUsageLimit(t *testing.T) {
 	if _, err := s.Advance(ctx, runner, it.ID, pipeline.UsageLimit, map[string]string{"error": "429", "reset": "17:00"}, nil); err != nil {
 		t.Fatal(err)
 	}
+	// A limit pauses claude claims until its reset (unreadable here: an hour) and leaves the
+	// active-agents number alone.
 	ctl, _ := s.Control(ctx)
-	if ctl.ActiveAgents != 0 {
-		t.Fatalf("usage_limit must set active agents to 0, got %d", ctl.ActiveAgents)
+	if ctl.ActiveAgents != 4 {
+		t.Fatalf("usage_limit must leave active agents alone, got %d", ctl.ActiveAgents)
 	}
 	if c := claim(t, s, "a"); c != nil {
-		t.Fatal("claim at active agents 0")
+		t.Fatal("claim while claude is paused")
 	}
 	d, _ = s.GetItem(ctx, it.ID)
 	if d.Item.Stage != pipeline.Triage || d.Lease != nil {
 		t.Fatalf("usage_limit item: %+v", d)
+	}
+	clk.Advance(pipeline.UnknownResetPause)
+	if c := claim(t, s, "a"); c == nil {
+		t.Fatal("no claim after the pause")
 	}
 	n := 7
 	if _, err := s.SetControl(ctx, user, ControlPatch{ActiveAgents: &n}); code(err) != pipeline.CodeInvalidField {

@@ -520,17 +520,28 @@ func TestStopViaHeartbeatAndUsageLimit(t *testing.T) {
 		Stopped      bool `json:"stopped"`
 	}
 	e.do(userTok, "GET", "/control", nil, 200, &ctl)
-	if ctl.ActiveAgents != 0 {
-		t.Fatalf("usage_limit: active agents %d, want 0", ctl.ActiveAgents)
+	if ctl.ActiveAgents != 4 {
+		t.Fatalf("usage_limit: active agents %d, want the user's 4", ctl.ActiveAgents)
 	}
 	if c := e.claim(runnerTok, "a"); c != nil {
-		t.Fatal("claim at active agents 0")
+		t.Fatal("claim while claude is paused")
 	}
 	d := e.get(id)
 	if d.Item.Stage != "triage" || d.Events[len(d.Events)-1].Kind != "usage_limit" {
 		t.Fatalf("usage_limit item: %+v", d)
 	}
-	e.do(userTok, "PUT", "/control", map[string]any{"active_agents": 2}, 200, nil)
+	var u struct {
+		Pace struct {
+			Level int       `json:"level"`
+			Until time.Time `json:"until"`
+		} `json:"pace"`
+	}
+	e.do(userTok, "GET", "/usage", nil, 200, &u)
+	if u.Pace.Level != pipeline.PacePaused || !u.Pace.Until.Equal(t0.Add(pipeline.UnknownResetPause)) {
+		t.Fatalf("GET /usage pace %+v", u.Pace)
+	}
+	// The reset ("17:00" is not one the CLI writes: an hour) resumes claims on its own.
+	e.clock.Advance(pipeline.UnknownResetPause)
 	e.mustClaim("a", id, "triage")
 }
 
