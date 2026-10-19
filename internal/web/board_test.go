@@ -408,6 +408,26 @@ func TestItemGolden(t *testing.T) {
 	checkGolden(t, "item_held.golden.html", b.Bytes())
 }
 
+// TestItemQA: a qa item's page says what it waits for (a deploy first, when the repo needs one),
+// under a QA label: it is not a question.
+func TestItemQA(t *testing.T) {
+	for _, awaiting := range []bool{false, true} {
+		d := store.Detail{Item: pipeline.Item{ID: 16, Title: "Merged one", Repo: "alexberardi/jarvis-loop", Priority: "P1",
+			Stage: pipeline.QA, PR: 40, AwaitingDeploy: awaiting, CreatedAt: now.Add(-time.Hour), UpdatedAt: now}, Display: "qa"}
+		v := itemView(d, "", "", now, "")
+		if want := qaReason(awaiting); v.Reason != want {
+			t.Errorf("awaiting deploy %v: reason %q, want %q", awaiting, v.Reason, want)
+		}
+		var b bytes.Buffer
+		if err := itemTmpl.Execute(&b, v); err != nil {
+			t.Fatal(err)
+		}
+		if want := `<dt>QA</dt><dd class="reason">` + qaReason(awaiting) + `</dd>`; !strings.Contains(b.String(), want) {
+			t.Errorf("awaiting deploy %v: page lacks %s", awaiting, want)
+		}
+	}
+}
+
 // goldenOrch is the orchestrator's panel: an action of each shape, an open escalation, a ticket it
 // filed (open) and one done, and notes whose markdown must not let HTML through.
 func goldenOrch() store.OrchBoard {

@@ -49,7 +49,7 @@ td.data { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 <dt>Slack</dt><dd><a href="{{$.SlackURL}}">thread</a></dd>
 {{- end}}
 {{- if $.Reason}}
-<dt>{{if eq $.Display "held"}}Held{{else}}Question{{end}}</dt><dd class="reason">{{$.Reason}}</dd>
+<dt>{{if eq $.Display "held"}}Held{{else if eq $.Display "qa"}}QA{{else}}Question{{end}}</dt><dd class="reason">{{$.Reason}}</dd>
 {{- end}}
 </dl>
 {{- with $.Working}}
