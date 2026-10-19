@@ -107,3 +107,34 @@ func TestRegressionRoutes(t *testing.T) {
 		t.Fatalf("evidence: %+v", d.Evidence)
 	}
 }
+
+func TestScheduledRegressionRoutes(t *testing.T) {
+	e := newEnv(t)
+	e.refused(runnerTok, "POST", "/regressions/scheduled", nil, 403, "forbidden")
+	var reg store.Regression
+	e.do(userTok, "POST", "/regressions/scheduled", nil, 201, &reg)
+	if reg.Status != store.RegScheduled || reg.Suite != pipeline.SuiteOvernight || reg.NotBefore == nil {
+		t.Fatalf("scheduled: %+v", reg)
+	}
+	e.refused(userTok, "POST", "/regressions/scheduled", nil, 409, store.CodeRegressionOpen)
+	var got struct {
+		Regression *store.Regression `json:"regression"`
+	}
+	e.do(userTok, "GET", "/regressions/scheduled", nil, 200, &got)
+	if got.Regression == nil || got.Regression.ID != reg.ID {
+		t.Fatalf("GET scheduled: %+v", got)
+	}
+	e.refused(runnerTok, "DELETE", "/regressions/scheduled", nil, 403, "forbidden")
+	e.do(userTok, "DELETE", "/regressions/scheduled", nil, 200, &reg)
+	if reg.Status != store.RegCancelled {
+		t.Fatalf("cancelled: %+v", reg)
+	}
+	e.refused(userTok, "DELETE", "/regressions/scheduled", nil, 404, store.CodeNotFound)
+	// The nightly setting is the control's.
+	var ctl pipeline.Control
+	e.do(userTok, "PUT", "/control", map[string]any{"regression_nightly": true, "regression_at": "02:00"}, 200, &ctl)
+	if !ctl.RegressionNightly || ctl.RegressionAt != "02:00" {
+		t.Fatalf("control %+v", ctl)
+	}
+	e.refused(userTok, "PUT", "/control", map[string]any{"regression_at": "2am"}, 400, pipeline.CodeInvalidField)
+}

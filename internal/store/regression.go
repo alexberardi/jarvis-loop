@@ -29,10 +29,10 @@ const (
 	RegScheduled = "scheduled"
 	RegCancelled = "cancelled"
 	RegQueued    = "queued"
-	RegRunning = "running"
-	RegPassed  = "passed"
-	RegFailed  = "failed" // a test failed, or a suite did not run
-	RegError   = "error"  // the run produced no report
+	RegRunning   = "running"
+	RegPassed    = "passed"
+	RegFailed    = "failed" // a test failed, or a suite did not run
+	RegError     = "error"  // the run produced no report
 )
 
 // Event kinds of the runs (no item).
@@ -58,32 +58,32 @@ const (
 
 // Regression is one regression run.
 type Regression struct {
-	ID          int64      `json:"id"`
-	Suite       string     `json:"suite"`
-	Status      string     `json:"status"`
-	RequestedBy string     `json:"requested_by"`
-	Via         string     `json:"via,omitempty"`
-	Runner      string     `json:"runner,omitempty"`
-	Agent       string     `json:"agent,omitempty"`
-	Error       string     `json:"error,omitempty"`
-	E2ERun      string     `json:"e2e_run,omitempty"`
-	ServerHead  string     `json:"server_head,omitempty"`
-	MobileHead  string     `json:"mobile_head,omitempty"`
-	Passed      int        `json:"passed"`
-	Failed      int        `json:"failed"`
-	Skipped     int        `json:"skipped"`
+	ID          int64  `json:"id"`
+	Suite       string `json:"suite"`
+	Status      string `json:"status"`
+	RequestedBy string `json:"requested_by"`
+	Via         string `json:"via,omitempty"`
+	Runner      string `json:"runner,omitempty"`
+	Agent       string `json:"agent,omitempty"`
+	Error       string `json:"error,omitempty"`
+	E2ERun      string `json:"e2e_run,omitempty"`
+	ServerHead  string `json:"server_head,omitempty"`
+	MobileHead  string `json:"mobile_head,omitempty"`
+	Passed      int    `json:"passed"`
+	Failed      int    `json:"failed"`
+	Skipped     int    `json:"skipped"`
 	// Flaky are the tests that failed and passed on the overnight run's rerun.
 	Flaky int `json:"flaky"`
 	// NotBefore is a scheduled run's set time; QuietSince since when the queue was quiet (nil:
 	// it is not); ReportAt when its report goes to #loop, ReportedAt when it went.
-	NotBefore   *time.Time `json:"not_before,omitempty"`
-	QuietSince  *time.Time `json:"quiet_since,omitempty"`
-	ReportAt    *time.Time `json:"report_at,omitempty"`
-	ReportedAt  *time.Time `json:"reported_at,omitempty"`
-	ClaimedAt   *time.Time `json:"claimed_at,omitempty"`
-	FinishedAt  *time.Time `json:"finished_at,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	NotBefore  *time.Time `json:"not_before,omitempty"`
+	QuietSince *time.Time `json:"quiet_since,omitempty"`
+	ReportAt   *time.Time `json:"report_at,omitempty"`
+	ReportedAt *time.Time `json:"reported_at,omitempty"`
+	ClaimedAt  *time.Time `json:"claimed_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 	// Tests and Files are a finished run's (GetRegression only).
 	Tests []RegressionTest `json:"tests,omitempty"`
 	Files []RegressionFile `json:"files,omitempty"`
@@ -177,9 +177,9 @@ const regCols = `id, suite, status, requested_by, via, runner, agent, lease_id, 
 
 func scanRegression(row scanner) (Regression, error) {
 	var (
-		r                                   Regression
-		act                                 string
-		claimed, expires, finished, cr, upd int64
+		r                                    Regression
+		act                                  string
+		claimed, expires, finished, cr, upd  int64
 		notBefore, quiet, reportAt, reported int64
 	)
 	err := row.Scan(&r.ID, &r.Suite, &r.Status, &r.RequestedBy, &r.Via, &r.Runner, &r.Agent, &r.lease.ID, &claimed, &expires,

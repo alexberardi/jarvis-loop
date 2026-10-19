@@ -51,7 +51,7 @@ type boardPage struct {
 // NewBoard returns the handler for GET /board, GET /board/working, GET /board/live.js,
 // GET /board/items/{id}, GET /board/items/{id}/evidence/{n}, GET /board/plans/{id},
 // GET /board/plans/{id}/{kind}/{v}, GET /board/regressions/{id}, its files, and the user's
-// POST /board/regressions, and nothing else.
+// POST /board/regressions and /board/regressions/tonight, and nothing else.
 func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardConfig) http.Handler {
 	if cfg.Clock == nil {
 		cfg.Clock = clock.Real{}
@@ -70,6 +70,7 @@ func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardCo
 	// The board's one write: the user's "Run regression" button. The cookie is SameSite=Strict,
 	// and the post is guarded against cross-origin requests too.
 	mux.Handle("POST /board/regressions", http.NewCrossOriginProtection().Handler(p.auth(p.runRegression)))
+	mux.Handle("POST /board/regressions/tonight", http.NewCrossOriginProtection().Handler(p.auth(p.tonight)))
 	return mux
 }
 
@@ -197,6 +198,16 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, err)
 		return
 	}
+	sched, err := p.st.ScheduledRegression(r.Context())
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
+	ctl, err := p.st.Control(r.Context())
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
 	rw, err := p.st.Runway(r.Context())
 	if err != nil {
 		p.fail(w, err)
@@ -214,7 +225,7 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		p.log.Error("board usage", "err", err)
 	}
 	v.Runners = runnerView(runners, now)
-	v.Regressions = regressionView(regs, p.principal(r).Kind == api.KindUser, now)
+	v.Regressions = regressionView(regs, sched, ctl.RegressionNightly, p.principal(r).Kind == api.KindUser, now)
 	v.Runway = runwayView(rw)
 	w.Header().Set("Content-Security-Policy", liveCSP)
 	if v.Regressions.CanRun {
@@ -806,7 +817,17 @@ var templateFS embed.FS
 //go:embed templates/live.js
 var liveJS []byte
 
-var funcs = template.FuncMap{"join": strings.Join, "age": age, "size": size, "stamp": stamp, "tokens": pipeline.FormatTokens, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot}
+var funcs = template.FuncMap{"join": strings.Join, "age": age, "size": size, "stamp": stamp, "tokens": pipeline.FormatTokens, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot,
+	"clock": func(t *time.Time) string {
+		if t == nil {
+			return ""
+		}
+		loc, err := time.LoadLocation(store.OrchDayZone)
+		if err != nil {
+			loc = time.UTC
+		}
+		return t.In(loc).Format("15:04 Mon Jan 2")
+	}}
 
 var (
 	boardTmpl      = template.Must(template.New("board.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/board.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
