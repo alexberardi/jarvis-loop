@@ -114,14 +114,6 @@ func (b *Bot) digestMessage(ctx context.Context, from, to time.Time, evs []store
 	if !found {
 		return Message{}, false
 	}
-	// The items waiting in qa now, whatever happened in the window (they alone post no digest).
-	if rows, err := b.c.Store.ListItems(ctx, string(pipeline.QA), ""); err == nil {
-		qa := &group{name: "Waiting for your check"}
-		for _, r := range rows {
-			addTo(qa, r.ID)
-		}
-		secs = append(secs, qa)
-	}
 	f, t := from.In(b.c.Location), to.In(b.c.Location)
 	window := fmt.Sprintf("%s %s–%s", t.Format("Mon Jan 2"), f.Format("15:04"), t.Format("15:04"))
 	if f.YearDay() != t.YearDay() || f.Year() != t.Year() {
@@ -129,21 +121,25 @@ func (b *Bot) digestMessage(ctx context.Context, from, to time.Time, evs []store
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "*Loop digest* · %s (New York)\n", window)
-	titles := map[int64]string{}
+	// The items themselves are the 09:00 standup's (standup.go): the digest counts them, and lists
+	// only main's CI, which cannot wait for the morning.
+	var counts []string
 	for _, s := range secs {
-		if len(s.ids) == 0 {
-			continue
+		if len(s.ids) > 0 && s != secs[1] {
+			counts = append(counts, fmt.Sprintf("%s %d", strings.ToLower(s.name), len(s.ids)))
 		}
-		fmt.Fprintf(&sb, "\n*%s (%d)*\n", s.name, len(s.ids))
-		for _, id := range s.ids {
-			title, ok := titles[id]
-			if !ok {
-				if d, err := b.c.Store.GetItem(ctx, id); err == nil {
-					title = d.Item.Title
-				}
-				titles[id] = title
+	}
+	if len(counts) > 0 {
+		fmt.Fprintf(&sb, "\n%s\n", strings.Join(counts, " · "))
+	}
+	if ci := secs[1]; len(ci.ids) > 0 {
+		fmt.Fprintf(&sb, "\n*%s (%d)*\n", ci.name, len(ci.ids))
+		for _, id := range ci.ids {
+			title := ""
+			if d, err := b.c.Store.GetItem(ctx, id); err == nil {
+				title = d.Item.Title
 			}
-			fmt.Fprintf(&sb, "• #%d %s%s\n", id, b.field(title, 120, id), notes[fmt.Sprintf("%s/%d", s.name, id)])
+			fmt.Fprintf(&sb, "• #%d %s%s\n", id, b.field(title, 120, id), notes[fmt.Sprintf("%s/%d", ci.name, id)])
 		}
 	}
 	if line := buildersLine(evs); line != "" {

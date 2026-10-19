@@ -42,7 +42,9 @@ type Claim struct {
 	Plan *pipeline.Plan     `json:"plan,omitempty"`
 	Turn *pipeline.PlanTurn `json:"turn,omitempty"`
 	// Orch is an orchestrate turn's (Kind orchestrate).
-	Orch  *OrchTurn `json:"orchestrate,omitempty"`
+	Orch *OrchTurn `json:"orchestrate,omitempty"`
+	// Reg is a regression run's (Kind regression).
+	Reg   *Regression `json:"regression,omitempty"`
 	Lease struct {
 		ID        string    `json:"id"`
 		ExpiresAt time.Time `json:"expires_at"`
@@ -152,7 +154,7 @@ func (c *Client) claim(ctx context.Context, agent string, caps, only, stages []s
 	if len(runnerStages) > 0 {
 		body["runner_stages"] = runnerStages
 	}
-	turnKinds := map[string]string{StagePlan: pipeline.WorkPlan, StageOrchestrate: pipeline.WorkOrchestrate}
+	turnKinds := map[string]string{StagePlan: pipeline.WorkPlan, StageOrchestrate: pipeline.WorkOrchestrate, StageRegression: pipeline.WorkRegression}
 	if slices.ContainsFunc(stages, func(s string) bool { return turnKinds[s] != "" }) {
 		var items, kinds []string
 		for _, s := range stages {

@@ -68,7 +68,7 @@ panel (`/board/flow`, linked from the board's header) and the API the same numbe
 
 ## Speed
 
-Migration 0024 adds `leases(ended_at)` and `plan_leases(ended_at)`; `events(at)` comes from the
+Migration 0025 adds `leases(ended_at)` and `plan_leases(ended_at)`; `events(at)` comes from the
 runway migration (#205, `0023_runway.sql`), so this one does not create it again. Every window query
 starts from one of the three (`TestFlowQueriesUseIndexes` checks the query plans), and the per-item
 pass pairing reads only the items with a stage change in the window, by the existing

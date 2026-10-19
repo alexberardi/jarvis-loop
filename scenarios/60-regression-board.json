@@ -1,0 +1,23 @@
+{
+  "name": "regression-board",
+  "about": "The board's Run regression button (docs/decisions/2026-10-18-regression-trigger.md): the board token may not press it; the user's token queues R1 (via board) and a second press while it waits is refused (409). The run passes: one message in #loop with the counts and no File it button, and the board's panel and report page show it.",
+  "stages": ["triage", "build", "review", "regression"],
+  "steps": [
+    {"do": "e2e", "outcome": "pass"},
+    {"do": "regression", "via": "board", "as": "board", "suite": "web", "status": 403},
+    {"do": "expect", "no_events": [{"kind": "regression_queued"}]},
+    {"do": "regression", "via": "board", "as": "user", "suite": "web"},
+    {"do": "regression", "via": "board", "as": "user", "suite": "all", "status": 409},
+    {"do": "expect", "events": [{"kind": "regression_queued", "count": 1, "actor": "user", "data": {"suite": "^web$", "via": "^board$"}}]},
+    {"do": "runner", "claims": "regression"},
+    {"do": "runner_idle"},
+    {"do": "expect",
+     "messages": [{"channel": "loop", "from": "bot", "text": "^\\*Regression R1 \\(web\\) :large_green_circle: passed\\*: 2 passed, 0 failed, 0 skipped · jarvis-server `[0-9a-f]{7}` · full report: /board/regressions/1 on loopd$"}],
+     "board_regression": {"1": "(?s)Regression R1 \\(web\\): passed.*2 passed, 0 failed, 0 skipped.*Asked by</dt><dd>user:sandbox \\(board\\).*<td class=\"st\">passed</td><td>web</td><td>login\\.spec\\.ts › a wrong password is refused</td>"}}
+  ],
+  "expect": {
+    "events": [{"kind": "regression_done", "count": 1, "data": {"status": "^passed$"}}],
+    "no_events": [{"kind": "created"}],
+    "agent_runs": {}
+  }
+}

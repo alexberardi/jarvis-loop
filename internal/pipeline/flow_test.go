@@ -88,6 +88,11 @@ func TestWaitReason(t *testing.T) {
 		{"more free slots than held", two, waiting(1, Build, "P3", 0), nil, nil, nil, nil, macHold, WaitReady},
 		{"a limit before the held slot", two, waiting(1, Triage, "P3", 0), nil, []LiveLease{{ItemID: 8, Stage: Triage}}, nil, nil, macHold, "limit triage:1"},
 		{"land ignores a held slot", two, waiting(1, Land, "P3", 0), nil, []LiveLease{{ItemID: 8, Stage: Build}}, nil, nil, macHold, WaitReady},
+		// A running regression (#82) is a live lease: it takes an agent slot and its suite's resources.
+		{"a regression takes the last slot", two, waiting(1, Build, "P3", 0), nil,
+			[]LiveLease{{ItemID: 8, Stage: Build}, {Stage: RegressionStage}}, nil, nil, nil, WaitNoSlot},
+		{"a regression holds its resources", ctl, waiting(1, Build, "P3", 0, "voice"), nil,
+			[]LiveLease{{Stage: RegressionStage, Resources: []string{"voice"}}}, nil, nil, nil, "limit voice:1"},
 		{"the fix ignores a held slot", two, in(waiting(5, Build, "P1", 0), "o/r"), nil, []LiveLease{{ItemID: 8, Stage: Build}}, nil, frozen, macHold, WaitReady},
 	}
 	for _, c := range cases {
@@ -125,7 +130,7 @@ func TestWaitReasonAgreesWithChoose(t *testing.T) {
 	for _, ctl := range []Control{DefaultControl(), full, three} {
 		for _, holds := range [][]SlotHold{nil, macHold} {
 			for _, it := range items {
-				w, _ := ChooseWork(ctl, []Item{it}, deps, live, nil, nil, holds, req, frozen)
+				w, _ := ChooseWork(ctl, []Item{it}, deps, live, nil, nil, nil, holds, req, frozen)
 				chosen := w.Item != nil
 				why := WaitReason(ctl, it, deps, live, nil, frozen, holds)
 				if chosen != (why == WaitReady) {

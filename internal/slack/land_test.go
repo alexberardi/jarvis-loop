@@ -146,12 +146,12 @@ func TestDigestMainCI(t *testing.T) {
 	e.calls()
 	e.clk.Advance(4 * time.Hour)
 	e.b.Tick(e.ctx)
-	posts := only(t, e.calls(), "chat.postMessage")
+	posts := digests(t, e.calls())
 	if len(posts) != 1 {
 		t.Fatalf("posts %+v", posts)
 	}
 	txt := allText(posts[0])
-	if !strings.Contains(txt, "Merged (1)") || !strings.Contains(txt, "Main CI not green (1)") || !strings.Contains(txt, fmt.Sprintf("#%d ship it: timeout", id)) {
+	if !strings.Contains(txt, "merged 1") || !strings.Contains(txt, "Main CI not green (1)") || !strings.Contains(txt, fmt.Sprintf("#%d ship it: timeout", id)) {
 		t.Fatalf("digest %s", txt)
 	}
 }
@@ -194,7 +194,7 @@ func TestDigestComparesBuilders(t *testing.T) {
 	e.calls()
 	e.clk.Advance(4 * time.Hour)
 	e.b.Tick(e.ctx)
-	posts := only(t, e.calls(), "chat.postMessage")
+	posts := digests(t, e.calls())
 	if len(posts) != 1 {
 		t.Fatalf("posts %+v", posts)
 	}

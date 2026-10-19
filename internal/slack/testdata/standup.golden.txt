@@ -1,0 +1,24 @@
+*Standup* · Sun Oct 18 (New York) · since Sat 09:00
+
+*Merged yesterday (1)*
+• #12 Round the kitchen timer
+
+*In flight (1)*
+• #14 Support Kasa plugs — build, working · 2h in stage
+
+*Waiting (1)*
+• #16 Kasa scenes — waiting on #17 → needs you
+
+*Needs you (3)*
+• #17 Pick the plug API — needs you: local or cloud? · I recommend: local, because it works offline
+• #18 Rotate the &lt;tokens&gt; — held for your approval: touches auth
+• #12 Round the kitchen timer — merged, waiting for your check
+
+*What I did*
+escalated 1 · note 3 · refused answer 1 · retried 2
+• retried #14: git index.lock
+• escalated #17: a product question
+• refused answer #17: at most 2 answers per head
+
+*My spend*
+12 turns (cap 150 a day) · $1.23 · 1.2M tokens in, 40k out

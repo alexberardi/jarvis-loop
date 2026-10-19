@@ -67,7 +67,8 @@ func (s *Store) OrchMessage(ctx context.Context, m OrchestratorMessage) (e Event
 		if err := s.recordEvent(tx, &e, Event{Actor: "loopd", Kind: KindOrchMessage, Data: data}); err != nil {
 			return err
 		}
-		return s.queueOrch(tx, pipeline.Trigger{Reason: pipeline.TriggerMessage, ItemID: m.ItemID, Text: clipText(m.Text, 2000)})
+		return s.queueOrch(tx, pipeline.Trigger{Reason: pipeline.TriggerMessage, ItemID: m.ItemID, Text: clipText(m.Text, 2000),
+			Channel: m.Channel, TS: m.TS, ThreadTS: m.ThreadTS, Approver: m.Approver})
 	})
 	return e, fresh, err
 }
@@ -88,9 +89,9 @@ func (s *Store) OrchMessages(ctx context.Context, since int64, limit int) ([]Eve
 	return scanEvents(rows)
 }
 
-// OrchReply records the orchestrator's answer in a Slack thread (or a DM); its Slack app posts it.
-// Where it may post is the API's and the Slack client's to check.
-func (s *Store) OrchReply(ctx context.Context, actor, channel, threadTS, text string) (Event, error) {
+// OrchReply records the orchestrator's answer in a Slack thread (or a DM), with its reason when it
+// gave one; its Slack app posts it. Where it may post is the API's and the Slack client's to check.
+func (s *Store) OrchReply(ctx context.Context, actor, channel, threadTS, text, reason string) (Event, error) {
 	var out Event
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		text = strings.TrimSpace(text)
@@ -100,8 +101,11 @@ func (s *Store) OrchReply(ctx context.Context, actor, channel, threadTS, text st
 		if channel == "" {
 			return errf(pipeline.CodeMissingField, "channel is required")
 		}
-		return s.recordEvent(tx, &out, Event{Actor: actor, Kind: KindOrchReply,
-			Data: map[string]any{"channel": channel, "thread_ts": threadTS, "text": text}})
+		data := map[string]any{"channel": channel, "thread_ts": threadTS, "text": text}
+		if r := strings.TrimSpace(reason); r != "" {
+			data["reason"] = clipText(r, 500)
+		}
+		return s.recordEvent(tx, &out, Event{Actor: actor, Kind: KindOrchReply, Data: data})
 	})
 	return out, err
 }
