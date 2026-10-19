@@ -1,0 +1,29 @@
+{
+  "name": "plan-gemini-critique",
+  "about": "#191: with the runner's gemini block on, a ready blueprint is critiqued by Gemini before its Approve button is posted. The engineering turn writes a 3-piece blueprint, ready; the fake agy (in the plan's directory, with the critique schema) raises 3 points (high missing on piece 1, medium order on piece 3, low risk on Risks); the runner resumes engineering's session with the points, and it takes 1 and 3 (revising the blueprint) and answers 2. The thread's reply opens with 'Gemini raised 3 points: 2 taken, 1 answered.', then the answers, the Approve blueprint v1 button and a link to the critique. The critique (points and answers) is the plan's critique v1; the blueprint v1 is the revised one. Approving it files the items as before.",
+  "stages": ["triage", "build", "review", "plan"],
+  "steps": [
+    {"do": "plan_post", "as": "approver", "plan": "p", "text": "A pantry list in demo\nSo I know what to buy."},
+    {"do": "runner", "claims": "p"},
+    {"do": "runner_idle"},
+    {"do": "plan_approve", "plan": "p", "doc": "brief", "text": "yes"},
+    {"do": "gemini", "play": "ok"},
+    {"do": "runner", "claims": "p"},
+    {"do": "runner_idle"},
+    {"do": "wait", "plans": {"p": {"stage": "blueprint", "turn": "you", "docs": {"brief": 1, "blueprint": 1, "critique": 1}}},
+     "messages": [{"plan": "p", "from": "bot", "text": "^Gemini raised 3 points: 2 taken, 1 answered\\.\\n\\nGemini's points: 1: agree; 2: disagree; 3: agree\\.\\n\\nReady for your approval: blueprint v1 .*\\nGemini's critique and the answers: critique v1", "buttons": ["Approve blueprint v1"]}]},
+    {"do": "expect",
+     "events": [{"plan": "p", "kind": "plan_doc", "actor": "runner", "data": {"kind": "^critique$", "version": "^1$"}, "count": 1},
+                {"plan": "p", "kind": "plan_turn_done", "actor": "runner", "data": {"persona": "^engineering$", "ready": "^true$"}, "count": 1}],
+     "run_files": [{"plan": "p", "stage": "engineering", "file": "gemini-critique-schema.json", "text": "\"points\""},
+                   {"plan": "p", "stage": "engineering", "file": "argv-critique.json", "text": "\"--resume\",\"fake-session-P1-engineering\""},
+                   {"plan": "p", "stage": "engineering", "file": "brief.md", "text": "^## Gemini's critique\\n[\\s\\S]*1\\. \\*\\*high, missing\\*\\* \\(piece 1\\): No piece tests the migration"},
+                   {"plan": "p", "stage": "engineering", "file": "brief-blueprint.md", "text": "The brief was approved: start the blueprint\\."}]},
+    {"do": "plan_approve", "plan": "p", "doc": "blueprint", "text": "go"},
+    {"do": "expect", "plans": {"p": {"stage": "split", "items": 3, "turn": "none"}}}
+  ],
+  "expect": {
+    "plans": {"p": {"stage": "split", "items": 3}},
+    "agent_runs": {"product": 1, "engineering": 1}
+  }
+}

@@ -28,14 +28,14 @@ td.st { white-space: nowrap; }
 <h1>Regression R{{.Run.ID}} ({{.Run.Suite}}): {{.Run.Status}}</h1>
 <dl>
 {{- if or (eq .Run.Status "passed") (eq .Run.Status "failed")}}
-<dt>Tests</dt><dd>{{.Run.Passed}} passed, {{.Run.Failed}} failed, {{.Run.Skipped}} skipped</dd>
+<dt>Tests</dt><dd>{{.Run.Passed}} passed, {{.Run.Failed}} failed,{{if .Run.Flaky}} {{.Run.Flaky}} flaky,{{end}} {{.Run.Skipped}} skipped</dd>
 {{- end}}
 <dt>Asked by</dt><dd>{{.Run.RequestedBy}}{{with .Run.Via}} ({{.}}){{end}}, {{stamp .Run.CreatedAt}}</dd>
 {{- with .Run.Runner}}
 <dt>Runner</dt><dd>{{.}}</dd>
 {{- end}}
 {{- with .Run.FinishedAt}}
-<dt>Finished</dt><dd>{{stamp .}}</dd>
+<dt>Finished</dt><dd>{{stamp .}}{{if $.Run.Duration}}, after {{$.Run.Duration}}{{end}}</dd>
 {{- end}}
 {{- with .Run.ServerHead}}
 <dt>jarvis-server</dt><dd><code>{{.}}</code></dd>
@@ -60,6 +60,19 @@ td.st { white-space: nowrap; }
 {{- end}}
 {{- if .Screenshot}}
 <figure><a href="/board/regressions/{{$.Run.ID}}/files/{{.Screenshot}}"><img src="/board/regressions/{{$.Run.ID}}/files/{{.Screenshot}}" alt="screenshot of {{.Title}}"></a></figure>
+{{- end}}
+{{- if .Recording}}
+<p class="files"><a href="/board/regressions/{{$.Run.ID}}/files/{{.Recording}}">recording</a></p>
+{{- end}}
+{{- end}}
+{{- end}}
+{{- if .Flaky}}
+<h2>Flaky · {{len .Flaky}}</h2>
+<p class="note">Failed, then passed on the rerun.</p>
+{{- range .Flaky}}
+<h3>{{.Suite}}: {{.Title}}</h3>
+{{- with .Error}}
+<pre>{{.}}</pre>
 {{- end}}
 {{- end}}
 {{- end}}

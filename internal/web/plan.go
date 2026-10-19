@@ -9,12 +9,13 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/store"
 )
 
-// The plan pages (docs/phases/07-planning.md, "The board"): a plan's brief and blueprint rendered
-// through markdown's allow-list, older versions linked, its turns and the items it filed.
+// The plan pages (docs/phases/07-planning.md, "The board"): a plan's brief, blueprint and Gemini's
+// critique rendered through markdown's allow-list, older versions linked, its turns and the items
+// it filed.
 
-var docKinds = []string{pipeline.DocBrief, pipeline.DocBlueprint}
+var docKinds = []string{pipeline.DocBrief, pipeline.DocBlueprint, pipeline.DocCritique}
 
-var docNames = map[string]string{pipeline.DocBrief: "Brief", pipeline.DocBlueprint: "Blueprint"}
+var docNames = map[string]string{pipeline.DocBrief: "Brief", pipeline.DocBlueprint: "Blueprint", pipeline.DocCritique: "Gemini critique"}
 
 func turnLabel(turn string) string {
 	switch turn {
@@ -26,12 +27,16 @@ func turnLabel(turn string) string {
 	return ""
 }
 
-// approvedVersion is the plan's approved version of a kind of document (0: none).
+// approvedVersion is the plan's approved version of a kind of document (0: none; a critique is
+// never approved).
 func approvedVersion(p pipeline.Plan, kind string) int {
-	if kind == pipeline.DocBrief {
+	switch kind {
+	case pipeline.DocBrief:
 		return p.BriefApproved
+	case pipeline.DocBlueprint:
+		return p.BlueprintApproved
 	}
-	return p.BlueprintApproved
+	return 0
 }
 
 type docSection struct {

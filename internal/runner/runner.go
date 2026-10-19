@@ -44,6 +44,9 @@ type Runner struct {
 	PRs PRs
 	// Push pushes the item's branch from the mirror; nil means Git.PushBranch.
 	Push func(ctx context.Context, mirror, branch string) error
+	// ForcePush pushes a rewritten branch with a lease pinned to expect, the PR's recorded head;
+	// nil means Git.ForcePushBranch.
+	ForcePush func(ctx context.Context, mirror, branch, expect string) error
 	// VerifyPR checks the PR on GitHub; nil skips the check (the dry run, tests).
 	VerifyPR func(ctx context.Context, slug string, pr int) (PRInfo, error)
 	// Land asks GitHub what the land gates need and merges (GH; nil: this runner cannot land).
@@ -319,12 +322,16 @@ type run struct {
 	item Item
 	// trustUsed is the commit verify ran on the approver's trust OK (reported with the outcome).
 	trustUsed string
-	stage     string
-	lease     string
-	agent     string
-	repoKey   string // "" for a triage run of an item with no repo: every configured repo is checked out
-	repo      RepoConfig
-	branch    string
+	// trustCarried is the head verify carried the OK to (its trusted files' diff is the one the
+	// approver OK'd, digest trustDiffSHA), reported with the outcome for loopd to check.
+	trustCarried string
+	trustDiffSHA string
+	stage        string
+	lease        string
+	agent        string
+	repoKey      string // "" for a triage run of an item with no repo: every configured repo is checked out
+	repo         RepoConfig
+	branch       string
 	// wt is the agent's working directory: the item's worktree (build), the PR's head (review),
 	// or a plain directory with the repos checked out under repos/<key>/ (triage).
 	wt string
@@ -717,6 +724,19 @@ func (r *Runner) writeArgv(ru *run) error {
 	return os.WriteFile(filepath.Join(ru.dir, "argv.json"), argv, 0o600)
 }
 
+// recorded is what the loop recorded for the item's branch: the PR's head, and the heads the user
+// OK'd since (a Trust that still allows its commit, an approval).
+func recorded(it Item) Recorded {
+	rec := Recorded{Prev: it.HeadSHA}
+	if it.Trust != nil && it.Trust.allows(it.Trust.HeadSHA) {
+		rec.Heads = append(rec.Heads, it.Trust.HeadSHA)
+	}
+	if it.Approval != nil && it.Approval.HeadSHA != "" {
+		rec.Heads = append(rec.Heads, it.Approval.HeadSHA)
+	}
+	return rec
+}
+
 // prepareBuild makes the item's worktree on its branch (continuing an earlier run's commits),
 // with triage's notes and, after a bounce, the review's in .loop/review/ (and, after a held item
 // came back, why).
@@ -731,7 +751,7 @@ func (r *Runner) prepareBuild(ctx context.Context, ru *run, info *RunInfo) error
 	err := r.Git.EnsureMirror(ctx, ru.mirror, ru.repo)
 	ahead := 0
 	if err == nil {
-		ahead, err = r.Git.AddWorktree(ctx, ru.mirror, ru.wt, ru.branch, ru.repo.Base)
+		ahead, err = r.Git.AddWorktree(ctx, ru.mirror, ru.wt, ru.branch, ru.repo.Base, recorded(ru.item))
 	}
 	unlock()
 	if err != nil {
@@ -772,17 +792,22 @@ const SetupTimeout = 20 * time.Minute
 // the agent's sandbox, before the agent starts; their output goes to setup.log in the run dir.
 // A failure fails the run (the user sees the log's tail).
 func (r *Runner) setup(ctx context.Context, ru *run) error {
-	if len(ru.repo.Setup) == 0 {
+	return r.runSetup(ctx, ru.repo.Setup, ru.repoDir, ru.dir)
+}
+
+// runSetup runs setup commands in dir, logged in logDir's setup.log.
+func (r *Runner) runSetup(ctx context.Context, cmds []string, dir, logDir string) error {
+	if len(cmds) == 0 {
 		return nil
 	}
-	logf, err := os.OpenFile(filepath.Join(ru.dir, "setup.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logf, err := os.OpenFile(filepath.Join(logDir, "setup.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
 	defer logf.Close()
-	for _, c := range ru.repo.Setup {
+	for _, c := range cmds {
 		fmt.Fprintf(logf, "$ %s\n", c)
-		out, err := r.shell(ctx, ru.repoDir, c, SetupTimeout)
+		out, err := r.shell(ctx, dir, c, SetupTimeout)
 		logf.WriteString(out)
 		if err != nil {
 			fmt.Fprintf(logf, "[failed: %v]\n", err)
@@ -1270,6 +1295,10 @@ func (r *Runner) advance(ctx context.Context, ru *run, outcome string, fields ma
 	if ru.trustUsed != "" {
 		fields[pipeline.FieldTrustUsed] = ru.trustUsed
 	}
+	if ru.trustCarried != "" {
+		fields[pipeline.FieldTrustCarried] = ru.trustCarried
+		fields[pipeline.FieldTrustDiffSHA] = ru.trustDiffSHA
+	}
 	if err := r.Client.Advance(ctx, ru.item.ID, outcome, fields, paths); err != nil {
 		r.Log.Error("advance", "item", ru.item.ID, "outcome", outcome, "err", err)
 		return
@@ -1606,9 +1635,11 @@ func evidenceLabels(v Result) map[string]string {
 	return labels
 }
 
-// publish pushes the item's branch (only it, never forced) and opens its PR, or updates the open
-// one, with the runner's own credentials; it returns the PR number and "opened" or "updated". The
-// agent did neither.
+// publish pushes the item's branch (only it) and opens its PR, or updates the open one, with the
+// runner's own credentials; it returns the PR number and "opened" or "updated". The agent did
+// neither. A branch the build rewrote (a reviewed rebase) over the PR's recorded head is pushed
+// with a lease pinned to that head and recorded as branch_rewritten; any other push is never
+// forced, so a remote commit the loop never recorded fails it.
 func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []EvidenceFile, out outcome, vres []VerifyResult) (int, string, error) {
 	if r.PRs == nil {
 		return 0, "", errors.New("the runner has no way to open PRs (configuration)")
@@ -1617,8 +1648,20 @@ func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []Evidence
 	if push == nil {
 		push = r.Git.PushBranch
 	}
+	forcePush := r.ForcePush
+	if forcePush == nil {
+		forcePush = r.Git.ForcePushBranch
+	}
 	unlock := r.lockMirror(ru.mirror)
-	err := push(ctx, ru.mirror, ru.branch)
+	var err error
+	rewritten, rangeDiff := "", ""
+	if prev := ru.item.HeadSHA; r.Git.Rewrites(ctx, ru.mirror, ru.branch, prev) {
+		rewritten = prev
+		rangeDiff, _ = r.Git.RangeDiff(ctx, ru.mirror, ru.repo.Base, prev, v.HeadSHA)
+		err = forcePush(ctx, ru.mirror, ru.branch, prev)
+	} else {
+		err = push(ctx, ru.mirror, ru.branch)
+	}
 	remote := ""
 	if err == nil {
 		remote, err = r.Git.RemoteHead(ctx, ru.mirror, ru.branch)
@@ -1629,6 +1672,13 @@ func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []Evidence
 	}
 	if remote != v.HeadSHA {
 		return 0, "", fmt.Errorf("after the push, %s on the remote is %q, not HEAD %s", ru.branch, remote, v.HeadSHA)
+	}
+	if rewritten != "" {
+		r.Log.Info("pushed a rewritten branch with a lease", "item", ru.item.ID, "branch", ru.branch, "old", rewritten, "new", remote)
+		if err := r.Client.Event(ctx, ru.item.ID, "branch_rewritten",
+			map[string]any{"old": rewritten, "new": remote, "range_diff": clip(rangeDiff, 2000)}); err != nil {
+			r.Log.Warn("could not record the rewrite", "item", ru.item.ID, "err", err)
+		}
 	}
 	st := r.runStats(ru, out)
 	body := filepath.Join(ru.dir, "pr-body.md")
@@ -1751,13 +1801,19 @@ func (r *Runner) cleanup(ctx context.Context, ru *run, log *slog.Logger) {
 		for _, c := range ru.checkouts {
 			mirror := r.mirrorPath(c.Key)
 			unlock := r.lockMirror(mirror)
-			r.Git.RemoveWorktree(ctx, mirror, filepath.Join(ru.wt, c.Dir))
+			if err := r.Git.RemoveWorktree(ctx, mirror, filepath.Join(ru.wt, c.Dir)); err != nil {
+				log.Warn("remove worktree", "err", err)
+			}
 			unlock()
 		}
-		os.RemoveAll(ru.wt)
+		if err := removeTree(ru.wt); err != nil {
+			log.Warn("remove worktree", "err", err)
+		}
 	} else if ru.mirror != "" {
 		unlock := r.lockMirror(ru.mirror)
-		r.Git.RemoveWorktree(ctx, ru.mirror, ru.wt)
+		if err := r.Git.RemoveWorktree(ctx, ru.mirror, ru.wt); err != nil {
+			log.Warn("remove worktree", "err", err)
+		}
 		unlock()
 	}
 	log.Info("cleaned up", "worktree", ru.wt)

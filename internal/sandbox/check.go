@@ -264,6 +264,9 @@ func (p *player) problems(e Expect, negatives bool) []string {
 	if e.BoardOrchestrator != "" {
 		out = append(out, p.orchPanelProblems(e.BoardOrchestrator)...)
 	}
+	if e.Flow != nil {
+		out = append(out, p.flowProblems(*e.Flow)...)
+	}
 	if e.BoardRunners != "" {
 		out = append(out, p.runnersProblems(e.BoardRunners)...)
 	}

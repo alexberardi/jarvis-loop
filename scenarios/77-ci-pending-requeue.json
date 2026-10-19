@@ -1,0 +1,57 @@
+{
+  "name": "ci-pending-requeue",
+  "about": "Slow CI (#278): checks on the PR's head stay pending past land_ci_wait (30 minutes). Nothing failed, so land does not ask the user: it reports ci_pending, gives back its lease and the item waits in land (posting nothing) until LandRequeueAfter (10 minutes) has passed; then a land run claims it again, CI passes and it merges.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass", "upgrade (macos-14)": "pending"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "clock", "advance": "29m"},
+    {"do": "expect", "stage": {"a": "land"}, "leased": {"a": true}, "pr": {"a": {"merge_calls": 0}}},
+    {"do": "clock", "advance": "1m30s"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"}, "leased": {"a": false}, "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
+     "messages": [{"parent": "a", "text": "Stage \\*land( \\(queued\\))?, waiting for CI \\(upgrade \\(macos-14\\)\\) since \\d\\d:\\d\\d UTC, checking again at \\d\\d:\\d\\d UTC"}],
+     "no_messages": [{"thread": "a", "text": "needs you|pending|ci_pending"}]},
+    {"do": "clock", "advance": "5m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "land"}, "leased": {"a": false}},
+    {"do": "clock", "advance": "5m"},
+    {"do": "runner", "claims": "a"},
+    {"do": "expect", "stage": {"a": "land"}, "leased": {"a": true}},
+    {"do": "ci", "item": "a", "checks": {"check": "pass", "upgrade (macos-14)": "pass"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "leased": {"a": false},
+    "pr": {"a": {"number": 101, "state": "MERGED", "merge_calls": 1}},
+    "events": [
+      {"item": "a", "kind": "land_waiting", "data": {"waiting_for": "^CI \\(upgrade \\(macos-14\\)\\)$"}, "count": 1},
+      {"item": "a", "kind": "advanced", "outcome": "ci_pending", "actor": "runner",
+       "data": {"wait": "^CI \\(upgrade \\(macos-14\\)\\)$", "head_sha": "^[0-9a-f]{40}$", "since": "Z$", "not_before": "Z$"}, "count": 1},
+      {"item": "a", "kind": "claimed", "data": {"ci_pending": "^true$"}, "count": 1},
+      {"item": "a", "kind": "advanced", "outcome": "merged", "actor": "runner", "count": 1}
+    ],
+    "no_events": [
+      {"item": "a", "kind": "advanced", "outcome": "failed"},
+      {"item": "a", "kind": "lease_expired"},
+      {"item": "a", "kind": "run_overtime"},
+      {"item": "a", "kind": "retried"}
+    ],
+    "messages": [
+      {"thread": "a", "text": "^Claimed for land\\.$"},
+      {"thread": "a", "text": "^Merged <https://github.com/sandbox/demo/pull/101\\|sandbox/demo#101> as `[0-9a-f]{7}`; watching main's CI\\.$"}
+    ],
+    "no_messages": [
+      {"thread": "a", "text": "needs you|ci_pending"}
+    ]
+  }
+}

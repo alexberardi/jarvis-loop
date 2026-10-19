@@ -1,0 +1,34 @@
+{
+  "name": "trust-asks-again-changed-diff",
+  "about": "Item #277: a trusted-file change is OK'd and its PR opens; review bounces it and the fix changes the trusted file again. The new head's trusted files' diff is not the one the user OK'd, so the OK does not carry: verify refuses it and the item waits on a new Trust.",
+  "stages": ["build", "review"],
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "shoot dark mode too", "text": "[mobile] shoot dark mode too"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "trusted_change", "file": "tools/shoot"},
+    {"do": "script", "item": "a", "for": "review", "play": "bounce"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}},
+    {"do": "press", "item": "a", "as": "approver", "button": "trust"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "needs_you"},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "failed", "actor": "runner",
+       "data": {"trust_sha": "^[0-9a-f]{40}$", "trusted_diff_sha256": "^[0-9a-f]{64}$"}, "count": 2},
+      {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "count": 1}
+    ],
+    "no_events": [{"item": "a", "kind": "trust_carried"}],
+    "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
+    "prs": 1
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "name": "trust-carried-unchanged-diff",
+  "about": "Item #277 (as on #272 and #221): a trusted-file change is OK'd and its PR opens; review bounces it and the fix touches only other files, so the new head's trusted files' diff against the merge base is byte-identical to the one the user OK'd. The runner carries the OK to the new head (trust_carried with the digest, which loopd checks against the refusal's), verify runs and the PR goes back to review without a second Trust. The item stays held for the user.",
+  "stages": ["build", "review"],
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "shoot dark mode too", "text": "[mobile] shoot dark mode too"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "trusted_then_fix", "file": "tools/shoot"},
+    {"do": "script", "item": "a", "for": "review", "play": "bounce"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "failed", "actor": "runner",
+                 "data": {"trust_sha": "^[0-9a-f]{40}$", "trusted_diff_sha256": "^[0-9a-f]{64}$"}}]},
+    {"do": "press", "item": "a", "as": "approver", "button": "trust"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review"},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "failed", "data": {"trust_sha": "^[0-9a-f]{40}$"}, "count": 1},
+      {"item": "a", "kind": "trusted", "count": 1},
+      {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "count": 2},
+      {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "count": 1,
+       "data": {"trust_carried": "^[0-9a-f]{40}$", "trust_used": "^[0-9a-f]{40}$", "trusted_diff_sha256": "^[0-9a-f]{64}$"}},
+      {"item": "a", "kind": "trust_carried", "actor": "runner", "count": 1,
+       "data": {"from": "^[0-9a-f]{40}$", "to": "^[0-9a-f]{40}$", "diff_sha256": "^[0-9a-f]{64}$"}}
+    ],
+    "messages": [
+      {"thread": "a", "text": "^Trusted files' diff unchanged since `[0-9a-f]{7}`: the OK you gave carries to `[0-9a-f]{7}`, so verify ran it without asking again\\.$"}
+    ],
+    "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
+    "prs": 1
+  }
+}

@@ -577,3 +577,34 @@ func TestPlanDoneWhenItsItemsAre(t *testing.T) {
 		t.Fatalf("plans %+v", rows)
 	}
 }
+
+// Gemini's critique of a blueprint is stored with it, versioned like any document, served by
+// GetPlanDoc, and never approved.
+func TestPlanCritiqueDoc(t *testing.T) {
+	s, _ := openPlans(t)
+	ctx := context.Background()
+	p := newPlan(t, s, "Pantry list", "P2")
+	toBlueprint(t, s, p)
+	c := claimTurn(t, s, "agent-1")
+	result(t, s, c, pipeline.TurnResult{Reply: "Blueprint ready.", Blueprint: blueprint3, Critique: "# Gemini's critique\n\n1 point", Ready: true})
+	d, err := s.GetPlanDoc(ctx, p.ID, pipeline.DocCritique, 0)
+	if err != nil || d.Version != 1 || !strings.Contains(d.Markdown, "1 point") {
+		t.Fatalf("critique %+v %v", d, err)
+	}
+	pd, _ := s.GetPlan(ctx, p.ID)
+	var kinds []string
+	for _, e := range pd.Events {
+		if e.Kind == "plan_doc" {
+			kinds = append(kinds, e.Data["kind"].(string))
+		}
+	}
+	if !slices.Contains(kinds, pipeline.DocCritique) || !slices.Contains(kinds, pipeline.DocBlueprint) {
+		t.Fatalf("plan_doc events for %v", kinds)
+	}
+	if _, err := s.ApprovePlan(ctx, user, p.ID, pipeline.DocCritique, d.SHA256, "ok"); code(err) != pipeline.CodeInvalidField {
+		t.Fatalf("approving a critique: %v", err)
+	}
+	if _, err := s.GetPlanDoc(ctx, p.ID, "notes", 0); code(err) != pipeline.CodeInvalidField {
+		t.Fatalf("an unknown kind: %v", err)
+	}
+}

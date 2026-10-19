@@ -48,10 +48,10 @@ type boardPage struct {
 	cfg    BoardConfig
 }
 
-// NewBoard returns the handler for GET /board, GET /board/working, GET /board/live.js,
+// NewBoard returns the handler for GET /board, GET /board/working, GET /board/flow, GET /board/live.js,
 // GET /board/items/{id}, GET /board/items/{id}/evidence/{n}, GET /board/plans/{id},
 // GET /board/plans/{id}/{kind}/{v}, GET /board/regressions/{id}, its files, and the user's
-// POST /board/regressions, and nothing else.
+// POST /board/regressions and /board/regressions/tonight, and nothing else.
 func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardConfig) http.Handler {
 	if cfg.Clock == nil {
 		cfg.Clock = clock.Real{}
@@ -60,6 +60,7 @@ func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardCo
 	mux := http.NewServeMux()
 	mux.Handle("GET /board", p.auth(p.board))
 	mux.Handle("GET /board/working", p.auth(p.working))
+	mux.Handle("GET /board/flow", p.auth(p.flow))
 	mux.Handle("GET /board/live.js", p.auth(p.liveJS))
 	mux.Handle("GET /board/items/{id}", p.auth(p.item))
 	mux.Handle("GET /board/items/{id}/evidence/{n}", p.auth(p.evidence))
@@ -70,6 +71,7 @@ func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardCo
 	// The board's one write: the user's "Run regression" button. The cookie is SameSite=Strict,
 	// and the post is guarded against cross-origin requests too.
 	mux.Handle("POST /board/regressions", http.NewCrossOriginProtection().Handler(p.auth(p.runRegression)))
+	mux.Handle("POST /board/regressions/tonight", http.NewCrossOriginProtection().Handler(p.auth(p.tonight)))
 	return mux
 }
 
@@ -197,6 +199,16 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, err)
 		return
 	}
+	sched, err := p.st.ScheduledRegression(r.Context())
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
+	ctl, err := p.st.Control(r.Context())
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
 	rw, err := p.st.Runway(r.Context())
 	if err != nil {
 		p.fail(w, err)
@@ -208,13 +220,26 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 	v.Freezes = fz
 	v.Working = workingView(work, now, 0)
 	v.Orch = orchView(orch, items)
+	per, total, err := p.st.SecondOpinions(r.Context())
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
+	v.SecondOpinion = total
+	for _, col := range v.Columns {
+		for i := range col.Cards {
+			if so, ok := per[col.Cards[i].ID]; ok {
+				col.Cards[i].SecondOpinion = &so
+			}
+		}
+	}
 	if u, err := p.st.Usage(r.Context()); err == nil {
 		v.Usage = usageView(u)
 	} else {
 		p.log.Error("board usage", "err", err)
 	}
 	v.Runners = runnerView(runners, now)
-	v.Regressions = regressionView(regs, p.principal(r).Kind == api.KindUser, now)
+	v.Regressions = regressionView(regs, sched, ctl.RegressionNightly, p.principal(r).Kind == api.KindUser, now)
 	v.Runway = runwayView(rw)
 	w.Header().Set("Content-Security-Policy", liveCSP)
 	if v.Regressions.CanRun {
@@ -380,6 +405,8 @@ type card struct {
 	SlackURL string
 	// Reason is why it waits on the user: the question or the hold reason.
 	Reason string
+	// SecondOpinion is its Gemini second opinions added up (nil: none).
+	SecondOpinion *store.SecondOpinionStats
 }
 
 // planCard is an open plan in the Planning column.
@@ -457,6 +484,8 @@ type boardData struct {
 	Now       time.Time
 	Total     int
 	PlanCount int
+	// SecondOpinion is every item's Gemini second opinions added up.
+	SecondOpinion store.SecondOpinionStats
 }
 
 // usageSection is the Usage panel: claude's 5h window and week against their budgets, the pace and
@@ -803,6 +832,8 @@ type itemData struct {
 	Evidence  []evidenceRow
 	// Working is the item's "Working now" card while a lease is live (nil otherwise).
 	Working *workingSection
+	// SecondOpinion is its Gemini second opinions added up (nil: none).
+	SecondOpinion *store.SecondOpinionStats
 }
 
 // maxDataText caps an event's data on the page; the full record is in `loop show`.
@@ -833,6 +864,9 @@ func itemView(d store.Detail, channel, ts string, now time.Time, slackBase strin
 		}
 		v.Events = append(v.Events, row)
 	}
+	if so, ok := store.SumSecondOpinions(d.Events); ok {
+		v.SecondOpinion = &so
+	}
 	for _, ev := range d.Evidence {
 		v.Evidence = append(v.Evidence, evidenceRow{Evidence: ev, Image: slices.Contains(imageTypes, ev.ContentType)})
 	}
@@ -857,13 +891,24 @@ var templateFS embed.FS
 //go:embed templates/live.js
 var liveJS []byte
 
-var funcs = template.FuncMap{"join": strings.Join, "age": age, "size": size, "stamp": stamp, "tokens": pipeline.FormatTokens, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot}
+var funcs = template.FuncMap{"join": strings.Join, "age": age, "size": size, "stamp": stamp, "tokens": pipeline.FormatTokens, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot, "dur": dur, "mins": mins,
+	"clock": func(t *time.Time) string {
+		if t == nil {
+			return ""
+		}
+		loc, err := time.LoadLocation(store.OrchDayZone)
+		if err != nil {
+			loc = time.UTC
+		}
+		return t.In(loc).Format("15:04 Mon Jan 2")
+	}}
 
 var (
 	boardTmpl      = template.Must(template.New("board.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/board.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
 	itemTmpl       = template.Must(template.New("item.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/item.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
 	workingTmpl    = template.Must(template.New("working.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/working.tmpl"))
 	planTmpl       = template.Must(template.New("plan.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plan.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
+	flowTmpl       = template.Must(template.New("flow.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/flow.tmpl", "templates/style.tmpl"))
 	docTmpl        = template.Must(template.New("plandoc.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plandoc.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
 	regressionTmpl = template.Must(template.New("regression.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/regression.tmpl", "templates/style.tmpl"))
 )

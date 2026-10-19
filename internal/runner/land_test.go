@@ -3,8 +3,10 @@ package runner
 import (
 	"context"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -376,5 +378,67 @@ func TestLandConfigWaits(t *testing.T) {
 		if err := c.normalize(); err == nil {
 			t.Errorf("land_ci_wait %q accepted", bad)
 		}
+	}
+}
+
+// At the end of one run's land_ci_wait: CI still pending gives the item back to the land queue
+// (ci_pending), unless no check ever reported (a repo with no CI) or CI has been pending on this
+// head for land_ci_give_up across runs; those go to the user, as before.
+func TestCIPendingAtLimit(t *testing.T) {
+	now := time.Date(2026, 10, 19, 15, 0, 0, 0, time.UTC)
+	head := "0123456789abcdef0123456789abcdef01234567"
+	pending := LandPR{HeadRefOid: head, Checks: []Check{{Name: "check", Bucket: BucketPending}}}
+	wait := Decision{Action: ActWait, Wait: "CI (check)"}
+	runStart := now.Add(-30 * time.Minute)
+	for _, c := range []struct {
+		name    string
+		pr      LandPR
+		d       Decision
+		item    Item
+		outcome string
+		want    string
+	}{
+		{"first run", pending, wait, Item{}, "ci_pending", runStart.Format(time.RFC3339)},
+		{"earlier run on this head", pending, wait, Item{CIPendingSHA: head, CIPendingSince: now.Add(-2 * time.Hour)},
+			"ci_pending", now.Add(-2 * time.Hour).Format(time.RFC3339)},
+		{"earlier run on another head", pending, wait, Item{CIPendingSHA: "fedcba9876543210fedcba9876543210fedcba98", CIPendingSince: now.Add(-5 * time.Hour)},
+			"ci_pending", runStart.Format(time.RFC3339)},
+		{"past give-up in all", pending, wait, Item{CIPendingSHA: head, CIPendingSince: now.Add(-3 * time.Hour)},
+			"failed", "^CI \\(check\\) still pending after 3h$"},
+		{"no checks at all", LandPR{HeadRefOid: head}, Decision{Action: ActWait, Wait: "CI (no checks reported yet)"}, Item{},
+			"failed", "^CI \\(no checks reported yet\\) still pending after 30m$"},
+		{"mergeability", LandPR{HeadRefOid: head, Checks: []Check{{Name: "check", Bucket: BucketPass}}},
+			Decision{Action: ActWait, Wait: "GitHub's mergeability check"}, Item{}, "ci_pending", runStart.Format(time.RFC3339)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := ciWaitEnded(c.d, c.pr, c.item, runStart, now, 3*time.Hour)
+			if got.Action != ActAdvance || got.Outcome != c.outcome {
+				t.Fatalf("%+v, want %s", got, c.outcome)
+			}
+			if c.outcome == "failed" {
+				if !regexp.MustCompile(c.want).MatchString(got.Fields["error"]) {
+					t.Fatalf("error %q, want %s", got.Fields["error"], c.want)
+				}
+				return
+			}
+			if got.Fields["since"] != c.want || got.Fields["head_sha"] != head || got.Fields["wait"] != c.d.Wait {
+				t.Fatalf("fields %+v, want since %s", got.Fields, c.want)
+			}
+		})
+	}
+}
+
+func TestLandCIGiveUpConfig(t *testing.T) {
+	c := Config{Name: "n", Token: "0123456789abcdef0", LoopdURL: "http://127.0.0.1:1", Repos: map[string]RepoConfig{"r": {Remote: "x", Slug: "o/r"}}}
+	if err := c.normalize(); err != nil || c.ciGiveUp != 3*time.Hour {
+		t.Fatalf("default: %v %v", c.ciGiveUp, err)
+	}
+	c.LandCIGiveUp = "90m"
+	if err := c.normalize(); err != nil || c.ciGiveUp != 90*time.Minute {
+		t.Fatalf("set: %v %v", c.ciGiveUp, err)
+	}
+	c.LandCIGiveUp = "later"
+	if err := c.normalize(); err == nil {
+		t.Fatalf("land_ci_give_up %q accepted", c.LandCIGiveUp)
 	}
 }

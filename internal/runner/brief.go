@@ -3,6 +3,7 @@ package runner
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 	"github.com/alexberardi/jarvis-loop/skills"
@@ -43,6 +44,10 @@ type Item struct {
 	PlanPiece int   `json:"plan_piece,omitempty"`
 	// Proof is how the loop checks it once merged (the runner runs its command checks).
 	Proof *pipeline.Proof `json:"proof,omitempty"`
+	// CIPendingSince and CIPendingSHA are when CI started pending on that head, across land runs
+	// that ended in ci_pending (land reads them for land_ci_give_up).
+	CIPendingSince time.Time `json:"ci_pending_since,omitzero"`
+	CIPendingSHA   string    `json:"ci_pending_sha,omitempty"`
 }
 
 // ItemTrust is the part of a trust OK the runner needs.
@@ -50,6 +55,10 @@ type ItemTrust struct {
 	HeadSHA string `json:"head_sha"`
 	By      string `json:"by"`
 	Used    bool   `json:"used"`
+	// Paths and DiffSHA256 are the trusted files and their diff's digest the approver OK'd: a new
+	// head with the same ones carries the OK (carriedTrust).
+	Paths      []string `json:"paths"`
+	DiffSHA256 string   `json:"diff_sha256"`
 }
 
 // allows reports whether the approver's OK lets verify run head's change to trusted files.

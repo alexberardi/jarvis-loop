@@ -140,3 +140,29 @@ func TestBoardPlanPages(t *testing.T) {
 		t.Errorf("plan without a token: %d", resp.StatusCode)
 	}
 }
+
+// Gemini's critique shows after the blueprint, never marked approved (approving files the
+// blueprint, the critique is a record).
+func TestPlanCritiqueSection(t *testing.T) {
+	d, latest := goldenPlan()
+	crit := pipeline.PlanDoc{PlanID: 2, Kind: pipeline.DocCritique, Version: 1, Markdown: "# Gemini's critique of the blueprint\n\nGemini raised 1 point: 1 taken, 0 answered.\n",
+		CreatedAt: now.Add(-40 * time.Hour)}
+	d.Docs = append(d.Docs, pipeline.PlanDoc{PlanID: 2, Kind: pipeline.DocCritique, Version: 1, CreatedAt: crit.CreatedAt})
+	latest[pipeline.DocCritique] = crit
+	var b bytes.Buffer
+	if err := planTmpl.Execute(&b, planView(d, latest, now, "")); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	bp, cr := strings.Index(out, "<h2>Blueprint</h2>"), strings.Index(out, "<h2>Gemini critique</h2>")
+	if bp < 0 || cr < bp || !strings.Contains(out[cr:], "Gemini raised 1 point: 1 taken, 0 answered.") {
+		t.Fatalf("no critique section after the blueprint:\n%s", out)
+	}
+	b.Reset()
+	if err := docTmpl.Execute(&b, docView(d, crit)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.String(), "approved") {
+		t.Fatalf("the critique page says approved:\n%s", b.String())
+	}
+}

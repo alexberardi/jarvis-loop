@@ -250,8 +250,10 @@ func (g *GitHub) View(_ context.Context, slug string, number int) (runner.PRView
 		return runner.PRView{}, fmt.Errorf("no pull request %s#%d", slug, number)
 	}
 	p := g.prs[i]
-	return runner.PRView{Number: p.Number, Title: p.Title, Body: p.Body, HeadRefName: p.Head, HeadRefOid: g.RemoteHead(slug, p.Head),
-		BaseRefName: p.Base, State: p.State}, nil
+	v := runner.PRView{Number: p.Number, Title: p.Title, Body: p.Body, HeadRefName: p.Head, HeadRefOid: g.RemoteHead(slug, p.Head),
+		BaseRefName: p.Base, State: p.State}
+	v.Author.Login, _, _ = strings.Cut(slug, "/") // the runner opens PRs as the user, the repo's owner
+	return v, nil
 }
 
 // Comment records a comment (gh pr comment).

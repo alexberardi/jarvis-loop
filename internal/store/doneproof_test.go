@@ -53,7 +53,7 @@ func TestDoneVerifyBackfill(t *testing.T) {
 	}
 	open := add(t, s, "not done", "")
 	exec(t, s, `UPDATE items SET verify = '', verify_reason = ''`)
-	exec(t, s, `DELETE FROM schema_migrations WHERE version = 28`)
+	exec(t, s, `DELETE FROM schema_migrations WHERE version = 32`)
 	exec(t, s, `DROP INDEX items_verify`)
 	exec(t, s, `ALTER TABLE items DROP COLUMN verify`)
 	exec(t, s, `ALTER TABLE items DROP COLUMN verify_reason`)

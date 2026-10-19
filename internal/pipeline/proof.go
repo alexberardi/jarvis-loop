@@ -48,6 +48,12 @@ const (
 	ProofNone = "none"
 )
 
+// CheckError is a runner's result (never a check's state) for a command check it could not run
+// for its environment's sake: the repo's setup failed, or the command's own output shows it never
+// got to test the change (docs/decisions/2026-10-19-proof-setup.md). It is recorded on the check
+// as its evidence and leaves its state and fails as they were: it never counts toward a reopen.
+const CheckError = "error"
+
 // Who wrote a proof.
 const (
 	ProofByBuild = "build"
@@ -383,8 +389,10 @@ func ApplyProofChecked(it Item, results []CheckResult, usage map[int]UsageSeen, 
 		case CheckFailed:
 			c.State = CheckFailed
 			c.Fails++
+		case CheckError:
+			c.Evidence = clipRunes("could not run: "+c.Evidence, maxProofEvidence)
 		default:
-			return Transition{}, errf(CodeInvalidField, "result for check %d: state must be passed or failed", r.Check)
+			return Transition{}, errf(CodeInvalidField, "result for check %d: state must be passed, failed or error", r.Check)
 		}
 	}
 	for i, u := range usage {
@@ -493,7 +501,8 @@ func ApplyE2EResults(it Item, run E2ERun, now time.Time) (tr Transition, decided
 					continue
 				}
 				n++
-				if t.Status == "passed" {
+				// Flaky: it failed, then passed on the overnight run's rerun; not a failure.
+				if t.Status == "passed" || t.Status == "flaky" {
 					passed++
 				} else if bad == nil {
 					bad = t

@@ -23,7 +23,10 @@ type RunnerSeen struct {
 	OnlyResources []string
 	PollSeconds   int
 	Stages        []Stage
-	LastSeen      time.Time
+	// Builders are the other builders it said it can run (BuilderQwen), for the flow panel's
+	// usage-paced reason (WaitReason).
+	Builders []string
+	LastSeen time.Time
 }
 
 // Unservable is what of resources no runner seen within RunnerSeenWindow of now can serve, sorted;

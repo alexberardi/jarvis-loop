@@ -37,9 +37,12 @@ type Scenario struct {
 	// learn of only from a reload_loopd and a reload_runner step.
 	ExtraRepo bool `json:"extra_repo,omitempty"`
 	// Slots are the runner's agent slots (default 1): two let a run go on while another starts.
-	Slots int     `json:"slots,omitempty"`
-	Steps []Step  `json:"steps"`
-	Final *Expect `json:"expect,omitempty"`
+	Slots int `json:"slots,omitempty"`
+	// Capabilities are the runner's (default none): the overnight regression needs emulator, gpu
+	// and voice.
+	Capabilities []string `json:"capabilities,omitempty"`
+	Steps        []Step   `json:"steps"`
+	Final        *Expect  `json:"expect,omitempty"`
 }
 
 // Step is one thing that happens. Do says what; the other fields are its arguments. An "expect"
@@ -71,10 +74,13 @@ type Step struct {
 	RunnerStages string `json:"runner_stages,omitempty"`
 	// script: how the fake claude plays the item's runs of a stage (default build), and the repo
 	// a triage run picks
-	For   string `json:"for,omitempty"` // the stage the script is for: triage, build (default), review
-	Play  string `json:"play,omitempty"`
-	File  string `json:"file,omitempty"`
-	Picks string `json:"picks,omitempty"` // the repo a triage run picks
+	For  string `json:"for,omitempty"` // the stage the script is for: triage, build (default), review
+	Play string `json:"play,omitempty"`
+	File string `json:"file,omitempty"`
+	// gemini: turn the runner's Gemini second opinion on, the fake agy playing Play (ok, none,
+	// quota, garbage, failed, hang), advisory unless Blocking
+	Blocking bool   `json:"blocking,omitempty"`
+	Picks    string `json:"picks,omitempty"` // the repo a triage run picks
 	// Proof: the proof (a list of checks) the item's builds state; with For "proof", the one the
 	// orchestrator's proofs play writes for it (the proof sweep).
 	Proof json.RawMessage `json:"proof,omitempty"`
@@ -218,6 +224,8 @@ type Expect struct {
 	// BoardOrchestrator: a regexp the board's Orchestrator panel must match ("" when the board
 	// has none: "^$").
 	BoardOrchestrator string `json:"board_orchestrator,omitempty"`
+	// Flow: the flow panel's numbers (GET /flow) and its page (/board/flow).
+	Flow *FlowMatch `json:"flow,omitempty"`
 	// BoardRunners: a regexp the board's runner notices (draining runners) must match, all of
 	// them together ("^$" when there are none).
 	BoardRunners string `json:"board_runners,omitempty"`
@@ -540,6 +548,8 @@ func (p *player) step(st Step) error {
 		return nil
 	case "runner_listener":
 		return s.runnerListener(st.As, st.Refused)
+	case "gemini":
+		return s.Gemini(st.Play, st.Blocking)
 	case "script":
 		if st.For == "orchestrate" {
 			b, _ := json.Marshal(map[string]string{"play": st.Play})

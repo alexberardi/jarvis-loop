@@ -1249,6 +1249,22 @@ func TestBuilderFallbackLine(t *testing.T) {
 	}
 }
 
+// trust_carried is one line: the OK'd head, who OK'd it and the head it carried to (#277).
+func TestTrustCarriedLine(t *testing.T) {
+	e := newBotEnv(t)
+	it, err := e.st.AddItem(e.ctx, "user:alex", store.NewItem{Title: "x", Repo: "jarvis-server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := store.Event{ItemID: it.ID, Actor: "runner:devbox", Kind: pipeline.KindTrustCarried, From: "build", To: "review",
+		Data: map[string]any{"from": strings.Repeat("a", 40), "to": strings.Repeat("b", 40), "by": "user:alex", "diff_sha256": strings.Repeat("c", 64)}}
+	m, ok := e.b.describe(e.ctx, ev, store.Detail{Item: it})
+	want := "Trusted files' diff unchanged since `aaaaaaa`: the OK you (alex, CLI) gave carries to `bbbbbbb`, so verify ran it without asking again."
+	if !ok || m.Text != want {
+		t.Errorf("got %q, want %q", m.Text, want)
+	}
+}
+
 // unservable mentions the approver once with what no runner offers; servable is one line.
 func TestUnservableLines(t *testing.T) {
 	e := newBotEnv(t)

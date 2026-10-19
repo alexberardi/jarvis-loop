@@ -65,6 +65,11 @@ type Config struct {
 	UserEmulator string `json:"user_emulator"`
 	// AllowedDomains extends the sandbox's network allowlist.
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	// TrustedAuthors are the GitHub logins (besides each repo's owner, always trusted) whose PR
+	// comments, reviews and PR bodies reach an agent; anyone else's are left out, since anyone can
+	// comment on a public repo (docs/decisions/2026-10-19-trusted-comment-authors.md). A GitHub
+	// App or bot posts as "name[bot]". Matched case-insensitively.
+	TrustedAuthors []string `json:"trusted_authors,omitempty"`
 	// VerifyPR checks the PR on GitHub (gh pr view) against git before reporting. Default true.
 	VerifyPR *bool `json:"verify_pr,omitempty"`
 	// LandCIWait is how long a land run waits for CI (or GitHub's mergeability) on the PR's head
@@ -72,6 +77,9 @@ type Config struct {
 	// default "30m" each.
 	LandCIWait   string `json:"land_ci_wait,omitempty"`
 	LandMainWait string `json:"land_main_wait,omitempty"`
+	// LandCIGiveUp is how long CI may stay pending on one head, over all the land runs that ended
+	// with it pending (ci_pending), before land gives the item to the user. Default "3h".
+	LandCIGiveUp string `json:"land_ci_give_up,omitempty"`
 	// PlanTurnMinutes caps one plan turn (stage plan): the agent is stopped and the turn fails
 	// after it, as an item's run is at loopd's max_run_minutes. Default 15.
 	PlanTurnMinutes int `json:"plan_turn_minutes,omitempty"`
@@ -94,12 +102,15 @@ type Config struct {
 	// Qwen is the Qwen builder for items whose builder is qwen (qwen.go); nil: they build with
 	// claude.
 	Qwen *QwenConfig `json:"qwen,omitempty"`
+	// Gemini is the Gemini second opinion on approved reviews (gemini.go, secondopinion.go);
+	// nil: none.
+	Gemini *GeminiConfig `json:"gemini,omitempty"`
 	// Regression is the end-to-end regression a runner with stage regression runs (regression.go,
 	// docs/decisions/2026-10-18-regression-trigger.md).
 	Regression *RegressionConfig `json:"regression,omitempty"`
 
-	path             string
-	ciWait, mainWait time.Duration
+	path                       string
+	ciWait, mainWait, ciGiveUp time.Duration
 }
 
 // RepoConfig is one repository the runner works on, keyed by the item's repo field.
@@ -197,8 +208,14 @@ type RegressionConfig struct {
 	// the app itself.
 	Repo       string `json:"repo"`
 	MobileRepo string `json:"mobile_repo,omitempty"`
-	// TimeoutText is a Go duration (default 150m): the run is ended after it.
+	// TimeoutText is a Go duration (default 150m): the run is ended after it (an overnight run's
+	// each lane).
 	TimeoutText string `json:"timeout,omitempty"`
+	// PipelineCommand replaces the overnight run's pipeline-scenarios command (PipelineCommand):
+	// a bash command line run in the server checkout with LOOP_PIPELINE_SANDBOX, LOOP_PIPELINE_FILTER
+	// (a rerun's) and LOOP_PIPELINE_OUT (where tools/pipeline run --json's summary goes) set. The
+	// loop's harness points it at a stand-in.
+	PipelineCommand string `json:"pipeline_command,omitempty"`
 
 	timeout time.Duration
 }
@@ -335,8 +352,10 @@ func (c *Config) normalize() error {
 	for _, w := range []struct {
 		name, val string
 		to        *time.Duration
-	}{{"land_ci_wait", c.LandCIWait, &c.ciWait}, {"land_main_wait", c.LandMainWait, &c.mainWait}} {
-		*w.to = 30 * time.Minute
+		def       time.Duration
+	}{{"land_ci_wait", c.LandCIWait, &c.ciWait, 30 * time.Minute}, {"land_main_wait", c.LandMainWait, &c.mainWait, 30 * time.Minute},
+		{"land_ci_give_up", c.LandCIGiveUp, &c.ciGiveUp, 3 * time.Hour}} {
+		*w.to = w.def
 		if w.val == "" {
 			continue
 		}
@@ -370,6 +389,11 @@ func (c *Config) normalize() error {
 	}
 	if c.Qwen != nil {
 		if err := c.Qwen.normalize(); err != nil {
+			return err
+		}
+	}
+	if c.Gemini != nil {
+		if err := c.Gemini.normalize(); err != nil {
 			return err
 		}
 	}
@@ -599,7 +623,12 @@ func (c *Config) ownSecrets() []string {
 	if c.Qwen != nil {
 		creds = c.Qwen.CredentialsFile
 	}
-	for _, p := range []string{c.path, c.LoopdTokens, c.LoopdData, creds} {
+	// agy's login: only agy's own fence leaves it readable (gemini.go).
+	gemini := ""
+	if c.Gemini != nil {
+		gemini = c.Gemini.Home
+	}
+	for _, p := range []string{c.path, c.LoopdTokens, c.LoopdData, creds, gemini} {
 		if p != "" {
 			out = append(out, p)
 		}
@@ -636,4 +665,17 @@ func uniq(in []string) []string {
 		}
 	}
 	return out
+}
+
+// Trusted reports whether a GitHub login's text may reach an agent working on repo slug: the
+// repo's owner and the TrustedAuthors are; anyone else (and an empty login) is not.
+func (c *Config) Trusted(slug, login string) bool {
+	if login == "" {
+		return false
+	}
+	owner, _, _ := strings.Cut(slug, "/")
+	if strings.EqualFold(login, owner) {
+		return true
+	}
+	return slices.ContainsFunc(c.TrustedAuthors, func(a string) bool { return strings.EqualFold(a, login) })
 }

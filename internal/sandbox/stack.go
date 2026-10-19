@@ -96,6 +96,8 @@ type Options struct {
 	ExtraRepo bool
 	// Slots are the runner's agent slots (default 1).
 	Slots int
+	// Capabilities are the runner's (default none).
+	Capabilities []string
 }
 
 // Stack is one sandboxed loop: loopd (store, API on a loopback port, Slack layer), a runner, a
@@ -355,7 +357,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 	verify := true
 	slots := max(opts.Slots, 1)
 	cfg := runner.Config{
-		LoopdURL: s.LoopdURL, Token: runnerTok, OrchestratorToken: orchTok, Name: RunnerName, Capabilities: []string{}, Slots: slots,
+		LoopdURL: s.LoopdURL, Token: runnerTok, OrchestratorToken: orchTok, Name: RunnerName, Capabilities: append([]string{}, opts.Capabilities...), Slots: slots,
 		WorkRoot: filepath.Join(dir, "work"), Claude: opts.Bin.Claude, Guard: opts.Bin.Guard, Mode: runner.ModeAuto,
 		PollSeconds: 2, UserEmulator: "emulator-5554", VerifyPR: &verify,
 		LoopdTokens: tokPath, LoopdData: filepath.Join(dir, "loopd"), Stages: opts.Stages,
@@ -370,7 +372,9 @@ func StartStack(opts Options) (st *Stack, err error) {
 				DenyWrite: []string{MobileTrustedFile}},
 		},
 		// The demo repo stands in for jarvis-server (its scripts/e2e from a scenario's e2e step).
-		Regression: &runner.RegressionConfig{Repo: RepoKey, MobileRepo: MobileKey},
+		// The overnight run's pipeline scenarios: the stand-in the "e2e" step commits with outcome
+		// overnight.
+		Regression: &runner.RegressionConfig{Repo: RepoKey, MobileRepo: MobileKey, PipelineCommand: "scripts/pipeline-scenarios"},
 	}
 	if s.qwen, err = startFakeQwen(); err != nil {
 		return nil, err
@@ -744,6 +748,26 @@ func (s *Stack) SetScript(id int64, stage, play, file, repo string, proof json.R
 		name = fmt.Sprintf("%d-%s.json", id, stage)
 	}
 	return os.WriteFile(filepath.Join(s.scripts, name), b, 0o644)
+}
+
+// Gemini turns on the runner's Gemini second opinion (off by default), with the fake agy (the
+// fake claude through a link named agy, unfenced) playing play (fakeagy's plays; "" for ok).
+func (s *Stack) Gemini(play string, blocking bool) error {
+	agy := filepath.Join(s.Dir, "bin", "agy")
+	if err := os.MkdirAll(filepath.Dir(agy), 0o755); err != nil {
+		return err
+	}
+	if err := os.Symlink(s.Runner.Cfg.Claude, agy); err != nil && !os.IsExist(err) {
+		return err
+	}
+	b, _ := json.Marshal(map[string]string{"play": play})
+	if err := os.WriteFile(filepath.Join(s.scripts, "agy.json"), b, 0o644); err != nil {
+		return err
+	}
+	off := false
+	s.Runner.Cfg.Gemini = &runner.GeminiConfig{Agy: agy, Model: runner.DefaultGeminiModel, Blocking: blocking, Fence: &off,
+		Home: filepath.Join(s.Dir, "gemini")}
+	return nil
 }
 
 // AgentState is what the fake claude reported for an item's runs so far ("started", "hanging").

@@ -183,6 +183,8 @@ type fakePRs struct {
 	comments  map[int][]string // PR -> comment bodies the runner posted
 	merged    []MergedPR
 	mergedErr map[string]error
+	author    string      // who opened the PRs (default alex, the repos' owner)
+	others    []PRComment // comments by other people, after the runner's own
 }
 
 func (f *fakePRs) View(_ context.Context, slug string, pr int) (PRView, error) {
@@ -192,7 +194,12 @@ func (f *fakePRs) View(_ context.Context, slug string, pr int) (PRView, error) {
 	if !ok {
 		return PRView{}, fmt.Errorf("no PR #%d", pr)
 	}
-	return PRView{Number: pr, Title: s.Title, Body: f.bodies[pr], HeadRefName: s.Head, BaseRefName: s.Base, State: "OPEN"}, nil
+	v := PRView{Number: pr, Title: s.Title, Body: f.bodies[pr], HeadRefName: s.Head, BaseRefName: s.Base, State: "OPEN"}
+	v.Author.Login = f.author
+	if v.Author.Login == "" {
+		v.Author.Login = "alex"
+	}
+	return v, nil
 }
 
 func (f *fakePRs) Comment(_ context.Context, slug string, pr int, bodyFile string) error {
@@ -217,7 +224,7 @@ func (f *fakePRs) Comments(_ context.Context, slug string, pr int) ([]PRComment,
 		out = append(out, PRComment{Author: "alex", At: fmt.Sprintf("2026-10-15T12:0%d:00Z", i), Body: c})
 	}
 	out = append(out, PRComment{Author: "alex", At: "2026-10-15T12:09:00Z", Body: "Name the test after the case.", Path: "feature.txt", Line: 1})
-	return out, nil
+	return append(out, f.others...), nil
 }
 
 func (f *fakePRs) MergedPRs(_ context.Context, slug string, n int) ([]MergedPR, error) {
@@ -480,6 +487,11 @@ func TestOnlyConfiguredStagesAreClaimed(t *testing.T) {
 	}
 	if g.runOnce() {
 		t.Fatal("a build runner claimed a triage item")
+	}
+	// Its claim still told loopd how many slots it works (the flow panel's idle capacity).
+	f, err := g.st.Flow(g.ctx, "24h")
+	if err != nil || len(f.Runners) != 1 || f.Runners[0].Slots != 1 {
+		t.Fatalf("flow runners %+v %v", f.Runners, err)
 	}
 }
 
