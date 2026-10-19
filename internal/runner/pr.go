@@ -50,6 +50,10 @@ type PRView struct {
 	HeadRefOid  string `json:"headRefOid"`
 	BaseRefName string `json:"baseRefName"`
 	State       string `json:"state"`
+	// Author is who opened the PR; its title and body reach an agent only if they are trusted.
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
 }
 
 // PRComment is one comment on a PR: Path and Line are set for an inline review comment, State for
@@ -143,7 +147,7 @@ func (g GH) Edit(ctx context.Context, pr int, s PRSpec) error {
 
 // View reads the PR (gh pr view).
 func (g GH) View(ctx context.Context, slug string, pr int) (PRView, error) {
-	out, err := g.run(ctx, "pr", "view", strconv.Itoa(pr), "--repo", slug, "--json", "number,title,body,headRefName,headRefOid,baseRefName,state")
+	out, err := g.run(ctx, "pr", "view", strconv.Itoa(pr), "--repo", slug, "--json", "number,title,body,headRefName,headRefOid,baseRefName,state,author")
 	if err != nil {
 		return PRView{}, err
 	}
