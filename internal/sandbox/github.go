@@ -560,6 +560,11 @@ func (g *GitHub) FailedLog(_ context.Context, slug string, id int64) (string, er
 // Push commits content to a file on a branch of the remote, as someone else would (a teammate's
 // commit on the PR's branch, or a change landing on main meanwhile).
 func (g *GitHub) Push(slug, branch, file, content, msg string) (string, error) {
+	return g.PushFile(slug, branch, file, content, msg, 0o644)
+}
+
+// PushFile is Push with the file's mode (0o755: a script).
+func (g *GitHub) PushFile(slug, branch, file, content, msg string, mode os.FileMode) (string, error) {
 	repo := g.repos[slug]
 	if repo == "" {
 		return "", fmt.Errorf("no repository %s", slug)
@@ -575,7 +580,10 @@ func (g *GitHub) Push(slug, branch, file, content, msg string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(filepath.Join(tmp, file)), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(tmp, file), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, file), []byte(content), mode); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(filepath.Join(tmp, file), mode); err != nil {
 		return "", err
 	}
 	for _, args := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", msg}, {"push", "-q", "origin", "HEAD:refs/heads/" + branch}} {

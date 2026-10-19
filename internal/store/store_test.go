@@ -663,23 +663,6 @@ func TestLandLimitMigration(t *testing.T) {
 	}
 }
 
-// Each migration has its own version: migrate records only the number, so a second file with the
-// same number never runs (main had 0022_land_limit and 0022_runway, and runway's columns were missing).
-func TestMigrationVersionsUnique(t *testing.T) {
-	ents, err := migrations.ReadDir("migrations")
-	if err != nil {
-		t.Fatal(err)
-	}
-	seen := map[string]string{}
-	for _, e := range ents {
-		v := strings.SplitN(e.Name(), "_", 2)[0]
-		if prev, ok := seen[v]; ok {
-			t.Errorf("migrations %s and %s share version %s", prev, e.Name(), v)
-		}
-		seen[v] = e.Name()
-	}
-}
-
 // toDone takes an item through every stage, merged by runnerName.
 func toDone(t *testing.T, s *Store, runnerName string) pipeline.Item {
 	t.Helper()

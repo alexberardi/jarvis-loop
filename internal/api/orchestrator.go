@@ -253,6 +253,7 @@ func (s *server) orchReply(w http.ResponseWriter, r *http.Request) {
 		Channel  string `json:"channel"`
 		ThreadTS string `json:"thread_ts"`
 		Text     string `json:"text"`
+		Reason   string `json:"reason"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -261,7 +262,7 @@ func (s *server) orchReply(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "channel must be #loop, #loop-digest, #plan or a DM with the orchestrator")
 		return
 	}
-	ev, err := s.st.OrchReply(r.Context(), actor(r), body.Channel, body.ThreadTS, body.Text)
+	ev, err := s.st.OrchReply(r.Context(), actor(r), body.Channel, body.ThreadTS, body.Text, body.Reason)
 	if err != nil {
 		s.fail(w, err)
 		return
