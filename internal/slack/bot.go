@@ -789,6 +789,10 @@ func (b *Bot) orchestratorLine(ctx context.Context, e store.Event) string {
 		what = "saw this again"
 	case "proof_set":
 		what = "wrote its proof (the proof sweep): " + b.field(strings.Join(listOf(e.Data, "checks"), "; "), 600, e.ItemID)
+		if e.Data["replaced"] != nil {
+			what = "rewrote its proof with checks the loop can run (it was " + b.field(strings.Join(listOf(e.Data, "replaced"), "; "), 300, e.ItemID) +
+				"): " + b.field(strings.Join(listOf(e.Data, "checks"), "; "), 600, e.ItemID)
+		}
 	case "refused":
 		return fmt.Sprintf("Orchestrator: tried to %s; refused: %s", Escape(str(e.Data, "action")), f("message", 300))
 	default:

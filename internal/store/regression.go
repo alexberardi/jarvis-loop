@@ -464,6 +464,7 @@ func (s *Store) RegressionResult(ctx context.Context, runnerName string, id int6
 		}
 		now := s.clock.Now()
 		r.Passed, r.Failed, r.Skipped = 0, 0, 0
+		saved := make([]RegressionTest, 0, len(rep.Tests))
 		for i, t := range rep.Tests {
 			if strings.TrimSpace(t.Title) == "" || strings.TrimSpace(t.Status) == "" {
 				return errf(pipeline.CodeMissingField, "test %d has no title or status", i+1)
@@ -485,6 +486,7 @@ func (s *Store) RegressionResult(ctx context.Context, runnerName string, id int6
 				VALUES (?,?,?,?,?,?,?,?,?,?,?)`, id, rt.N, rt.Suite, rt.Title, rt.File, rt.Line, rt.Status, rt.Error, rt.MS, rt.Screenshot, rt.Repo); err != nil {
 				return err
 			}
+			saved = append(saved, rt)
 		}
 		r.Error = clipText(rep.Error, 2000)
 		r.E2ERun, r.ServerHead, r.MobileHead = clipText(rep.E2ERun, 80), clipText(rep.ServerHead, 64), clipText(rep.MobileHead, 64)
@@ -511,9 +513,114 @@ func (s *Store) RegressionResult(ctx context.Context, runnerName string, id int6
 		if r.Error != "" {
 			data["error"] = r.Error
 		}
+		verified, reopened, err := s.regressionProofs(tx, r, saved, files)
+		if err != nil {
+			return err
+		}
+		if len(verified) > 0 {
+			data["verified"] = verified
+		}
+		if len(reopened) > 0 {
+			data["reopened"] = reopened
+		}
 		return s.event(tx, Event{Actor: "runner:" + runnerName, Kind: KindRegDone, Data: data})
 	})
 	return out, err
+}
+
+// regressionProofs lets a finished run decide the e2e checks of the items in qa (#195,
+// docs/decisions/2026-10-18-qa-proofs.md): those merged (or, for the loop's own repo, deployed)
+// before the run was claimed, since the run tests main as it was then. Each is verified or
+// reopened by the loop (the reopened item gets the failing test's screenshot and is the one
+// 'File it' shows for that test), or records the checks it decided and stays.
+func (s *Store) regressionProofs(tx *sql.Tx, r Regression, tests []RegressionTest, files []RegressionFile) (verified, reopened []int64, err error) {
+	if r.ClaimedAt == nil || len(tests) == 0 {
+		return nil, nil, nil
+	}
+	run := pipeline.E2ERun{ID: r.ID}
+	for _, t := range tests {
+		run.Tests = append(run.Tests, pipeline.E2ETest{N: t.N, Name: t.Key(), File: t.File, Status: t.Status, Error: t.Error, Screenshot: t.Screenshot})
+	}
+	rows, err := tx.Query(`SELECT id FROM items WHERE stage = 'qa' AND proof LIKE '%"kind":"e2e"%' ORDER BY id`)
+	if err != nil {
+		return nil, nil, err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	now := s.clock.Now()
+	for _, id := range ids {
+		it, err := loadItem(tx, id)
+		if err != nil {
+			return nil, nil, err
+		}
+		if it.Proof == nil || it.AwaitingDeploy {
+			continue
+		}
+		var since int64
+		if err := tx.QueryRow(`SELECT COALESCE(MAX(at), 0) FROM events WHERE item_id = ?
+			AND ((kind = 'advanced' AND outcome = ?) OR kind = 'deployed')`, id, string(pipeline.Merged)).Scan(&since); err != nil {
+			return nil, nil, err
+		}
+		if since == 0 || since >= r.ClaimedAt.UnixNano() {
+			continue
+		}
+		tr, decided, err := pipeline.ApplyE2EResults(it, run, now)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !decided {
+			continue
+		}
+		if tr.Kind == "reopened" {
+			_, filed, err := s.reopenTx(tx, pipeline.ActorProof, it, tr)
+			if err != nil {
+				return nil, nil, err
+			}
+			test, _ := tr.Data["test"].(string)
+			n, _ := tr.Data["test_n"].(int)
+			if _, err := tx.Exec(`INSERT INTO regression_items (item_id, test, run_id, n) VALUES (?,?,?,?)`, filed.ID, test, r.ID, n); err != nil {
+				return nil, nil, err
+			}
+			if shot, _ := tr.Data["screenshot"].(int); shot != 0 {
+				for _, f := range files {
+					if f.N == shot {
+						if err := s.attachRegressionFile(tx, pipeline.ActorProof, filed.ID, f, "screenshot: "+clipText(test, 150)); err != nil {
+							return nil, nil, err
+						}
+					}
+				}
+			}
+			reopened = append(reopened, id)
+			continue
+		}
+		actor := "loopd"
+		if tr.Kind == "verified" {
+			actor = pipeline.ActorProof
+			verified = append(verified, id)
+		}
+		tr.Item.UpdatedAt = now
+		if err := saveItem(tx, tr.Item); err != nil {
+			return nil, nil, err
+		}
+		if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
+			return nil, nil, err
+		}
+		if err := s.planItemSettled(tx, tr.Item); err != nil {
+			return nil, nil, err
+		}
+	}
+	return verified, reopened, nil
 }
 
 func regressionFiles(q querier, id int64) ([]RegressionFile, error) {

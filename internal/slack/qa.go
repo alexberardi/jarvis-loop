@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -61,7 +62,11 @@ func (b *Bot) qaAsk(it pipeline.Item, what, detail string) Message {
 		if looks := it.Proof.Looks(); len(looks) > 0 {
 			text += "\nThen your check: " + b.looks(it) + "."
 		}
-		text += "\nIt is verified when every automatic check passes, and reopened if one fails twice in a row; Verified and Reopen still work by hand."
+		reopen := "reopened if one fails twice in a row"
+		if slices.ContainsFunc(it.Proof.Checks, func(c pipeline.ProofCheck) bool { return c.Kind == pipeline.ProofE2E }) {
+			reopen = "reopened if a command fails twice in a row or a regression run fails one of its E2E tests"
+		}
+		text += "\nIt is verified when every automatic check passes, and " + reopen + "; Verified and Reopen still work by hand."
 	}
 	value := strconv.FormatInt(it.ID, 10)
 	return Message{Text: head, Blocks: []map[string]any{

@@ -142,7 +142,7 @@ const (
 	// and failure signatures, the answer kinds, escalations with a recommendation, P1 tickets.
 	OrchPersona = "persona"
 	// OrchProofs writes a proof for each item a proof_needed trigger names: the item's
-	// <id>-proof.json script's proof, else one manual check.
+	// <id>-proof.json script's proof, else one manual check; for proof_e2e, only the script's.
 	OrchProofs = "proofs"
 )
 
@@ -999,12 +999,14 @@ func (f *fake) orchestrate(play, turn string, brief []byte, progress func(string
 	case OrchProofs:
 		if snap.Turn != nil {
 			for _, tr := range snap.Turn.Triggers {
-				if tr.Reason != "proof_needed" {
+				if tr.Reason != "proof_needed" && tr.Reason != "proof_e2e" {
 					continue
 				}
 				checks := json.RawMessage(`[{"kind":"manual","look":"the change in use"}]`)
 				if p := loadScript(os.Getenv("FAKE_CLAUDE_SCRIPTS"), fmt.Sprint(tr.ItemID), "proof").Proof; len(p) > 0 {
 					checks = p
+				} else if tr.Reason == "proof_e2e" {
+					continue // no test covers it: the manual proof stays
 				}
 				actions = append(actions, map[string]any{"action": "proof", "item_id": tr.ItemID, "checks": checks, "reason": "from the item, its PR and evidence"})
 			}
