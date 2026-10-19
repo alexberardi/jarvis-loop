@@ -36,6 +36,7 @@ const (
 	TriggerSweep        = "sweep"         // the 15-minute sweep, with something changed
 	TriggerDue          = "due"           // a wait the orchestrator was told about ended (a retry's backoff)
 	TriggerProof        = "proof_needed"  // an item is in qa without a proof: write one (the proof sweep)
+	TriggerProofE2E     = "proof_e2e"     // the sweep's manual-only proof, written before E2E results passed checks: replace it if tests cover the change
 )
 
 // MaxTriggers caps the reasons one turn collects: past it, the snapshot has the rest.

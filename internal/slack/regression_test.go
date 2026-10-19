@@ -184,3 +184,13 @@ func TestRegressionReportCapsTheFailures(t *testing.T) {
 		t.Fatalf("block %d: %v", MaxReportFailures, blocks[MaxReportFailures])
 	}
 }
+
+// A run that decided e2e checks says so under its report (#195).
+func TestRegressionReportQALine(t *testing.T) {
+	if got := regressionQALine(store.Event{Data: map[string]any{"verified": []any{float64(4), float64(9)}, "reopened": []any{float64(5)}}}); got != "QA from this run's E2E checks: verified #4, #9; reopened #5." {
+		t.Fatalf("line %q", got)
+	}
+	if got := regressionQALine(store.Event{Data: map[string]any{}}); got != "" {
+		t.Fatalf("no item decided: %q", got)
+	}
+}
