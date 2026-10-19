@@ -1,0 +1,40 @@
+{
+  "name": "done-proof-fails",
+  "about": "Done proofs (docs/decisions/2026-10-18-done-proofs.md), a done item's check failing. a merged straight to done; the done sweep's proof is one command that fails on main. The first proof pass records the failure and says nothing (a flaky check files no work); 30 minutes later it fails again: the loop files a P1 item with the failure as its ask, linked by reopen_of, and a stays done, its status failed; a's thread says what failed and which item fixes it. The board's Done column shows a as failed with the item filed.",
+  "stages": ["build", "review", "land", "orchestrate"],
+  "steps": [
+    {"do": "script", "for": "orchestrate", "play": "proofs"},
+    {"do": "add", "item": "a", "title": "Chime volume"},
+    {"do": "script", "item": "a", "for": "proof", "proof": [{"kind": "command", "run": "test -f chime.wav || { echo 'chime.wav is not on main'; exit 1; }"}]},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "triage", "item": "a"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "clock", "advance": "1m"},
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "done"},
+     "events": [{"item": "a", "kind": "proof_set", "data": {"verify": "^proving$"}, "count": 1}]},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "done"},
+     "events": [{"item": "a", "kind": "done_proof_checked", "actor": "runner", "data": {"status": "^failed$", "verify": "^proving$"}, "count": 1}],
+     "no_messages": [{"thread": "a", "text": "^Proof"}]},
+    {"do": "clock", "advance": "30m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "done", "#2": "triage"},
+     "events": [{"item": "a", "kind": "done_failed", "actor": "loop (proof)", "data": {"words": "^Proof of the merged change failed 2 times in a row: command: `test -f chime\\.wav .*`: exit 1 after 0s: chime\\.wav is not on main$", "reopen_item": "^2$"}, "count": 1},
+                {"item": "#2", "kind": "created", "actor": "loop (proof)", "data": {"priority": "^P1$", "reopen_of": "^1$"}, "count": 1}],
+     "messages": [{"thread": "a", "from": "bot", "text": "^Proof of the merged change failed 2 times in a row: .*chime\\.wav is not on main\\. Filed #2 .*\\(P1\\) to fix it; this one stays done\\.$"}],
+     "board": {"a": {"column": "Done", "card": "done · failed</span>[\\s\\S]*\\(filed #2\\)"}}}
+  ],
+  "expect": {
+    "stage": {"a": "done", "#2": "triage"},
+    "events": [{"item": "a", "kind": "done_proof_checked", "count": 1}],
+    "no_events": [{"item": "a", "kind": "refused"}, {"item": "a", "kind": "reopened"}, {"item": "a", "kind": "verified"}]
+  }
+}
