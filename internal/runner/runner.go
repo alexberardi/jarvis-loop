@@ -44,6 +44,9 @@ type Runner struct {
 	PRs PRs
 	// Push pushes the item's branch from the mirror; nil means Git.PushBranch.
 	Push func(ctx context.Context, mirror, branch string) error
+	// ForcePush pushes a rewritten branch with a lease pinned to expect, the PR's recorded head;
+	// nil means Git.ForcePushBranch.
+	ForcePush func(ctx context.Context, mirror, branch, expect string) error
 	// VerifyPR checks the PR on GitHub; nil skips the check (the dry run, tests).
 	VerifyPR func(ctx context.Context, slug string, pr int) (PRInfo, error)
 	// Land asks GitHub what the land gates need and merges (GH; nil: this runner cannot land).
@@ -717,6 +720,19 @@ func (r *Runner) writeArgv(ru *run) error {
 	return os.WriteFile(filepath.Join(ru.dir, "argv.json"), argv, 0o600)
 }
 
+// recorded is what the loop recorded for the item's branch: the PR's head, and the heads the user
+// OK'd since (a Trust that still allows its commit, an approval).
+func recorded(it Item) Recorded {
+	rec := Recorded{Prev: it.HeadSHA}
+	if it.Trust != nil && it.Trust.allows(it.Trust.HeadSHA) {
+		rec.Heads = append(rec.Heads, it.Trust.HeadSHA)
+	}
+	if it.Approval != nil && it.Approval.HeadSHA != "" {
+		rec.Heads = append(rec.Heads, it.Approval.HeadSHA)
+	}
+	return rec
+}
+
 // prepareBuild makes the item's worktree on its branch (continuing an earlier run's commits),
 // with triage's notes and, after a bounce, the review's in .loop/review/ (and, after a held item
 // came back, why).
@@ -731,7 +747,7 @@ func (r *Runner) prepareBuild(ctx context.Context, ru *run, info *RunInfo) error
 	err := r.Git.EnsureMirror(ctx, ru.mirror, ru.repo)
 	ahead := 0
 	if err == nil {
-		ahead, err = r.Git.AddWorktree(ctx, ru.mirror, ru.wt, ru.branch, ru.repo.Base)
+		ahead, err = r.Git.AddWorktree(ctx, ru.mirror, ru.wt, ru.branch, ru.repo.Base, recorded(ru.item))
 	}
 	unlock()
 	if err != nil {
@@ -1606,9 +1622,11 @@ func evidenceLabels(v Result) map[string]string {
 	return labels
 }
 
-// publish pushes the item's branch (only it, never forced) and opens its PR, or updates the open
-// one, with the runner's own credentials; it returns the PR number and "opened" or "updated". The
-// agent did neither.
+// publish pushes the item's branch (only it) and opens its PR, or updates the open one, with the
+// runner's own credentials; it returns the PR number and "opened" or "updated". The agent did
+// neither. A branch the build rewrote (a reviewed rebase) over the PR's recorded head is pushed
+// with a lease pinned to that head and recorded as branch_rewritten; any other push is never
+// forced, so a remote commit the loop never recorded fails it.
 func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []EvidenceFile, out outcome, vres []VerifyResult) (int, string, error) {
 	if r.PRs == nil {
 		return 0, "", errors.New("the runner has no way to open PRs (configuration)")
@@ -1617,8 +1635,20 @@ func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []Evidence
 	if push == nil {
 		push = r.Git.PushBranch
 	}
+	forcePush := r.ForcePush
+	if forcePush == nil {
+		forcePush = r.Git.ForcePushBranch
+	}
 	unlock := r.lockMirror(ru.mirror)
-	err := push(ctx, ru.mirror, ru.branch)
+	var err error
+	rewritten, rangeDiff := "", ""
+	if prev := ru.item.HeadSHA; r.Git.Rewrites(ctx, ru.mirror, ru.branch, prev) {
+		rewritten = prev
+		rangeDiff, _ = r.Git.RangeDiff(ctx, ru.mirror, ru.repo.Base, prev, v.HeadSHA)
+		err = forcePush(ctx, ru.mirror, ru.branch, prev)
+	} else {
+		err = push(ctx, ru.mirror, ru.branch)
+	}
 	remote := ""
 	if err == nil {
 		remote, err = r.Git.RemoteHead(ctx, ru.mirror, ru.branch)
@@ -1629,6 +1659,13 @@ func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []Evidence
 	}
 	if remote != v.HeadSHA {
 		return 0, "", fmt.Errorf("after the push, %s on the remote is %q, not HEAD %s", ru.branch, remote, v.HeadSHA)
+	}
+	if rewritten != "" {
+		r.Log.Info("pushed a rewritten branch with a lease", "item", ru.item.ID, "branch", ru.branch, "old", rewritten, "new", remote)
+		if err := r.Client.Event(ctx, ru.item.ID, "branch_rewritten",
+			map[string]any{"old": rewritten, "new": remote, "range_diff": clip(rangeDiff, 2000)}); err != nil {
+			r.Log.Warn("could not record the rewrite", "item", ru.item.ID, "err", err)
+		}
 	}
 	st := r.runStats(ru, out)
 	body := filepath.Join(ru.dir, "pr-body.md")
