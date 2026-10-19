@@ -7,7 +7,7 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
-// The user's corrections to a filed item (loop edit, link, unlink, resources): each is an event,
+// The user's corrections to a filed item (loop edit, link, unlink, resources, feature): each is an event,
 // and a refusal is recorded as one too (human).
 
 // Edit fixes an item's title or ask before build starts (pipeline.ApplyEdit).
@@ -53,5 +53,12 @@ func (s *Store) SetResources(ctx context.Context, actor string, id int64, resour
 			return err
 		}
 		return s.checkUnservable(tx, s.clock.Now())
+	})
+}
+
+// SetFeature tags an item with a feature, or clears it (pipeline.ApplyFeature).
+func (s *Store) SetFeature(ctx context.Context, actor string, id int64, feature string) (pipeline.Item, error) {
+	return s.human(ctx, actor, id, "feature", func(it pipeline.Item) (pipeline.Transition, error) {
+		return pipeline.ApplyFeature(it, feature)
 	})
 }

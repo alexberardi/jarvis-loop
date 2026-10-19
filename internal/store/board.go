@@ -24,6 +24,8 @@ type BoardItem struct {
 	PlanID int64
 	// Builder is who its plan piece says should build it ("": not from a plan).
 	Builder string
+	// Feature is the feature it belongs to ("": none).
+	Feature string
 	// Unservable is the resources no runner offers it, when loopd flagged it (pipeline.Unservable).
 	Unservable []string
 	// Proof is a qa item's proof (nil: none), and AwaitingDeploy whether it waits for its deploy:
@@ -46,7 +48,7 @@ func (s *Store) BoardItems(ctx context.Context) ([]BoardItem, error) {
 	}
 	rows, err := s.r.QueryContext(ctx, `SELECT i.id, i.title, i.priority, i.stage, i.repo, i.pr, i.created_at,
 		COALESCE(l.runner || '/' || l.agent, ''), i.question, i.hold_reason, i.slack_channel, i.slack_ts, i.updated_at,
-		i.depends_on, i.plan_id, i.builder, i.proof, i.awaiting_deploy FROM items i LEFT JOIN leases l ON l.item_id = i.id AND l.ended_at IS NULL
+i.depends_on, i.plan_id, i.builder, i.proof, i.awaiting_deploy, i.feature FROM items i LEFT JOIN leases l ON l.item_id = i.id AND l.ended_at IS NULL
 		ORDER BY i.priority, i.created_at, i.id`)
 	if err != nil {
 		return nil, err
@@ -62,7 +64,7 @@ func (s *Store) BoardItems(ctx context.Context) ([]BoardItem, error) {
 		var created, updated int64
 		var dependsOn, proof string
 		if err := rows.Scan(&b.ID, &b.Title, &b.Priority, &b.Stage, &b.Repo, &b.PR, &created, &b.ClaimedBy,
-			&b.Question, &b.HoldReason, &b.SlackChannel, &b.SlackTS, &updated, &dependsOn, &b.PlanID, &b.Builder, &proof, &b.AwaitingDeploy); err != nil {
+			&b.Question, &b.HoldReason, &b.SlackChannel, &b.SlackTS, &updated, &dependsOn, &b.PlanID, &b.Builder, &proof, &b.AwaitingDeploy, &b.Feature); err != nil {
 			return nil, err
 		}
 		if proof != "" {

@@ -356,7 +356,7 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
 	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of, ci_red_sha, ci_main_fixed,
-	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust, proof, not_before, ci_pending_since, ci_pending_sha`
+	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust, proof, not_before, ci_pending_since, ci_pending_sha, feature`
 
 type scanner interface{ Scan(...any) error }
 
@@ -373,7 +373,7 @@ func scanItem(row scanner) (pipeline.Item, error) {
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
 		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf, &it.CIRedSHA, &it.CIMainFixed,
-		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust, &proof, &notBefore, &ciSince, &it.CIPendingSHA)
+		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust, &proof, &notBefore, &ciSince, &it.CIPendingSHA, &it.Feature)
 	if err != nil {
 		return it, err
 	}
@@ -487,11 +487,11 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
 		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, ci_main_fixed=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=?, trust=?, proof=?,
-		not_before=?, ci_pending_since=?, ci_pending_sha=? WHERE id=?`,
+		not_before=?, ci_pending_since=?, ci_pending_sha=?, feature=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
 		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, it.CIMainFixed, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, trust, proof,
-		toOptNanos(it.NotBefore), toOptNanos(it.CIPendingSince), it.CIPendingSHA, it.ID)
+		toOptNanos(it.NotBefore), toOptNanos(it.CIPendingSince), it.CIPendingSHA, it.Feature, it.ID)
 	return err
 }
 
@@ -504,6 +504,8 @@ type NewItem struct {
 	Source   string `json:"source"`
 	// DependsOn are existing items this one waits for (loop add --after, "/loop add … after #12").
 	DependsOn []int64 `json:"depends_on"`
+	// Feature tags it with a feature (loop add --feature; pipeline.ParseFeature normalizes it).
+	Feature string `json:"feature"`
 }
 
 // AddItem adds an item at triage.
@@ -515,6 +517,9 @@ func (s *Store) AddItem(ctx context.Context, actor string, n NewItem) (pipeline.
 	n.Repo = repo
 	it, err := pipeline.NewItem(n.Title, n.Ask, n.Repo, n.Priority, n.Source, s.clock.Now())
 	if err != nil {
+		return it, err
+	}
+	if it.Feature, err = pipeline.ParseFeature(n.Feature); err != nil {
 		return it, err
 	}
 	it.DependsOn = dedupeIDs(n.DependsOn)
@@ -534,9 +539,9 @@ func (s *Store) insertItem(tx *sql.Tx, actor string, it *pipeline.Item) error {
 		it.DependsOn = []int64{}
 	}
 	res, err := tx.Exec(`INSERT INTO items (title, ask, repo, source, priority, stage, risk, created_at, updated_at, reopen_of,
-		depends_on, plan_id, plan_piece, builder) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		depends_on, plan_id, plan_piece, builder, feature) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), it.Risk, it.CreatedAt.UnixNano(), it.UpdatedAt.UnixNano(), it.ReopenOf,
-		joinIDs(it.DependsOn), it.PlanID, it.PlanPiece, it.Builder)
+		joinIDs(it.DependsOn), it.PlanID, it.PlanPiece, it.Builder, it.Feature)
 	if err != nil {
 		return err
 	}

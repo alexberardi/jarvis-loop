@@ -501,3 +501,35 @@ func TestCLIRebuild(t *testing.T) {
 		t.Fatalf("rebuild in build: %d %q", code, errs)
 	}
 }
+
+func TestCLIFeature(t *testing.T) {
+	c := testLoopd(t)
+	if out := c.ok(userTok, "add", "a", "--repo", "jarvis-server", "--feature", "Smallest Blocks"); !strings.Contains(out, "added #1 a (P3), feature smallest-blocks") {
+		t.Fatalf("add --feature: %q", out)
+	}
+	c.ok(userTok, "add", "b")
+	if out := c.ok(userTok, "show", "1"); !strings.Contains(out, "feature:  smallest-blocks") {
+		t.Fatalf("show: %q", out)
+	}
+	if out := c.ok(userTok, "show", "2"); strings.Contains(out, "feature:") {
+		t.Fatalf("show without a feature: %q", out)
+	}
+	if out := c.ok(userTok, "feature", "#2", "e2e"); out != "#2 is in feature e2e\n" {
+		t.Fatalf("feature: %q", out)
+	}
+	if out := c.ok(userTok, "show", "2"); !strings.Contains(out, "feature:  e2e") || !strings.Contains(out, `from="" to="e2e"`) {
+		t.Fatalf("show after feature: %q", out)
+	}
+	if out := c.ok(userTok, "feature", "2", "none"); out != "#2 is in no feature\n" {
+		t.Fatalf("feature none: %q", out)
+	}
+	if code, _, errs := c.run(userTok, "feature", "2", "--", "--"); code != 1 || !strings.Contains(errs, "no letters or digits") {
+		t.Fatalf("bad feature: %d %q", code, errs)
+	}
+	if code, _, errs := c.run(runnerTok, "feature", "2", "x"); code != 1 || !strings.Contains(errs, "forbidden") {
+		t.Fatalf("runner token: %d %q", code, errs)
+	}
+	if code, _, errs := c.run(userTok, "feature", "2"); code != 2 || !strings.Contains(errs, "usage") {
+		t.Fatalf("no name: %d %q", code, errs)
+	}
+}

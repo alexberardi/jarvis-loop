@@ -243,7 +243,7 @@ func TestPlanItems(t *testing.T) {
 		t.Fatalf("%d items", len(items))
 	}
 	for i, it := range items {
-		if it.Source != SourcePlan || it.Priority != "P2" || it.PlanID != 7 || it.PlanPiece != i+1 || it.Stage != Triage {
+		if it.Source != SourcePlan || it.Priority != "P2" || it.PlanID != 7 || it.PlanPiece != i+1 || it.Stage != Triage || it.Feature != "pantry" {
 			t.Errorf("item %d: %+v", i, it)
 		}
 		if !strings.HasPrefix(it.Ask, "Piece "+string(rune('1'+i))+" of plan P7 (Pantry).") || !strings.HasSuffix(it.Ask, ps[i].Section) {
