@@ -792,17 +792,22 @@ const SetupTimeout = 20 * time.Minute
 // the agent's sandbox, before the agent starts; their output goes to setup.log in the run dir.
 // A failure fails the run (the user sees the log's tail).
 func (r *Runner) setup(ctx context.Context, ru *run) error {
-	if len(ru.repo.Setup) == 0 {
+	return r.runSetup(ctx, ru.repo.Setup, ru.repoDir, ru.dir)
+}
+
+// runSetup runs setup commands in dir, logged in logDir's setup.log.
+func (r *Runner) runSetup(ctx context.Context, cmds []string, dir, logDir string) error {
+	if len(cmds) == 0 {
 		return nil
 	}
-	logf, err := os.OpenFile(filepath.Join(ru.dir, "setup.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logf, err := os.OpenFile(filepath.Join(logDir, "setup.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
 	defer logf.Close()
-	for _, c := range ru.repo.Setup {
+	for _, c := range cmds {
 		fmt.Fprintf(logf, "$ %s\n", c)
-		out, err := r.shell(ctx, ru.repoDir, c, SetupTimeout)
+		out, err := r.shell(ctx, dir, c, SetupTimeout)
 		logf.WriteString(out)
 		if err != nil {
 			fmt.Fprintf(logf, "[failed: %v]\n", err)
