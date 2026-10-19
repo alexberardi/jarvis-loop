@@ -148,6 +148,41 @@ func TestWaitReasonPaced(t *testing.T) {
 	}
 }
 
+// While an overnight regression runs (HoldsClaims) the claim takes only land: every other work
+// item waits on it, after its own blockers; land waits only on what chooseLand checks.
+func TestWaitReasonOvernight(t *testing.T) {
+	ctl := DefaultControl()
+	stopped := DefaultControl()
+	stopped.Stopped = true
+	normal := Pace{Level: PaceNormal, Agents: ctl.ActiveAgents}
+	overnight := []LiveLease{{Stage: RegressionStage, Resources: []string{"voice"}, Holds: true}}
+	cases := []struct {
+		name   string
+		ctl    Control
+		pace   Pace
+		it     Item
+		deps   map[int64]Stage
+		frozen Frozen
+		want   string
+	}{
+		{"a build", ctl, normal, waiting(1, Build, "P1", 0), nil, nil, WaitOvernight},
+		{"triage", ctl, normal, waiting(1, Triage, "P1", 0), nil, nil, WaitOvernight},
+		{"a frozen repo's fix", ctl, normal, Item{ID: 5, Stage: Build, Priority: "P1", Repo: "o/r", CreatedAt: t0}, nil, Frozen{"o/r": 5}, WaitOvernight},
+		{"a build under a pause", ctl, Pace{Level: PacePaused}, waiting(1, Build, "P1", 0), nil, nil, WaitOvernight},
+		{"dependencies come first", ctl, normal, Item{ID: 3, Stage: Build, Priority: "P1", DependsOn: []int64{7}, CreatedAt: t0}, map[int64]Stage{7: Build}, nil, WaitDeps},
+		{"land", ctl, normal, waiting(1, Land, "P2", 0), nil, nil, WaitReady},
+		{"land while stopped", stopped, normal, waiting(1, Land, "P2", 0), nil, nil, WaitReady},
+		{"land in a frozen repo", ctl, normal, Item{ID: 6, Stage: Land, Priority: "P2", Repo: "o/r", CreatedAt: t0}, nil, Frozen{"o/r": 5}, WaitFrozen},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := WaitReason(c.ctl, c.pace, c.it, c.deps, overnight, nil, c.frozen, nil, nil); got != c.want {
+				t.Fatalf("WaitReason = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 func TestRunnerBuilders(t *testing.T) {
 	now := t0
 	runners := []RunnerSeen{
@@ -198,19 +233,24 @@ func TestWaitReasonAgreesWithChoose(t *testing.T) {
 			for _, pace := range paces {
 				for _, builders := range [][]string{nil, {BuilderQwen}} {
 					for _, claude := range []bool{false, true} {
-						lv := slices.Clone(live)
-						for i := range lv {
-							lv[i].Claude = claude
-						}
-						r := req
-						r.Builders = builders
-						for _, it := range items {
-							w, _ := ChooseWorkPaced(ctl, pace, []Item{it}, deps, lv, nil, nil, nil, holds, r, frozen)
-							chosen := w.Item != nil
-							why := WaitReason(ctl, pace, it, deps, lv, nil, frozen, holds, builders)
-							if chosen != (why == WaitReady) {
-								t.Errorf("%d agents, %d held, pace %d/%d, builders %v, claude %v, item %d: ChooseWork %v, WaitReason %q",
-									ctl.ActiveAgents, len(holds), pace.Level, pace.Agents, builders, claude, it.ID, chosen, why)
+						for _, night := range []bool{false, true} {
+							lv := slices.Clone(live)
+							for i := range lv {
+								lv[i].Claude = claude
+							}
+							if night {
+								lv = append(lv, LiveLease{Stage: RegressionStage, Holds: true})
+							}
+							r := req
+							r.Builders = builders
+							for _, it := range items {
+								w, _ := ChooseWorkPaced(ctl, pace, []Item{it}, deps, lv, nil, nil, nil, holds, r, frozen)
+								chosen := w.Item != nil
+								why := WaitReason(ctl, pace, it, deps, lv, nil, frozen, holds, builders)
+								if chosen != (why == WaitReady) {
+									t.Errorf("%d agents, %d held, pace %d/%d, builders %v, claude %v, overnight %v, item %d: ChooseWork %v, WaitReason %q",
+										ctl.ActiveAgents, len(holds), pace.Level, pace.Agents, builders, claude, night, it.ID, chosen, why)
+								}
 							}
 						}
 					}

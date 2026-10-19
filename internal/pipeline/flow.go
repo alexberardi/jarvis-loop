@@ -24,6 +24,8 @@ const (
 	// later run (ChooseWorkPaced): slow takes only P1, size S and triage; paused takes nothing.
 	WaitPaced  = "usage paced"
 	WaitPaused = "usage paused"
+	// WaitOvernight: an overnight regression runs (HoldsClaims) and the claim takes only land.
+	WaitOvernight = "overnight regression"
 	// WaitReady: nothing holds it; it goes to the next runner that asks for its stage.
 	WaitReady = "ready"
 )
@@ -86,7 +88,8 @@ func itemBlocks(c Control, it Item, deps map[int64]Stage, inUse map[string]int, 
 // Land takes no agent slot, so neither busy nor held slots hold it back. A frozen repo's fix waits only for a stop or 0 active agents, claude's pace and the resource limits, as
 // chooseFix takes it. pace is claude's pace as the claim applies it (ChooseWorkPaced) and
 // builders the other builders some runner offers (RunnerBuilders): a build qwen may take is not
-// paced. The pace comes after the free slots (a slot frees sooner) and before the limits.
+// paced. The pace comes after the free slots (a slot frees sooner) and before the limits. While an
+// overnight regression runs (HoldsClaims), everything but land waits on it after its own blockers.
 func WaitReason(c Control, pace Pace, it Item, deps map[int64]Stage, live []LiveLease, unservable []string, frozen Frozen, holds []SlotHold, builders []string) string {
 	switch it.Stage {
 	case NeedsYou:
@@ -109,11 +112,21 @@ func WaitReason(c Control, pace Pace, it Item, deps map[int64]Stage, live []Live
 	if frozen.Blocks(it) {
 		return WaitFrozen
 	}
+	land := it.Stage == Land
+	if HoldsClaims(live) {
+		// As ChooseWorkPaced: only land (chooseLand: its dependencies, frozen repo and limits).
+		if !land {
+			return WaitOvernight
+		}
+		if r := itemBlocks(c, it, deps, inUse, true); r != "" {
+			return r
+		}
+		return WaitReady
+	}
 	fix := frozen.Fixes(it)
 	if r := loopBlocks(c); r != "" {
 		return r
 	}
-	land := it.Stage == Land
 	if !fix && !land && AgentLeases(live) >= c.ActiveAgents {
 		return WaitNoSlot
 	}

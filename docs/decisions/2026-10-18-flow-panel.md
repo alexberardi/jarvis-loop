@@ -77,10 +77,16 @@ panel (`/board/flow`, linked from the board's header) and the API the same numbe
   frees sooner) and before the limits; a frozen repo's fix is paced like any item, and land and
   qwen builds never are. `TestWaitReasonAgreesWithChoose` runs against `ChooseWorkPaced` under the
   normal, slow and paused paces, with and without a qwen runner.
+- **Overnight regression** (#152, `HoldsClaims`): while an overnight regression runs, the claim
+  takes only land. Every other work item waits `overnight regression`, after its own blockers
+  (dependencies, no runner, a frozen repo). Land waits only on what `chooseLand` checks: its
+  dependencies, a frozen repo and its stage's limit. A stop does not hold it, because the claim
+  takes land under the hold even then. `TestWaitReasonAgreesWithChoose` also runs with a running
+  overnight lease.
 
 ## Speed
 
-Migration 0029 adds `leases(ended_at)` and `plan_leases(ended_at)` (and the `runners.slots` and
+Migration 0030 adds `leases(ended_at)` and `plan_leases(ended_at)` (and the `runners.slots` and
 `runners.builders` columns); `events(at)` comes from the
 runway migration (#205, `0023_runway.sql`), so this one does not create it again. Every window query
 starts from one of the three (`TestFlowQueriesUseIndexes` checks the query plans), and the per-item
