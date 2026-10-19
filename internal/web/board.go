@@ -203,7 +203,7 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := p.cfg.Clock.Now()
-	v := boardView(items, plans, now, r.URL.Query().Get("closed") == "1", p.cfg.SlackWorkspace)
+	v := boardViewVerify(items, plans, now, r.URL.Query().Get("closed") == "1", p.cfg.SlackWorkspace, r.URL.Query().Get("verify"))
 	v.Draining = draining
 	v.Freezes = fz
 	v.Working = workingView(work, now, 0)
@@ -395,6 +395,15 @@ type column struct {
 	Note  string
 	Cards []card
 	Plans []planCard
+	// Filters are the Done column's Verified filter: each verification status with its count.
+	Filters []verifyFilter
+}
+
+// verifyFilter is a link of the Done column's Verified filter (docs/decisions/2026-10-18-done-proofs.md).
+type verifyFilter struct {
+	Status string
+	Count  int
+	On     bool
 }
 
 // Count is the column's cards, plans included.
@@ -443,9 +452,11 @@ type boardData struct {
 	Runway     *runwaySection
 	Columns    []column
 	ShowClosed bool
-	Now        time.Time
-	Total      int
-	PlanCount  int
+	// Verify is the Done column's Verified filter ("": none).
+	Verify    string
+	Now       time.Time
+	Total     int
+	PlanCount int
 }
 
 // usageSection is the Usage panel: claude's 5h window and week against their budgets, the pace and
@@ -648,7 +659,16 @@ var lanes = []struct {
 }
 
 func boardView(items []store.BoardItem, plans []store.PlanRow, now time.Time, showClosed bool, slackBase string) boardData {
-	v := boardData{ShowClosed: showClosed, Now: now, PlanCount: len(plans), Working: workingView(nil, now, 0)}
+	return boardViewVerify(items, plans, now, showClosed, slackBase, "")
+}
+
+// boardViewVerify is boardView with the Done column's Verified filter: verify, one of
+// pipeline.VerifyStatuses, shows every done item in that status, however old (anything else: none).
+func boardViewVerify(items []store.BoardItem, plans []store.PlanRow, now time.Time, showClosed bool, slackBase, verify string) boardData {
+	if !slices.Contains(pipeline.VerifyStatuses, verify) {
+		verify = ""
+	}
+	v := boardData{ShowClosed: showClosed, Verify: verify, Now: now, PlanCount: len(plans), Working: workingView(nil, now, 0)}
 	for _, l := range lanes {
 		col := column{Name: l.name, Note: l.note, Cards: []card{}}
 		if l.name == "Planning" {
@@ -663,12 +683,16 @@ func boardView(items []store.BoardItem, plans []store.PlanRow, now time.Time, sh
 			if !slices.Contains(l.displays, it.Display) {
 				continue
 			}
-			switch it.Display {
-			case "done":
+			switch {
+			case verify != "":
+				if it.Display != "done" || it.Verify != verify {
+					continue
+				}
+			case it.Display == "done":
 				if now.Sub(it.UpdatedAt) > DoneWindow {
 					continue
 				}
-			case "closed":
+			case it.Display == "closed":
 				if !showClosed {
 					continue
 				}
@@ -684,6 +708,9 @@ func boardView(items []store.BoardItem, plans []store.PlanRow, now time.Time, sh
 			if it.Display == "qa" {
 				c.Label, c.Reason = pipeline.QAGroup(it.Proof, it.AwaitingDeploy)
 			}
+			if it.Display == "done" && it.Verify != "" {
+				c.Label, c.Reason = "done · "+it.Verify, it.VerifyReason
+			}
 			col.Cards = append(col.Cards, c)
 		}
 		if l.name == "QA" && len(col.Cards) > 0 {
@@ -693,10 +720,34 @@ func boardView(items []store.BoardItem, plans []store.PlanRow, now time.Time, sh
 			})
 			col.Note = ""
 		}
+		if l.name == "Done" {
+			col.Filters = verifyFilters(items, verify)
+			if verify != "" && len(col.Cards) == 0 {
+				col.Note = "No done item is " + verify + "."
+			}
+		}
 		v.Total += len(col.Cards)
 		v.Columns = append(v.Columns, col)
 	}
 	return v
+}
+
+// verifyFilters counts every done item per verification status, in pipeline.VerifyStatuses' order;
+// a status no item has is left out.
+func verifyFilters(items []store.BoardItem, on string) []verifyFilter {
+	n := map[string]int{}
+	for _, it := range items {
+		if it.Display == "done" && it.Verify != "" {
+			n[it.Verify]++
+		}
+	}
+	var out []verifyFilter
+	for _, st := range pipeline.VerifyStatuses {
+		if n[st] > 0 || st == on {
+			out = append(out, verifyFilter{Status: st, Count: n[st], On: st == on})
+		}
+	}
+	return out
 }
 
 func repoName(slug string) string {
