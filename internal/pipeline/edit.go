@@ -3,6 +3,8 @@ package pipeline
 import (
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Event kinds of the user's corrections to an item (loop edit, unlink, resources). Each records
@@ -11,6 +13,7 @@ const (
 	KindEdited    = "edited"
 	KindUnlinked  = "unlinked"
 	KindResources = "resources"
+	KindFeature   = "feature"
 )
 
 // BeforeBuild reports whether the item is still in triage's hands: in triage, or on triage's
@@ -82,4 +85,50 @@ func ApplyResources(it Item, raw string) (Transition, error) {
 	it.Resources = res
 	return Transition{Item: it, From: it.Stage, To: it.Stage, Kind: KindResources,
 		Data: map[string]any{"from": from, "to": res}}, nil
+}
+
+// MaxFeatureLen caps a feature name; a longer plan title is cut there.
+const MaxFeatureLen = 48
+
+// FeatureSlug normalizes a feature name: lowercase, letters and digits, each other run a '-'
+// ("Smallest Blocks" is smallest-blocks). "" when nothing is left.
+func FeatureSlug(name string) string {
+	words := strings.FieldsFunc(strings.ToLower(name), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	s := strings.Join(words, "-")
+	if len(s) > MaxFeatureLen {
+		cut := MaxFeatureLen
+		for !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = strings.TrimRight(s[:cut], "-")
+	}
+	return s
+}
+
+// ParseFeature normalizes a feature name the user gave: "" or "none" is no feature, and a name
+// with no letters or digits is refused.
+func ParseFeature(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "none" {
+		return "", nil
+	}
+	f := FeatureSlug(raw)
+	if f == "" {
+		return "", errf(CodeInvalidField, "feature %q has no letters or digits", raw)
+	}
+	return f, nil
+}
+
+// ApplyFeature tags the item with a feature ("" or none clears it), in any stage: a feature's
+// progress counts its done items too.
+func ApplyFeature(it Item, raw string) (Transition, error) {
+	f, err := ParseFeature(raw)
+	if err != nil {
+		return Transition{}, err
+	}
+	data := map[string]any{"from": it.Feature, "to": f}
+	it.Feature = f
+	return Transition{Item: it, From: it.Stage, To: it.Stage, Kind: KindFeature, Data: data}, nil
 }

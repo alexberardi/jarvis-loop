@@ -27,7 +27,9 @@ import (
 const usage = `usage: loop <command> [args]
 
   add "<title>" [--ask TEXT] [--repo REPO] [--priority P1-P5] [--source SRC] [--after 12,13]
-      [--json | -q]           REPO: owner/name, the bare name or an alias; loopd stores the slug
+      [--feature NAME] [--json | -q]
+                              REPO: owner/name, the bare name or an alias; loopd stores the slug
+                              NAME: the feature it is part of (lowercase, words joined by -)
                               --json prints the item as JSON, -q (--quiet) only its number
   status [--stage STAGE] [--priority P]
   show <id>
@@ -44,6 +46,7 @@ const usage = `usage: loop <command> [args]
   link <id> --after 12,13     make it wait for those items too
   unlink <id> <after id>      stop it waiting for that item
   resources <id> <macos,voice,...|none>   after triage; applies from the next claim
+  feature <id> <name|none>    put it in that feature, or in none
   rebuild <id> "<notes>" | --notes TEXT   send a held or needs_you item back to build
   agents [<0-6>]
   stop | resume
@@ -213,7 +216,7 @@ type command struct {
 }
 
 var commands = map[string]command{
-	"add":       {1, 1, []string{"ask", "repo", "priority", "source", "after", "json", "quiet"}, cmdAdd},
+	"add":       {1, 1, []string{"ask", "repo", "priority", "source", "after", "feature", "json", "quiet"}, cmdAdd},
 	"status":    {0, 0, []string{"stage", "priority"}, cmdStatus},
 	"show":      {1, 1, nil, cmdShow},
 	"answer":    {2, 2, nil, cmdAnswer},
@@ -229,6 +232,7 @@ var commands = map[string]command{
 	"link":      {1, 1, []string{"after"}, cmdLink},
 	"unlink":    {2, 2, nil, cmdUnlink},
 	"resources": {2, 2, nil, cmdResources},
+	"feature":   {2, 2, nil, cmdFeature},
 	"rebuild":   {1, 2, []string{"notes"}, cmdRebuild},
 	"agents":    {0, 1, nil, cmdAgents},
 	"usage":     {0, 0, nil, cmdUsage},
@@ -321,6 +325,7 @@ type item struct {
 	NeedsQA     bool      `json:"needs_qa"`
 	ReopenOf    int64     `json:"reopen_of"`
 	DependsOn   []int64   `json:"depends_on"`
+	Feature     string    `json:"feature"`
 	CreatedAt   time.Time `json:"created_at"`
 	Approval    *struct {
 		By      string    `json:"by"`
@@ -392,7 +397,7 @@ func cmdAdd(c *client, pos []string, f map[string][]string) error {
 	var raw json.RawMessage
 	_, err = c.json("POST", "/items", map[string]any{
 		"title": pos[0], "ask": last(f, "ask"), "repo": last(f, "repo"), "priority": last(f, "priority"), "source": last(f, "source"),
-		"depends_on": after,
+		"depends_on": after, "feature": last(f, "feature"),
 	}, &raw)
 	if err != nil {
 		return err
@@ -412,6 +417,9 @@ func cmdAdd(c *client, pos []string, f map[string][]string) error {
 	line := fmt.Sprintf("added #%d %s (%s)", it.ID, it.Title, it.Priority)
 	if len(it.DependsOn) > 0 {
 		line += ", after " + ids(it.DependsOn)
+	}
+	if it.Feature != "" {
+		line += ", feature " + it.Feature
 	}
 	fmt.Fprintln(c.out, line)
 	return nil
@@ -547,6 +555,9 @@ func cmdShow(c *client, pos []string, _ map[string][]string) error {
 		repo = "not set"
 	}
 	fmt.Fprintf(w, "priority: %s   source: %s   repo: %s\n", it.Priority, it.Source, repo)
+	if it.Feature != "" {
+		fmt.Fprintf(w, "feature:  %s\n", it.Feature)
+	}
 	if it.Ask != "" {
 		fmt.Fprintf(w, "ask:      %s\n", it.Ask)
 	}
@@ -861,6 +872,23 @@ func cmdResources(c *client, pos []string, _ map[string][]string) error {
 		fmt.Fprintf(c.out, "#%d needs no resources\n", it.ID)
 	} else {
 		fmt.Fprintf(c.out, "#%d needs %s\n", it.ID, strings.Join(it.Resources, ", "))
+	}
+	return nil
+}
+
+func cmdFeature(c *client, pos []string, _ map[string][]string) error {
+	id, err := itemID(pos[0])
+	if err != nil {
+		return err
+	}
+	var it item
+	if _, err := c.json("POST", "/items/"+id+"/feature", map[string]any{"feature": pos[1]}, &it); err != nil {
+		return err
+	}
+	if it.Feature == "" {
+		fmt.Fprintf(c.out, "#%d is in no feature\n", it.ID)
+	} else {
+		fmt.Fprintf(c.out, "#%d is in feature %s\n", it.ID, it.Feature)
 	}
 	return nil
 }

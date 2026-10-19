@@ -148,7 +148,6 @@ func TestAddWorktreeContinuesARecordedRebase(t *testing.T) {
 	// Not recorded (no Trust for the rebased head, or the remote is not the PR's head): refused.
 	for name, rec := range map[string]Recorded{
 		"nothing recorded":    {},
-		"rebase not recorded": {Prev: prev, Heads: []string{prev}},
 		"remote not the PR's": {Prev: rebased, Heads: []string{rebased}},
 		"no previous head":    {Heads: []string{rebased}},
 	} {
@@ -183,6 +182,114 @@ func TestAddWorktreeContinuesARecordedRebase(t *testing.T) {
 	}
 	if r.g.Rewrites(r.ctx, r.mirror, "loop/1-x", prev) {
 		t.Fatal("still a rewrite after the push")
+	}
+}
+
+// staleMirrorRig: the mirror pushed loop/1-x (old), then "runner B" rebased it onto a newer main
+// from its own clone and force-pushed it (recorded, the head loopd has), so this mirror's branch is
+// stale (#283).
+func staleMirrorRig(t *testing.T) (r gitRig, wt, old, recorded string) {
+	r = newGitRig(t)
+	wt = filepath.Join(t.TempDir(), "wt")
+	if _, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{}); err != nil {
+		t.Fatal(err)
+	}
+	old = r.commitIn(wt, "b.txt")
+	if err := r.g.PushBranch(r.ctx, r.mirror, "loop/1-x"); err != nil {
+		t.Fatal(err)
+	}
+	r.g.RemoveWorktree(r.ctx, r.mirror, wt)
+	r.commitIn(r.seed, "main2.txt")
+	gitT(t, r.seed, "push", "-q", r.remote, "main")
+	other := filepath.Join(t.TempDir(), "other")
+	gitT(t, "", "clone", "-q", r.remote, other)
+	gitT(t, other, "checkout", "-q", "loop/1-x")
+	gitT(t, other, "-c", "user.name=b", "-c", "user.email=b@x", "rebase", "-q", "origin/main")
+	recorded = gitT(t, other, "rev-parse", "HEAD")
+	gitT(t, other, "push", "-q", "-f", "origin", "loop/1-x")
+	if err := r.g.EnsureMirror(r.ctx, r.mirror, RepoConfig{Remote: r.remote, Base: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	return r, wt, old, recorded
+}
+
+func TestAddWorktreeResetsAStaleMirrorToTheRecordedHead(t *testing.T) {
+	r, wt, old, recorded := staleMirrorRig(t)
+	// The remote is not the head loopd recorded (someone else pushed), or nothing is recorded:
+	// refused as before, nothing reset.
+	for name, rec := range map[string]Recorded{
+		"nothing recorded":       {},
+		"the mirror's is the PR": {Prev: old},
+		"another head":           {Prev: strings.Repeat("a", 40)},
+	} {
+		if _, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", rec); err == nil || !strings.Contains(err.Error(), "diverged") {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if h := gitT(t, r.mirror, "rev-parse", "refs/heads/loop/1-x"); h != old {
+			t.Fatalf("%s: the mirror's branch moved to %s", name, h)
+		}
+	}
+	// The remote is the recorded head: it is the truth. The mirror's branch is kept under
+	// refs/backup/ and reset to the remote's.
+	if n, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{Prev: recorded}); err != nil || n != 1 {
+		t.Fatalf("stale mirror: %d %v", n, err)
+	}
+	if h := gitT(t, wt, "rev-parse", "HEAD"); h != recorded {
+		t.Fatalf("HEAD %s, want the remote's %s", h, recorded)
+	}
+	if h := gitT(t, r.mirror, "rev-parse", "refs/heads/loop/1-x"); h != recorded {
+		t.Fatalf("the mirror's branch is %s, want %s", h, recorded)
+	}
+	backup := BackupRef("loop/1-x", old)
+	if backup != "refs/backup/1-"+old {
+		t.Fatalf("backup ref %q", backup)
+	}
+	if h := gitT(t, r.mirror, "rev-parse", backup); h != old {
+		t.Fatalf("backup %s, want %s", h, old)
+	}
+	if r.g.Rewrites(r.ctx, r.mirror, "loop/1-x", recorded) {
+		t.Fatal("continuing the remote's head is not a rewrite")
+	}
+	// The next refresh keeps the backup.
+	r.g.RemoveWorktree(r.ctx, r.mirror, wt)
+	if err := r.g.EnsureMirror(r.ctx, r.mirror, RepoConfig{Remote: r.remote, Base: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if h := gitT(t, r.mirror, "rev-parse", backup); h != old {
+		t.Fatalf("backup after a refresh %s, want %s", h, old)
+	}
+}
+
+func TestAddWorktreeContinuesAnUnpushedEquivalentRebase(t *testing.T) {
+	// This runner rebased the PR's head onto a newer main and its push failed (#241, #258): the
+	// mirror's commits are the remote's patches on a newer base, and the remote is the recorded
+	// head. The run continues the rebase; publish pushes it with the lease.
+	r, wt, prev, rebased := rebaseRig(t)
+	if n, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{Prev: prev}); err != nil || n != 1 ||
+		gitT(t, wt, "rev-parse", "HEAD") != rebased {
+		t.Fatalf("equivalent rebase: %d %v", n, err)
+	}
+	if !r.g.Rewrites(r.ctx, r.mirror, "loop/1-x", prev) {
+		t.Fatal("the rebase over the PR's head is not a rewrite")
+	}
+	if gitT(t, r.mirror, "for-each-ref", "refs/backup/") != "" {
+		t.Fatal("a backup for a branch that was not reset")
+	}
+}
+
+func TestAddWorktreeResetsADifferentLocalRewrite(t *testing.T) {
+	// The mirror's rewrite of the PR's head has other patches (here, a commit more): not the
+	// recorded head's, so the remote wins and the mirror's is kept as a backup.
+	r, wt, prev, rebased := rebaseRig(t)
+	gitT(t, r.mirror, "worktree", "add", "-q", wt, "loop/1-x")
+	extra := r.commitIn(wt, "c.txt")
+	r.g.RemoveWorktree(r.ctx, r.mirror, wt)
+	if n, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{Prev: prev}); err != nil || n != 1 ||
+		gitT(t, wt, "rev-parse", "HEAD") != prev {
+		t.Fatalf("different rewrite: %d %v", n, err)
+	}
+	if h := gitT(t, r.mirror, "rev-parse", BackupRef("loop/1-x", extra)); h != extra {
+		t.Fatalf("backup %s, want %s (over %s)", h, extra, rebased)
 	}
 }
 

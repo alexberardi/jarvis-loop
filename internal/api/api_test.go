@@ -1139,3 +1139,27 @@ func TestUnfreezeIsTheUsers(t *testing.T) {
 	e.refused(orchTok, "POST", "/unfreeze", map[string]string{"repo": "o/r"}, 403, CodeForbidden)
 	e.refused(userTok, "POST", "/unfreeze", map[string]string{"repo": "o/r"}, 409, store.CodeNotFrozen)
 }
+
+func TestFeature(t *testing.T) {
+	e := newEnv(t)
+	var it struct {
+		ID      int64
+		Feature string
+	}
+	e.do(userTok, "POST", "/items", map[string]any{"title": "a", "repo": "jarvis-server", "feature": "Smallest Blocks"}, 201, &it)
+	if it.Feature != "smallest-blocks" {
+		t.Fatalf("filed with feature %q", it.Feature)
+	}
+	e.refused(userTok, "POST", "/items", map[string]any{"title": "b", "feature": "!!"}, 400, "invalid_field")
+	path := fmt.Sprintf("/items/%d/feature", it.ID)
+	e.do(userTok, "POST", path, map[string]any{"feature": "e2e"}, 200, &it)
+	if it.Feature != "e2e" {
+		t.Fatalf("feature %q", it.Feature)
+	}
+	if d := e.get(it.ID); d.Events[len(d.Events)-1].Kind != "feature" {
+		t.Fatalf("no feature event: %+v", d.Events)
+	}
+	e.refused(userTok, "POST", path, map[string]any{"feature": "--"}, 400, "invalid_field")
+	e.refused(runnerTok, "POST", path, map[string]any{"feature": "x"}, 403, "forbidden")
+	e.refused(userTok, "POST", "/items/42/feature", map[string]any{"feature": "x"}, 404, "not_found")
+}

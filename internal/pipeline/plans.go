@@ -556,7 +556,7 @@ func ParseBlueprint(md string) ([]Piece, error) {
 // PlanItems are the items a split plan files, one per piece, in piece order: source plan, the
 // plan's priority, linked to the plan and piece, the piece's section as the ask's tail. A piece
 // without a repo takes the plan's, when it has exactly one; one without a builder gets claude.
-// Dependencies are piece numbers here
+// Each carries the plan's title as its feature (FeatureSlug). Dependencies are piece numbers here
 // (Piece.DependsOn); the store maps them to the new items' ids and adds the existing items
 // (Piece.After).
 func PlanItems(p Plan, pieces []Piece, configured []string, now time.Time) ([]Item, error) {
@@ -575,6 +575,7 @@ func PlanItems(p Plan, pieces []Piece, configured []string, now time.Time) ([]It
 			return nil, err
 		}
 		it.Source, it.PlanID, it.PlanPiece, it.Builder = SourcePlan, p.ID, pc.N, pc.Builder
+		it.Feature = FeatureSlug(p.Title)
 		if it.Builder == "" {
 			it.Builder = BuilderClaude
 		}

@@ -296,6 +296,9 @@ func (s *Store) OrchAdd(ctx context.Context, actor string, n NewItem, signature,
 		if it, err = pipeline.NewItem(n.Title, n.Ask, n.Repo, n.Priority, n.Source, s.clock.Now()); err != nil {
 			return err
 		}
+		if it.Feature, err = pipeline.ParseFeature(n.Feature); err != nil {
+			return err
+		}
 		it.DependsOn = dedupeIDs(n.DependsOn)
 		if err := s.insertItem(tx, actor, &it); err != nil {
 			return err
