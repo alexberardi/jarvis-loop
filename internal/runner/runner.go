@@ -750,8 +750,15 @@ func (r *Runner) prepareBuild(ctx context.Context, ru *run, info *RunInfo) error
 	unlock := r.lockMirror(ru.mirror)
 	err := r.Git.EnsureMirror(ctx, ru.mirror, ru.repo)
 	ahead := 0
+	stale := ""
 	if err == nil {
+		stale = r.Git.revParse(ctx, ru.mirror, "refs/heads/"+ru.branch)
 		ahead, err = r.Git.AddWorktree(ctx, ru.mirror, ru.wt, ru.branch, ru.repo.Base, recorded(ru.item))
+	}
+	if err == nil && stale != "" && r.Git.hasRef(ctx, ru.mirror, BackupRef(ru.branch, stale)) &&
+		r.Git.revParse(ctx, ru.mirror, "refs/heads/"+ru.branch) != stale {
+		log.Info("reset the mirror's branch to the PR's recorded head", "branch", ru.branch, "old", stale,
+			"new", ru.item.HeadSHA, "backup", BackupRef(ru.branch, stale))
 	}
 	unlock()
 	if err != nil {

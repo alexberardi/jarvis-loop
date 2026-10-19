@@ -11,7 +11,7 @@ enforced by a test (`internal/pipeline/doneproof_test.go`, `internal/store/donep
 
 ## A verification status, separate from the stage
 
-- **`items.verify`** (migration `0032_done_proofs.sql`, `pipeline.Item.Verify`, with
+- **`items.verify`** (migration `0033_done_proofs.sql`, `pipeline.Item.Verify`, with
   `verify_reason`): `unproven`, `proving`, `verified`, `failed`, `needs-you`, `waiting`; `''` on an
   item that is not done. **A done item stays done**; only its status moves.
 - **Set at the transition into done:** merged straight to done → `unproven`, or the status its

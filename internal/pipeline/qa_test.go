@@ -154,9 +154,10 @@ func TestApplyReopen(t *testing.T) {
 		t.Fatalf("reopen: %+v", tr)
 	}
 
+	it.Feature = "pantry"
 	n, err := NewReopen(it, " the button is still tiny ", t0)
 	wantCode(t, err, "")
-	if n.ReopenOf != it.ID || n.Priority != "P2" || n.Stage != Triage || n.Repo != it.Repo || n.Source != "user" {
+	if n.ReopenOf != it.ID || n.Feature != "pantry" || n.Priority != "P2" || n.Stage != Triage || n.Repo != it.Repo || n.Source != "user" {
 		t.Fatalf("reopened item: %+v", n)
 	}
 	if n.Ask != "the button is still tiny" || !strings.Contains(n.Title, "#7") || !strings.Contains(n.Title, "the button is still tiny") {

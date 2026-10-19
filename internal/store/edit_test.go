@@ -109,3 +109,48 @@ func TestSetResourcesClearsUnservable(t *testing.T) {
 		t.Fatalf("devbox cannot claim it now: %+v", c)
 	}
 }
+
+func TestFeature(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	// Set in triage, it survives every stage move (each writes the whole item).
+	built := toMerged(t, s, runner, func(it pipeline.Item) {
+		if _, err := s.SetFeature(ctx, user, it.ID, "e2e"); err != nil {
+			t.Fatal(err)
+		}
+	}, nil)
+	if g, _ := s.GetItem(ctx, built.ID); g.Item.Stage != pipeline.Done || g.Item.Feature != "e2e" {
+		t.Fatalf("lost on the way to done: %+v", g.Item)
+	}
+
+	it, err := s.AddItem(ctx, user, NewItem{Title: "a", Repo: "jarvis-server", Feature: " Smallest Blocks"})
+	if err != nil || it.Feature != "smallest-blocks" {
+		t.Fatalf("%+v %v", it, err)
+	}
+	if g, _ := s.GetItem(ctx, it.ID); g.Item.Feature != "smallest-blocks" {
+		t.Fatalf("not stored: %+v", g.Item)
+	}
+	if _, err := s.AddItem(ctx, user, NewItem{Title: "b", Repo: "jarvis-server", Feature: "!!"}); code(err) != pipeline.CodeInvalidField {
+		t.Fatalf("bad feature: %v", err)
+	}
+
+	got, err := s.SetFeature(ctx, user, it.ID, "e2e")
+	if err != nil || got.Feature != "e2e" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if e := newest(t, s, it.ID); e.Kind != pipeline.KindFeature || e.Actor != user || e.Data["from"] != "smallest-blocks" || e.Data["to"] != "e2e" {
+		t.Fatalf("event %+v", e)
+	}
+	if b := boardItem(t, s, it.ID); b.Feature != "e2e" {
+		t.Fatalf("board feature %q", b.Feature)
+	}
+	if got, err = s.SetFeature(ctx, user, it.ID, ""); err != nil || got.Feature != "" {
+		t.Fatalf("clear: %+v %v", got, err)
+	}
+	if _, err := s.SetFeature(ctx, user, it.ID, "--"); code(err) != pipeline.CodeInvalidField {
+		t.Fatalf("bad feature: %v", err)
+	}
+	if e := newest(t, s, it.ID); e.Kind != "refused" || e.Data["action"] != "feature" {
+		t.Fatalf("the refusal is not recorded: %+v", e)
+	}
+}

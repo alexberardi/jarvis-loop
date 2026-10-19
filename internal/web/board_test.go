@@ -231,7 +231,7 @@ func goldenItems() []store.BoardItem {
 		{BoardRow: row(4, "Retry the TTS call", "P2", "build", "ready", "alexberardi/jarvis-server", 0, "", 26*time.Hour),
 			WaitingOn: []int64{12}, Waits: []pipeline.WaitChain{{Path: []int64{12, 5}, Root: "in review"}}, UpdatedAt: now},
 		{BoardRow: row(12, "Show the plan link", "P2", "triage", "intake", "alexberardi/jarvis-loop", 0, "", time.Hour),
-			WaitingOn: []int64{5, 8}, Waits: []pipeline.WaitChain{{Path: []int64{5}, Root: "in review"}, {Path: []int64{8}, Root: "held for approval"}}, PlanID: 2, Builder: "qwen", UpdatedAt: now},
+			WaitingOn: []int64{5, 8}, Waits: []pipeline.WaitChain{{Path: []int64{5}, Root: "in review"}, {Path: []int64{8}, Root: "held for approval"}}, PlanID: 2, Builder: "qwen", Feature: "pantry", UpdatedAt: now},
 		{BoardRow: row(13, "Mac app progress window", "P4", "build", "ready", "alexberardi/jarvis-server", 0, "", 6*time.Hour),
 			Unservable: []string{"macos"}, UpdatedAt: now},
 		{BoardRow: row(14, "Pair screen copy", "P2", "build", "build", "alexberardi/jarvis-server", 0, "devbox/builder-1", 3*time.Hour),
