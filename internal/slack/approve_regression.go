@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
 // Who may start a regression run and file its failures (regression.go). In an approve*.go file for
@@ -23,6 +26,31 @@ func (b *Bot) regressionMention(ctx context.Context, m slackEvent, suite string)
 		return
 	}
 	b.ephemeral(ctx, m.Channel, m.User, fmt.Sprintf("Regression R%d (%s) queued: it takes the next free agent slot, and its report comes to #loop when it ends.", r.ID, r.Suite))
+}
+
+// regressionTonight handles `@jarvis-loop regression tonight [off]`: the approver's schedules the
+// overnight run (or cancels the scheduled one); its report comes to #loop in the morning.
+func (b *Bot) regressionTonight(ctx context.Context, m slackEvent, on bool) {
+	if !IsApprover(m.User) {
+		b.refuse(ctx, m.Channel, m.User, 0, "regression_schedule")
+		return
+	}
+	if !on {
+		r, err := b.c.Store.CancelScheduledRegression(ctx, actorPrefix+m.User, "slack")
+		if err != nil {
+			b.ephemeral(ctx, m.Channel, m.User, "Nothing cancelled: "+Escape(errMessage(err)))
+			return
+		}
+		b.ephemeral(ctx, m.Channel, m.User, fmt.Sprintf("Regression R%d (overnight) cancelled.", r.ID))
+		return
+	}
+	r, err := b.c.Store.ScheduleRegression(ctx, actorPrefix+m.User, "slack")
+	if err != nil {
+		b.ephemeral(ctx, m.Channel, m.User, "No overnight regression scheduled: "+Escape(errMessage(err)))
+		return
+	}
+	b.ephemeral(ctx, m.Channel, m.User, fmt.Sprintf("Regression R%d (overnight) scheduled: it starts at %s or once the queue has been quiet for %d minutes, whichever is later, and holds new work while it runs; its report comes to #loop in the morning.",
+		r.ID, b.clockText(*r.NotBefore), int(pipeline.OvernightQuiet/time.Minute)))
 }
 
 // onRegressionFile is the 'File it' button ("R3:2": run 3's test 2): the approver's files the

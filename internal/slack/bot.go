@@ -162,12 +162,13 @@ func (b *Bot) Drain(ctx context.Context) {
 	}
 }
 
-// Tick applies reply approvals whose window has passed and posts the digest and the standup when
-// one is due.
+// Tick applies reply approvals whose window has passed and posts the digest, the standup and an
+// overnight regression's morning report when one is due.
 func (b *Bot) Tick(ctx context.Context) {
 	b.applyDue(ctx)
 	b.digest(ctx)
 	b.standup(ctx)
+	b.morningReports(ctx)
 }
 
 // ---- Slack calls with bounded retries ----
@@ -1221,6 +1222,10 @@ func (b *Bot) onMention(ctx context.Context, m slackEvent) {
 		}
 	}
 	text := incoming(m.Text)
+	if on, ok := pipeline.ParseRegressionTonight(text); ok {
+		b.regressionTonight(ctx, m, on)
+		return
+	}
 	if suite, ok := pipeline.ParseRegression(text); ok {
 		b.regressionMention(ctx, m, suite)
 		return
