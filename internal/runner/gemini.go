@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -160,34 +161,6 @@ var quotaRe = regexp.MustCompile(`(?i)quota|rate[ _-]?limit|resource[ _]exhauste
 // a string or an object). An error means the output is not usable; its reason is AgyBadOutput,
 // AgyError or AgyQuota.
 func ParseAgy(stdout []byte) (agyResult, string) {
-	var o struct {
-		Response json.RawMessage `json:"response"`
-		Status   string          `json:"status"`
-		Usage    json.RawMessage `json:"usage"`
-	}
-	if err := json.Unmarshal(bytes.TrimSpace(stdout), &o); err != nil {
-		return agyResult{}, AgyBadOutput
-	}
-	res := agyResult{}
-	if len(o.Usage) > 0 && string(o.Usage) != "null" {
-		res.Usage = clip(string(o.Usage), 300)
-	}
-	st := strings.ToLower(o.Status)
-	failed := strings.Contains(st, "error") || strings.Contains(st, "fail")
-	if failed && quotaRe.Match(stdout) {
-		return res, AgyQuota
-	}
-	resp := o.Response
-	var s string
-	if json.Unmarshal(resp, &s) == nil {
-		s = strings.TrimSpace(s)
-		// A model may wrap its JSON in a code fence.
-		if strings.HasPrefix(s, "```") {
-			s = strings.TrimPrefix(strings.TrimPrefix(s, "```json"), "```")
-			s = strings.TrimSuffix(strings.TrimSpace(s), "```")
-		}
-		resp = json.RawMessage(s)
-	}
 	var doc struct {
 		Findings []struct {
 			Severity string          `json:"severity"`
@@ -197,20 +170,15 @@ func ParseAgy(stdout []byte) (agyResult, string) {
 			Evidence string          `json:"evidence"`
 		} `json:"findings"`
 	}
-	if err := json.Unmarshal(resp, &doc); err != nil || doc.Findings == nil {
-		if failed {
-			return res, AgyError
-		}
-		return res, AgyBadOutput
+	usage, why := agyResponse(stdout, &doc, func() bool { return doc.Findings != nil })
+	res := agyResult{Usage: usage}
+	if why != "" {
+		return res, why
 	}
 	for _, f := range doc.Findings {
 		sev := strings.ToLower(strings.TrimSpace(f.Severity))
-		ok := false
-		for _, s := range Severities {
-			ok = ok || s == sev
-		}
 		claim := strings.TrimSpace(f.Claim)
-		if !ok || claim == "" || len(res.Findings) == MaxFindings {
+		if !slices.Contains(Severities, sev) || claim == "" || len(res.Findings) == MaxFindings {
 			res.Dropped++
 			continue
 		}
@@ -227,6 +195,47 @@ func ParseAgy(stdout []byte) (agyResult, string) {
 			Line: line, Claim: clip(strings.TrimSpace(claim), 1000), Evidence: clip(strings.TrimSpace(f.Evidence), 1500)})
 	}
 	return res, ""
+}
+
+// agyResponse reads agy's JSON output into doc (the schema's JSON, given as a string or an
+// object) and returns agy's usage object (clipped) and "" when doc is filled (ok says so), else
+// why not: AgyBadOutput, AgyError or AgyQuota.
+func agyResponse(stdout []byte, doc any, ok func() bool) (string, string) {
+	var o struct {
+		Response json.RawMessage `json:"response"`
+		Status   string          `json:"status"`
+		Usage    json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(stdout), &o); err != nil {
+		return "", AgyBadOutput
+	}
+	usage := ""
+	if len(o.Usage) > 0 && string(o.Usage) != "null" {
+		usage = clip(string(o.Usage), 300)
+	}
+	st := strings.ToLower(o.Status)
+	failed := strings.Contains(st, "error") || strings.Contains(st, "fail")
+	if failed && quotaRe.Match(stdout) {
+		return usage, AgyQuota
+	}
+	resp := o.Response
+	var s string
+	if json.Unmarshal(resp, &s) == nil {
+		s = strings.TrimSpace(s)
+		// A model may wrap its JSON in a code fence.
+		if strings.HasPrefix(s, "```") {
+			s = strings.TrimPrefix(strings.TrimPrefix(s, "```json"), "```")
+			s = strings.TrimSuffix(strings.TrimSpace(s), "```")
+		}
+		resp = json.RawMessage(s)
+	}
+	if err := json.Unmarshal(resp, doc); err != nil || !ok() {
+		if failed {
+			return usage, AgyError
+		}
+		return usage, AgyBadOutput
+	}
+	return usage, ""
 }
 
 // agyFailure names why a call that exited non-zero (or printed nothing usable) failed, from its
@@ -272,35 +281,63 @@ func (r *Runner) agyCommand(ru *run, args []string) (*exec.Cmd, error) {
 	})
 }
 
-// runAgy runs one agy call with the prompt, for at most limit, heartbeating the lease meanwhile.
-// Its stdout and stderr stay in the run dir (gemini-stdout.json, gemini-stderr.log), never
-// uploaded: they can hold anything agy printed.
+// runAgy runs one agy call for the review's findings (FindingsSchema), for at most limit.
 func (r *Runner) runAgy(ctx context.Context, ru *run, prompt string, limit time.Duration) agyResult {
+	call := r.agyCall(ctx, ru, agyCallSpec{Prompt: prompt, Schema: FindingsSchema, Name: "gemini", Status: "second opinion: Gemini reviewing"}, limit)
+	if call.Reason != "" {
+		return agyResult{Reason: call.Reason, Seconds: call.Seconds}
+	}
+	res, why := ParseAgy(call.Stdout)
+	if why == AgyBadOutput && quotaRe.Match(call.Stderr) {
+		why = AgyQuota
+	}
+	res.Reason, res.Seconds = why, call.Seconds
+	return res
+}
+
+// agyCallSpec is one agy call: its prompt, the JSON schema of its answer, the name of its files
+// in the run dir (<name>-schema.json, <name>-stdout.json, <name>-stderr.log) and the lease's
+// status meanwhile.
+type agyCallSpec struct {
+	Prompt, Schema, Name, Status string
+}
+
+// agyOutput is how one agy call ended: Reason "" when it exited 0 (its stdout still to parse),
+// else one of the Agy* reasons.
+type agyOutput struct {
+	Reason         string
+	Stdout, Stderr []byte
+	Seconds        int
+}
+
+// agyCall runs one agy call, for at most limit, heartbeating the lease meanwhile. Its stdout and
+// stderr stay in the run dir, never uploaded: they can hold anything agy printed.
+func (r *Runner) agyCall(ctx context.Context, ru *run, spec agyCallSpec, limit time.Duration) agyOutput {
 	started := r.Clock.Now()
-	done := func(res agyResult) agyResult {
+	done := func(res agyOutput) agyOutput {
 		res.Seconds = int(r.Clock.Now().Sub(started).Seconds())
 		return res
 	}
-	schema := filepath.Join(ru.dir, "gemini-schema.json")
-	if err := os.WriteFile(schema, []byte(FindingsSchema), 0o644); err != nil {
-		return done(agyResult{Reason: AgyNoStart})
+	schema := filepath.Join(ru.dir, spec.Name+"-schema.json")
+	if err := os.WriteFile(schema, []byte(spec.Schema), 0o644); err != nil {
+		return done(agyOutput{Reason: AgyNoStart})
 	}
-	cmd, err := r.agyCommand(ru, AgyArgs(prompt, ru.cfg.Gemini.Model, schema))
+	cmd, err := r.agyCommand(ru, AgyArgs(spec.Prompt, ru.cfg.Gemini.Model, schema))
 	if err != nil {
-		r.Log.Warn("gemini: agy cannot start", "item", ru.item.ID, "err", err)
-		return done(agyResult{Reason: AgyNoStart})
+		r.Log.Warn("gemini: agy cannot start", "run", ru.dir, "err", err)
+		return done(agyOutput{Reason: AgyNoStart})
 	}
 	var stdout bytes.Buffer
-	stderr, err := os.OpenFile(filepath.Join(ru.dir, "gemini-stderr.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	stderr, err := os.OpenFile(filepath.Join(ru.dir, spec.Name+"-stderr.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
-		return done(agyResult{Reason: AgyNoStart})
+		return done(agyOutput{Reason: AgyNoStart})
 	}
 	defer stderr.Close()
 	cmd.Stdout, cmd.Stderr = &limitedBuffer{b: &stdout, max: 4 << 20}, stderr
 	ownGroup(cmd)
 	if err := cmd.Start(); err != nil {
-		r.Log.Warn("gemini: agy cannot start", "item", ru.item.ID, "err", err)
-		return done(agyResult{Reason: AgyNoStart})
+		r.Log.Warn("gemini: agy cannot start", "run", ru.dir, "err", err)
+		return done(agyOutput{Reason: AgyNoStart})
 	}
 	pid := cmd.Process.Pid
 	exited := make(chan error, 1)
@@ -320,26 +357,21 @@ func (r *Runner) runAgy(ctx context.Context, ru *run, prompt string, limit time.
 		select {
 		case err := <-exited:
 			_ = signalGroup(pid, syscall.SIGKILL)
-			os.WriteFile(filepath.Join(ru.dir, "gemini-stdout.json"), stdout.Bytes(), 0o600)
+			os.WriteFile(filepath.Join(ru.dir, spec.Name+"-stdout.json"), stdout.Bytes(), 0o600)
 			if reason != "" {
-				return done(agyResult{Reason: reason})
+				return done(agyOutput{Reason: reason})
 			}
 			errOut, _ := os.ReadFile(stderr.Name())
 			var ee *exec.ExitError
 			if err != nil && !errors.As(err, &ee) {
-				return done(agyResult{Reason: AgyError})
+				return done(agyOutput{Reason: AgyError})
 			}
 			if err != nil {
-				return done(agyResult{Reason: agyFailure(stdout.Bytes(), errOut)})
+				return done(agyOutput{Reason: agyFailure(stdout.Bytes(), errOut)})
 			}
-			res, why := ParseAgy(stdout.Bytes())
-			if why == AgyBadOutput && quotaRe.Match(errOut) {
-				why = AgyQuota
-			}
-			res.Reason = why
-			return done(res)
+			return done(agyOutput{Stdout: stdout.Bytes(), Stderr: errOut})
 		case <-hb.C():
-			stopped, err := r.Client.Heartbeat(ctx, ru.lease, "second opinion: Gemini reviewing", nil)
+			stopped, err := r.Client.Heartbeat(ctx, ru.lease, spec.Status, nil)
 			var ae *APIError
 			if err == nil && stopped || errors.As(err, &ae) && ae.Status >= 400 && ae.Status < 500 {
 				stop(AgyStopped)
