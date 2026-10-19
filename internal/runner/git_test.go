@@ -47,7 +47,7 @@ func (r gitRig) commitIn(wt, file string) string {
 func TestPushBranch(t *testing.T) {
 	r := newGitRig(t)
 	wt := filepath.Join(t.TempDir(), "wt")
-	if _, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main"); err != nil {
+	if _, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{}); err != nil {
 		t.Fatal(err)
 	}
 	head := r.commitIn(wt, "b.txt")
@@ -86,13 +86,13 @@ func TestAddWorktreeResumes(t *testing.T) {
 	r := newGitRig(t)
 	wt := filepath.Join(t.TempDir(), "wt")
 	// Fresh: from the base, nothing ahead.
-	if n, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main"); err != nil || n != 0 {
+	if n, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{}); err != nil || n != 0 {
 		t.Fatalf("fresh: %d %v", n, err)
 	}
 	// An earlier run committed but never pushed (a question): the mirror's branch is continued.
 	first := r.commitIn(wt, "b.txt")
 	r.g.RemoveWorktree(r.ctx, r.mirror, wt)
-	if n, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main"); err != nil || n != 1 || gitT(t, wt, "rev-parse", "HEAD") != first {
+	if n, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{}); err != nil || n != 1 || gitT(t, wt, "rev-parse", "HEAD") != first {
 		t.Fatalf("local resume: %d %v", n, err)
 	}
 	// Pushed, then the remote moved on (a WIP push from elsewhere): the remote, which contains the
@@ -108,7 +108,7 @@ func TestAddWorktreeResumes(t *testing.T) {
 	if err := r.g.EnsureMirror(r.ctx, r.mirror, RepoConfig{Remote: r.remote, Base: "main"}); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main"); err != nil || n != 2 || gitT(t, wt, "rev-parse", "HEAD") != ahead {
+	if n, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{}); err != nil || n != 2 || gitT(t, wt, "rev-parse", "HEAD") != ahead {
 		t.Fatalf("remote resume: %d %v", n, err)
 	}
 	// Diverged: refused, so neither side's commits are lost.
@@ -117,15 +117,111 @@ func TestAddWorktreeResumes(t *testing.T) {
 	gitT(t, other, "push", "-q", "origin", "loop/1-x")
 	r.g.RemoveWorktree(r.ctx, r.mirror, wt)
 	r.g.EnsureMirror(r.ctx, r.mirror, RepoConfig{Remote: r.remote, Base: "main"})
-	if _, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main"); err == nil || !strings.Contains(err.Error(), "diverged") {
+	if _, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{}); err == nil || !strings.Contains(err.Error(), "diverged") {
 		t.Fatalf("diverged: %v", err)
+	}
+}
+
+// rebaseRig is #155: the PR's head was pushed (prev), main moved on, and a build rebased the
+// branch in the mirror (the new head waited on the user's Trust, unpushed).
+func rebaseRig(t *testing.T) (r gitRig, wt, prev, rebased string) {
+	r = newGitRig(t)
+	wt = filepath.Join(t.TempDir(), "wt")
+	if _, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{}); err != nil {
+		t.Fatal(err)
+	}
+	prev = r.commitIn(wt, "b.txt")
+	if err := r.g.PushBranch(r.ctx, r.mirror, "loop/1-x"); err != nil {
+		t.Fatal(err)
+	}
+	r.commitIn(r.seed, "main2.txt")
+	gitT(t, r.seed, "push", "-q", r.remote, "main")
+	r.g.EnsureMirror(r.ctx, r.mirror, RepoConfig{Remote: r.remote, Base: "main"})
+	gitT(t, wt, "rebase", "-q", "origin/main")
+	rebased = gitT(t, wt, "rev-parse", "HEAD")
+	r.g.RemoveWorktree(r.ctx, r.mirror, wt)
+	return r, wt, prev, rebased
+}
+
+func TestAddWorktreeContinuesARecordedRebase(t *testing.T) {
+	r, wt, prev, rebased := rebaseRig(t)
+	// Not recorded (no Trust for the rebased head, or the remote is not the PR's head): refused.
+	for name, rec := range map[string]Recorded{
+		"nothing recorded":    {},
+		"rebase not recorded": {Prev: prev, Heads: []string{prev}},
+		"remote not the PR's": {Prev: rebased, Heads: []string{rebased}},
+		"no previous head":    {Heads: []string{rebased}},
+	} {
+		if _, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", rec); err == nil || !strings.Contains(err.Error(), "diverged") {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	// The mirror's head is the one the user trusted and the remote is the PR's previous head: the
+	// run continues the rebased branch.
+	if n, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{Prev: prev, Heads: []string{"", rebased}}); err != nil || n != 1 ||
+		gitT(t, wt, "rev-parse", "HEAD") != rebased {
+		t.Fatalf("recorded rebase: %d %v", n, err)
+	}
+	if !r.g.Rewrites(r.ctx, r.mirror, "loop/1-x", prev) {
+		t.Fatal("the rebase over the PR's head is not a rewrite")
+	}
+	if r.g.Rewrites(r.ctx, r.mirror, "loop/1-x", rebased) || r.g.Rewrites(r.ctx, r.mirror, "loop/1-x", "") {
+		t.Fatal("a rewrite of a head the remote is not at")
+	}
+	if rd, err := r.g.RangeDiff(r.ctx, r.mirror, "main", prev, rebased); err != nil || !strings.Contains(rd, "1:") || !strings.Contains(rd, "add b.txt") {
+		t.Fatalf("range-diff %q %v", rd, err)
+	}
+	// A plain push is refused (not a fast-forward); the lease pinned to the PR's head goes through.
+	if err := r.g.PushBranch(r.ctx, r.mirror, "loop/1-x"); err == nil {
+		t.Fatal("a rewrite went through a plain push")
+	}
+	if err := r.g.ForcePushBranch(r.ctx, r.mirror, "loop/1-x", prev); err != nil {
+		t.Fatal(err)
+	}
+	if h := gitT(t, r.remote, "rev-parse", "refs/heads/loop/1-x"); h != rebased {
+		t.Fatalf("remote %s, want the rebased %s", h, rebased)
+	}
+	if r.g.Rewrites(r.ctx, r.mirror, "loop/1-x", prev) {
+		t.Fatal("still a rewrite after the push")
+	}
+}
+
+func TestForcePushBranchHoldsTheLease(t *testing.T) {
+	r, wt, prev, _ := rebaseRig(t)
+	// Someone else pushed over the PR's head: the lease pinned to it fails, nothing is lost.
+	other := filepath.Join(t.TempDir(), "other")
+	gitT(t, filepath.Dir(other), "clone", "-q", "-b", "loop/1-x", r.remote, other)
+	theirs := r.commitIn(other, "theirs.txt")
+	gitT(t, other, "push", "-q", "origin", "loop/1-x")
+	if err := r.g.ForcePushBranch(r.ctx, r.mirror, "loop/1-x", prev); err == nil {
+		t.Fatal("a stale lease went through")
+	}
+	if h := gitT(t, r.remote, "rev-parse", "refs/heads/loop/1-x"); h != theirs {
+		t.Fatalf("the remote branch was overwritten: %s", h)
+	}
+	// The remote has a commit the loop never recorded: still diverged, even with the rebase trusted.
+	r.g.EnsureMirror(r.ctx, r.mirror, RepoConfig{Remote: r.remote, Base: "main"})
+	rebased := gitT(t, r.mirror, "rev-parse", "refs/heads/loop/1-x")
+	if _, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{Prev: prev, Heads: []string{rebased}}); err == nil || !strings.Contains(err.Error(), "diverged") {
+		t.Fatalf("foreign commit: %v", err)
+	}
+	if r.g.Rewrites(r.ctx, r.mirror, "loop/1-x", prev) {
+		t.Fatal("a foreign remote head counted as the PR's")
+	}
+	for _, bad := range []string{"main", "loop/1-x:main", "+loop/1-x", "-f"} {
+		if err := r.g.ForcePushBranch(r.ctx, r.mirror, bad, prev); err == nil {
+			t.Errorf("force-pushed %q", bad)
+		}
+	}
+	if err := r.g.ForcePushBranch(r.ctx, r.mirror, "loop/1-x", ""); err == nil {
+		t.Error("a forced push with no lease")
 	}
 }
 
 func TestFactsSeeUncommittedWork(t *testing.T) {
 	r := newGitRig(t)
 	wt := filepath.Join(t.TempDir(), "wt")
-	r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main")
+	r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{})
 	r.commitIn(wt, "b.txt")
 	os.MkdirAll(filepath.Join(wt, ".loop", "evidence"), 0o755)
 	os.WriteFile(filepath.Join(wt, ".loop", "result.json"), []byte("{}"), 0o644)
@@ -146,7 +242,7 @@ func TestFactsSeeUncommittedWork(t *testing.T) {
 func TestGitRunsNoPlantedCommand(t *testing.T) {
 	r := newGitRig(t)
 	wt := filepath.Join(t.TempDir(), "wt")
-	r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main")
+	r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{})
 	ran := filepath.Join(t.TempDir(), "ran")
 	planted := filepath.Join(t.TempDir(), "planted.sh")
 	os.WriteFile(planted, []byte("#!/bin/sh\ntouch "+ran+"\n"), 0o755)
@@ -261,7 +357,7 @@ func TestAddWorktreeWritesNoConfig(t *testing.T) {
 	r := newGitRig(t)
 	cfg := filepath.Join(r.mirror, "config")
 	before, _ := os.ReadFile(cfg)
-	if _, err := r.g.AddWorktree(r.ctx, r.mirror, filepath.Join(t.TempDir(), "wt"), "loop/9-x", "main"); err != nil {
+	if _, err := r.g.AddWorktree(r.ctx, r.mirror, filepath.Join(t.TempDir(), "wt"), "loop/9-x", "main", Recorded{}); err != nil {
 		t.Fatal(err)
 	}
 	if after, _ := os.ReadFile(cfg); string(after) != string(before) {
