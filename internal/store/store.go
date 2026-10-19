@@ -356,7 +356,7 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
 	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of, ci_red_sha, ci_main_fixed,
-	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust, proof`
+	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust, proof, not_before, ci_pending_since, ci_pending_sha`
 
 type scanner interface{ Scan(...any) error }
 
@@ -368,14 +368,16 @@ func scanItem(row scanner) (pipeline.Item, error) {
 		trust, proof        string
 		dependsOn           string
 		created, updated    int64
+		notBefore, ciSince  int64
 	)
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
 		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf, &it.CIRedSHA, &it.CIMainFixed,
-		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust, &proof)
+		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust, &proof, &notBefore, &ciSince, &it.CIPendingSHA)
 	if err != nil {
 		return it, err
 	}
+	it.NotBefore, it.CIPendingSince = optNanos(notBefore), optNanos(ciSince)
 	it.Stage, it.ReturnStage = pipeline.Stage(stage), pipeline.Stage(ret)
 	it.Resources = splitList(resources)
 	if it.DependsOn, err = splitIDs(dependsOn); err != nil {
@@ -432,6 +434,21 @@ func joinIDs(ids []int64) string {
 
 func fromNanos(n int64) time.Time { return time.Unix(0, n).UTC() }
 
+// optNanos and toOptNanos store a time that may be unset as 0.
+func optNanos(n int64) time.Time {
+	if n == 0 {
+		return time.Time{}
+	}
+	return fromNanos(n)
+}
+
+func toOptNanos(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano()
+}
+
 func loadItem(q interface {
 	QueryRow(string, ...any) *sql.Row
 }, id int64) (pipeline.Item, error) {
@@ -469,10 +486,12 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 	}
 	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
-		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, ci_main_fixed=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=?, trust=?, proof=? WHERE id=?`,
+		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, ci_main_fixed=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=?, trust=?, proof=?,
+		not_before=?, ci_pending_since=?, ci_pending_sha=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
-		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, it.CIMainFixed, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, trust, proof, it.ID)
+		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, it.CIMainFixed, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, trust, proof,
+		toOptNanos(it.NotBefore), toOptNanos(it.CIPendingSince), it.CIPendingSHA, it.ID)
 	return err
 }
 
@@ -875,7 +894,8 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		if reg == nil && slices.Contains(req.Kinds, pipeline.WorkRegression) {
 			reg = sched
 		}
-		w, ok := pipeline.ChooseWorkPaced(ctl, pace, waiting, deps, snap, turns, orch, reg, cs.holds, req, cs.frozen)
+		// A land item put back by ci_pending waits for its not-before time (pipeline.Ready).
+		w, ok := pipeline.ChooseWorkPaced(ctl, pace, pipeline.Ready(waiting, now), deps, snap, turns, orch, reg, cs.holds, req, cs.frozen)
 		if !ok {
 			return nil
 		}
@@ -913,6 +933,9 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		if w.RouteQwen {
 			data["routed"] = pipeline.BuilderQwen
 			data["pace"] = pace.Describe(usageZone())
+		}
+		if it.Stage == pipeline.Land && it.CIPendingSHA != "" {
+			data["ci_pending"] = true // a land run again after ci_pending: Slack posts nothing for it
 		}
 		return s.event(tx, Event{ItemID: it.ID, Actor: "runner:" + runnerName, Kind: "claimed", From: string(it.Stage), To: string(it.Stage),
 			Data: data})

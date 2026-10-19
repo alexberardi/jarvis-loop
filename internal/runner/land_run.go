@@ -39,6 +39,14 @@ type landRun struct {
 	mainTip string
 }
 
+// ciGiveUp is land_ci_give_up: how long CI may stay pending on one head over all land runs.
+func (r *Runner) ciGiveUp() time.Duration {
+	if d := r.Config().ciGiveUp; d > 0 {
+		return d
+	}
+	return 3 * time.Hour
+}
+
 // land works a land claim in-process: no agent, no worktree for one, no guard. It re-runs the
 // gates from the top after every wait and after a refused merge, and reports one outcome.
 func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
@@ -149,11 +157,16 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 				waitSince = now
 			}
 			waited := now.Sub(waitSince)
-			if waited >= ciWait {
-				r.landAdvance(report, lr, failed("%s still pending after %s", d.Wait, roundDur(waited)), f.Paths)
+			if waited >= ciWait || len(f.PR.Checks) > 0 && now.Sub(pendingSince(f.PR, lr.item, waitSince)) >= r.ciGiveUp() {
+				d := ciWaitEnded(d, f.PR, lr.item, waitSince, now, r.ciGiveUp())
+				if d.Outcome == "ci_pending" {
+					lr.log.Info("land: CI still pending; back to the land queue", "since", d.Fields["since"])
+				}
+				r.landAdvance(report, lr, d, f.Paths)
 				return
 			}
-			if waited >= LandWaitingAfter && !noted {
+			// Once per head: a run after ci_pending on the same head has already said so.
+			if waited >= LandWaitingAfter && !noted && lr.item.CIPendingSHA != f.PR.HeadRefOid {
 				noted = true
 				if err := r.Client.Event(ctx, lr.item.ID, "land_waiting", map[string]any{"waiting_for": d.Wait,
 					"since": waitSince.UTC().Format(time.RFC3339), "head_sha": f.PR.HeadRefOid}); err != nil {
@@ -296,7 +309,7 @@ func (r *Runner) landAdvance(ctx context.Context, lr *landRun, d Decision, paths
 	if d.Outcome == "merged" && lr.repo.QAAfterDeploy {
 		fields["qa_after_deploy"] = "true" // and asks for the check once a build with it runs
 	}
-	if d.Outcome == "failed" {
+	if d.Outcome == "failed" || d.Outcome == "ci_pending" {
 		paths = nil
 	}
 	err := r.Client.Advance(ctx, lr.item.ID, d.Outcome, fields, paths)
@@ -361,5 +374,9 @@ func roundDur(d time.Duration) string {
 	if d < time.Minute {
 		return d.Round(time.Second).String()
 	}
-	return strings.TrimSuffix(d.Round(time.Minute).String(), "0s")
+	s := strings.TrimSuffix(d.Round(time.Minute).String(), "0s")
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m") // "3h", not "3h0m"
+	}
+	return s
 }
