@@ -42,10 +42,26 @@ const MaxTriggers = 50
 
 // Trigger is one reason for a turn.
 type Trigger struct {
-	Reason string    `json:"reason"`
-	ItemID int64     `json:"item_id,omitempty"`
-	Text   string    `json:"text,omitempty"` // a message's words
-	At     time.Time `json:"at"`
+	Reason string `json:"reason"`
+	ItemID int64  `json:"item_id,omitempty"`
+	Text   string `json:"text,omitempty"` // a message's words
+	// Where a message came from, so the turn's reply lands in its thread: the channel (a DM's
+	// too), its ts and the thread it was in ("" when it started none), and whether the approver
+	// wrote it (only the approver's words may make the orchestrator act).
+	Channel  string    `json:"channel,omitempty"`
+	TS       string    `json:"ts,omitempty"`
+	ThreadTS string    `json:"thread_ts,omitempty"`
+	Approver bool      `json:"approver,omitempty"`
+	At       time.Time `json:"at"`
+}
+
+// ReplyThread is the thread a reply to a message trigger goes in: the thread the message was in,
+// or the thread it starts.
+func (t Trigger) ReplyThread() string {
+	if t.ThreadTS != "" {
+		return t.ThreadTS
+	}
+	return t.TS
 }
 
 // AddTrigger adds t to a turn's reasons: the same reason on the same item joins the first (a
