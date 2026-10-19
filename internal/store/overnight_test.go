@@ -237,3 +237,37 @@ func mustReg(t *testing.T, s *Store, id int64) Regression {
 	}
 	return r
 }
+
+// Nightly is once a night by set time: a cancelled night is skipped, not scheduled again, and a run
+// that waited into the afternoon does not take the next night's place.
+func TestOvernightNightlyOncePerSetTime(t *testing.T) {
+	s, clk := open(t)
+	ctx := context.Background()
+	on := true
+	if _, err := s.SetControl(ctx, user, ControlPatch{RegressionNightly: &on}); err != nil {
+		t.Fatal(err)
+	}
+	claimWith(t, s, pipeline.WorkItem)
+	r1, _ := s.ScheduledRegression(ctx)
+	if r1 == nil || !r1.NotBefore.Equal(t0.Add(toOne)) {
+		t.Fatalf("tonight's: %+v", r1)
+	}
+	if _, err := s.CancelScheduledRegression(ctx, "slack:U1", "slack"); err != nil {
+		t.Fatal(err)
+	}
+	claimWith(t, s, pipeline.WorkItem)
+	r2, _ := s.ScheduledRegression(ctx)
+	if r2 == nil || !r2.NotBefore.Equal(r1.NotBefore.Add(24*time.Hour)) {
+		t.Fatalf("after cancelling tonight's (%v), the next poll scheduled %+v, want the next night", r1.NotBefore, r2)
+	}
+	// R2 waits until 14:00 the day after its set time, then runs.
+	clk.Advance(toOne + 24*time.Hour + 13*time.Hour)
+	if c := claimWith(t, s, pipeline.WorkRegression); c == nil || c.Reg == nil || c.Reg.ID != r2.ID {
+		t.Fatalf("R2 not claimed in the afternoon: %+v", c)
+	}
+	claimWith(t, s, pipeline.WorkItem)
+	r3, _ := s.ScheduledRegression(ctx)
+	if r3 == nil || !r3.NotBefore.Equal(r2.NotBefore.Add(24*time.Hour)) {
+		t.Fatalf("after a late run (set %v), the next is %+v, want the very next night", r2.NotBefore, r3)
+	}
+}

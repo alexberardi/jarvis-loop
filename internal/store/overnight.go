@@ -67,14 +67,18 @@ func (s *Store) schedule(tx *sql.Tx, actor, via string, ctl pipeline.Control) (R
 	now := s.clock.Now()
 	at := pipeline.NextAt(now, s.orchLoc(), ctl.RegressionTime())
 	if via == "nightly" {
-		// Once a night: when an overnight run started within the 12 hours before this set time (or
-		// after it: the one just claimed), this night had its run.
-		var last int64
-		if err := tx.QueryRow(`SELECT COALESCE(MAX(claimed_at), 0) FROM regressions WHERE suite = ? AND claimed_at != 0`,
-			pipeline.SuiteOvernight).Scan(&last); err != nil {
-			return out, err
-		}
-		if last != 0 && fromNanos(last).After(at.Add(-12*time.Hour)) {
+		// Once a night, keyed on the set time: a night that already has an overnight row (any
+		// status: run, running, or cancelled to skip it) moves to the next. The 12 hours only absorb
+		// a changed regression_at and the clock change; set times are a day apart.
+		for {
+			var n int
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM regressions WHERE suite = ? AND not_before > ? AND not_before <= ?`,
+				pipeline.SuiteOvernight, at.Add(-12*time.Hour).UnixNano(), at.UnixNano()).Scan(&n); err != nil {
+				return out, err
+			}
+			if n == 0 {
+				break
+			}
 			at = pipeline.NextAt(at.Add(time.Minute), s.orchLoc(), ctl.RegressionTime())
 		}
 	}

@@ -23,9 +23,12 @@ run; camera and biometrics stay manual. This piece is the overnight run.
   waits while any run is open.
 - **Every night:** the control's `regression_nightly` (bool) and `regression_at` (`HH:MM`, default
   01:00), set with `PUT /control`. With it on, the claim path schedules one (via `nightly`, actor
-  loopd) whenever none is, once a night: a set time with an overnight run started in the 12 hours
-  before it (or after it) moves to the next night. Turned off, the nightly-scheduled run is
-  cancelled; one the approver scheduled stays.
+  loopd) whenever none is, once a night, keyed on the set time (`not_before`): a set time that
+  already has an overnight row of any status (run, running, or cancelled) moves to the next night.
+  So cancelling tonight's run (`regression tonight off`, the toggle, `DELETE /regressions/scheduled`)
+  skips that night, and the next poll schedules tomorrow's; a run that waited into the afternoon
+  still leaves the next night its own run. Turned off, the nightly-scheduled run is cancelled; one
+  the approver scheduled stays.
 - **The quiet gate** (`pipeline.QueueBusy`, `OvernightReady`): the run starts once it is at or past
   its set time **and** the queue has been quiet for 10 minutes, whichever is later. Quiet: no live
   lease of an agent stage (triage, build, review, a plan turn, the orchestrate turn: all of them, not
