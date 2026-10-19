@@ -87,7 +87,14 @@ func HeldReason(holds []SlotHold) string {
 
 // serves says whether w takes an item needing one of the held resources.
 func serves(w Work, holds []SlotHold) bool {
-	return w.Item != nil && slices.ContainsFunc(holds, func(h SlotHold) bool { return slices.Contains(w.Item.Needs(), h.Resource) })
+	var res []string
+	switch {
+	case w.Item != nil:
+		res = w.Item.Needs()
+	case w.Reg != nil:
+		res = w.Reg.Resources
+	}
+	return slices.ContainsFunc(holds, func(h SlotHold) bool { return slices.Contains(res, h.Resource) })
 }
 
 // agentStages is stages without land (none: every agent stage).

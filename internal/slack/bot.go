@@ -235,6 +235,10 @@ func (b *Bot) handleEvent(ctx context.Context, e store.Event) {
 			b.post(ctx, "freeze", b.freezeMessage(ctx, e))
 			return
 		}
+		if e.Kind == store.KindRegDone {
+			b.regressionReport(ctx, e)
+			return
+		}
 		if e.Kind == store.KindRunwayLow {
 			b.post(ctx, "runway", b.runwayMessage(ctx, e))
 			return
@@ -1147,11 +1151,15 @@ func (b *Bot) onMention(ctx context.Context, m slackEvent) {
 			return
 		}
 	}
+	text := incoming(m.Text)
+	if suite, ok := pipeline.ParseRegression(text); ok {
+		b.regressionMention(ctx, m, suite)
+		return
+	}
 	if !IsApprover(m.User) {
 		b.refuse(ctx, m.Channel, m.User, 0, "add")
 		return
 	}
-	text := incoming(m.Text)
 	if _, err := b.add(ctx, m.User, text); err != nil {
 		b.ephemeral(ctx, m.Channel, m.User, Escape(errMessage(err))+" Try: @jarvis-loop <what to do>")
 	}
@@ -1196,6 +1204,10 @@ func (b *Bot) onActions(ctx context.Context, p interaction) {
 	for _, a := range p.Actions {
 		if strings.HasPrefix(a.ActionID, "plan_") {
 			b.onPlanAction(ctx, channel, msgTS, user, a.ActionID, a.Value)
+			continue
+		}
+		if a.ActionID == "regression_file" {
+			b.onRegressionFile(ctx, channel, msgTS, user, a.Value)
 			continue
 		}
 		itemID := actionItem(a.ActionID, a.BlockID, a.Value)
