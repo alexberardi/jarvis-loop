@@ -27,16 +27,17 @@ const OrchSweepEvery = 15 * time.Minute
 
 // Why a turn was queued.
 const (
-	TriggerNeedsYou     = "needs_you"     // an item entered needs_you (a question)
-	TriggerRunFailed    = "run_failed"    // ... because its run failed or ran overtime
-	TriggerLeaseExpired = "lease_expired" // a run's lease expired (the runner went away)
-	TriggerIdle         = "idle"          // an item waited in its stage past IdleLimits
-	TriggerLoopMerged   = "loop_merged"   // a merge to the loop's own repo
-	TriggerMessage      = "message"       // the user wrote to the orchestrator
-	TriggerSweep        = "sweep"         // the 15-minute sweep, with something changed
-	TriggerDue          = "due"           // a wait the orchestrator was told about ended (a retry's backoff)
-	TriggerProof        = "proof_needed"  // an item is in qa without a proof: write one (the proof sweep)
-	TriggerProofE2E     = "proof_e2e"     // the sweep's manual-only proof, written before E2E results passed checks: replace it if tests cover the change
+	TriggerNeedsYou     = "needs_you"         // an item entered needs_you (a question)
+	TriggerRunFailed    = "run_failed"        // ... because its run failed or ran overtime
+	TriggerLeaseExpired = "lease_expired"     // a run's lease expired (the runner went away)
+	TriggerIdle         = "idle"              // an item waited in its stage past IdleLimits
+	TriggerLoopMerged   = "loop_merged"       // a merge to the loop's own repo
+	TriggerMessage      = "message"           // the user wrote to the orchestrator
+	TriggerSweep        = "sweep"             // the 15-minute sweep, with something changed
+	TriggerDue          = "due"               // a wait the orchestrator was told about ended (a retry's backoff)
+	TriggerProof        = "proof_needed"      // an item is in qa without a proof: write one (the proof sweep)
+	TriggerProofE2E     = "proof_e2e"         // the sweep's manual-only proof, written before E2E results passed checks: replace it if tests cover the change
+	TriggerDoneProof    = "done_proof_needed" // a done item is unproven: write its proof (the done sweep)
 )
 
 // MaxTriggers caps the reasons one turn collects: past it, the snapshot has the rest.

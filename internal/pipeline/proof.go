@@ -313,10 +313,14 @@ func (c ProofCheck) String() string {
 	return c.Kind
 }
 
-// ProofDue reports whether an item's proof is due a check: in qa, not waiting for a deploy, with
-// an automatic check still to pass, and never checked or not for ProofRecheck.
+// ProofDue reports whether an item's proof is due a check: in qa (not waiting for a deploy) or
+// done and proving (doneproof.go), with an automatic check still to pass, and never checked or not
+// for ProofRecheck.
 func ProofDue(it Item, now time.Time) bool {
-	if it.Stage != QA || it.AwaitingDeploy || it.Proof == nil {
+	if it.Proof == nil || it.AwaitingDeploy {
+		return false
+	}
+	if it.Stage != QA && (it.Stage != Done || it.Verify != DoneProving) {
 		return false
 	}
 	if st := it.Proof.Status(); st != CheckPending && st != CheckFailed {
@@ -347,8 +351,9 @@ const ActorProof = "loop (proof)"
 // qa → done, kind verified. A command check failing ProofFailsToReopen runs in a row → qa → done,
 // kind reopened (the caller files the new item with the words, as the user's Reopen does).
 // Otherwise the item stays in qa, kind proof_checked, with changed set when its status changed.
+// A done item's proof (doneproof.go) moves only its verification status, never its stage.
 func ApplyProofChecked(it Item, results []CheckResult, usage map[int]UsageSeen, now time.Time) (Transition, error) {
-	if it.Stage != QA || it.Proof == nil {
+	if (it.Stage != QA && it.Stage != Done) || it.Proof == nil {
 		return Transition{}, errf(CodeWrongStage, "item is %s and has no proof to check", it.Stage)
 	}
 	if it.AwaitingDeploy {
@@ -396,6 +401,9 @@ func ApplyProofChecked(it Item, results []CheckResult, usage map[int]UsageSeen, 
 		}
 	}
 	p.CheckedAt = &at
+	if it.Stage == Done {
+		return applyDoneProofChecked(it, p, it.Verify)
+	}
 	it.Proof = &p
 	after := p.Status()
 	data := map[string]any{"status": after, "by": p.By, "checks": proofSummary(p)}
@@ -403,6 +411,7 @@ func ApplyProofChecked(it Item, results []CheckResult, usage map[int]UsageSeen, 
 		if c.Kind == ProofCommand && c.State == CheckFailed && c.Fails >= ProofFailsToReopen {
 			words := fmt.Sprintf("Proof failed %d times in a row: %s: %s", c.Fails, c.String(), firstLine(c.Evidence))
 			it.Stage, it.AwaitingDeploy = Done, false
+			it.Verify, it.VerifyReason = DoneFailed, clipRunes(words, 400)
 			data["words"] = words
 			return Transition{Item: it, From: QA, To: Done, Kind: "reopened", Data: data}, nil
 		}
@@ -410,6 +419,7 @@ func ApplyProofChecked(it Item, results []CheckResult, usage map[int]UsageSeen, 
 	if after == CheckPassed {
 		words := "Proof passed: " + strings.Join(proofSummary(p), "; ")
 		it.Stage, it.AwaitingDeploy = Done, false
+		it.Verify, it.VerifyReason = DoneVerified, clipRunes(words, 400)
 		data["words"] = words
 		return Transition{Item: it, From: QA, To: Done, Kind: "verified", Data: data}, nil
 	}
@@ -516,6 +526,7 @@ func ApplyE2EResults(it Item, run E2ERun, now time.Time) (tr Transition, decided
 	if failed != nil {
 		words := fmt.Sprintf("E2E failed in regression R%d: %s (%s): %s. Report: %s", run.ID, failed.Name, failed.File, firstLine(failed.Error), report)
 		it.Stage, it.AwaitingDeploy = Done, false
+		it.Verify, it.VerifyReason = DoneFailed, clipRunes(words, 400)
 		data["words"], data["test"], data["test_n"] = words, failed.Name, failed.N
 		if failed.Screenshot != 0 {
 			data["screenshot"] = failed.Screenshot
@@ -525,6 +536,7 @@ func ApplyE2EResults(it Item, run E2ERun, now time.Time) (tr Transition, decided
 	if after == CheckPassed {
 		words := "Proof passed: " + strings.Join(proofSummary(p), "; ") + fmt.Sprintf(". Regression R%d: %s", run.ID, report)
 		it.Stage, it.AwaitingDeploy = Done, false
+		it.Verify, it.VerifyReason = DoneVerified, clipRunes(words, 400)
 		data["words"] = words
 		return Transition{Item: it, From: QA, To: Done, Kind: "verified", Data: data}, true, nil
 	}
@@ -532,11 +544,15 @@ func ApplyE2EResults(it Item, run E2ERun, now time.Time) (tr Transition, decided
 	return Transition{Item: it, From: QA, To: QA, Kind: "proof_checked", Data: data}, true, nil
 }
 
-// ApplySetProof is a proof written for an item that has none (the sweep's): only in qa. It may
-// also replace a proof the sweep wrote with only manual checks (Replaceable): written before E2E
-// results could pass a check (#195), it may now have tests that cover the change.
+// ApplySetProof is a proof written for an item that has none (the sweep's): in qa, or done and
+// unproven (the done sweep), which it leaves in the status the proof gives. It may also replace a
+// proof the sweep wrote with only manual checks (Replaceable): written before E2E results could
+// pass a check (#195), it may now have tests that cover the change.
 func ApplySetProof(it Item, p *Proof) (Transition, error) {
-	if it.Stage != QA {
+	if it.Stage != QA && (it.Stage != Done || it.Verify != DoneUnproven) {
+		if it.Stage == Done {
+			return Transition{}, errf(CodeWrongStage, "item is done and %s, not unproven", it.Verify)
+		}
 		return Transition{}, errf(CodeWrongStage, "item is %s, not qa", it.Stage)
 	}
 	data := map[string]any{"by": p.By, "status": p.Status(), "checks": proofSummary(*p)}
@@ -547,7 +563,11 @@ func ApplySetProof(it Item, p *Proof) (Transition, error) {
 		data["replaced"] = proofSummary(*it.Proof)
 	}
 	it.Proof = p
-	return Transition{Item: it, From: QA, To: QA, Kind: "proof_set", Data: data}, nil
+	if it.Stage == Done {
+		it.Verify, it.VerifyReason = VerifyFromProof(p), doneReason(p)
+		data["verify"] = it.Verify
+	}
+	return Transition{Item: it, From: it.Stage, To: it.Stage, Kind: "proof_set", Data: data}, nil
 }
 
 // Replaceable says the sweep wrote the proof and it has only manual checks: the sweep may write

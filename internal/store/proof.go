@@ -63,11 +63,11 @@ func (s *Store) ProofChecked(ctx context.Context, runnerName string, id int64, d
 		tr.Data["runner"] = runnerName
 		actor := "runner:" + runnerName
 		switch tr.Kind {
-		case "reopened":
+		case "reopened", pipeline.KindDoneFailed:
 			_, _, err := s.reopenTx(tx, pipeline.ActorProof, it, tr)
 			out = transitionEvent(id, pipeline.ActorProof, tr)
 			return err
-		case "verified":
+		case "verified", pipeline.KindDoneVerified:
 			actor = pipeline.ActorProof
 		}
 		tr.Item.UpdatedAt = s.clock.Now()
@@ -136,7 +136,8 @@ func usageSeen(tx *sql.Tx, id int64, c pipeline.ProofCheck, since int64) (pipeli
 	return u, rows.Err()
 }
 
-// ProofsDue are the qa items whose proof is due a check (pipeline.ProofDue), as board rows.
+// ProofsDue are the qa items whose proof is due a check (pipeline.ProofDue), as board rows, then
+// at most DoneProofsPerPass proving done items (doneproof.go).
 func (s *Store) ProofsDue(ctx context.Context) ([]BoardRow, error) {
 	rows, err := s.ListItemsFilter(ctx, ListFilter{Stage: string(pipeline.QA)})
 	if err != nil {
@@ -153,12 +154,13 @@ func (s *Store) ProofsDue(ctx context.Context) ([]BoardRow, error) {
 			out = append(out, r)
 		}
 	}
-	return out, nil
+	done, err := s.doneProofsDue(ctx)
+	return append(out, done...), err
 }
 
 // OrchProof is the orchestrator writing the proof of a qa item that has none, or replacing the
-// sweep's manual-only one (the proof sweep's action): checks is the JSON list of checks, as a
-// build states them.
+// sweep's manual-only one (the proof sweep's action), or writing that of an unproven done item (the
+// done sweep's): checks is the JSON list of checks, as a build states them.
 func (s *Store) OrchProof(ctx context.Context, actor string, id int64, checks json.RawMessage, reason string) (pipeline.Item, error) {
 	return s.orch(ctx, actor, id, "proof", reason, func(tx *sql.Tx, it pipeline.Item, _ []Event) (pipeline.Transition, error) {
 		p, err := pipeline.ParseProof(string(checks), pipeline.ProofBySweep)

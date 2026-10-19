@@ -30,6 +30,9 @@ type BoardItem struct {
 	// the QA column groups by them (pipeline.QAGroup).
 	Proof          *pipeline.Proof
 	AwaitingDeploy bool
+	// Verify is a done item's verification status and VerifyReason why (pipeline.DoneVerified…):
+	// the Done column filters by it.
+	Verify, VerifyReason string
 	// ReopenedDeps is its dependencies that failed the user's check, while the fix is open.
 	ReopenedDeps []ReopenedDependency
 }
@@ -46,7 +49,7 @@ func (s *Store) BoardItems(ctx context.Context) ([]BoardItem, error) {
 	}
 	rows, err := s.r.QueryContext(ctx, `SELECT i.id, i.title, i.priority, i.stage, i.repo, i.pr, i.created_at,
 		COALESCE(l.runner || '/' || l.agent, ''), i.question, i.hold_reason, i.slack_channel, i.slack_ts, i.updated_at,
-		i.depends_on, i.plan_id, i.builder, i.proof, i.awaiting_deploy FROM items i LEFT JOIN leases l ON l.item_id = i.id AND l.ended_at IS NULL
+		i.depends_on, i.plan_id, i.builder, i.proof, i.awaiting_deploy, i.verify, i.verify_reason FROM items i LEFT JOIN leases l ON l.item_id = i.id AND l.ended_at IS NULL
 		ORDER BY i.priority, i.created_at, i.id`)
 	if err != nil {
 		return nil, err
@@ -62,7 +65,7 @@ func (s *Store) BoardItems(ctx context.Context) ([]BoardItem, error) {
 		var created, updated int64
 		var dependsOn, proof string
 		if err := rows.Scan(&b.ID, &b.Title, &b.Priority, &b.Stage, &b.Repo, &b.PR, &created, &b.ClaimedBy,
-			&b.Question, &b.HoldReason, &b.SlackChannel, &b.SlackTS, &updated, &dependsOn, &b.PlanID, &b.Builder, &proof, &b.AwaitingDeploy); err != nil {
+			&b.Question, &b.HoldReason, &b.SlackChannel, &b.SlackTS, &updated, &dependsOn, &b.PlanID, &b.Builder, &proof, &b.AwaitingDeploy, &b.Verify, &b.VerifyReason); err != nil {
 			return nil, err
 		}
 		if proof != "" {

@@ -396,6 +396,9 @@ func TestApplyE2EResults(t *testing.T) {
 			if c.words != "" && tr.Data["words"] != c.words {
 				t.Fatalf("words %q,\nwant  %q", tr.Data["words"], c.words)
 			}
+			if want := map[string]string{"verified": DoneVerified, "reopened": DoneFailed}[c.kind]; tr.Item.Verify != want {
+				t.Fatalf("done status %q, want %q (#216: an item done by E2E results says how)", tr.Item.Verify, want)
+			}
 			if tr.Data["regression"] != int64(12) {
 				t.Fatalf("regression %v, want 12", tr.Data["regression"])
 			}

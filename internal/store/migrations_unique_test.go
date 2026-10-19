@@ -40,7 +40,7 @@ func TestMigration25RecordedForUsage(t *testing.T) {
 	for _, q := range []string{
 		`ALTER TABLE items DROP COLUMN proof`,
 		`ALTER TABLE items DROP COLUMN proof_asked`,
-		`DELETE FROM schema_migrations WHERE version >= 26`,
+		`DELETE FROM schema_migrations WHERE version = 26`,
 	} {
 		if _, err := s.w.Exec(q); err != nil {
 			t.Fatal(q, err)

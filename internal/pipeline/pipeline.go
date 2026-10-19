@@ -166,6 +166,10 @@ type Item struct {
 	// Proof is how the loop can tell, once merged, that the change works (proof.go): the build's,
 	// or the proof sweep's for an item that reached qa without one.
 	Proof *Proof `json:"proof,omitempty"`
+	// Verify is a done item's verification status, separate from its stage (doneproof.go; "" on an
+	// item not done), and VerifyReason the line that says why.
+	Verify       string `json:"verify,omitempty"`
+	VerifyReason string `json:"verify_reason,omitempty"`
 	// CIRedSHA is the head land sent back to build for red CI; a pr_opened with the same head
 	// goes to the user, not review (the build changed nothing, so CI would stay red).
 	CIRedSHA string `json:"ci_red_sha,omitempty"`
@@ -539,8 +543,12 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		it.MergeSHA = sha
 		it.NeedsQA = it.NeedsQA || qa || afterDeploy
 		it.Stage = Done
+		it.Verify, it.VerifyReason = VerifyFromProof(it.Proof), ""
+		if it.Proof != nil {
+			it.VerifyReason = doneReason(it.Proof)
+		}
 		if it.NeedsQA {
-			it.Stage = QA
+			it.Stage, it.Verify, it.VerifyReason = QA, "", ""
 		}
 		if afterDeploy {
 			it.AwaitingDeploy = true
@@ -754,13 +762,20 @@ func ApplySetQA(it Item) (Transition, error) {
 	return Transition{Item: it, From: it.Stage, To: it.Stage, Kind: "qa_marked", Data: map[string]any{"needs_qa": true}}, nil
 }
 
-// ApplyVerified is the user's check of a merged item passing: qa → done.
+// ApplyVerified is the user's check of a merged item passing: qa → done; or of a done item not yet
+// verified (doneproof.go), which stays done.
 func ApplyVerified(it Item, words string) (Transition, error) {
+	words = strings.TrimSpace(words)
+	if it.Stage == Done && it.Verify != "" && it.Verify != DoneVerified {
+		it.Verify, it.VerifyReason = DoneVerified, "verified by the user"
+		return Transition{Item: it, From: Done, To: Done, Kind: "verified", Data: map[string]any{"words": words, "verify": it.Verify}}, nil
+	}
 	if it.Stage != QA {
 		return Transition{}, errf(CodeWrongStage, "item is %s, not qa", it.Stage)
 	}
 	it.Stage, it.AwaitingDeploy = Done, false
-	return Transition{Item: it, From: QA, To: Done, Kind: "verified", Data: map[string]any{"words": strings.TrimSpace(words)}}, nil
+	it.Verify, it.VerifyReason = DoneVerified, "verified by the user"
+	return Transition{Item: it, From: QA, To: Done, Kind: "verified", Data: map[string]any{"words": words}}, nil
 }
 
 // ApplyReopen is the user's check of a merged item failing: qa → done, and the caller files a new
@@ -774,6 +789,7 @@ func ApplyReopen(it Item, words string) (Transition, error) {
 		return Transition{}, errf(CodeMissingField, "say what is wrong: the words are the new item's ask")
 	}
 	it.Stage, it.AwaitingDeploy = Done, false
+	it.Verify, it.VerifyReason = DoneFailed, "reopened by the user"
 	return Transition{Item: it, From: QA, To: Done, Kind: "reopened", Data: map[string]any{"words": words}}, nil
 }
 
