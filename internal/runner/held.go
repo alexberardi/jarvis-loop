@@ -84,7 +84,7 @@ func (r *Runner) heldMerge(ctx context.Context, key string, repo RepoConfig, row
 		return "", "", "", err
 	}
 	wt := filepath.Join(r.Config().WorkRoot, fmt.Sprintf("%d-held", row.ID))
-	return r.mergeBase(ctx, mirror, repo, wt, pr.HeadRefOid, pr.HeadRefName, row.PR)
+	return r.mergeBase(ctx, mirror, repo, wt, pr.HeadRefOid, pr.HeadRefName, row.PR, "loop held watch")
 }
 
 // heldWatchLoop runs CheckHeld every land poll until ctx ends, while land is in the stages (a

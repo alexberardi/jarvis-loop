@@ -19,7 +19,7 @@ const unionDocs = "docs/** merge=union\n"
 // head. A conflict anywhere else goes back to build.
 func (r *Runner) landConflict(ctx context.Context, lr *landRun, f LandFacts) (Decision, []string) {
 	wt := filepath.Join(r.Config().WorkRoot, fmt.Sprintf("%d-land", lr.item.ID))
-	head, how, conflict, err := r.mergeBase(ctx, lr.mirror, lr.repo, wt, f.PR.HeadRefOid, f.Branch, f.PR.Number)
+	head, how, conflict, err := r.mergeBase(ctx, lr.mirror, lr.repo, wt, f.PR.HeadRefOid, f.Branch, f.PR.Number, "loop land")
 	if err != nil {
 		return failed("land: %s", err.Error()), nil
 	}
@@ -39,7 +39,8 @@ func (r *Runner) landConflict(ctx context.Context, lr *landRun, f LandFacts) (De
 // git's union driver, both sides kept; no -X strategy option), is pushed to branch (only
 // loop/<item>-…, never forced): it returns the new head and how it merged. A conflict anywhere
 // else returns conflict, the reason the merge needs a build, and pushes nothing.
-func (r *Runner) mergeBase(ctx context.Context, mirror string, rc RepoConfig, wt, prHead, branch string, pr int) (head, how, conflict string, err error) {
+// by names the caller in the merge commit's message.
+func (r *Runner) mergeBase(ctx context.Context, mirror string, rc RepoConfig, wt, prHead, branch string, pr int, by string) (head, how, conflict string, err error) {
 	base := "refs/remotes/origin/" + rc.Base
 	unlock := r.lockMirror(mirror)
 	defer unlock()
@@ -47,7 +48,7 @@ func (r *Runner) mergeBase(ctx context.Context, mirror string, rc RepoConfig, wt
 	if err := r.Git.AddDetached(ctx, mirror, wt, prHead); err != nil {
 		return "", "", "", fmt.Errorf("could not check out PR #%d to merge %s in: %s", pr, rc.Base, clip(err.Error(), 600))
 	}
-	msg := fmt.Sprintf("Merge %s into %s (loop land)", rc.Base, branch)
+	msg := fmt.Sprintf("Merge %s into %s (%s)", rc.Base, branch, by)
 	ident := []string{"-c", "user.name=jarvis-loop", "-c", "user.email=jarvis-loop@localhost"}
 	merge := func(extra ...string) error {
 		args := append(append(append([]string{}, ident...), extra...), "merge", "--no-ff", "--no-edit", "-m", msg, base)

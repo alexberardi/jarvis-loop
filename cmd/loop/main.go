@@ -554,8 +554,8 @@ func cmdShow(c *client, pos []string, _ map[string][]string) error {
 	if it.Question != "" {
 		fmt.Fprintf(w, "question: %s (returns to %s)\n", it.Question, it.ReturnStage)
 	}
-	if a := it.Approval; a != nil {
-		fmt.Fprintf(w, "approval: %s for %s: %q\n", a.By, a.HeadSHA, a.Words)
+	if it.Approval != nil {
+		fmt.Fprintln(w, approvalLine(it))
 	}
 	if t := it.Trust; t != nil {
 		switch {
@@ -1024,4 +1024,15 @@ func (c *client) upload(id, path string) error {
 	}
 	fmt.Fprintf(c.out, "evidence %d: %s (%d bytes)\n", ev.N, ev.Name, ev.Size)
 	return nil
+}
+
+// approvalLine is show's approval line. An approval of another head than the PR's is void (a
+// new head voids it; only loopd's carry moves it), and says so.
+func approvalLine(it item) string {
+	a := it.Approval
+	line := fmt.Sprintf("approval: %s for %s: %q", a.By, a.HeadSHA, a.Words)
+	if it.HeadSHA != "" && a.HeadSHA != it.HeadSHA {
+		line += fmt.Sprintf(" (void: the PR's head is now %s)", it.HeadSHA)
+	}
+	return line
 }

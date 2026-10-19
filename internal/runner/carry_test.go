@@ -111,7 +111,7 @@ func TestApprovalDelta(t *testing.T) {
 		r.write("b.txt", "pr\n")
 		approved := r.commit("pr")
 		r.onMain("c.txt", "main\n")
-		_, _ = Git{}.run(context.Background(), r.dir, "merge", "-q", "--no-ff", "--no-commit", "main")
+		gitT(t, r.dir, "merge", "-q", "--no-ff", "--no-commit", "main")
 		r.write("b.txt", "pr, changed in the merge\n")
 		head := r.commit("merge main")
 		d := r.delta(approved, head)
@@ -144,6 +144,24 @@ func TestApprovalDelta(t *testing.T) {
 		head := gitT(t, r.dir, "rev-parse", "HEAD")
 		d := r.delta(approved, head)
 		if !strings.Contains(d.Problem, "not a merge of origin/main") || d.Carryable() {
+			t.Fatalf("delta %+v", d)
+		}
+	})
+	t.Run("a merge of another branch that holds only a merge of main", func(t *testing.T) {
+		// The branch brings no commit of its own, so only the check that each merge's second
+		// parent is on origin/main refuses it.
+		r := newCarryRepo(t)
+		r.write("b.txt", "pr\n")
+		approved := r.commit("pr")
+		gitT(t, r.dir, "switch", "-q", "-c", "other", "main")
+		r.onMain("c.txt", "main\n")
+		gitT(t, r.dir, "switch", "-q", "other")
+		gitT(t, r.dir, "merge", "-q", "--no-ff", "--no-edit", "main")
+		gitT(t, r.dir, "switch", "-q", "loop/7-x")
+		gitT(t, r.dir, "merge", "-q", "--no-ff", "--no-edit", "other")
+		head := gitT(t, r.dir, "rev-parse", "HEAD")
+		d := r.delta(approved, head)
+		if !strings.Contains(d.Problem, "which is not on origin/main") || d.Carryable() {
 			t.Fatalf("delta %+v", d)
 		}
 	})
