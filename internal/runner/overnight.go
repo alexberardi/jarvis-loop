@@ -39,7 +39,7 @@ type overnightLane struct {
 	e2e bool
 }
 
-func overnightLanes(mobileDir string) []overnightLane {
+func overnightLanes(mobileDir, pipelineCmd string) []overnightLane {
 	return []overnightLane{
 		{name: "e2e", e2e: true, cmd: func(sb, suite, filter string) string {
 			if suite == "" {
@@ -58,7 +58,13 @@ func overnightLanes(mobileDir string) []overnightLane {
 			}
 			return c
 		}},
-		{name: LanePipeline, cmd: func(sb, _, filter string) string { return PipelineCommand(sb, filter) }},
+		{name: LanePipeline, cmd: func(sb, _, filter string) string {
+			if pipelineCmd == "" {
+				return PipelineCommand(sb, filter)
+			}
+			return "LOOP_PIPELINE_SANDBOX=" + shellQuote(sb) + " LOOP_PIPELINE_FILTER=" + shellQuote(filter) +
+				"; export LOOP_PIPELINE_SANDBOX LOOP_PIPELINE_FILTER; " + pipelineCmd
+		}},
 	}
 }
 
@@ -144,7 +150,7 @@ func (r *Runner) runOvernight(ctx context.Context, ru *run, reg Regression, rep 
 	repos[LanePipeline], repos["voice"] = ru.repo.Slug, ru.repo.Slug
 	var errs, runs []string
 	var tests []RegressionTest
-	for i, lane := range overnightLanes(mobileDir) {
+	for i, lane := range overnightLanes(mobileDir, cfg.PipelineCommand) {
 		res := r.runLane(ctx, ru, reg, lane, fmt.Sprintf("%s-%d", ru.sandbox, i), "", "", repos, writable, budget(), log)
 		if errors.Is(res.err, errVerifyStopped) {
 			return rep, errVerifyStopped
