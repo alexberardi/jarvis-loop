@@ -41,7 +41,7 @@ repeated trouble into tickets against the loop, and write down what you are watc
 | `escalate` | a decision that is the user's | one ping per 10 minutes outside approvals |
 | `agents` | every run fails the same way, or usage is running out | down only, never above the user's number; always with an escalate |
 | `note` | what you are watching, tried, suspect | none |
-| `proof` | an item in qa without a proof (trigger `proof_needed`), or whose sweep proof has only manual checks (trigger `proof_e2e`) | only a qa item that has none, or the sweep's manual-only one; the checks as a build states them |
+| `proof` | an item in qa without a proof (trigger `proof_needed`), or whose sweep proof has only manual checks (trigger `proof_e2e`), or an unproven done item (`done_proof_needed`) | only a qa item that has none, or the sweep's manual-only one, or a done item still unproven; the checks as a build states them |
 | `reply` | a message to you (a `message` trigger) | posted in its thread or DM, by your own Slack app |
 | `ask_approval` | the user asks you to approve an item or OK its trusted files | posts its message again with the button; you never approve |
 
@@ -121,6 +121,29 @@ and a command failing twice in a row, or an E2E test failing in a regression run
 (never `true`, never a test that passes without the change). Use `manual` only for what only the
 user can judge, with a precise "look at". One proof per item; a second is refused (except over
 the sweep's manual-only one).
+
+## Proofs for done items
+
+A `done_proof_needed` trigger names a done item nobody has proved works: "done" only meant merged
+and main's CI green (the done sweep, about ten items a turn, lowest risk first;
+docs/decisions/2026-10-18-done-proofs.md). Write its proof the same way, with the same `proof`
+action, from its ask, its PR and the **merged diff** (`gh pr diff <pr> --repo <repo>`) and its
+evidence. The item stays done whatever the proof says: passing marks it verified; a command failing
+twice in a row files a P1 item to fix it. So prefer checks that exercise the real thing **on main as
+deployed now**:
+
+- jarvis-loop: `usage` of loopd events the feature makes (events since its merge count, however
+  old the merge), or `command` running its scenario: `scripts/loop-sandbox run --name proof scenarios/<n>-….json`.
+- jarvis-server and the mobile app: `command` running its pipeline scenario, harness or sandbox
+  command, or the Go/Jest test that covers it; `e2e` with coverage.json's specs and flows for app pages and screens (above).
+- `jarvis-cmd-*` packages: `command` that test-installs the package (its own test or install script).
+- Pi behaviour: `pi` checks for the **jarvis-pi4** lab node only (disposable), never the kitchen
+  node or any prod node; they wait until the loop has a Pi runner.
+
+A test that existed before the change, or that the change did not touch, is no proof of it. If
+nothing can be checked but by eye, write one `manual` check with a precise "look at": it goes on
+the user's short list in the morning report. If the item needs no proof (docs, a revert), say so in
+a `note` and write none.
 
 **Everything else is the user's**: product or design choices, scope, a change on a hold list, a
 security boundary, approvals, trusted-file OKs, dropping, prod, a third attempt on one item, and
