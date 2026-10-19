@@ -1,0 +1,41 @@
+{
+  "name": "review-gemini-blocking",
+  "about": "#190: with gemini.blocking on, a high finding Claude agrees with sends the approved PR back to build as a review bounce, the agreed high finding as the note (the low one stays out of it). The build addresses it on the same branch; at the new head Gemini's quota is used up, so the second opinion is unavailable: no comment, the thread says so, and the approval stands.",
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "gemini", "play": "ok", "blocking": true},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [
+       {"item": "a", "kind": "second_opinion", "actor": "runner", "data": {"status": "^ok$", "agreed_high": "^1$", "blocking": "^true$", "bounced": "^true$"}, "count": 1},
+       {"item": "a", "kind": "advanced", "outcome": "bounce", "actor": "runner",
+        "data": {"second_opinion": "^bounce$", "bounce_count": "^1$", "notes": "(?s)^Second opinion \\(Gemini\\), agreed by Claude: fix these high findings\\.\\n\\n- `feature\\.txt:1`: The empty input is not handled: it panics\\. Evidence: .*Claude: Checked the line[^\\n]*\\n$"}}
+     ],
+     "pr": {"a": {"comments": 2, "comment": "\\*\\*Sent back to build:\\*\\* Claude agreed with 1 high finding\\(s\\), and blocking is on\\."}},
+     "messages": [
+       {"thread": "a", "text": "^Second opinion \\(Gemini\\): 2 findings \\(1 high\\), Claude agreed with 2 \\(1 high\\); sent back to build\\.$"},
+       {"thread": "a", "text": "^Bounced back to build \\(1\\): Second opinion \\(Gemini\\), agreed by Claude"}
+     ]},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review"}},
+    {"do": "gemini", "play": "quota", "blocking": true},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"},
+     "events": [
+       {"item": "a", "kind": "second_opinion", "actor": "runner", "data": {"status": "^unavailable$", "reason": "^quota$", "bounced": "^false$"}, "count": 1},
+       {"item": "a", "kind": "advanced", "outcome": "approved", "actor": "runner", "data": {"second_opinion": "^unavailable$"}, "count": 1}
+     ],
+     "pr": {"a": {"comments": 3, "comment": "^## Loop review: approved"}},
+     "messages": [
+       {"thread": "a", "text": "^Second opinion \\(Gemini\\) unavailable \\(quota\\); the review stands\\.$"},
+       {"thread": "a", "text": "^Review approved → land"}
+     ],
+     "board": {"a": {"column": "Review", "card": "Gemini 2 · 2 agreed", "page": "2 reviews \\(1 unavailable\\) · 2 findings: 1 high, 0 medium, 1 low · Claude agreed with 2 of 2 judged \\(100%\\): 1 high, 0 medium, 1 low · sent back 1×"}}}
+  ]
+}
