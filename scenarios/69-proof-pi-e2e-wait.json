@@ -1,6 +1,6 @@
 {
   "name": "proof-pi-e2e-wait",
-  "about": "QA proofs (docs/decisions/2026-10-18-qa-proofs.md), the pi and e2e kinds: nothing runs them yet (the test Pi device is not on main; the E2E suite is #148/#149), so they wait and never verify the item. The build's proof: a command, a pi check and an e2e check. The command passes on the first pass; the thread says what it still waits for, the board shows it under waiting for a proof, and an hour later nothing more is checked. The user can always verify it by hand.",
+  "about": "QA proofs (docs/decisions/2026-10-18-qa-proofs.md), the pi and e2e kinds: nothing runs pi checks yet (the test Pi device is not on main) and these e2e tests are in no regression run, so they wait and never verify the item (#195: scenarios 73-…). The build's proof: a command, a pi check and an e2e check. The command passes on the first pass; the thread says what it still waits for, the board shows it under waiting for a proof, and an hour later nothing more is checked. The user can always verify it by hand.",
   "stages": ["build", "review", "land"],
   "steps": [
     {"do": "add", "item": "a", "title": "Node wake word"},
@@ -19,11 +19,11 @@
     {"do": "runner", "claims": "a"},
     {"do": "runner_idle"},
     {"do": "expect", "stage": {"a": "qa"},
-     "messages": [{"thread": "a", "from": "bot", "text": "#1 Node wake word: Merged — the loop checks it itself: command: `test -n \"\\$LOOP_MERGE_SHA\"`; pi: `systemctl is-active jarvis-node` \\(waits for the test Pi\\); e2e: TestWakeWord, TestWakeWordAtNight \\(waits for the E2E suite\\)\\.", "buttons": ["Verified", "Reopen"]}]},
+     "messages": [{"thread": "a", "from": "bot", "text": "#1 Node wake word: Merged — the loop checks it itself: command: `test -n \"\\$LOOP_MERGE_SHA\"`; pi: `systemctl is-active jarvis-node` \\(waits for the test Pi\\); e2e: TestWakeWord, TestWakeWordAtNight \\(waits for the next regression run\\)\\.", "buttons": ["Verified", "Reopen"]}]},
     {"do": "runner", "claims": "none"},
     {"do": "expect", "stage": {"a": "qa"},
      "events": [{"item": "a", "kind": "proof_checked", "data": {"status": "^waiting$", "changed": "^true$"}, "count": 1}],
-     "messages": [{"thread": "a", "from": "bot", "text": "^Proof: waits for: pi: `systemctl is-active jarvis-node` \\(waits for the test Pi\\); e2e: TestWakeWord, TestWakeWordAtNight \\(waits for the E2E suite\\)\\.$"}],
+     "messages": [{"thread": "a", "from": "bot", "text": "^Proof: waits for: pi: `systemctl is-active jarvis-node` \\(waits for the test Pi\\); e2e: TestWakeWord, TestWakeWordAtNight \\(waits for the next regression run\\)\\.$"}],
      "board": {"a": {"column": "QA", "card": "waiting for a proof</span>[\\s\\S]*waits for: pi: "}}},
     {"do": "clock", "advance": "1h"},
     {"do": "runner", "claims": "none"},

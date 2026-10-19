@@ -88,6 +88,9 @@ const (
 	BackToReview Outcome = "back_to_review"
 	UsageLimit   Outcome = "usage_limit"
 	Failed       Outcome = "failed"
+	// CIPending is land giving back its lease while the PR's CI is still pending (not failed): the
+	// item stays in land and is claimed again after LandRequeueAfter (cipending.go).
+	CIPending Outcome = "ci_pending"
 )
 
 // Risk values set by triage.
@@ -184,9 +187,14 @@ type Item struct {
 	Builder string `json:"builder,omitempty"`
 	// BuildSession is the OpenCode session of the item's last qwen build, which its next build
 	// resumes ("" for none).
-	BuildSession string    `json:"build_session,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	BuildSession string `json:"build_session,omitempty"`
+	// NotBefore is when a land item put back by ci_pending may be claimed again; CIPendingSince
+	// and CIPendingSHA are when CI started pending on that head, across land runs (cipending.go).
+	NotBefore      time.Time `json:"not_before,omitzero"`
+	CIPendingSince time.Time `json:"ci_pending_since,omitzero"`
+	CIPendingSHA   string    `json:"ci_pending_sha,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // ValidPriority reports whether p is P1–P5.
@@ -339,8 +347,14 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		return nil
 	}
 
-	if err := applyTrustFields(&it, from, a.Outcome, f, data); err != nil {
+	trustNotes, err := applyTrustFields(&it, from, a.Outcome, f, data)
+	if err != nil {
 		return Transition{}, err
+	}
+	tr.Also = append(tr.Also, trustNotes...)
+
+	if a.Outcome != CIPending {
+		it.NotBefore, it.CIPendingSince, it.CIPendingSHA = time.Time{}, time.Time{}, ""
 	}
 
 	switch a.Outcome {
@@ -632,6 +646,10 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 			return Transition{}, err
 		}
 		it = toNeedsYou(it, from, msg)
+	case CIPending:
+		if err := applyCIPending(&it, f, data, now); err != nil {
+			return Transition{}, err
+		}
 	}
 	if builder == BuilderQwen && it.Builder == BuilderClaude {
 		tr.Also = append(tr.Also, Note{Kind: "builder_fallback", Data: map[string]any{

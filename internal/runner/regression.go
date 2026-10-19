@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"mime/multipart"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
@@ -52,6 +55,7 @@ type RegressionTest struct {
 	Error      string `json:"error,omitempty"`
 	MS         int64  `json:"ms"`
 	Screenshot string `json:"screenshot,omitempty"`
+	Recording  string `json:"recording,omitempty"`
 	Repo       string `json:"repo,omitempty"`
 }
 
@@ -80,6 +84,9 @@ type E2EReport struct {
 		DurationMS  int64    `json:"duration_ms"`
 		Error       *string  `json:"error"`
 		Screenshots []string `json:"screenshots"`
+		// Attachments and Artifacts are a failure's other files (a voice case's reply.wav).
+		Attachments []string `json:"attachments"`
+		Artifacts   []string `json:"artifacts"`
 	} `json:"tests"`
 }
 
@@ -112,11 +119,21 @@ func (rep E2EReport) SuiteErrors() string {
 	return strings.Join(out, "; ")
 }
 
+// recordingExts are the files a failure's recording may be (a voice reply, a screen recording).
+var recordingExts = []string{".wav", ".mp4", ".webm", ".mov"}
+
 // RegressionTests are the report's tests for loopd: repos says which repo a suite's failure is
-// filed in; shots are the screenshots to upload (the upload name -> the file under the run's dir),
-// the first of each failure's, at most MaxRegressionShots, each a plain relative path.
-func (rep E2EReport) RegressionTests(repos map[string]string) (tests []RegressionTest, shots map[string]string) {
+// filed in; shots are the files to upload (the upload name -> the file under the run's dir): the
+// first screenshot of each failure's, at most MaxRegressionShots, and its first recording (an
+// attachment or artifact that is audio or video), each a plain relative path. prefix goes before
+// each upload name (an overnight run's lanes each have a report).
+func (rep E2EReport) RegressionTests(repos map[string]string, prefix ...string) (tests []RegressionTest, shots map[string]string) {
 	shots = map[string]string{}
+	pre := strings.Join(prefix, "")
+	plain := func(s string) (string, bool) {
+		rel := filepath.Clean(s)
+		return rel, s != "" && !filepath.IsAbs(rel) && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../")
+	}
 	for i, t := range rep.Tests {
 		rt := RegressionTest{Suite: t.Suite, Title: t.Title, File: t.File, Line: t.Line, Status: t.Status, MS: t.DurationMS, Repo: repos[t.Suite]}
 		if t.Error != nil {
@@ -125,13 +142,28 @@ func (rep E2EReport) RegressionTests(repos map[string]string) (tests []Regressio
 		failed := t.Status != "passed" && t.Status != "skipped"
 		if failed && len(shots) < MaxRegressionShots {
 			for _, s := range t.Screenshots {
-				rel := filepath.Clean(s)
-				if s == "" || filepath.IsAbs(rel) || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+				rel, ok := plain(s)
+				if !ok {
 					continue
 				}
-				name := fmt.Sprintf("%d-%s", i+1, filepath.Base(rel))
+				name := fmt.Sprintf("%s%d-%s", pre, i+1, filepath.Base(rel))
 				shots[name] = rel
 				rt.Screenshot = name
+				break
+			}
+		}
+		if failed && len(shots) < MaxRegressionShots {
+			for _, s := range append(slices.Clone(t.Attachments), t.Artifacts...) {
+				rel, ok := plain(s)
+				if !ok || !slices.Contains(recordingExts, strings.ToLower(filepath.Ext(rel))) {
+					continue
+				}
+				name := fmt.Sprintf("%s%d-%s", pre, i+1, filepath.Base(rel))
+				if _, dup := shots[name]; dup {
+					continue
+				}
+				shots[name] = rel
+				rt.Recording = name
 				break
 			}
 		}
@@ -287,28 +319,58 @@ func (r *Runner) runRegression(ctx context.Context, ru *run, reg Regression, log
 	}
 	defer release()
 
-	cmdline := RegressionCommand(reg.Suite, ru.sandbox, mobileDir)
-	logPath := filepath.Join(ru.dir, "e2e.log")
-	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return rep, err
-	}
 	writable := []string{ru.dir}
 	if mobileDir != "" {
 		writable = append(writable, mobileDir)
 	}
-	cmd, err := r.fence(wt, cmdline, append(r.agentEnv(), "LOOP_SANDBOX="+ru.sandbox, "LOOP_REPO="+ru.repo.Slug, "LOOP_BASE="+ru.repo.Base,
+	if reg.Suite == pipeline.SuiteOvernight {
+		return r.runOvernight(ctx, ru, reg, rep, mobileDir, repos, writable, log)
+	}
+	cmdline := RegressionCommand(reg.Suite, ru.sandbox, mobileDir)
+	exit, out, err := r.runFenced(ctx, ru, reg, cmdline, "e2e.log", "e2e "+reg.Suite, writable, cfg.Timeout(), log)
+	if err != nil {
+		return rep, err
+	}
+	runDir, raw, err := latestE2EReport(wt)
+	if err != nil {
+		return rep, fmt.Errorf("scripts/e2e exited %d with no report (%v); its log ends: %s", exit, err, clip(tail(out, 3), 400))
+	}
+	e2e, err := ParseE2EReport(raw)
+	if err != nil {
+		return rep, err
+	}
+	rep.E2ERun = e2e.Run
+	rep.Error = e2e.SuiteErrors()
+	tests, shots := e2e.RegressionTests(repos)
+	rep.Tests = tests
+	r.uploadShots(ctx, reg.ID, runDir, rep.Tests, shots, log)
+	r.uploadReport(ctx, reg.ID, runDir, "", log)
+	log.Info("regression ended", "exit", exit, "tests", len(tests), "suite_errors", rep.Error)
+	return rep, nil
+}
+
+// runFenced runs cmdline in the run's checkout, in the verify steps' fence, its output in the run
+// dir's logName, keeping the lease alive (note: what the board shows), for at most timeout. It
+// returns the exit code and the log; an error is a stop (errVerifyStopped), the timeout, or a
+// command that could not start.
+func (r *Runner) runFenced(ctx context.Context, ru *run, reg Regression, cmdline, logName, note string, writable []string, timeout time.Duration, log *slog.Logger) (int, string, error) {
+	logPath := filepath.Join(ru.dir, logName)
+	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return -1, "", err
+	}
+	cmd, err := r.fence(ru.wt, cmdline, append(r.agentEnv(), "LOOP_SANDBOX="+ru.sandbox, "LOOP_REPO="+ru.repo.Slug, "LOOP_BASE="+ru.repo.Base,
 		"LOOP_REGRESSION="+strconv.FormatInt(reg.ID, 10)), writable)
 	if err != nil {
 		logf.Close()
-		return rep, fmt.Errorf("scripts/e2e cannot run fenced: %w", err)
+		return -1, "", fmt.Errorf("%s cannot run fenced: %w", firstWord(cmdline), err)
 	}
 	cmd.Stdout, cmd.Stderr = logf, logf
 	ownGroup(cmd)
-	log.Info("regression starting", "dir", wt, "cmd", cmdline)
+	log.Info("regression starting", "dir", ru.wt, "cmd", cmdline)
 	if err := cmd.Start(); err != nil {
 		logf.Close()
-		return rep, fmt.Errorf("scripts/e2e could not start: %w", err)
+		return -1, "", fmt.Errorf("%s could not start: %w", firstWord(cmdline), err)
 	}
 	pid := cmd.Process.Pid
 	exited := make(chan struct{})
@@ -317,7 +379,7 @@ func (r *Runner) runRegression(ctx context.Context, ru *run, reg Regression, log
 		state, _ = cmd.Process.Wait()
 		close(exited)
 	}()
-	w := r.keepAlive(ctx, ru, "regression: e2e "+reg.Suite, "e2e "+reg.Suite, exited, cfg.Timeout())
+	w := r.keepAlive(ctx, ru, "regression: "+note, note, exited, timeout)
 	if w != waitDone {
 		_ = signalGroup(pid, syscall.SIGTERM)
 		grace := r.Clock.NewTimer(r.killGrace())
@@ -331,7 +393,7 @@ func (r *Runner) runRegression(ctx context.Context, ru *run, reg Regression, log
 	<-exited
 	logf.Close()
 	if w == waitStopped {
-		return rep, errVerifyStopped
+		return -1, "", errVerifyStopped
 	}
 	exit := -1
 	if state != nil {
@@ -339,39 +401,14 @@ func (r *Runner) runRegression(ctx context.Context, ru *run, reg Regression, log
 	}
 	out, _ := os.ReadFile(logPath)
 	if w == waitTimeout {
-		return rep, fmt.Errorf("scripts/e2e ran past the runner's %s limit (its log stays in the runner's run dir)", cfg.Timeout())
+		return exit, string(out), fmt.Errorf("%s ran past the runner's %s limit (its log stays in the runner's run dir)", firstWord(cmdline), timeout)
 	}
-	runDir, raw, err := latestE2EReport(wt)
-	if err != nil {
-		return rep, fmt.Errorf("scripts/e2e exited %d with no report (%v); its log ends: %s", exit, err, clip(tail(string(out), 3), 400))
-	}
-	e2e, err := ParseE2EReport(raw)
-	if err != nil {
-		return rep, err
-	}
-	rep.E2ERun = e2e.Run
-	rep.Error = e2e.SuiteErrors()
-	tests, shots := e2e.RegressionTests(repos)
-	rep.Tests = tests
-	for name, rel := range shots {
-		path, err := runDirShot(runDir, rel)
-		if err != nil {
-			log.Warn("regression screenshot not uploaded", "file", rel, "err", err)
-			r.dropShot(rep.Tests, name)
-			continue
-		}
-		if err := r.Client.RegressionFile(ctx, reg.ID, path, name); err != nil {
-			log.Warn("regression screenshot upload", "file", rel, "err", err)
-			r.dropShot(rep.Tests, name)
-		}
-	}
-	for _, f := range []string{"report.md", "report.json"} {
-		if err := r.Client.RegressionFile(ctx, reg.ID, filepath.Join(runDir, f), f); err != nil {
-			log.Warn("regression report upload", "file", f, "err", err)
-		}
-	}
-	log.Info("regression ended", "exit", exit, "tests", len(tests), "suite_errors", rep.Error)
-	return rep, nil
+	return exit, string(out), nil
+}
+
+func firstWord(cmdline string) string {
+	w, _, _ := strings.Cut(cmdline, " ")
+	return w
 }
 
 // runDirShot resolves a screenshot's path in the run dir, symlinks included: the report's path is
@@ -398,6 +435,37 @@ func (r *Runner) dropShot(tests []RegressionTest, name string) {
 	for i := range tests {
 		if tests[i].Screenshot == name {
 			tests[i].Screenshot = ""
+		}
+		if tests[i].Recording == name {
+			tests[i].Recording = ""
+		}
+	}
+}
+
+// uploadShots uploads the failures' screenshots and recordings (shots: upload name -> the file
+// under runDir); one that cannot be is dropped from its test.
+func (r *Runner) uploadShots(ctx context.Context, id int64, runDir string, tests []RegressionTest, shots map[string]string, log *slog.Logger) {
+	names := slices.Sorted(maps.Keys(shots))
+	for _, name := range names {
+		rel := shots[name]
+		path, err := runDirShot(runDir, rel)
+		if err != nil {
+			log.Warn("regression screenshot not uploaded", "file", rel, "err", err)
+			r.dropShot(tests, name)
+			continue
+		}
+		if err := r.Client.RegressionFile(ctx, id, path, name); err != nil {
+			log.Warn("regression screenshot upload", "file", rel, "err", err)
+			r.dropShot(tests, name)
+		}
+	}
+}
+
+// uploadReport uploads a report's report.md and report.json (prefix before their names).
+func (r *Runner) uploadReport(ctx context.Context, id int64, runDir, prefix string, log *slog.Logger) {
+	for _, f := range []string{"report.md", "report.json"} {
+		if err := r.Client.RegressionFile(ctx, id, filepath.Join(runDir, f), prefix+f); err != nil {
+			log.Warn("regression report upload", "file", f, "err", err)
 		}
 	}
 }

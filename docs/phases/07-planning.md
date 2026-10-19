@@ -64,8 +64,9 @@ ones are allowed), all `invalid_field` (400); a cycle is refused too; repeats ar
 - Table `plans`: id, title, stage (`brief`, `blueprint`, `split`, `done`, `dropped`), priority,
   repos (one or more slugs, set by the user's words or by the product agent), Slack channel and
   thread ts, the product and engineering session ids, created/updated.
-- Table `plan_docs`: plan id, kind (`brief`, `blueprint`), version, markdown, sha256, created.
-  Append-only: each agent turn that changes a document adds a version.
+- Table `plan_docs`: plan id, kind (`brief`, `blueprint`, and since #191 `critique`: Gemini's
+  critique of a blueprint with engineering's answers, never approved), version, markdown, sha256,
+  created. Append-only: each agent turn that changes a document adds a version.
 - Table `plan_turns`: plan id, the user messages batched into the turn, status (`queued`,
   `running`, `done`, `failed`), lease, result summary. At most one queued or running turn per plan;
   a message that arrives while a turn runs joins the next queued turn.
@@ -200,6 +201,17 @@ new session with the persona's whole brief, whose id loopd then stores. Harness:
 plan plays and per-directory sessions, `scenarios/40-plan-runner.json` (2, end to end),
 `41-plan-reply-joins.json` (3), `42-plan-back-to-brief.json` (5), `43-plan-resume.json` (7).
 
+**Gemini's critique of a blueprint (#191, [decision](../decisions/2026-10-19-gemini-plan-critique.md)):**
+with the runner config's `gemini` block, an engineering turn that says `ready` has its blueprint
+critiqued by Gemini (agy, `runner/plancritique.go`) against the approved brief before the result
+is posted; with points, the runner resumes the engineering session in the same turn to answer
+each (agree and revise the blueprint, or disagree and why). The result carries `critique` (the
+markdown), the revised blueprint and a reply that opens with the summary line ("Gemini raised 7
+points: 4 taken, 3 answered."). Gemini unavailable (quota, timeout, bad output) or the answers
+unusable: the blueprint is posted as the persona left it, and the reply's first line says so.
+Advisory: nothing waits on or is refused for Gemini. Scenarios `75-plan-gemini-critique.json`
+and `76-plan-gemini-unavailable.json`.
+
 ## Slack
 
 - The bot joins `#plan` (`C0C8Y132YRM`; already a member). A top-level message there from the
@@ -208,8 +220,8 @@ plan plays and per-directory sessions, `scenarios/40-plan-runner.json` (2, end t
 - Replies in a plan thread queue a turn. While a turn runs, the bot adds a ⏳ reaction to the
   message; ✅ when the reply is posted.
 - When a turn says `ready`, the reply ends with **Approve brief v2** / **Approve blueprint v1**
-  buttons and a link to the document page. Approving the blueprint lists the filed items in the
-  thread.
+  buttons and a link to the document page (and to Gemini's critique, when the turn wrote one).
+  Approving the blueprint lists the filed items in the thread.
 - `/loop plans` lists open plans; `/loop drop P<n>` drops one.
 
 **As built (piece 4, 2026-10-16):** the bot may post in `#plan` (`slack.ChannelPlan`, added to its
@@ -251,9 +263,9 @@ from the API now get a `#plan` thread too (37–39's transcripts show it).
 
 - The **Planning** column shows open plans (stage, last activity, whose turn it is: "you" or
   "agent").
-- `GET /board/plans/{id}`: the plan's documents rendered as HTML (latest, with older versions
-  linked), its turns, and its items with their stages. Markdown is rendered server-side with an
-  allow-list (headings, lists, tables, code, links; no raw HTML), so the CSP stays as it is.
+- `GET /board/plans/{id}`: the plan's documents (brief, blueprint, Gemini critique) rendered as
+  HTML (latest, with older versions linked), its turns, and its items with their stages. Markdown
+  is rendered server-side with an allow-list (headings, lists, tables, code, links; no raw HTML), so the CSP stays as it is.
 - Cards of items from a plan show the plan's number, linking to this page.
 
 ## Into the repo

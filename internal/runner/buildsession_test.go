@@ -181,7 +181,7 @@ func TestCrashedBuildSavesWorkAndResumes(t *testing.T) {
 	g.setBuildSession(id, s)
 	branch := fmt.Sprintf("loop/%d-crash", id)
 	wt := filepath.Join(g.r.Cfg.WorkRoot, fmt.Sprintf("%d-build", id))
-	if _, err := g.r.Git.AddWorktree(g.ctx, filepath.Join(g.r.Cfg.WorkRoot, "mirrors", "demo.git"), wt, branch, "main"); err != nil {
+	if _, err := g.r.Git.AddWorktree(g.ctx, filepath.Join(g.r.Cfg.WorkRoot, "mirrors", "demo.git"), wt, branch, "main", Recorded{}); err != nil {
 		t.Fatal(err)
 	}
 	os.WriteFile(filepath.Join(wt, "unsaved.txt"), []byte("written before the crash\n"), 0o644)

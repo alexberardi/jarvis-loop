@@ -11,3 +11,4 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .muted { color: var(--muted); }
 .reason { color: var(--warn); }
 </style>{{end}}
+{{define "second-opinion"}}{{.Runs}} {{if eq .Runs 1}}review{{else}}reviews{{end}}{{if .Unavailable}} ({{.Unavailable}} unavailable){{end}} · {{.Findings}} {{if eq .Findings 1}}finding{{else}}findings{{end}}: {{.High}} high, {{.Medium}} medium, {{.Low}} low · Claude agreed with {{.Agreed}} of {{.Judged}} judged ({{.AgreedPct}}%): {{.AgreedHigh}} high, {{.AgreedMedium}} medium, {{.AgreedLow}} low{{if .Bounced}} · sent back {{.Bounced}}×{{end}}{{end}}

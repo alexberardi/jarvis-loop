@@ -16,14 +16,16 @@ func (s *Store) loadControl(q interface {
 	QueryRow(string, ...any) *sql.Row
 }) (pipeline.Control, error) {
 	var c pipeline.Control
-	var stopped int
+	var stopped, nightly int
 	var limits, rules, budgets string
-	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules, orchestrator_turns_per_day, runway_warn_hours, budgets FROM control WHERE id = 1`).
-		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules, &c.OrchTurnsPerDay, &c.RunwayWarnHours, &budgets)
+	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules, orchestrator_turns_per_day, runway_warn_hours, budgets,
+		regression_nightly, regression_at FROM control WHERE id = 1`).
+		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules, &c.OrchTurnsPerDay, &c.RunwayWarnHours, &budgets, &nightly, &c.RegressionAt)
 	if err != nil {
 		return c, err
 	}
-	c.Stopped = stopped != 0
+	c.Stopped, c.RegressionNightly = stopped != 0, nightly != 0
+	c.RegressionAt = c.RegressionTime()
 	if err := json.Unmarshal([]byte(limits), &c.Limits); err != nil {
 		return c, err
 	}
@@ -72,8 +74,13 @@ func saveControl(tx *sql.Tx, c pipeline.Control, builtInRules bool) error {
 	if maps.EqualFunc(c.Budgets, pipeline.DefaultBudgets(), func(a, b pipeline.Budget) bool { return a == b }) {
 		budgets = nil
 	}
-	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=?, orchestrator_turns_per_day=?, runway_warn_hours=?, budgets=? WHERE id = 1`,
-		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules), c.OrchTurnsPerDay, c.RunwayWarnHours, string(budgets))
+	nightly := 0
+	if c.RegressionNightly {
+		nightly = 1
+	}
+	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=?, orchestrator_turns_per_day=?, runway_warn_hours=?, budgets=?,
+		regression_nightly=?, regression_at=? WHERE id = 1`,
+		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules), c.OrchTurnsPerDay, c.RunwayWarnHours, string(budgets), nightly, c.RegressionAt)
 	return err
 }
 
@@ -121,6 +128,9 @@ type ControlPatch struct {
 	RunwayWarnHours *int `json:"runway_warn_hours"`
 	// Budgets replace the budget of each provider they name (usage.go).
 	Budgets map[string]pipeline.Budget `json:"budgets"`
+	// RegressionNightly schedules the overnight regression every night, at RegressionAt (HH:MM).
+	RegressionNightly *bool   `json:"regression_nightly"`
+	RegressionAt      *string `json:"regression_at"`
 }
 
 // SetControl applies a patch to the control row and records it.
@@ -150,6 +160,12 @@ func (s *Store) SetControl(ctx context.Context, actor string, p ControlPatch) (p
 		}
 		if p.RunwayWarnHours != nil {
 			c.RunwayWarnHours = *p.RunwayWarnHours
+		}
+		if p.RegressionNightly != nil {
+			c.RegressionNightly = *p.RegressionNightly
+		}
+		if p.RegressionAt != nil {
+			c.RegressionAt = *p.RegressionAt
 		}
 		for k, v := range p.Limits {
 			c.Limits[k] = v

@@ -3,6 +3,7 @@ package runner
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 	"github.com/alexberardi/jarvis-loop/skills"
@@ -43,6 +44,10 @@ type Item struct {
 	PlanPiece int   `json:"plan_piece,omitempty"`
 	// Proof is how the loop checks it once merged (the runner runs its command checks).
 	Proof *pipeline.Proof `json:"proof,omitempty"`
+	// CIPendingSince and CIPendingSHA are when CI started pending on that head, across land runs
+	// that ended in ci_pending (land reads them for land_ci_give_up).
+	CIPendingSince time.Time `json:"ci_pending_since,omitzero"`
+	CIPendingSHA   string    `json:"ci_pending_sha,omitempty"`
 }
 
 // ItemTrust is the part of a trust OK the runner needs.
@@ -50,6 +55,10 @@ type ItemTrust struct {
 	HeadSHA string `json:"head_sha"`
 	By      string `json:"by"`
 	Used    bool   `json:"used"`
+	// Paths and DiffSHA256 are the trusted files and their diff's digest the approver OK'd: a new
+	// head with the same ones carries the OK (carriedTrust).
+	Paths      []string `json:"paths"`
+	DiffSHA256 string   `json:"diff_sha256"`
 }
 
 // allows reports whether the approver's OK lets verify run head's change to trusted files.
@@ -219,7 +228,7 @@ func StaticBrief(stage string) string {
  "proof": [{"kind": "command", "run": "go test ./internal/web -run TestBoardQA"}, {"kind": "manual", "look": "the QA column on a phone"}]}`)
 		b.WriteString("\n```\n\n```json\n{\"outcome\": \"question\", \"question\": \"…\"}\n```\n\n")
 		b.WriteString("`ready_for_pr` means everything is committed: the runner refuses a worktree with uncommitted changes, and reports git's own HEAD and changed files. It adds a Verification footer (the evidence files, the run's numbers, your proof) to your `pr_body`. Set `needs_review` to true when the change touches something the user should look at before it merges. No other fields.\n\n")
-		b.WriteString("`proof` (optional, at most 10 checks) is how the loop can tell, once merged, that the change works; an item that waits in qa is checked with it. Kinds: `usage` (`event`: a loopd event kind seen since the merge, with optional `actor` and `match` lists on its data fields: `{\"kind\": \"usage\", \"event\": \"claimed\", \"actor\": [\"runner:mbp\"]}`); `command` (`run`: one shell line the runner runs fenced in a checkout of main, exit 0 passes); `pi` (`run`, for the test Pi; it waits until the loop has one); `e2e` (`tests`: E2E suite test names; they wait until it runs); `manual` (`look`: one line, what only the user can judge). Every automatic check passing verifies the item without the user; a command failing twice in a row reopens it. So make each check really show the change works, and use `manual` only for looks, feel or a product call.\n")
+		b.WriteString("`proof` (optional, at most 10 checks) is how the loop can tell, once merged, that the change works; an item that waits in qa is checked with it. Kinds: `usage` (`event`: a loopd event kind seen since the merge, with optional `actor` and `match` lists on its data fields: `{\"kind\": \"usage\", \"event\": \"claimed\", \"actor\": [\"runner:mbp\"]}`); `command` (`run`: one shell line the runner runs fenced in a checkout of main, exit 0 passes); `pi` (`run`, for the test Pi; it waits until the loop has one); `e2e` (`tests`: E2E specs or flows, as jarvis-server's e2e/coverage.json lists them for the pages and screens an app change touches; the next regression run that runs them decides it); `manual` (`look`: one line, what only the user can judge). Every automatic check passing verifies the item without the user; a command failing twice in a row, or an E2E test failing, reopens it. So make each check really show the change works, and use `manual` only for looks, feel or a product call.\n")
 	}
 	return b.String()
 }

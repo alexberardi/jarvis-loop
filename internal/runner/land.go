@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Land is plain code, no agent (docs/phases/06-land.md): no claude process, no model, nothing an
@@ -135,6 +136,32 @@ func advance(outcome string, fields map[string]string) Decision {
 
 func failed(format string, args ...any) Decision {
 	return advance("failed", map[string]string{"error": fmt.Sprintf(format, args...)})
+}
+
+// pendingSince is when CI started pending on the PR's head: the first land run's wait on that
+// head (the item's, from an earlier ci_pending), or this run's.
+func pendingSince(pr LandPR, it Item, runStart time.Time) time.Time {
+	if it.CIPendingSHA == pr.HeadRefOid && !it.CIPendingSince.IsZero() && it.CIPendingSince.Before(runStart) {
+		return it.CIPendingSince
+	}
+	return runStart
+}
+
+// ciWaitEnded is what a land run reports when one wait has lasted its land_ci_wait (it waited
+// since runStart), or CI has been pending for giveUp in all: ci_pending, which gives the item back to the land queue for a later run, while
+// checks are merely pending; failed (the user) when no check ever reported on the head (no CI to
+// wait for) or CI has been pending on this head for giveUp over all the runs.
+// docs/decisions/2026-10-19-ci-pending-requeue.md.
+func ciWaitEnded(d Decision, pr LandPR, it Item, runStart, now time.Time, giveUp time.Duration) Decision {
+	if len(pr.Checks) == 0 {
+		return failed("%s still pending after %s", d.Wait, roundDur(now.Sub(runStart)))
+	}
+	since := pendingSince(pr, it, runStart)
+	if waited := now.Sub(since); waited >= giveUp {
+		return failed("%s still pending after %s", d.Wait, roundDur(waited))
+	}
+	return advance("ci_pending", map[string]string{"wait": d.Wait, "head_sha": pr.HeadRefOid,
+		"since": since.UTC().Format(time.RFC3339)})
 }
 
 // Decide runs the gates in the spec's order (docs/phases/06-land.md): the PR, review approval

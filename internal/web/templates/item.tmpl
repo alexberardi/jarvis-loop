@@ -72,6 +72,10 @@ td.data { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 </ul>
 {{- end}}
 {{- end}}
+{{- with .SecondOpinion}}
+<h2>Second opinion (Gemini)</h2>
+<p>{{template "second-opinion" .}}</p>
+{{- end}}
 <h2>Evidence · {{len .Evidence}}</h2>
 {{- range .Evidence}}
 {{- if .Image}}

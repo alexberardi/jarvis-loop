@@ -409,3 +409,34 @@ func TestPlanReplyAfterTheConversationEnded(t *testing.T) {
 		t.Fatalf("refusal %+v", posts)
 	}
 }
+
+// A blueprint critiqued by Gemini: the reply (the answers and the summary line) and the Approve
+// button, with a link to the critique next to the blueprint's.
+func TestPlanReadyLinksTheCritique(t *testing.T) {
+	e := newPlanEnv(t)
+	e.planMsg(Approver, "", "a pantry list in jarvis-loop")
+	e.turn(1, pipeline.TurnResult{Reply: "Brief ready.", Brief: "# Pantry", Ready: true})
+	d := e.plan(1)
+	if _, err := e.st.ApprovePlan(e.ctx, "user:"+Approver, 1, pipeline.DocBrief, d.Docs[0].SHA256, ""); err != nil {
+		t.Fatal(err)
+	}
+	e.calls()
+	reply := "Gemini raised 1 point: 1 taken, 0 answered.\n\n1: agree, piece 3 now depends on 2."
+	e.turn(1, pipeline.TurnResult{Reply: reply, Blueprint: planBlueprint, Critique: "# Gemini's critique", Ready: true})
+	posts := only(t, e.calls(), "chat.postMessage")
+	if len(posts) != 1 || !slices.Contains(actionIDs(posts[0]), "plan_approve") {
+		t.Fatalf("ready %+v", posts)
+	}
+	text := allText(posts[0])
+	for _, want := range []string{"Gemini raised 1 point: 1 taken, 0 answered.", "Approve blueprint v1", "Gemini's critique and the answers: critique v1 (`GET /plans/P1/docs/critique?v=1` on loopd)"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("no %q in %s", want, text)
+		}
+	}
+	// A ready blueprint with no critique this turn links none.
+	e.planMsg(Approver, d.Plan.SlackTS, "fine")
+	e.turn(1, pipeline.TurnResult{Reply: "Still ready.", Ready: true})
+	if text := allText(only(t, e.calls(), "chat.postMessage")[0]); strings.Contains(text, "critique") {
+		t.Fatalf("a critique link with no critique: %s", text)
+	}
+}

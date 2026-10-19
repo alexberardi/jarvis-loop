@@ -76,7 +76,8 @@ PR, nor nightly yet (#152 builds on this).
 
 ## Left open
 
-- Per-PR and nightly runs (#152) and the QA verifier reading the results (#195).
+- Per-PR runs. Nightly runs were built in #152 ([2026-10-19-overnight-regression.md](2026-10-19-overnight-regression.md)). The QA verifier reads the results since #195: a finished run
+  decides the e2e checks of the items in qa ([2026-10-18-qa-proofs.md](2026-10-18-qa-proofs.md)).
 - No `loop regression` CLI command: Slack, the board and the API cover the trigger.
 - The real `scripts/e2e` has not run under the loop's fence on the dev box (the harness runs a
   stand-in with the same report format): the first real run is its check.

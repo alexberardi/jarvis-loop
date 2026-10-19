@@ -10,6 +10,9 @@
 // progress ("started", "hanging") to <dir>/<item id>.state, so the harness knows when a hanging
 // agent is really running. These files are the harness's plumbing, not tool calls.
 //
+// Called as `agy ...`, or through a link named agy, it is the fake Antigravity CLI instead
+// (package fakeagy).
+//
 // Called as `run ...` it is a stand-in for `opencode run --format json` instead (the runner's
 // qwen builder): it reads the provider from $OPENCODE_CONFIG, makes one chat request through it
 // (the runner's proxy, which must answer 200), resumes a session it started with -s (in the same
@@ -30,6 +33,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/alexberardi/jarvis-loop/internal/fakeagy"
 )
 
 // Scenarios.
@@ -85,6 +90,15 @@ const (
 	// TrustedChangeEager is TrustedChange by an agent that ignores the brief's line about the
 	// OK: every run commits another change to the file (#144, #142).
 	TrustedChangeEager = "trusted_change_eager"
+	// RebaseTrusted is TrustedChange, but a rerun after a bounce rebases the branch onto the base's
+	// head and commits nothing more (#233, as on #155): a rewritten head that needs a new OK.
+	RebaseTrusted = "rebase_trusted"
+	// RebaseTrustedEdit is RebaseTrusted whose rerun also changes the trusted file again after the
+	// rebase: a rewritten head with a new trusted diff, which needs a new OK (#277).
+	RebaseTrustedEdit = "rebase_trusted_edit"
+	// TrustedThenFix is TrustedChange whose rerun after a bounce fixes the review in another file
+	// only: a new head whose trusted files' diff is unchanged, so the OK carries (#277).
+	TrustedThenFix = "trusted_then_fix"
 	// Harness is good, after using the repo's harness through the runner: loop-harness up, then a
 	// run that writes .loop/evidence/harness.txt. HarnessHang does the same, then hangs.
 	Harness     = "harness"
@@ -128,7 +142,14 @@ const (
 	PlanBlueprint = "blueprint"     // engineering: a 3-piece blueprint (2 and 3 depend on 1), ready
 	BackToBrief   = "back_to_brief" // engineering: sends the plan back to the brief
 	PlanCycle     = "cycle"         // engineering: a blueprint whose pieces depend on each other
-	PlanEscape    = "plan_escape"   // tries to write outside out/ (refused), then the persona's usual
+	// PlanKeep plays blueprint while the plan has none (.loop/context/blueprint.md), then keeps
+	// the latest: ready, writing no blueprint.
+	PlanKeep = "keep"
+	// Answering Gemini's critique (a prompt with "## Gemini's critique"), every engineering play
+	// agrees with the odd points and disagrees with the even ones, revising the blueprint;
+	// PlanUnanswered writes no result then, and plays the blueprint before.
+	PlanUnanswered = "unanswered"
+	PlanEscape     = "plan_escape" // tries to write outside out/ (refused), then the persona's usual
 	// PlanWait waits until the harness releases it (the file <dir>/P<id>.release), reporting
 	// "waiting", then plays the persona's usual.
 	// A build run plays it too: wip.txt, then it waits for <dir>/<id>.release and plays good.
@@ -147,8 +168,12 @@ const (
 	// OrchPersona plays the orchestrator's skill as rules on the snapshot (persona.go): retries
 	// and failure signatures, the answer kinds, escalations with a recommendation, P1 tickets.
 	OrchPersona = "persona"
+
+	// Adjudication plays (the runner's Claude turn on Gemini's findings, stage adjudicate).
+	Agree    = "agree"    // agree with every finding
+	Disagree = "disagree" // disagree with every finding
 	// OrchProofs writes a proof for each item a proof_needed trigger names: the item's
-	// <id>-proof.json script's proof, else one manual check.
+	// <id>-proof.json script's proof, else one manual check; for proof_e2e, only the script's.
 	OrchProofs = "proofs"
 )
 
@@ -157,7 +182,8 @@ var stagePlays = map[string][]string{
 	"review": {Approve, Bounce, ReviewCommit, ApproveHold, ApproveQA, ApproveToolState, ApproveNamesDir, ApproveNamesDirOnce, Hang, UsageLimit, Exit3, Background},
 	// Plan personas.
 	"product":     {PlanBrief, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
-	"engineering": {PlanBlueprint, BackToBrief, PlanCycle, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
+	"engineering": {PlanBlueprint, BackToBrief, PlanCycle, PlanKeep, PlanUnanswered, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
+	"adjudicate":  {Agree, Disagree, Hang, UsageLimit, Exit3},
 	"orchestrate": {OrchReact, OrchNote, OrchAgentsUp, OrchInvalid, OrchInvalidOnce, OrchPersona, OrchProofs, Hang, UsageLimit, Exit3},
 }
 
@@ -185,6 +211,12 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	f := &fake{out: stdout, runHooks: true}
 	if len(args) > 0 && args[0] == "run" {
 		f.oc, f.runHooks = true, false
+	}
+	if len(args) > 0 && args[0] == "agy" {
+		return fakeagy.Main(args[1:], stdout, stderr)
+	}
+	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "agy" {
+		return fakeagy.Main(args, stdout, stderr)
 	}
 	var settings, resume string
 	for i := 0; i < len(args); i++ {
@@ -467,6 +499,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return f.triage(scenario, brief, sc)
 	case "review":
 		return f.review(scenario, brief)
+	case "adjudicate":
+		return f.adjudicate(scenario)
 	case "product", "engineering":
 		return f.planTurn(scenario, stage, item, brief, sc, progress)
 	case "orchestrate":
@@ -479,7 +513,16 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	resumed := strings.TrimSpace(git(f.cwd, "rev-list", "--count", "origin/"+base+"..HEAD")) != "0"
 	if scenario == NoChange && resumed {
 		// Nothing to fix: no commit.
-	} else if scenario == TrustedChange || scenario == TrustedChangeEager {
+	} else if (scenario == RebaseTrusted || scenario == RebaseTrustedEdit) && resumed && exists(filepath.Join(f.cwd, ".loop", "review", "notes.md")) {
+		f.bash("git -c user.name=fake -c user.email=fake@example.com rebase -q origin/" + base)
+		if scenario == RebaseTrustedEdit {
+			f.bash("echo 'shoot --light' >> " + shellQuote(change) + " && git add " + shellQuote(change) +
+				" && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'harness: shoot light mode too'")
+		}
+	} else if scenario == TrustedThenFix && resumed && exists(filepath.Join(f.cwd, ".loop", "review", "notes.md")) {
+		f.bash("mkdir -p docs && echo 'addressed the review' >> docs/review.md && git add docs/review.md" +
+			" && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'fix: address the review'")
+	} else if scenario == TrustedChange || scenario == TrustedChangeEager || scenario == RebaseTrusted || scenario == RebaseTrustedEdit || scenario == TrustedThenFix {
 		if !resumed || scenario == TrustedChangeEager || !bytes.Contains(brief, []byte(trustedBrief)) {
 			f.bash("mkdir -p \"$(dirname " + shellQuote(change) + ")\" && echo 'shoot --dark' >> " + shellQuote(change) + " && git add " + shellQuote(change) +
 				" && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'harness: shoot dark mode too'")
@@ -839,6 +882,31 @@ func (f *fake) review(play string, brief []byte) int {
 	return 0
 }
 
+// adjudicate plays the runner's adjudication turn: a verdict on each of Gemini's findings in
+// .loop/context/gemini-findings.json.
+func (f *fake) adjudicate(play string) int {
+	f.bash("cat .loop/context/gemini-findings.json")
+	b, _ := os.ReadFile(filepath.Join(f.cwd, ".loop", "context", "gemini-findings.json"))
+	var in struct {
+		Findings []struct {
+			ID int `json:"id"`
+		} `json:"findings"`
+	}
+	json.Unmarshal(b, &in)
+	verdicts := []any{}
+	for _, fd := range in.Findings {
+		v := map[string]any{"id": fd.ID, "verdict": "agree", "reason": "Checked the line: it is as the finding says."}
+		if play == Disagree {
+			v["verdict"], v["reason"] = "disagree", "The caller already checks this; the finding misreads the code."
+		}
+		verdicts = append(verdicts, v)
+	}
+	res, _ := json.Marshal(map[string]any{"verdicts": verdicts})
+	f.write(".loop/result.json", string(res))
+	f.result("Judged.")
+	return 0
+}
+
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // checkSession finds a session the fake started: it must exist and have been started in cwd
@@ -880,7 +948,10 @@ func (f *fake) planTurn(play, persona, plan string, brief []byte, sc script, pro
 	if play == PlanEscape {
 		f.write("notes.md", "outside out/\n")
 	}
-	if play == PlanWait || play == PlanEscape {
+	if bytes.HasPrefix(brief, []byte("## Gemini's critique")) {
+		return f.answerCritique(play)
+	}
+	if play == PlanWait || play == PlanEscape || play == PlanUnanswered {
 		play = stagePlays[persona][0]
 	}
 	var msgs []string
@@ -893,6 +964,14 @@ func (f *fake) planTurn(play, persona, plan string, brief []byte, sc script, pro
 	title := find(`(?m)^- Plan: P\d+: (.*)$`, brief)
 	f.bash("ls -a .loop/context")
 	r := map[string]any{}
+	if play == PlanKeep {
+		if _, err := os.Stat(filepath.Join(f.cwd, ".loop", "context", "blueprint.md")); err == nil {
+			play = ""
+			r = map[string]any{"reply": fmt.Sprintf("The blueprint stands (turn %s).", turn), "ready": true}
+		} else {
+			play = PlanBlueprint
+		}
+	}
 	switch play {
 	case PlanBrief:
 		f.write("out/brief.md", fmt.Sprintf("# %s\n\nTurn %s heard: %s\n", title, turn, strings.Join(msgs, " / ")))
@@ -917,6 +996,46 @@ func (f *fake) planTurn(play, persona, plan string, brief []byte, sc script, pro
 	res, _ := json.Marshal(r)
 	f.write("out/result.json", string(res))
 	f.result("Turn done.")
+	return 0
+}
+
+// answerCritique plays engineering's answers to Gemini's critique in
+// .loop/context/gemini-critique.json: it takes the odd points (revising out/blueprint.md) and
+// answers the even ones.
+func (f *fake) answerCritique(play string) int {
+	f.bash("cat .loop/context/gemini-critique.json")
+	if play == PlanUnanswered {
+		f.result("I could not get to it.")
+		return 0
+	}
+	b, _ := os.ReadFile(filepath.Join(f.cwd, ".loop", "context", "gemini-critique.json"))
+	var in struct {
+		Points []struct {
+			ID int `json:"id"`
+		} `json:"points"`
+	}
+	json.Unmarshal(b, &in)
+	answers, taken, lines := []any{}, []string{}, []string{}
+	for _, p := range in.Points {
+		a := map[string]any{"id": p.ID, "verdict": "agree", "why": fmt.Sprintf("Right: point %d is now in the blueprint.", p.ID)}
+		if p.ID%2 == 0 {
+			a["verdict"], a["why"] = "disagree", "The pieces already cover it."
+		}
+		answers = append(answers, a)
+		lines = append(lines, fmt.Sprintf("%d: %s", p.ID, a["verdict"]))
+		if a["verdict"] == "agree" {
+			taken = append(taken, fmt.Sprintf("- Gemini's point %d, taken.\n", p.ID))
+		}
+	}
+	r := map[string]any{"reply": "Gemini's points: " + strings.Join(lines, "; ") + ".", "answers": answers}
+	if len(taken) > 0 {
+		bp, _ := os.ReadFile(filepath.Join(f.cwd, "out", "blueprint.md"))
+		f.write("out/blueprint.md", string(bp)+"\n"+strings.Join(taken, ""))
+		r["blueprint"] = "blueprint.md"
+	}
+	res, _ := json.Marshal(r)
+	f.write("out/result.json", string(res))
+	f.result("Answered.")
 	return 0
 }
 
@@ -1013,12 +1132,14 @@ func (f *fake) orchestrate(play, turn string, brief []byte, progress func(string
 	case OrchProofs:
 		if snap.Turn != nil {
 			for _, tr := range snap.Turn.Triggers {
-				if tr.Reason != "proof_needed" {
+				if tr.Reason != "proof_needed" && tr.Reason != "proof_e2e" {
 					continue
 				}
 				checks := json.RawMessage(`[{"kind":"manual","look":"the change in use"}]`)
 				if p := loadScript(os.Getenv("FAKE_CLAUDE_SCRIPTS"), fmt.Sprint(tr.ItemID), "proof").Proof; len(p) > 0 {
 					checks = p
+				} else if tr.Reason == "proof_e2e" {
+					continue // no test covers it: the manual proof stays
 				}
 				actions = append(actions, map[string]any{"action": "proof", "item_id": tr.ItemID, "checks": checks, "reason": "from the item, its PR and evidence"})
 			}
@@ -1058,4 +1179,9 @@ func (f *fake) orchestrate(play, turn string, brief []byte, progress func(string
 	f.write("out/result.json", string(res))
 	f.result("Turn done.")
 	return 0
+}
+
+func exists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }

@@ -137,6 +137,9 @@ func TestApplyProofChecked(t *testing.T) {
 		status  string
 		words   string
 		err     string
+		// the command check after this check, when set
+		cmdFails int
+		evidence string
 	}{
 		{name: "all automatic checks pass: verified", raw: usageCmd,
 			results: []CheckResult{{Check: 1, State: CheckPassed, Evidence: "exit 0"}}, usage: map[int]UsageSeen{0: {Count: 2, Last: 40}},
@@ -150,6 +153,12 @@ func TestApplyProofChecked(t *testing.T) {
 		{name: "a second failure in a row reopens", raw: usageCmd, fails: 1,
 			results: []CheckResult{{Check: 1, State: CheckFailed, Evidence: "exit 1: FAIL TestX\nmore"}}, usage: map[int]UsageSeen{0: {Count: 1}},
 			kind: "reopened", to: Done, status: CheckFailed, words: "Proof failed 2 times in a row: command: `scripts/check`: exit 1: FAIL TestX"},
+		{name: "an environment error after a failure: no reopen, fails and state left", raw: usageCmd, fails: 1,
+			results: []CheckResult{{Check: 1, State: CheckError, Evidence: "setup failed: exit 1"}}, usage: map[int]UsageSeen{0: {Count: 1}},
+			kind: "proof_checked", to: QA, status: CheckFailed, cmdFails: 1, evidence: "could not run: setup failed: exit 1"},
+		{name: "an environment error on a pending check: stays pending", raw: usageCmd,
+			results: []CheckResult{{Check: 1, State: CheckError, Evidence: "FAIL pkg [setup failed]"}}, usage: map[int]UsageSeen{0: {Count: 1}},
+			kind: "proof_checked", to: QA, status: CheckPending, evidence: "could not run: FAIL pkg [setup failed]"},
 		{name: "automatic passed, manual left: stays for the user", raw: `[{"kind":"command","run":"true"},{"kind":"manual","look":"the colours"}]`,
 			results: []CheckResult{{Check: 0, State: CheckPassed}},
 			kind:    "proof_checked", to: QA, status: CheckManual},
@@ -162,7 +171,7 @@ func TestApplyProofChecked(t *testing.T) {
 		{name: "a result for a usage check is refused", raw: usageCmd,
 			results: []CheckResult{{Check: 0, State: CheckPassed}}, err: "not a command check"},
 		{name: "an unknown state is refused", raw: usageCmd,
-			results: []CheckResult{{Check: 1, State: "flaky"}}, err: "passed or failed"},
+			results: []CheckResult{{Check: 1, State: "flaky"}}, err: "passed, failed or error"},
 		{name: "out of range", raw: usageCmd,
 			results: []CheckResult{{Check: 5, State: CheckPassed}}, err: "not a command check"},
 	} {
@@ -191,6 +200,12 @@ func TestApplyProofChecked(t *testing.T) {
 			}
 			if tr.Item.Proof.CheckedAt == nil || !tr.Item.Proof.CheckedAt.Equal(now) {
 				t.Fatal("the check time is recorded")
+			}
+			if c.evidence != "" {
+				cc := tr.Item.Proof.Checks[1]
+				if cc.Fails != c.cmdFails || cc.Evidence != c.evidence || cc.CheckedAt == nil {
+					t.Fatalf("command check %+v, want fails %d, evidence %q", cc, c.cmdFails, c.evidence)
+				}
 			}
 			if c.words != "" && tr.Data["words"] != c.words {
 				t.Fatalf("words %q, want %q", tr.Data["words"], c.words)
@@ -228,8 +243,19 @@ func TestApplySetProof(t *testing.T) {
 	if err != nil || tr.Item.Proof != p || tr.Kind != "proof_set" || tr.To != QA {
 		t.Fatalf("tr %+v err %v", tr, err)
 	}
-	if _, err := ApplySetProof(tr.Item, p); err == nil {
-		t.Fatal("a proof is not replaced")
+	// The sweep's manual-only proof may be replaced (#195: E2E checks can now pass it); one with an
+	// automatic check, or the build's, may not.
+	auto, _ := ParseProof(`[{"kind":"e2e","tests":[".maestro/schedules.yaml"]}]`, ProofBySweep)
+	re, err := ApplySetProof(tr.Item, auto)
+	if err != nil || re.Item.Proof != auto || re.Data["replaced"] == nil {
+		t.Fatalf("replacing the sweep's manual proof: %+v %v", re, err)
+	}
+	if _, err := ApplySetProof(re.Item, p); err == nil {
+		t.Fatal("a proof with an automatic check is not replaced")
+	}
+	built, _ := ParseProof(`[{"kind":"manual","look":"x"}]`, ProofByBuild)
+	if _, err := ApplySetProof(Item{Stage: QA, Proof: built}, auto); err == nil {
+		t.Fatal("the build's proof is not replaced")
 	}
 	if _, err := ApplySetProof(Item{Stage: Land}, p); err == nil {
 		t.Fatal("only a qa item gets the sweep's proof")
@@ -285,7 +311,7 @@ func TestQAGroup(t *testing.T) {
 		{"no proof", nil, false, QANeedsYou, "no proof: your check"},
 		{"no proof, before the deploy", nil, true, QAWaiting, "waits for the deploy, then your check (no proof)"},
 		{"usage and e2e", mk(`[{"kind":"usage","event":"claimed","actor":["runner:mbp","runner:mini"]},{"kind":"e2e","tests":["TestA"]}]`), false,
-			QAWaiting, "waits for: usage: `claimed` by runner:mbp or runner:mini; e2e: TestA (waits for the E2E suite)"},
+			QAWaiting, "waits for: usage: `claimed` by runner:mbp or runner:mini; e2e: TestA (waits for the next regression run)"},
 		{"before the deploy", mk(`[{"kind":"usage","event":"rebuild","match":{"source":["needs_you"]}}]`), true,
 			QAWaiting, "waits for the deploy, then: usage: `rebuild` source=needs_you"},
 		{"manual left", passedManual, false, QANeedsYou, "look at the QA column on a phone"},
@@ -294,6 +320,134 @@ func TestQAGroup(t *testing.T) {
 		g, d := QAGroup(c.p, c.deploy)
 		if g != c.group || d != c.detail {
 			t.Errorf("%s: %q, %q; want %q, %q", c.name, g, d, c.group, c.detail)
+		}
+	}
+}
+
+func TestE2EMatches(t *testing.T) {
+	web := E2ETest{Name: "web: inbox.spec.ts › delete from the detail", File: "tests/inbox.spec.ts", Status: "passed"}
+	flow := E2ETest{Name: "mobile: Schedules", File: ".maestro/schedules.yaml", Status: "passed"}
+	for _, c := range []struct {
+		entry string
+		t     E2ETest
+		want  bool
+	}{
+		{"e2e/web/tests/inbox.spec.ts", web, true}, // coverage.json's path, the report's is relative to e2e/web
+		{"tests/inbox.spec.ts", web, true},
+		{"web: inbox.spec.ts › delete from the detail", web, true}, // suite: title
+		{"e2e/web/tests/admin/inbox.spec.ts", web, false},
+		{"e2e/web/tests/myinbox.spec.ts", web, false},
+		{"inbox.spec.ts › delete from the detail", web, false},
+		{".maestro/schedules.yaml", flow, true},
+		{".maestro/routines.yaml", flow, false},
+	} {
+		if got := E2EMatches(c.entry, c.t); got != c.want {
+			t.Errorf("%q vs %s (%s): %v, want %v", c.entry, c.t.Name, c.t.File, got, c.want)
+		}
+	}
+}
+
+func TestApplyE2EResults(t *testing.T) {
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	pass := func(name, file string) E2ETest { return E2ETest{N: 1, Name: name, File: file, Status: "passed"} }
+	fail := func(name, file, why string, shot int) E2ETest {
+		return E2ETest{N: 2, Name: name, File: file, Status: "failed", Error: why, Screenshot: shot}
+	}
+	traces := `[{"kind":"e2e","tests":["e2e/web/tests/admin/traces.spec.ts"]}]`
+	for _, c := range []struct {
+		name    string
+		raw     string
+		tests   []E2ETest
+		decided bool
+		kind    string
+		to      Stage
+		status  string
+		words   string
+		shot    int
+	}{
+		{name: "every test of the check passed: verified with the report", raw: traces,
+			tests: []E2ETest{pass("web: traces.spec.ts › lists", "tests/admin/traces.spec.ts"), pass("web: traces.spec.ts › opens", "tests/admin/traces.spec.ts"),
+				pass("web: inbox.spec.ts › x", "tests/inbox.spec.ts")},
+			decided: true, kind: "verified", to: Done, status: CheckPassed,
+			words: "Proof passed: e2e: e2e/web/tests/admin/traces.spec.ts (passed). Regression R12: /board/regressions/12"},
+		{name: "a test failed: reopened at once with the assertion and screenshot", raw: traces,
+			tests: []E2ETest{pass("web: traces.spec.ts › lists", "tests/admin/traces.spec.ts"),
+				fail("web: traces.spec.ts › opens", "tests/admin/traces.spec.ts", "expect(locator).toBeVisible()\n  at traces.spec.ts:40", 3)},
+			decided: true, kind: "reopened", to: Done, status: CheckFailed, shot: 3,
+			words: "E2E failed in regression R12: web: traces.spec.ts › opens (tests/admin/traces.spec.ts): expect(locator).toBeVisible(). Report: /board/regressions/12"},
+		{name: "a test was flaky (failed, passed on the rerun): verified, not reopened", raw: traces,
+			tests: []E2ETest{pass("web: traces.spec.ts › lists", "tests/admin/traces.spec.ts"),
+				{N: 2, Name: "web: traces.spec.ts › opens", File: "tests/admin/traces.spec.ts", Status: "flaky", Error: "timed out"}},
+			decided: true, kind: "verified", to: Done, status: CheckPassed},
+		{name: "the suite did not run: still waiting", raw: traces,
+			tests: []E2ETest{pass("mobile: Schedules", ".maestro/schedules.yaml")}},
+		{name: "only skipped: still waiting", raw: traces,
+			tests: []E2ETest{{Name: "web: traces.spec.ts › lists", File: "tests/admin/traces.spec.ts", Status: "skipped"}}},
+		{name: "one of two names ran: still waiting", raw: `[{"kind":"e2e","tests":["e2e/web/tests/admin/traces.spec.ts","e2e/web/tests/chat.spec.ts"]}]`,
+			tests: []E2ETest{pass("web: traces.spec.ts › lists", "tests/admin/traces.spec.ts")}},
+		{name: "e2e passed, manual left: stays for the user", raw: `[{"kind":"e2e","tests":[".maestro/schedules.yaml"]},{"kind":"manual","look":"the colours"}]`,
+			tests:   []E2ETest{pass("mobile: Schedules", ".maestro/schedules.yaml")},
+			decided: true, kind: "proof_checked", to: QA, status: CheckManual},
+		{name: "e2e passed, a command still pending: stays", raw: `[{"kind":"e2e","tests":[".maestro/schedules.yaml"]},{"kind":"command","run":"true"}]`,
+			tests:   []E2ETest{pass("mobile: Schedules", ".maestro/schedules.yaml")},
+			decided: true, kind: "proof_checked", to: QA, status: CheckPending},
+		{name: "no e2e check: nothing to decide", raw: `[{"kind":"command","run":"true"}]`,
+			tests: []E2ETest{pass("mobile: Schedules", ".maestro/schedules.yaml")}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			it := proofItem(t, c.raw)
+			tr, decided, err := ApplyE2EResults(it, E2ERun{ID: 12, Tests: c.tests}, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decided != c.decided {
+				t.Fatalf("decided %v, want %v", decided, c.decided)
+			}
+			if !decided {
+				return
+			}
+			if tr.Kind != c.kind || tr.To != c.to || tr.Item.Stage != c.to {
+				t.Fatalf("kind %s → %s (item %s), want %s → %s", tr.Kind, tr.To, tr.Item.Stage, c.kind, c.to)
+			}
+			if got := tr.Item.Proof.Status(); got != c.status {
+				t.Fatalf("status %s, want %s", got, c.status)
+			}
+			if c.words != "" && tr.Data["words"] != c.words {
+				t.Fatalf("words %q,\nwant  %q", tr.Data["words"], c.words)
+			}
+			if tr.Data["regression"] != int64(12) {
+				t.Fatalf("regression %v, want 12", tr.Data["regression"])
+			}
+			if c.shot != 0 && tr.Data["screenshot"] != c.shot {
+				t.Fatalf("screenshot %v, want %d", tr.Data["screenshot"], c.shot)
+			}
+			if tr.Item.Proof.CheckedAt != nil {
+				t.Fatal("a regression run does not move the command checks' recheck")
+			}
+			c0 := tr.Item.Proof.Checks[0]
+			if c0.CheckedAt == nil || !strings.Contains(c0.Evidence, "R12") {
+				t.Fatalf("the e2e check records the run: %+v", c0)
+			}
+			if it.Proof.Checks[0].State != CheckWaiting {
+				t.Fatal("the input item's proof must not change")
+			}
+		})
+	}
+}
+
+func TestApplyE2EResultsRefusals(t *testing.T) {
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	it := proofItem(t, `[{"kind":"e2e","tests":["tests/a.spec.ts"]}]`)
+	deploy := it
+	deploy.AwaitingDeploy = true
+	none := it
+	none.Proof = nil
+	done := it
+	done.Stage = Done
+	run := E2ERun{ID: 1, Tests: []E2ETest{{Name: "web: a", File: "tests/a.spec.ts", Status: "passed"}}}
+	for name, x := range map[string]Item{"awaiting deploy": deploy, "no proof": none, "not in qa": done} {
+		if _, _, err := ApplyE2EResults(x, run, now); err == nil || !strings.Contains(err.Error(), CodeWrongStage) {
+			t.Errorf("%s: err = %v, want wrong_stage", name, err)
 		}
 	}
 }

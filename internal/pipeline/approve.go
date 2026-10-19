@@ -25,7 +25,7 @@ type Approval struct {
 var outcomeStages = map[Outcome][]Stage{
 	Reproduced: {Triage}, Routed: {Triage}, NotReproducible: {Triage}, Question: {Triage, Build},
 	PROpened: {Build}, VerifyFailed: {Build}, Approved: {Review}, Bounce: {Review},
-	Merged: {Land}, Hold: {Land}, BackToBuild: {Land}, BackToReview: {Land},
+	Merged: {Land}, Hold: {Land}, BackToBuild: {Land}, BackToReview: {Land}, CIPending: {Land},
 	UsageLimit: {Triage, Build, Review, Land}, Failed: {Triage, Build, Review, Land},
 }
 

@@ -156,8 +156,9 @@ func (s *Store) ProofsDue(ctx context.Context) ([]BoardRow, error) {
 	return out, nil
 }
 
-// OrchProof is the orchestrator writing the proof of a qa item that has none (the proof sweep's
-// action): checks is the JSON list of checks, as a build states them.
+// OrchProof is the orchestrator writing the proof of a qa item that has none, or replacing the
+// sweep's manual-only one (the proof sweep's action): checks is the JSON list of checks, as a
+// build states them.
 func (s *Store) OrchProof(ctx context.Context, actor string, id int64, checks json.RawMessage, reason string) (pipeline.Item, error) {
 	return s.orch(ctx, actor, id, "proof", reason, func(tx *sql.Tx, it pipeline.Item, _ []Event) (pipeline.Transition, error) {
 		p, err := pipeline.ParseProof(string(checks), pipeline.ProofBySweep)
@@ -168,32 +169,49 @@ func (s *Store) OrchProof(ctx context.Context, actor string, id int64, checks js
 	})
 }
 
+// proof_asked: 0 not asked, 1 asked; 2 marks a sweep proof with only manual checks written
+// before E2E results could pass a check (migration 0027), to ask once more (3).
+const (
+	proofAskE2E   = 2
+	proofAskedE2E = 3
+)
+
 // proofSweep asks the orchestrator, once per item, to write a proof for each item in qa without
 // one: on the first tick after this shipped, every item already in qa (the retroactive sweep);
-// later, any item that reaches qa without a build's proof.
+// later, any item that reaches qa without a build's proof. It asks once more (proof_e2e) for the
+// items migration 0027 marked: their manual-only proof may give way to E2E checks (#195).
 func (s *Store) proofSweep(tx *sql.Tx) error {
-	rows, err := tx.Query(`SELECT id FROM items WHERE stage = 'qa' AND proof = '' AND proof_asked = 0 ORDER BY id`)
+	rows, err := tx.Query(`SELECT id, proof_asked FROM items WHERE stage = 'qa'
+		AND ((proof = '' AND proof_asked = 0) OR proof_asked = ?) ORDER BY id`, proofAskE2E)
 	if err != nil {
 		return err
 	}
-	var ids []int64
+	type ask struct {
+		id    int64
+		asked int
+	}
+	var asks []ask
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var a ask
+		if err := rows.Scan(&a.id, &a.asked); err != nil {
 			rows.Close()
 			return err
 		}
-		ids = append(ids, id)
+		asks = append(asks, a)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for _, id := range ids {
-		if err := s.queueOrch(tx, pipeline.Trigger{Reason: pipeline.TriggerProof, ItemID: id}); err != nil {
+	for _, a := range asks {
+		reason, next := pipeline.TriggerProof, 1
+		if a.asked == proofAskE2E {
+			reason, next = pipeline.TriggerProofE2E, proofAskedE2E
+		}
+		if err := s.queueOrch(tx, pipeline.Trigger{Reason: reason, ItemID: a.id}); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`UPDATE items SET proof_asked = 1 WHERE id = ?`, id); err != nil {
+		if _, err := tx.Exec(`UPDATE items SET proof_asked = ? WHERE id = ?`, next, a.id); err != nil {
 			return err
 		}
 	}
