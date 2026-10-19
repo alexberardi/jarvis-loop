@@ -1,0 +1,36 @@
+{
+  "name": "proof-command-reopen",
+  "about": "QA proofs (docs/decisions/2026-10-18-qa-proofs.md), the command kind failing. The build's proof is one command that fails on main. The first proof pass records the failure and the thread says so (failed once; checked again in 30 minutes, a second failure reopens it); the board's QA column shows it under failed. 30 minutes later it fails again: the loop reopens the item as the user's Reopen does: a P2 item in triage with the failure as its ask, linked by reopen_of, and this one is done, actor 'loop (proof)'.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Chime volume"},
+    {"do": "command", "as": "approver", "text": "qa 1"},
+    {"do": "script", "item": "a", "proof": [{"kind": "command", "run": "test -f chime.wav || { echo 'chime.wav is not on main'; exit 1; }"}]},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "qa"}},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "qa"},
+     "events": [{"item": "a", "kind": "proof_checked", "actor": "runner", "data": {"status": "^failed$", "changed": "^true$"}, "count": 1}],
+     "messages": [{"thread": "a", "from": "bot", "text": "^Proof check failed once, checked again before it reopens: command: `test -f chime\\.wav \\|\\| \\{ echo 'chime\\.wav is not on main'; exit 1; \\}`: exit 1 after 0s: chime\\.wav is not on main\\. I check again in 30 minutes; a second failure in a row reopens it\\.$"}],
+     "board": {"a": {"column": "QA", "card": "failed</span>[\\s\\S]*exit 1 after 0s: chime.wav is not on main"}}},
+    {"do": "clock", "advance": "30m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "done", "#2": "triage"},
+     "events": [{"item": "a", "kind": "reopened", "actor": "loop (proof)", "data": {"words": "^Proof failed 2 times in a row: command: `test -f chime\\.wav .*`: exit 1 after 0s: chime\\.wav is not on main$"}, "count": 1},
+                {"item": "#2", "kind": "created", "actor": "loop (proof)", "count": 1}],
+     "messages": [{"thread": "a", "from": "bot", "text": "^Reopened by loop \\(proof\\): 'Proof failed 2 times in a row: .*'\\. Filed #2 \\(P2\\) with those words; this one is done\\.$"}]}
+  ],
+  "expect": {
+    "stage": {"a": "done", "#2": "triage"},
+    "events": [{"item": "a", "kind": "proof_checked", "count": 1}],
+    "no_events": [{"item": "a", "kind": "refused"}, {"item": "a", "kind": "verified"}]
+  }
+}

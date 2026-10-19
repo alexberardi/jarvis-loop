@@ -75,24 +75,3 @@ func TestBoardItemsWaitChain(t *testing.T) {
 		}
 	}
 }
-
-// A qa card says whether it waits on a deploy or on the user's check.
-func TestBoardItemsAwaitingDeploy(t *testing.T) {
-	s, _ := open(t)
-	ctx := context.Background()
-	a := add(t, s, "check me", "P1")
-	b := add(t, s, "deploy me", "P2")
-	if _, err := s.w.Exec(`UPDATE items SET stage='qa' WHERE id=?`, a.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.w.Exec(`UPDATE items SET stage='qa', awaiting_deploy=1 WHERE id=?`, b.ID); err != nil {
-		t.Fatal(err)
-	}
-	got, err := s.BoardItems(ctx)
-	if err != nil || len(got) != 2 {
-		t.Fatalf("board items: %+v %v", got, err)
-	}
-	if got[0].Display != "qa" || got[0].AwaitingDeploy || got[1].Display != "qa" || !got[1].AwaitingDeploy {
-		t.Errorf("qa rows: %+v / %+v", got[0], got[1])
-	}
-}

@@ -80,6 +80,39 @@
 {{- end}}
 </details>
 {{- end}}{{end}}
+{{- with .Usage}}{{if .Show}}
+<details class="orch usage"{{if .Paced}} open{{end}}>
+<summary>Usage · claude {{.Pace}}</summary>
+<ul>
+<li>5h window: {{.Window}}{{if .Forecast}} <span class="why">· {{.Forecast}}</span>{{end}}</li>
+<li>Week: {{.Week}}</li>
+</ul>
+{{- if .Days}}
+<h3>Days</h3>
+<ul>
+{{- range .Days}}
+<li><span class="muted">{{.Day}}</span>{{if .Claude}} claude {{.Claude}} burn, ${{printf "%.2f" .Cost}}, {{.ClaudeRuns}} {{if eq .ClaudeRuns 1}}run{{else}}runs{{end}}{{end}}{{if .Qwen}} · qwen {{.Qwen}} tokens, {{.QwenRuns}} {{if eq .QwenRuns 1}}run{{else}}runs{{end}}{{end}}</li>
+{{- end}}
+</ul>
+{{- end}}
+{{- if .Items}}
+<h3>Costliest items this week</h3>
+<ul>
+{{- range .Items}}
+<li><a href="/board/items/{{.ItemID}}">#{{.ItemID}} {{.Title}}</a> <span class="muted">{{tokens .Burn}} burn · ${{printf "%.2f" .CostUSD}} · {{.Runs}} {{if eq .Runs 1}}run{{else}}runs{{end}}</span></li>
+{{- end}}
+</ul>
+{{- end}}
+{{- if .Hits}}
+<h3>Limits hit</h3>
+<ul>
+{{- range .Hits}}
+<li><span class="muted">{{stamp .At}}</span> {{.Window}} limit at {{tokens .Burn}} burn{{if not .ResetAt.IsZero}} · reset {{stamp .ResetAt}}{{end}}</li>
+{{- end}}
+</ul>
+{{- end}}
+</details>
+{{- end}}{{end}}
 {{- with .Runners}}{{if .Runners}}
 <details class="orch"{{if .Holds}} open{{end}}>
 <summary>Runners · {{len .Runners}} seen today{{with len .Holds}} · {{.}} {{if eq . 1}}slot{{else}}slots{{end}} held{{end}}</summary>

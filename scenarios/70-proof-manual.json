@@ -1,0 +1,31 @@
+{
+  "name": "proof-manual",
+  "about": "QA proofs (docs/decisions/2026-10-18-qa-proofs.md), the manual kind: only the user can judge it. The build's proof is one manual check, so at merge the thread is the usual ask, mentioning the approver, with the one line of what to look at, and the Verified / Reopen buttons. The runner never checks it; the board shows it under needs you with the look-at line. Reopen by hand still works.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Dark mode colours"},
+    {"do": "command", "as": "approver", "text": "qa 1"},
+    {"do": "script", "item": "a", "proof": [{"kind": "manual", "look": "the settings screen in dark mode: no white flashes"}]},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "qa"},
+     "messages": [{"thread": "a", "from": "bot", "text": "<@U0C9AFPAMD4> #1 Dark mode colours: Merged — waiting for your check: look at the settings screen in dark mode: no white flashes\\. <https://github.com/sandbox/demo/pull/101\\|sandbox/demo#101> merged as `[0-9a-f]{7}`; watching main's CI\\.\\nPress Verified when it works", "buttons": ["Verified", "Reopen"]}],
+     "board": {"a": {"column": "QA", "card": "needs you</span>[\\s\\S]*look at the settings screen in dark mode"}}},
+    {"do": "clock", "advance": "1h"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "qa"}, "no_events": [{"item": "a", "kind": "proof_checked"}]},
+    {"do": "command", "as": "approver", "text": "reopen 1 white flash on the About row"}
+  ],
+  "expect": {
+    "stage": {"a": "done", "#2": "triage"},
+    "events": [{"item": "a", "kind": "reopened", "actor": "approver", "count": 1}],
+    "no_events": [{"item": "a", "kind": "refused"}, {"item": "a", "kind": "proof_checked"}]
+  }
+}

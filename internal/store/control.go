@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"maps"
 
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
@@ -16,15 +17,23 @@ func (s *Store) loadControl(q interface {
 }) (pipeline.Control, error) {
 	var c pipeline.Control
 	var stopped int
-	var limits, rules string
-	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules, orchestrator_turns_per_day, runway_warn_hours FROM control WHERE id = 1`).
-		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules, &c.OrchTurnsPerDay, &c.RunwayWarnHours)
+	var limits, rules, budgets string
+	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules, orchestrator_turns_per_day, runway_warn_hours, budgets FROM control WHERE id = 1`).
+		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules, &c.OrchTurnsPerDay, &c.RunwayWarnHours, &budgets)
 	if err != nil {
 		return c, err
 	}
 	c.Stopped = stopped != 0
 	if err := json.Unmarshal([]byte(limits), &c.Limits); err != nil {
 		return c, err
+	}
+	// '': the defaults (what got us limited last time); a budget the user set is stored.
+	c.Budgets = pipeline.DefaultBudgets()
+	if budgets != "" {
+		c.Budgets = map[string]pipeline.Budget{}
+		if err := json.Unmarshal([]byte(budgets), &c.Budgets); err != nil {
+			return c, err
+		}
 	}
 	if rules == "" {
 		c.HoldRules = s.DefaultHoldRules()
@@ -56,8 +65,15 @@ func saveControl(tx *sql.Tx, c pipeline.Control, builtInRules bool) error {
 	if c.Stopped {
 		stopped = 1
 	}
-	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=?, orchestrator_turns_per_day=?, runway_warn_hours=? WHERE id = 1`,
-		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules), c.OrchTurnsPerDay, c.RunwayWarnHours)
+	budgets, err := json.Marshal(c.Budgets)
+	if err != nil {
+		return err
+	}
+	if maps.EqualFunc(c.Budgets, pipeline.DefaultBudgets(), func(a, b pipeline.Budget) bool { return a == b }) {
+		budgets = nil
+	}
+	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=?, orchestrator_turns_per_day=?, runway_warn_hours=?, budgets=? WHERE id = 1`,
+		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules), c.OrchTurnsPerDay, c.RunwayWarnHours, string(budgets))
 	return err
 }
 
@@ -103,6 +119,8 @@ type ControlPatch struct {
 	OrchTurnsPerDay *int `json:"orchestrator_turns_per_day"`
 	// RunwayWarnHours is the runway below which loopd warns the user when away (0: off).
 	RunwayWarnHours *int `json:"runway_warn_hours"`
+	// Budgets replace the budget of each provider they name (usage.go).
+	Budgets map[string]pipeline.Budget `json:"budgets"`
 }
 
 // SetControl applies a patch to the control row and records it.
@@ -135,6 +153,13 @@ func (s *Store) SetControl(ctx context.Context, actor string, p ControlPatch) (p
 		}
 		for k, v := range p.Limits {
 			c.Limits[k] = v
+		}
+		if p.Budgets != nil {
+			c.Budgets = maps.Clone(old.Budgets)
+			if c.Budgets == nil {
+				c.Budgets = map[string]pipeline.Budget{}
+			}
+			maps.Copy(c.Budgets, p.Budgets)
 		}
 		builtIn, err := builtInRules(tx)
 		if err != nil {

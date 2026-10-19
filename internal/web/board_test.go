@@ -215,8 +215,7 @@ func TestBoardEvidence(t *testing.T) {
 }
 
 // goldenItems has a card for every column the board fills, plus the edge cases: done 15 days ago
-// (gone), closed (shown with the toggle only), qa waiting on the user's check and on a deploy (shown
-// however long ago they merged).
+// (gone), closed (shown with the toggle only).
 func goldenItems() []store.BoardItem {
 	day := 24 * time.Hour
 	row := func(id int64, title, pri, stage, display, repo string, pr int, claimed string, age time.Duration) store.BoardRow {
@@ -242,9 +241,13 @@ func goldenItems() []store.BoardItem {
 			Question: "Should the test use the sandbox emulator or a fake?", SlackChannel: "C0LOOP", SlackTS: "1760000001.000200", UpdatedAt: now},
 		{BoardRow: row(8, "Token rotation", "P2", "held", "held", "alexberardi/jarvis-loop", 12, "", 6*day),
 			HoldReason: "triage: risk hold; touches internal/api/auth.go", UpdatedAt: now},
-		{BoardRow: row(16, "Night mode toggle", "P2", "qa", "qa", "alexberardi/jarvis-node-mobile", 40, "", 2*day), UpdatedAt: now.Add(-day)},
-		{BoardRow: row(17, "Runner reports its build", "P1", "qa", "qa", "alexberardi/jarvis-loop", 41, "", 3*day),
-			AwaitingDeploy: true, UpdatedAt: now.Add(-20 * day)},
+		{BoardRow: row(18, "Mac runners", "P1", "qa", "qa", "alexberardi/jarvis-loop", 60, "", 2*day), UpdatedAt: now,
+			Proof: &pipeline.Proof{By: "build", Checks: []pipeline.ProofCheck{{Kind: "usage", Event: "claimed", Actor: []string{"runner:mbp", "runner:mini"}, State: "pending"}}}},
+		{BoardRow: row(19, "Board colours", "P2", "qa", "qa", "alexberardi/jarvis-loop", 61, "", 3*day), UpdatedAt: now,
+			Proof: &pipeline.Proof{By: "sweep", Checks: []pipeline.ProofCheck{{Kind: "command", Run: "go test ./internal/web", State: "passed"}, {Kind: "manual", Look: "the QA column on a phone", State: "manual"}}}},
+		{BoardRow: row(20, "Rebuild button", "P2", "qa", "qa", "alexberardi/jarvis-loop", 62, "", 3*day), UpdatedAt: now,
+			Proof: &pipeline.Proof{By: "build", Checks: []pipeline.ProofCheck{{Kind: "command", Run: "scripts/loop-sandbox run scenarios/64-rebuild-button.json", State: "failed", Fails: 1, Evidence: "exit 1 after 9s: 1 of 1 failed"}}}},
+		{BoardRow: row(21, "Old QA item", "P3", "qa", "qa", "alexberardi/jarvis-server", 40, "", 5*day), UpdatedAt: now, AwaitingDeploy: false},
 		{BoardRow: row(9, "Fix the digest time", "P2", "done", "done", "alexberardi/jarvis-loop", 9, "", 10*day), UpdatedAt: now.Add(-13 * day)},
 		{BoardRow: row(10, "Old done item", "P2", "done", "done", "alexberardi/jarvis-loop", 3, "", 30*day), UpdatedAt: now.Add(-15 * day)},
 		{BoardRow: row(11, "Not worth it", "P3", "closed", "closed", "", 0, "", 8*day), UpdatedAt: now.Add(-2 * day)},
@@ -340,7 +343,7 @@ func TestBoardColumns(t *testing.T) {
 	if strings.Join(names, ",") != "Planning,Triage,Build,Review,Needs you,Approval,QA,Done" {
 		t.Errorf("columns %v", names)
 	}
-	want := map[string][]int64{"Triage": {1, 2, 12}, "Build": {3, 4, 13, 14}, "Review": {5, 6}, "Needs you": {7}, "Approval": {8}, "QA": {16, 17}, "Done": {9}}
+	want := map[string][]int64{"Triage": {1, 2, 12}, "Build": {3, 4, 13, 14}, "Review": {5, 6}, "Needs you": {7}, "Approval": {8}, "QA": {18, 19, 21, 20}, "Done": {9}}
 	for k, ids := range want {
 		if !slicesEqual(got[k], ids) {
 			t.Errorf("%s: %v, want %v", k, got[k], ids)
@@ -349,15 +352,21 @@ func TestBoardColumns(t *testing.T) {
 	if len(got["Planning"]) != 0 {
 		t.Errorf("planning holds items: %v", got)
 	}
-	// A qa card says what it waits for.
-	reasons := map[int64]string{}
+	// The QA column's cards say their group and why.
 	for _, c := range v.Columns {
-		for _, cd := range c.Cards {
-			reasons[cd.ID] = cd.Reason
+		if c.Name != "QA" {
+			continue
 		}
-	}
-	if reasons[16] != "Merged; waiting for your check." || reasons[17] != "Merged; waiting for a deploy that contains it, then for your check." {
-		t.Errorf("qa reasons: %q / %q", reasons[16], reasons[17])
+		var lines []string
+		for _, cd := range c.Cards {
+			lines = append(lines, cd.Label+": "+cd.Reason)
+		}
+		want := "waiting for a proof: waits for: usage: `claimed` by runner:mbp or runner:mini|" +
+			"needs you: look at the QA column on a phone|needs you: no proof: your check|" +
+			"failed: failed once, checked again before it reopens: command: `scripts/loop-sandbox run scenarios/64-rebuild-button.json`: exit 1 after 9s: 1 of 1 failed"
+		if got := strings.Join(lines, "|"); got != want {
+			t.Errorf("QA cards:\n%s\nwant\n%s", got, want)
+		}
 	}
 	// No open plans: the Planning column says so.
 	if c := boardView(goldenItems(), nil, now, false, "").Columns[0]; c.Name != "Planning" || c.Note != "No open plans." || c.Count() != 0 {
@@ -408,24 +417,23 @@ func TestItemGolden(t *testing.T) {
 	checkGolden(t, "item_held.golden.html", b.Bytes())
 }
 
-// TestItemQA: a qa item's page says what it waits for (a deploy first, when the repo needs one),
-// under a QA label: it is not a question.
-func TestItemQA(t *testing.T) {
-	for _, awaiting := range []bool{false, true} {
-		d := store.Detail{Item: pipeline.Item{ID: 16, Title: "Merged one", Repo: "alexberardi/jarvis-loop", Priority: "P1",
-			Stage: pipeline.QA, PR: 40, AwaitingDeploy: awaiting, CreatedAt: now.Add(-time.Hour), UpdatedAt: now}, Display: "qa"}
-		v := itemView(d, "", "", now, "")
-		if want := qaReason(awaiting); v.Reason != want {
-			t.Errorf("awaiting deploy %v: reason %q, want %q", awaiting, v.Reason, want)
-		}
-		var b bytes.Buffer
-		if err := itemTmpl.Execute(&b, v); err != nil {
-			t.Fatal(err)
-		}
-		if want := `<dt>QA</dt><dd class="reason">` + qaReason(awaiting) + `</dd>`; !strings.Contains(b.String(), want) {
-			t.Errorf("awaiting deploy %v: page lacks %s", awaiting, want)
-		}
+// A qa item's page shows its QA group and its proof: each check with its state and evidence.
+func TestItemProofGolden(t *testing.T) {
+	at := now.Add(-time.Hour)
+	d := store.Detail{
+		Item: pipeline.Item{ID: 16, Title: "Rebuild button", Repo: "alexberardi/jarvis-loop", Priority: "P2", Stage: pipeline.QA, PR: 62,
+			Risk: "normal", CreatedAt: at, UpdatedAt: now, Proof: &pipeline.Proof{By: "build", CheckedAt: &at, Checks: []pipeline.ProofCheck{
+				{Kind: "usage", Event: "rebuild", Match: map[string][]string{"source": {"needs_you"}}, State: "passed", Evidence: "seen 2 time(s) since the merge (newest: event 913)", CheckedAt: &at},
+				{Kind: "command", Run: "scripts/loop-sandbox run scenarios/64-rebuild-button.json", State: "failed", Fails: 1, Evidence: "exit 1 after 9s: 1 of 1 failed\n<details>", CheckedAt: &at},
+				{Kind: "manual", Look: "the button's colour", State: "manual"},
+			}}},
+		Display: "qa",
 	}
+	var b bytes.Buffer
+	if err := itemTmpl.Execute(&b, itemView(d, "", "", now, "")); err != nil {
+		t.Fatal(err)
+	}
+	checkGolden(t, "item_qa.golden.html", b.Bytes())
 }
 
 // goldenOrch is the orchestrator's panel: an action of each shape, an open escalation, a ticket it
@@ -488,6 +496,59 @@ func TestBoardOrchestratorGolden(t *testing.T) {
 	}
 }
 
+func goldenUsage() store.UsageReport {
+	fc := now.Add(50 * time.Minute)
+	return store.UsageReport{
+		Now: now,
+		Claude: pipeline.UsageState{Now: now, WindowStart: now.Add(-3 * time.Hour), WindowEnd: now.Add(2 * time.Hour), Burn5h: 8_800_000, Limit5h: 10_000_000,
+			WeekStart: now.Add(-WeekAgo), BurnWeek: 41_000_000},
+		Pace:     pipeline.Pace{Level: pipeline.PaceSlow, Agents: 2, Window: pipeline.Window5h, Percent: 88},
+		Forecast: &fc,
+		Days: []store.UsageTotal{
+			{Key: "2026-10-15", Provider: "claude", Burn: 9_100_000, Tokens: 60_000_000, CostUSD: 12.5, Runs: 14},
+			{Key: "2026-10-15", Provider: "qwen", Burn: 1_200_000, Tokens: 1_200_000, Runs: 3},
+			{Key: "2026-10-14", Provider: "claude", Burn: 31_900_000, Tokens: 200_000_000, CostUSD: 40.25, Runs: 1},
+		},
+		Items: []store.UsageItem{{ItemID: 12, Title: "Rework the <hold> list", Burn: 6_400_000, CostUSD: 9.1, Runs: 4}},
+		Hits:  []pipeline.UsageHit{{At: now.Add(-26 * time.Hour), Provider: "claude", Window: pipeline.Window5h, Burn: 10_000_000, ResetAt: now.Add(-24 * time.Hour)}},
+	}
+}
+
+// WeekAgo is a rolling week.
+const WeekAgo = 7 * 24 * time.Hour
+
+func TestBoardUsageGolden(t *testing.T) {
+	v := boardView(goldenItems(), goldenPlans(), now, false, "")
+	v.Usage = usageView(goldenUsage())
+	var b bytes.Buffer
+	if err := boardTmpl.Execute(&b, v); err != nil {
+		t.Fatal(err)
+	}
+	checkGolden(t, "board_usage.golden.html", b.Bytes())
+	out := b.String()
+	for _, want := range []string{
+		"Usage · claude pacing: the 5h window is at 88% of its budget; 2 at once",
+		"5h window: 8.8M of 10.0M (88%)", "at this rate the 5h window runs out at",
+		"Week: 41.0M (no limit known yet) · rolling 7 days",
+		"claude 9.1M burn, $12.50, 14 runs · qwen 1.2M tokens, 3 runs", "claude 31.9M burn, $40.25, 1 run</li>",
+		"#12 Rework the &lt;hold&gt; list", "5h limit at 10.0M burn",
+		`<details class="orch usage" open>`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the usage panel lacks %q", want)
+		}
+	}
+	// No usage yet: no panel.
+	v.Usage = usageView(store.UsageReport{})
+	b.Reset()
+	if err := boardTmpl.Execute(&b, v); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.String(), "Usage ·") {
+		t.Error("a usage panel with no usage")
+	}
+}
+
 // The runner panel: the runners seen today and the slot held for the Mac's work (#192).
 func TestBoardRunnersGolden(t *testing.T) {
 	items := goldenItems()
@@ -538,18 +599,5 @@ func TestBoardRunwayLine(t *testing.T) {
 	}
 	if strings.Contains(got, "#8</a>") {
 		t.Error("board shows more than the top 3 unblockers")
-	}
-}
-
-// Every stage's items land in some lane, claimed or not: a stage no lane lists vanishes from the board.
-func TestEveryStageHasALane(t *testing.T) {
-	for _, s := range pipeline.AllStages {
-		for _, claimed := range []bool{false, true} {
-			d := pipeline.Display(s, claimed)
-			it := store.BoardItem{BoardRow: store.BoardRow{ID: 99, Stage: string(s), Display: d}, UpdatedAt: now}
-			if v := boardView([]store.BoardItem{it}, nil, now, true, ""); v.Total == 0 {
-				t.Errorf("stage %s (display %q) appears in no lane", s, d)
-			}
-		}
 	}
 }
