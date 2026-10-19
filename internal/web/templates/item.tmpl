@@ -49,7 +49,7 @@ td.data { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 <dt>Slack</dt><dd><a href="{{$.SlackURL}}">thread</a></dd>
 {{- end}}
 {{- if $.Reason}}
-<dt>{{if eq $.Display "held"}}Held{{else}}Question{{end}}</dt><dd class="reason">{{$.Reason}}</dd>
+<dt>{{if eq $.Display "held"}}Held{{else if eq $.Display "qa"}}QA{{else}}Question{{end}}</dt><dd class="reason">{{$.Reason}}</dd>
 {{- end}}
 </dl>
 {{- with $.Working}}
@@ -62,6 +62,14 @@ td.data { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 {{- if .Summary}}
 <h2>Summary</h2>
 <pre>{{.Summary}}</pre>
+{{- end}}
+{{- with .Proof}}
+<h2>Proof · by {{.By}}{{with .CheckedAt}} · checked {{stamp .UTC}}{{end}}</h2>
+<ul class="proof">
+{{- range .Checks}}
+<li><span class="label">{{.State}}</span> {{.String}}{{if .Evidence}}<pre>{{.Evidence}}</pre>{{end}}</li>
+{{- end}}
+</ul>
 {{- end}}
 {{- end}}
 {{- with .SecondOpinion}}

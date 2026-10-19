@@ -80,12 +80,14 @@ func (s *server) routes() *http.ServeMux {
 	route("GET /freezes", reads, s.listFreezes)
 	route("POST /unfreeze", user, s.unfreeze)
 	route("PUT /control", user, s.putControl)
+	route("GET /usage", reads, s.getUsage)
 	// The orchestrator's own actions (orchestrator.go).
 	route("POST /orchestrator/items", orch, s.orchAdd)
 	route("POST /orchestrator/items/{id}/answer", orch, s.orchAnswer)
 	route("POST /orchestrator/items/{id}/retry", orch, s.orchRetry)
 	route("POST /orchestrator/items/{id}/priority", orch, s.orchPriority)
 	route("POST /orchestrator/items/{id}/link", orch, s.orchLink)
+	route("POST /orchestrator/items/{id}/proof", orch, s.orchProof)
 	route("POST /orchestrator/escalations", orch, s.orchEscalate)
 	route("POST /orchestrator/agents", orch, s.orchAgents)
 	route("POST /orchestrator/notes", orch, s.orchNote)
@@ -283,6 +285,23 @@ func (s *server) listItems(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "awaiting_deploy must be 1 or 0"})
 		return
 	}
+	switch r.URL.Query().Get("proof_due") {
+	case "":
+	case "1", "true":
+		// The qa items whose proof is due a check (the runner's proof pass); the other filters
+		// do not apply.
+		rows, err := s.st.ProofsDue(r.Context())
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": rows})
+		return
+	case "0", "false":
+	default:
+		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "proof_due must be 1 or 0"})
+		return
+	}
 	rows, err := s.st.ListItemsFilter(r.Context(), store.ListFilter{Stage: stage, Priority: pri, Open: open, PRToClose: toClose, AwaitingDeploy: awaiting})
 	if err != nil {
 		s.fail(w, err)
@@ -348,9 +367,17 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		RunnerStages []string `json:"runner_stages"`
 		// Kinds: item, plan (plan turns), orchestrate, regression; empty is items only.
 		Kinds []string `json:"kinds"`
+		// Builders: the other builders the runner can run (qwen), for a paced claim's route.
+		Builders []string `json:"builders"`
 	}
 	if !decode(w, r, &body) {
 		return
+	}
+	for _, b := range body.Builders {
+		if b != pipeline.BuilderQwen {
+			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "builders may be qwen, got " + strconv.Quote(b)})
+			return
+		}
 	}
 	for _, k := range body.Kinds {
 		if !validKind(k) {
@@ -400,7 +427,7 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds})
+	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds, Builders: body.Builders})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -504,6 +531,11 @@ const KindPRClosed = "pr_closed"
 // commit (docs/decisions/2026-10-16-qa-after-deploy.md): there is no lease, any runner may.
 const KindDeployed = "deployed"
 
+// KindProofChecked is a runner's check of a qa item's due proof (docs/decisions/2026-10-18-qa-proofs.md):
+// its command checks' results; loopd evaluates the usage checks and decides. No lease, any
+// runner may (store.ProofChecked).
+const KindProofChecked = store.KindProofChecked
+
 func (s *server) runnerEvent(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	if !ok {
@@ -527,10 +559,12 @@ func (s *server) runnerEvent(w http.ResponseWriter, r *http.Request) {
 		ev, err = s.st.PRClosed(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Data)
 	case body.Kind == KindDeployed:
 		ev, err = s.st.Deployed(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Data)
+	case body.Kind == KindProofChecked:
+		ev, err = s.st.ProofChecked(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Data)
 	case slices.Contains(RunnerEventKinds, body.Kind):
 		ev, err = s.st.RunnerEvent(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Kind, body.Data)
 	default:
-		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kind must be one of " + strings.Join(append(RunnerEventKinds, KindMainCI, KindPRClosed, KindDeployed), ", ")})
+		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kind must be one of " + strings.Join(append(RunnerEventKinds, KindMainCI, KindPRClosed, KindDeployed, KindProofChecked), ", ")})
 		return
 	}
 	if err != nil {
@@ -864,6 +898,16 @@ func (s *server) getControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
+}
+
+// getUsage is the usage report: claude's windows, pace and forecast, the days, stages and items.
+func (s *server) getUsage(w http.ResponseWriter, r *http.Request) {
+	u, err := s.st.Usage(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, u)
 }
 
 func (s *server) putControl(w http.ResponseWriter, r *http.Request) {

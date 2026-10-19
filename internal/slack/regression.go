@@ -30,7 +30,31 @@ func (b *Bot) regressionReport(ctx context.Context, e store.Event) {
 		b.c.Log.Error("slack: load regression", "regression", e.Data["regression"], "err", err.Error())
 		return
 	}
-	b.post(ctx, "regression report", b.regressionMessage(r))
+	m := b.regressionMessage(r)
+	if line := regressionQALine(e); line != "" {
+		m.Text += "\n" + line
+		m.Blocks = append(m.Blocks, section(line))
+	}
+	b.post(ctx, "regression report", m)
+}
+
+// regressionQALine is what the run decided in the QA column (#195): the items in qa whose e2e
+// checks it passed (verified) or failed (reopened); each item's thread has its own line.
+func regressionQALine(e store.Event) string {
+	var parts []string
+	for _, k := range []struct{ key, verb string }{{"verified", "verified"}, {"reopened", "reopened"}} {
+		var refs []string
+		for _, id := range idsOf(e.Data[k.key]) {
+			refs = append(refs, fmt.Sprintf("#%d", id))
+		}
+		if len(refs) > 0 {
+			parts = append(parts, k.verb+" "+strings.Join(refs, ", "))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "QA from this run's E2E checks: " + strings.Join(parts, "; ") + "."
 }
 
 // regressionMessage is a finished run's report, from the store (an update after 'File it' builds

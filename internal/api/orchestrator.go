@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -87,6 +88,28 @@ func (s *server) orchLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, err := s.st.OrchLink(r.Context(), actor(r), id, body.After, body.Reason)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// orchProof is the proof sweep's action: the proof of a qa item that has none
+// (docs/decisions/2026-10-18-qa-proofs.md).
+func (s *server) orchProof(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Checks json.RawMessage `json:"checks"`
+		Reason string          `json:"reason"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.OrchProof(r.Context(), actor(r), id, body.Checks, body.Reason)
 	if err != nil {
 		s.fail(w, err)
 		return
