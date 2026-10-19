@@ -9,8 +9,9 @@ split into items at once, so a missing piece or a wrong dependency costs a whole
 
 **When.** An engineering turn's result says `ready` (not `back_to_brief`), and the runner config
 has a `gemini` block. The blueprint is the one the turn wrote, or the latest when it wrote none.
-A blueprint the latest critique already read (its sha256 is in the critique) is not critiqued
-again, so "looks good, ready" turns cost nothing. Product's briefs are not critiqued (see below).
+A blueprint the latest critique already read, or engineering's revision of it after the answers
+(both sha256s are in the critique), is not critiqued again, so "looks good, ready" turns cost
+nothing. Product's briefs are not critiqued (see below).
 
 **The critique** (`runner/plancritique.go`). One agy call through #190's `agyCall` (the same
 binary, model, timeout, fence and failure reasons), in the plan's directory, read-only. The prompt

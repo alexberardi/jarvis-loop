@@ -116,6 +116,39 @@ func TestPlanCritiqueOncePerBlueprint(t *testing.T) {
 	}
 }
 
+// A blueprint engineering revised after the critique is the critiqued one too: a later ready turn
+// that keeps it runs no second agy call and no second answer turn.
+func TestPlanCritiqueOnceAfterRevision(t *testing.T) {
+	g, p := planRig(t, fakeclaude.PlanBrief)
+	g.toEngineering(p, fakeclaude.PlanKeep)
+	g.gemini(false, fakeagy.OK)
+	g.runOnce()
+	bps := g.docs(p.ID, pipeline.DocBlueprint)
+	if len(bps) != 1 || !strings.Contains(bps[0].Markdown, "Gemini's point 1, taken") {
+		t.Fatalf("blueprints %+v\n%s", bps, g.logs.String())
+	}
+	if cs := g.docs(p.ID, pipeline.DocCritique); len(cs) != 1 || !strings.Contains(cs[0].Markdown, bps[0].SHA256) {
+		t.Fatalf("the critique does not name the revised blueprint %s: %+v", bps[0].SHA256, cs)
+	}
+	g.st.PlanMessage(g.ctx, "user:alex", p.ID, "looks right")
+	g.runOnce()
+	last := g.lastTurn(p.ID)
+	if last.Status != pipeline.TurnDone || !last.Ready || last.Reply != "The blueprint stands (turn 3)." {
+		t.Fatalf("second turn %+v\n%s", last, g.logs.String())
+	}
+	if n := len(g.agyCalls()); n != 1 || len(g.docs(p.ID, pipeline.DocCritique)) != 1 || len(g.docs(p.ID, pipeline.DocBlueprint)) != 1 {
+		t.Fatalf("%d agy calls, %d critiques, %d blueprints", n, len(g.docs(p.ID, pipeline.DocCritique)), len(g.docs(p.ID, pipeline.DocBlueprint)))
+	}
+	if runs := g.planRuns(p.ID, "engineering"); len(runs) != 2 || fileHas(filepath.Join(runs[1], "argv-critique.json")) {
+		t.Fatalf("a second answer turn ran: %v", runs)
+	}
+}
+
+func fileHas(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // Whatever goes wrong with agy, the blueprint is posted as the persona left it, and the reply
 // says the second opinion was unavailable.
 func TestPlanCritiqueUnavailable(t *testing.T) {

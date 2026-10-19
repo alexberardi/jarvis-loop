@@ -130,6 +130,9 @@ const (
 	PlanBlueprint = "blueprint"     // engineering: a 3-piece blueprint (2 and 3 depend on 1), ready
 	BackToBrief   = "back_to_brief" // engineering: sends the plan back to the brief
 	PlanCycle     = "cycle"         // engineering: a blueprint whose pieces depend on each other
+	// PlanKeep plays blueprint while the plan has none (.loop/context/blueprint.md), then keeps
+	// the latest: ready, writing no blueprint.
+	PlanKeep = "keep"
 	// Answering Gemini's critique (a prompt with "## Gemini's critique"), every engineering play
 	// agrees with the odd points and disagrees with the even ones, revising the blueprint;
 	// PlanUnanswered writes no result then, and plays the blueprint before.
@@ -167,7 +170,7 @@ var stagePlays = map[string][]string{
 	"review": {Approve, Bounce, ReviewCommit, ApproveHold, ApproveQA, ApproveToolState, ApproveNamesDir, ApproveNamesDirOnce, Hang, UsageLimit, Exit3, Background},
 	// Plan personas.
 	"product":     {PlanBrief, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
-	"engineering": {PlanBlueprint, BackToBrief, PlanCycle, PlanUnanswered, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
+	"engineering": {PlanBlueprint, BackToBrief, PlanCycle, PlanKeep, PlanUnanswered, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
 	"adjudicate":  {Agree, Disagree, Hang, UsageLimit, Exit3},
 	"orchestrate": {OrchReact, OrchNote, OrchAgentsUp, OrchInvalid, OrchInvalidOnce, OrchPersona, OrchProofs, Hang, UsageLimit, Exit3},
 }
@@ -934,6 +937,14 @@ func (f *fake) planTurn(play, persona, plan string, brief []byte, sc script, pro
 	title := find(`(?m)^- Plan: P\d+: (.*)$`, brief)
 	f.bash("ls -a .loop/context")
 	r := map[string]any{}
+	if play == PlanKeep {
+		if _, err := os.Stat(filepath.Join(f.cwd, ".loop", "context", "blueprint.md")); err == nil {
+			play = ""
+			r = map[string]any{"reply": fmt.Sprintf("The blueprint stands (turn %s).", turn), "ready": true}
+		} else {
+			play = PlanBlueprint
+		}
+	}
 	switch play {
 	case PlanBrief:
 		f.write("out/brief.md", fmt.Sprintf("# %s\n\nTurn %s heard: %s\n", title, turn, strings.Join(msgs, " / ")))

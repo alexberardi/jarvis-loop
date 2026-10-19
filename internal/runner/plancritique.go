@@ -87,9 +87,9 @@ type Critique struct {
 	// Answers are engineering's, by point ID; Unanswered is why there are none.
 	Answers    map[int]CritiqueAnswer
 	Unanswered string
-	// Revised: the answer turn changed the blueprint.
-	Revised bool
-	Seconds int
+	// RevisedSHA is the blueprint after the answer turn changed it; "" when it did not.
+	RevisedSHA string
+	Seconds    int
 }
 
 // ParseCritique reads agy's output for a critique: the points, numbered, the malformed and the
@@ -273,8 +273,8 @@ func CritiqueDoc(c Critique) string {
 	b.WriteString("# Gemini's critique of the blueprint\n\n")
 	fmt.Fprintf(&b, "%s\n\n", c.Summary())
 	fmt.Fprintf(&b, "Model: `%s`. The blueprint it read: sha256 `%s`", c.Model, c.BlueprintSHA)
-	if c.Revised {
-		b.WriteString("; engineering revised it after the answers")
+	if c.RevisedSHA != "" {
+		fmt.Fprintf(&b, "; engineering revised it after the answers (sha256 `%s`)", c.RevisedSHA)
 	}
 	b.WriteString(".")
 	if c.Dropped > 0 {
@@ -296,7 +296,8 @@ func CritiqueDoc(c Critique) string {
 	return b.String()
 }
 
-// critiqued: the latest critique (in the turn's context) is of this blueprint already.
+// critiqued: the latest critique (in the turn's context) is of this blueprint already, as
+// Gemini read it or as engineering revised it after the answers.
 func critiqued(dir, sha string) bool {
 	b, err := os.ReadFile(filepath.Join(dir, ".loop", "context", pipeline.DocCritique+".md"))
 	return err == nil && bytes.Contains(b, []byte("sha256 `"+sha+"`"))
@@ -373,11 +374,11 @@ func (r *Runner) critique(ctx context.Context, ru *run, res pipeline.TurnResult,
 				res.SessionID = sid
 			}
 			if revised != "" && revised != blueprint {
-				res.Blueprint, c.Revised = revised, true
+				res.Blueprint, c.RevisedSHA = revised, pipeline.DocSHA256(revised)
 			}
 		}
 	}
-	log.Info("gemini: critique", "points", len(c.Points), "taken", c.taken(), "revised", c.Revised)
+	log.Info("gemini: critique", "points", len(c.Points), "taken", c.taken(), "revised", c.RevisedSHA != "")
 	res.Reply = withSummary(c.Summary(), res.Reply)
 	res.Critique = CritiqueDoc(c)
 	return res, true
