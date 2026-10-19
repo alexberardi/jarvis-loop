@@ -347,9 +347,11 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		return nil
 	}
 
-	if err := applyTrustFields(&it, from, a.Outcome, f, data); err != nil {
+	trustNotes, err := applyTrustFields(&it, from, a.Outcome, f, data)
+	if err != nil {
 		return Transition{}, err
 	}
+	tr.Also = append(tr.Also, trustNotes...)
 
 	if a.Outcome != CIPending {
 		it.NotBefore, it.CIPendingSince, it.CIPendingSHA = time.Time{}, time.Time{}, ""

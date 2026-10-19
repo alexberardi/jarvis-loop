@@ -1,11 +1,11 @@
 {
   "name": "foreign-remote-commit-asks",
-  "about": "Item #233: as in rebase-after-trust-pushes, the build rebases the PR's branch and the rebased head waits on the user's Trust, but meanwhile someone else pushes a commit to the branch. The remote is no longer the PR's recorded head, so after the Trust the runner does not force anything: the branches have diverged, the run fails and the item goes to the user.",
+  "about": "Item #233: as in rebase-after-trust-pushes, the build rebases the PR's branch and changes the trusted file again, so the rebased head waits on the user's Trust, but meanwhile someone else pushes a commit to the branch. The remote is no longer the PR's recorded head, so after the Trust the runner does not force anything: the branches have diverged, the run fails and the item goes to the user.",
   "stages": ["build", "review"],
   "steps": [
     {"do": "add", "item": "a", "via": "slack", "title": "shoot dark mode too", "text": "[mobile] shoot dark mode too"},
     {"do": "triage", "item": "a"},
-    {"do": "script", "item": "a", "play": "rebase_trusted", "file": "tools/shoot"},
+    {"do": "script", "item": "a", "play": "rebase_trusted_edit", "file": "tools/shoot"},
     {"do": "script", "item": "a", "for": "review", "play": "bounce"},
     {"do": "runner", "claims": "a"},
     {"do": "runner_idle"},

@@ -160,3 +160,105 @@ func TestTrustKeptWithoutAVerdict(t *testing.T) {
 		wantCode(t, err, CodeInvalidField)
 	}
 }
+
+// digest is the sha256 of the trusted files' diff verify refused at sha1 (refusedWithDigest).
+var digest = strings.Repeat("ab", 32)
+
+// refusedWithDigest is an item verify refused at sha1 and the approver OK'd, whose refusal
+// recorded the trusted files' diff digest.
+func refusedWithDigest(t *testing.T) Item {
+	t.Helper()
+	tr, err := ApplyAdvance(item(Build), Advance{Outcome: Failed, Fields: map[string]string{
+		"error": "the change touches tools/pipeline", FieldTrustSHA: sha1, FieldTrustPaths: "tools/pipeline",
+		FieldTrustDiffSHA: digest}}, t0)
+	wantCode(t, err, "")
+	if tr.Item.Trust.DiffSHA256 != digest {
+		t.Fatalf("the refusal records the diff digest: %+v", tr.Item.Trust)
+	}
+	tr, err = ApplyTrust(tr.Item, "user:alex", sha1, t0)
+	wantCode(t, err, "")
+	return tr.Item
+}
+
+// A new head whose trusted files' diff is byte-identical to the one the approver OK'd carries the
+// OK (#277): loopd checks the digest, rebinds the OK to the new head and records trust_carried.
+func TestTrustCarriedToAHeadWithTheSameTrustedDiff(t *testing.T) {
+	it := refusedWithDigest(t)
+	// The PR opened at sha1 under the OK, which used it up.
+	pr := map[string]string{"repo": "alexberardi/jarvis-server", "pr": "9", "branch": "b", "head_sha": sha1, FieldTrustUsed: sha1}
+	tr, err := ApplyAdvance(it, Advance{Outcome: PROpened, Fields: pr, Evidence: 1, ChangedPaths: []string{"M tools/pipeline"}}, t0)
+	wantCode(t, err, "")
+	used := tr.Item
+	used.Stage = Build
+
+	// A review fix at sha2 changed only other files; the runner carried the OK.
+	carry := map[string]string{"repo": "alexberardi/jarvis-server", "pr": "9", "branch": "b", "head_sha": sha2,
+		FieldTrustUsed: sha2, FieldTrustCarried: sha2, FieldTrustDiffSHA: digest}
+	tr, err = ApplyAdvance(used, Advance{Outcome: PROpened, Fields: carry, Evidence: 1, ChangedPaths: []string{"M tools/pipeline", "M x.go"}}, t0)
+	wantCode(t, err, "")
+	got := tr.Item.Trust
+	if got.HeadSHA != sha2 || got.CarriedFrom != sha1 || got.By != "user:alex" || !got.Used || got.DiffSHA256 != digest {
+		t.Fatalf("carried trust %+v", got)
+	}
+	if len(tr.Also) != 1 || tr.Also[0].Kind != KindTrustCarried || tr.Also[0].Data["from"] != sha1 ||
+		tr.Also[0].Data["to"] != sha2 || tr.Also[0].Data["diff_sha256"] != digest {
+		t.Fatalf("trust_carried note %+v", tr.Also)
+	}
+	if tr.Item.Risk != RiskHold {
+		t.Fatal("the carried OK keeps the PR held")
+	}
+
+	// A run without a verdict rebinds the OK but leaves it unused, for the new head only.
+	tr, err = ApplyAdvance(used, Advance{Outcome: Failed, Fields: map[string]string{"error": "fault",
+		FieldTrustUsed: sha2, FieldTrustCarried: sha2, FieldTrustDiffSHA: digest}}, t0)
+	wantCode(t, err, "")
+	if !TrustAllows(tr.Item.Trust, sha2) || TrustAllows(tr.Item.Trust, sha1) {
+		t.Fatalf("unused carried trust %+v", tr.Item.Trust)
+	}
+}
+
+func TestTrustCarryChecked(t *testing.T) {
+	it := refusedWithDigest(t)
+	ok := func() map[string]string {
+		return map[string]string{"error": "fault", FieldTrustUsed: sha2, FieldTrustCarried: sha2, FieldTrustDiffSHA: digest}
+	}
+	adv := func(it Item, from Stage, f map[string]string) error {
+		it.Stage = from
+		_, err := ApplyAdvance(it, Advance{Outcome: Failed, Fields: f}, t0)
+		return err
+	}
+	wantCode(t, adv(it, Build, ok()), "")
+
+	// Another diff: one byte differs, so the digest does.
+	f := ok()
+	f[FieldTrustDiffSHA] = strings.Repeat("ab", 31) + "ac"
+	wantCode(t, adv(it, Build, f), CodeInvalidField)
+	// No digest sent.
+	f = ok()
+	delete(f, FieldTrustDiffSHA)
+	wantCode(t, adv(it, Build, f), CodeInvalidField)
+	// The carry must name the head verify ran.
+	f = ok()
+	f[FieldTrustUsed] = sha1
+	wantCode(t, adv(it, Build, f), CodeInvalidField)
+	// Not from build.
+	wantCode(t, adv(it, Review, ok()), CodeInvalidField)
+	// No OK given yet: nothing to carry.
+	notGiven := it
+	notGiven.Trust = &Trust{HeadSHA: sha1, Paths: []string{"tools/pipeline"}, DiffSHA256: digest}
+	wantCode(t, adv(notGiven, Build, ok()), CodeInvalidField)
+	// An OK recorded before digests (none to compare with).
+	old := it
+	o := *it.Trust
+	o.DiffSHA256 = ""
+	old.Trust = &o
+	wantCode(t, adv(old, Build, ok()), CodeInvalidField)
+	// No trust at all.
+	none := it
+	none.Trust = nil
+	wantCode(t, adv(none, Build, ok()), CodeInvalidField)
+	// A refusal's digest must be a sha256.
+	_, err := ApplyAdvance(item(Build), Advance{Outcome: Failed, Fields: map[string]string{
+		"error": "x", FieldTrustSHA: sha1, FieldTrustPaths: "p", FieldTrustDiffSHA: "nope"}}, t0)
+	wantCode(t, err, CodeInvalidField)
+}

@@ -1,0 +1,37 @@
+{
+  "name": "trust-carried-after-merge-of-main",
+  "about": "Item #277: a trusted-file change is OK'd and opened, review bounces it, main moves on (not in the trusted file) and the build rebases the branch with no other change. The trusted files' diff against the new merge base is the one the user OK'd, so the OK carries: the runner pushes the rebase with a lease pinned to the PR's head (branch_rewritten) and the PR goes back to review, without asking for Trust again.",
+  "stages": ["build", "review"],
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "shoot dark mode too", "text": "[mobile] shoot dark mode too"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "rebase_trusted", "file": "tools/shoot"},
+    {"do": "script", "item": "a", "for": "review", "play": "bounce"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}},
+    {"do": "press", "item": "a", "as": "approver", "button": "trust"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"}},
+    {"do": "push", "slug": "sandbox/jarvis-node-mobile", "branch": "main", "file": "docs/notes.md", "text": "main moved on\n"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review"},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "failed", "data": {"trust_sha": "^[0-9a-f]{40}$"}, "count": 1},
+      {"item": "a", "kind": "trusted", "count": 1},
+      {"item": "a", "kind": "branch_rewritten", "actor": "runner", "count": 1,
+       "data": {"range_diff": "^1:  [0-9a-f]+ = 1:  [0-9a-f]+ harness: shoot dark mode too$"}},
+      {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "count": 2},
+      {"item": "a", "kind": "trust_carried", "actor": "runner", "count": 1}
+    ],
+    "pr": {"a": {"state": "OPEN", "edits": 1, "merge_calls": 0}},
+    "prs": 1
+  }
+}

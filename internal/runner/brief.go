@@ -55,6 +55,10 @@ type ItemTrust struct {
 	HeadSHA string `json:"head_sha"`
 	By      string `json:"by"`
 	Used    bool   `json:"used"`
+	// Paths and DiffSHA256 are the trusted files and their diff's digest the approver OK'd: a new
+	// head with the same ones carries the OK (carriedTrust).
+	Paths      []string `json:"paths"`
+	DiffSHA256 string   `json:"diff_sha256"`
 }
 
 // allows reports whether the approver's OK lets verify run head's change to trusted files.

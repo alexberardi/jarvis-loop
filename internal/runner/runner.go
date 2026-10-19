@@ -322,12 +322,16 @@ type run struct {
 	item Item
 	// trustUsed is the commit verify ran on the approver's trust OK (reported with the outcome).
 	trustUsed string
-	stage     string
-	lease     string
-	agent     string
-	repoKey   string // "" for a triage run of an item with no repo: every configured repo is checked out
-	repo      RepoConfig
-	branch    string
+	// trustCarried is the head verify carried the OK to (its trusted files' diff is the one the
+	// approver OK'd, digest trustDiffSHA), reported with the outcome for loopd to check.
+	trustCarried string
+	trustDiffSHA string
+	stage        string
+	lease        string
+	agent        string
+	repoKey      string // "" for a triage run of an item with no repo: every configured repo is checked out
+	repo         RepoConfig
+	branch       string
 	// wt is the agent's working directory: the item's worktree (build), the PR's head (review),
 	// or a plain directory with the repos checked out under repos/<key>/ (triage).
 	wt string
@@ -1285,6 +1289,10 @@ func (r *Runner) advance(ctx context.Context, ru *run, outcome string, fields ma
 	fields["runner_agent"] = ru.agent
 	if ru.trustUsed != "" {
 		fields[pipeline.FieldTrustUsed] = ru.trustUsed
+	}
+	if ru.trustCarried != "" {
+		fields[pipeline.FieldTrustCarried] = ru.trustCarried
+		fields[pipeline.FieldTrustDiffSHA] = ru.trustDiffSHA
 	}
 	if err := r.Client.Advance(ctx, ru.item.ID, outcome, fields, paths); err != nil {
 		r.Log.Error("advance", "item", ru.item.ID, "outcome", outcome, "err", err)
