@@ -77,6 +77,9 @@ machines: no NFS or synced work root, no copied runner config.
      with `capabilities [macos]` and stages build/review would claim any build or review item
      that needs no resources.
    - No `land` stage, no orchestrator token: landing and the orchestrator stay on the dev box.
+     Land needs none of an item's resources, so the dev box lands `macos` items too, and a landing
+     `macos` item does not count against the `macos` limit
+     ([decision](../decisions/2026-10-18-land-needs-no-resources.md)).
    - `work_root` is the Mac's own disk. Do not point it at a shared folder.
 6. **The fence.** Setup, prepare, cleanup and verify commands run under `sandbox-exec` (built into
    macOS, `/usr/bin/sandbox-exec`) instead of bubblewrap: HOME read-only but for the worktree, the
@@ -115,9 +118,15 @@ machines: no NFS or synced work root, no copied runner config.
 
    ```sh
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/net.alexberardi.loop-runner.plist
-   launchctl kickstart -k gui/$(id -u)/net.alexberardi.loop-runner   # restart after an update
+   loop-runner reload                                                # after editing runner.json
+   loop-runner drain                                                 # after an update: exits once its runs end
    launchctl bootout gui/$(id -u)/net.alexberardi.loop-runner        # stop
    ```
+
+   `reload` (SIGHUP) applies the config to the next claim and keeps the live runs; the log says
+   whether it took the file. `drain` (SIGUSR1) stops claiming and exits once the live runs end;
+   `KeepAlive` then starts the new binary. `launchctl kickstart -k` restarts at once and ends the
+   live runs: only for a stuck runner.
 
    On the MBP, sleep stops it; its lease expires and the item goes back to waiting (the mini, if
    running, takes it). "Prevent automatic sleeping when the display is off" on power keeps it up.

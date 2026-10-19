@@ -6,12 +6,35 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
 // LimitHit is a usage or rate limit that ends a run.
 type LimitHit struct {
 	Error string
 	Reset string
+	// Window is the limit's window (pipeline.Window5h, WindowWeek; "": not said).
+	Window string
+}
+
+// merge fills what h lacks from a later event of the same end (the CLI sends a rate_limit_event
+// with the exact reset, then the text that names the window).
+func (h *LimitHit) merge(o LimitHit) {
+	if h.Reset == "" {
+		h.Reset = o.Reset
+	}
+	if h.Window == "" {
+		h.Window = o.Window
+	}
+}
+
+// rateLimit is the CLI's last rate-limit reading in a run (rate_limit_event, any status).
+type rateLimit struct {
+	Status      string   `json:"status"`
+	ResetsAt    float64  `json:"resetsAt"`
+	Type        string   `json:"rateLimitType"`
+	Utilization *float64 `json:"utilization"`
 }
 
 var (
@@ -44,6 +67,7 @@ func MatchUsageLimit(raw []byte) (LimitHit, bool) {
 			Status    string  `json:"status"`
 			ResetsAt  float64 `json:"resetsAt"`
 			ErrorCode string  `json:"errorCode"`
+			Type      string  `json:"rateLimitType"`
 		} `json:"rate_limit_info"`
 		Message *struct {
 			Content []struct {
@@ -67,6 +91,7 @@ func MatchUsageLimit(raw []byte) (LimitHit, bool) {
 		if ev.RateLimit.ResetsAt > 0 {
 			h.Reset = unixReset(int64(ev.RateLimit.ResetsAt))
 		}
+		h.Window, _ = pipeline.LimitWindowKnown("", ev.RateLimit.Type)
 		return h, true
 	case "assistant":
 		var text string
@@ -104,11 +129,12 @@ func MatchUsageLimit(raw []byte) (LimitHit, bool) {
 func matchText(text string) (LimitHit, bool) {
 	if m := legacyLimitRe.FindStringSubmatch(text); m != nil {
 		n, _ := strconv.ParseInt(m[1], 10, 64)
-		return LimitHit{Error: "Claude AI usage limit reached", Reset: unixReset(n)}, true
+		return LimitHit{Error: "Claude AI usage limit reached", Reset: unixReset(n), Window: pipeline.Window5h}, true
 	}
 	if m := hitLimitRe.FindStringSubmatch(text); m != nil {
 		h := LimitHit{Error: clip(strings.TrimSpace(m[0]), 300)}
 		h.Reset = strings.TrimSpace(m[1])
+		h.Window, _ = pipeline.LimitWindowKnown(h.Error, "")
 		return h, true
 	}
 	return LimitHit{}, false

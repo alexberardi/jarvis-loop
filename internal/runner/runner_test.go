@@ -515,7 +515,7 @@ func TestBadResultsFail(t *testing.T) {
 	cases := map[string]string{
 		fakeclaude.Lying:     "head_sha",
 		fakeclaude.Malformed: "not valid JSON",
-		fakeclaude.NoResult:  "without a usable .loop/result.json",
+		fakeclaude.NoResult:  "after its session was resumed once, still without a usable .loop/result.json",
 		fakeclaude.Exit3:     "code 3",
 		fakeclaude.SymlinkEv: "not a regular file",
 		fakeclaude.NoArm:     "guard_not_armed",
@@ -531,6 +531,9 @@ func TestBadResultsFail(t *testing.T) {
 				t.Fatalf("stage %s, question %q, want it to mention %q; log:\n%s", d.Item.Stage, d.Item.Question, want, g.logs.String())
 			}
 			runs := 1
+			if scenario == fakeclaude.NoResult {
+				runs = 2 // the session is resumed once (#208)
+			}
 			if refused[scenario] {
 				runs = 2
 				if !strings.HasPrefix(d.Item.Question, "the build's result couldn't be accepted: ") || !strings.Contains(d.Item.Question, "(again, after one retry)") {
@@ -708,9 +711,12 @@ func TestUsageLimit(t *testing.T) {
 	if ev == nil || !strings.Contains(fmt.Sprint(ev.Data["error"]), "rate limit") || ev.Data["reset"] == "" {
 		t.Fatalf("usage_limit event %+v", ev)
 	}
+	if ev.Data["limit_window"] != "5h" || ev.Data["paused_until"] == nil {
+		t.Fatalf("usage_limit event: no window or pause %+v", ev.Data)
+	}
 	ctl, _ := g.st.Control(g.ctx)
-	if ctl.ActiveAgents != 0 {
-		t.Fatalf("active agents %d", ctl.ActiveAgents)
+	if ctl.ActiveAgents != 4 {
+		t.Fatalf("active agents %d, want the user's 4", ctl.ActiveAgents)
 	}
 }
 

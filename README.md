@@ -47,9 +47,10 @@ next to `loop-runner` (or set `loop_harness`). Why: [docs/decisions/2026-10-16-h
 With `"land"` in `stages` (phase 6, [docs/phases/06-land.md](docs/phases/06-land.md)) it also lands
 approved items itself, with no agent: the gates from GitHub and git, `gh pr merge --squash
 --match-head-commit`, then main's CI on the merge (`land_ci_wait`, `land_main_wait`, default
-`"30m"`). Why: [docs/decisions/2026-10-15-land.md](docs/decisions/2026-10-15-land.md). Land has a
-lane of its own, one item at a time next to the `slots` agent runs, so an approved item never waits
-for a build ([docs/decisions/2026-10-16-land-lane.md](docs/decisions/2026-10-16-land-lane.md)).
+`"30m"`). Why: [docs/decisions/2026-10-15-land.md](docs/decisions/2026-10-15-land.md). Land has
+lanes of its own, `land_slots` (default 3) next to the `slots` agent runs, so an approved item never
+waits for a build or for another item's CI ([docs/decisions/2026-10-16-land-lane.md](docs/decisions/2026-10-16-land-lane.md),
+[docs/decisions/2026-10-18-land-never-waits.md](docs/decisions/2026-10-18-land-never-waits.md)).
 With `"plan"` in `stages` (phase 7, [docs/phases/07-planning.md](docs/phases/07-planning.md)) it
 also takes plans' turns: the product and engineering personas, one short agent per turn in
 `<work_root>/plan-<id>/`, resuming the persona's session (`plan_turn_minutes`, default 15).
@@ -61,6 +62,12 @@ With a `qwen` block (`base_url`, `credentials_file`, `model`, `max_minutes`, `op
 of items whose plan piece says `builder: qwen` run OpenCode in the verify fence against jarvisd,
 through a proxy in the runner that adds the app credentials; the second bounce turns the item to
 claude. Why and the gaps: [docs/decisions/2026-10-16-qwen-builder.md](docs/decisions/2026-10-16-qwen-builder.md).
+A config change needs no restart: `loop-runner reload` (SIGHUP) reads `runner.json` again for the
+next claim (repos, slots, stages, verify steps); live runs keep theirs, and a bad file is refused
+with a log line. To update the binary, `loop-runner drain` (SIGUSR1): it claims nothing new, the
+board shows it draining, and it exits 0 once its live runs end, so its service must restart on
+success (systemd `Restart=always`, launchd `KeepAlive`). loopd reads `--repos-file` again on
+SIGHUP. Why: [docs/decisions/2026-10-18-runner-reload-drain.md](docs/decisions/2026-10-18-runner-reload-drain.md).
 
 Harness (phase 4b, [docs/phases/04b-loop-harness.md](docs/phases/04b-loop-harness.md)):
 `scripts/loop-sandbox run` plays `scenarios/*.json` against the real loopd wiring, runner, bot and

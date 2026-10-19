@@ -41,6 +41,8 @@ type Item struct {
 	// PlanID and PlanPiece link an item filed from a plan to its piece (0: not from a plan).
 	PlanID    int64 `json:"plan_id,omitempty"`
 	PlanPiece int   `json:"plan_piece,omitempty"`
+	// Proof is how the loop checks it once merged (the runner runs its command checks).
+	Proof *pipeline.Proof `json:"proof,omitempty"`
 }
 
 // ItemTrust is the part of a trust OK the runner needs.
@@ -213,9 +215,11 @@ func StaticBrief(stage string) string {
 		b.WriteString(`{"outcome": "ready_for_pr", "pr_title": "one line, at most 256 characters",
  "pr_body": "markdown, at most 60,000 characters: what changed, the tests, what was not verified; name evidence files by file name",
  "summary": "one paragraph", "not_verified": ["…"], "evidence": [{"file": "evidence/after.png", "label": "after, phone"}],
- "needs_review": false}`)
+ "needs_review": false,
+ "proof": [{"kind": "command", "run": "go test ./internal/web -run TestBoardQA"}, {"kind": "manual", "look": "the QA column on a phone"}]}`)
 		b.WriteString("\n```\n\n```json\n{\"outcome\": \"question\", \"question\": \"…\"}\n```\n\n")
-		b.WriteString("`ready_for_pr` means everything is committed: the runner refuses a worktree with uncommitted changes, and reports git's own HEAD and changed files. It adds a Verification footer (the evidence files, the run's numbers) to your `pr_body`. Set `needs_review` to true when the change touches something the user should look at before it merges. No other fields.\n")
+		b.WriteString("`ready_for_pr` means everything is committed: the runner refuses a worktree with uncommitted changes, and reports git's own HEAD and changed files. It adds a Verification footer (the evidence files, the run's numbers, your proof) to your `pr_body`. Set `needs_review` to true when the change touches something the user should look at before it merges. No other fields.\n\n")
+		b.WriteString("`proof` (optional, at most 10 checks) is how the loop can tell, once merged, that the change works; an item that waits in qa is checked with it. Kinds: `usage` (`event`: a loopd event kind seen since the merge, with optional `actor` and `match` lists on its data fields: `{\"kind\": \"usage\", \"event\": \"claimed\", \"actor\": [\"runner:mbp\"]}`); `command` (`run`: one shell line the runner runs fenced in a checkout of main, exit 0 passes); `pi` (`run`, for the test Pi; it waits until the loop has one); `e2e` (`tests`: E2E suite test names; they wait until it runs); `manual` (`look`: one line, what only the user can judge). Every automatic check passing verifies the item without the user; a command failing twice in a row reopens it. So make each check really show the change works, and use `manual` only for looks, feel or a product call.\n")
 	}
 	return b.String()
 }
@@ -285,6 +289,7 @@ func Brief(stage string, it Item, r RunInfo) string {
 			fmt.Fprintf(&b, "- Sent back from held; PR #%d is open on this branch. Do what `%s` asks (the user's note, or a conflict with `%s`) on the same branch; the runner updates that PR, and the user approves the new head.\n", it.PR, r.HeldNotes, r.Base)
 		}
 		if it.Trust != nil && it.Trust.allows(it.Trust.HeadSHA) {
+			// Only when the runner kept no result for the OK'd head (trusted.go): else no agent runs.
 			fmt.Fprintf(&b, "- The user OK'd verify running commit `%s`, which changes files the runner trusts (deny_write). If that commit is this item's work, add no commit: return `ready_for_pr` for it as it is. Any new commit needs a new OK from the user.\n", it.Trust.HeadSHA)
 		}
 		if len(r.Verify) > 0 {
@@ -393,6 +398,17 @@ func RetryBrief(brief, why string) string {
 		"Your work so far is still here (the worktree, `.loop/evidence/`). Fix what the runner refused, then write " +
 		"`.loop/result.json` again. This is the one retry: a second refusal goes to the user as a runner error.\n"
 }
+
+// NoResultHeading starts NoResultNote.
+const NoResultHeading = "# Your run ended without a result\n"
+
+// NoResultNote is the prompt of a session resumed because its run exited with no
+// .loop/result.json (#208): the session has the brief already.
+const NoResultNote = NoResultHeading + "\nYour last turn ended without `.loop/result.json`, most likely while a command ran in the background " +
+	"(`run_in_background`, Monitor or `&`). This is a one-shot run: it ends when you stop, a background task never reports back, " +
+	"and its process is gone now. This is the same session, resumed once, in the same worktree.\n\n" +
+	"Re-run in the foreground what you were waiting for (raise the Bash `timeout`, up to 600000 ms, or split a long check), " +
+	"then finish with `.loop/result.json` as the brief (still in `.loop/brief.md`) says. If this run ends without it too, the item goes to the user.\n"
 
 // BuildBrief is the build stage's brief.
 func BuildBrief(it Item, r RunInfo) string { return Brief(StageBuild, it, r) }

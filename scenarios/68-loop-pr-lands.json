@@ -1,0 +1,37 @@
+{
+  "name": "loop-pr-lands",
+  "about": "Narrowed hold rules (docs/decisions/2026-10-18-narrow-loop-holds.md): a jarvis-loop PR that changes the claim rules (internal/pipeline/claim.go), not who may approve or merge, lands on its own once review approved and CI passed: no hold match at pr_opened, one merge, and the item waits in qa for the deploy. Scenario 23 is the other side: internal/pipeline/approve.go still holds.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "Change the claim rules", "text": "jarvis-loop: change the claim rules"},
+    {"do": "expect", "repo": {"a": "sandbox/jarvis-loop"}},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "script", "item": "a", "play": "good", "file": "internal/pipeline/claim.go"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"}, "events": [{"item": "a", "kind": "advanced", "outcome": "approved", "actor": "runner"}]},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "qa"},
+    "pr": {"a": {"repo": "sandbox/jarvis-loop", "state": "MERGED", "merge_calls": 1}},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "merged", "actor": "runner", "data": {"changed_paths": "internal/pipeline/claim\\.go", "awaiting_deploy": "^true$"}, "count": 1}
+    ],
+    "no_events": [
+      {"item": "a", "kind": "advanced", "outcome": "pr_opened", "data": {"hold_matches": "rule"}},
+      {"item": "a", "kind": "advanced", "outcome": "hold"}
+    ],
+    "messages": [
+      {"thread": "a", "from": "bot", "text": "#[0-9]+ change the claim rules: Merged; I'll ask for your check once it's deployed\\."}
+    ],
+    "no_messages": [
+      {"thread": "a", "text": "held for your approval"}
+    ]
+  }
+}

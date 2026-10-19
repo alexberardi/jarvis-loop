@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
@@ -196,27 +195,6 @@ func TestQAMarkedLine(t *testing.T) {
 	cs := only(t, e.calls(), "chat.postMessage")
 	if len(cs) != 1 || fmt.Sprint(cs[0].Body["text"]) != "Marked for your check once merged (you): it waits in qa after it lands." {
 		t.Fatalf("lines %+v", cs)
-	}
-}
-
-func TestDigestListsQA(t *testing.T) {
-	e := newBotEnv(t)
-	e.clk.Advance(30 * time.Minute)
-	e.b.Tick(e.ctx)
-	id := e.add("bigger pairing code")
-	e.toQA(id)
-	e.calls()
-	e.clk.Advance(4 * time.Hour)
-	e.b.Tick(e.ctx)
-	posts := only(t, e.calls(), "chat.postMessage")
-	if len(posts) != 1 {
-		t.Fatalf("digest %+v", posts)
-	}
-	txt := allText(posts[0])
-	for _, want := range []string{"Waiting for your check (1)", fmt.Sprintf("#%d bigger pairing code", id)} {
-		if !strings.Contains(txt, want) {
-			t.Errorf("digest lacks %q: %s", want, txt)
-		}
 	}
 }
 

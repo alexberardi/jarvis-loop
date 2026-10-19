@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
 // PRSpec is what the runner opens or updates a PR with.
@@ -269,8 +271,9 @@ type RunStats struct {
 
 // PRBody is the agent's body plus the runner's Verification footer: the runner's own verify steps
 // and their results (apart from the agent's claims), the agent's evidence files (uploaded to loopd
-// with the item) and the run's turn and cache numbers.
-func PRBody(agentBody string, item int64, evidence []EvidenceFile, labels map[string]string, st RunStats, verify []VerifyResult) string {
+// with the item), the build's proof (what the loop checks once merged, for review to see) and the
+// run's turn and cache numbers.
+func PRBody(agentBody string, item int64, evidence []EvidenceFile, labels map[string]string, st RunStats, verify []VerifyResult, proof *pipeline.Proof) string {
 	var b strings.Builder
 	b.WriteString(strings.TrimRight(agentBody, "\n"))
 	b.WriteString("\n\n---\n\n" + VerificationHeading + "\n\n")
@@ -299,6 +302,12 @@ func PRBody(agentBody string, item int64, evidence []EvidenceFile, labels map[st
 			} else {
 				fmt.Fprintf(&b, "- `%s`\n", e.Name)
 			}
+		}
+	}
+	if proof != nil {
+		b.WriteString("\n**Proof** (what the loop checks once this is merged and in qa):\n\n")
+		for _, c := range proof.Checks {
+			fmt.Fprintf(&b, "- %s\n", oneLine(c.String()))
 		}
 	}
 	if st.HasResult {

@@ -247,6 +247,8 @@ func TestActForUser(t *testing.T) {
 		`{"hold_rules":[],"max_run_minutes":600}]`,
 		`{"orchestrator_turns_per_day": 2000}`,
 		`{"stopped": true, "orchestrator_turns_per_day": 2000}`,
+		`{"runway_warn_hours": 0}`,
+		`{"stopped": true, "runway_warn_hours": 0}`,
 	} {
 		ts := "100.3" + strconv.Itoa(i)
 		if err := e.store.RecordSlackMessage(ctx, "C0LOOP", ts, slack.Approver, "what's up with #3?"); err != nil {
@@ -261,7 +263,7 @@ func TestActForUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(after.HoldRules) == 0 || len(after.HoldRules) != len(before.HoldRules) || after.MaxRunMinutes != before.MaxRunMinutes || after.Stopped ||
-		after.OrchTurnsPerDay != before.OrchTurnsPerDay {
+		after.OrchTurnsPerDay != before.OrchTurnsPerDay || after.RunwayWarnHours != before.RunwayWarnHours {
 		t.Fatalf("control changed: %+v -> %+v", before, after)
 	}
 	if err := e.store.RecordSlackMessage(ctx, "C0LOOP", "100.3", slack.Approver, "pause the loop"); err != nil {
@@ -328,8 +330,8 @@ func TestOrchestratorSlackRoutes(t *testing.T) {
 	e.refused(orchTok, "GET", "/orchestrator/messages?since=x", nil, 400, "bad_request")
 
 	var ev store.Event
-	e.do(orchTok, "POST", "/orchestrator/replies", map[string]any{"channel": "D1", "thread_ts": "1.1", "text": "nothing is stuck"}, 201, &ev)
-	if ev.Kind != store.KindOrchReply || ev.Data["text"] != "nothing is stuck" {
+	e.do(orchTok, "POST", "/orchestrator/replies", map[string]any{"channel": "D1", "thread_ts": "1.1", "text": "nothing is stuck", "reason": "you asked"}, 201, &ev)
+	if ev.Kind != store.KindOrchReply || ev.Data["text"] != "nothing is stuck" || ev.Data["reason"] != "you asked" {
 		t.Fatalf("reply %+v", ev)
 	}
 	e.do(orchTok, "POST", "/orchestrator/replies", map[string]any{"channel": slack.ChannelLoop, "thread_ts": "1.1", "text": "ok"}, 201, nil)

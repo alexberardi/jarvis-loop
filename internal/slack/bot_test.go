@@ -885,20 +885,17 @@ func TestUsageLimitIsAnnouncedInTheDigestChannel(t *testing.T) {
 		t.Fatalf("digest-channel posts %+v", digest)
 	}
 	txt := allText(digest[0])
-	for _, want := range []string{"<@" + Approver + ">", "Usage limit", "session limit", "resets 3:45pm", fmt.Sprintf("#%d", id), "0"} {
+	for _, want := range []string{"<@" + Approver + ">", "Usage limit", "session limit", "resets 3:45pm", fmt.Sprintf("#%d", id),
+		"Claude claims paused until", "qwen builds and landing go on"} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("usage-limit post lacks %q: %s", want, txt)
 		}
 	}
-	st, _ := e.st.SlackState(e.ctx)
-	var shown bool
+	// The active-agents number is the user's: the control message is not touched.
 	for _, u := range only(t, cs, "chat.update") {
-		if u.Body["ts"] == st.ControlTS && strings.Contains(allText(u), "Active agents: 0 of 6") {
-			shown = true
+		if strings.Contains(allText(u), "Active agents: 0 of 6") {
+			t.Fatalf("the control message went to 0: %+v", u.Body)
 		}
-	}
-	if !shown {
-		t.Fatalf("the control message does not show 0: %+v", only(t, cs, "chat.update"))
 	}
 	// Other control changes are not announced.
 	two := 2
@@ -1055,38 +1052,38 @@ func TestDigest(t *testing.T) {
 
 	e.clk.Advance(3 * time.Hour) // 11:30: no boundary yet
 	e.b.Tick(e.ctx)
-	if posts := only(t, e.calls(), "chat.postMessage"); len(posts) != 0 {
+	if posts := digests(t, e.calls()); len(posts) != 0 {
 		t.Fatalf("early digest %+v", posts)
 	}
 	e.clk.Advance(30 * time.Minute) // 12:00
 	e.b.Tick(e.ctx)
-	posts := only(t, e.calls(), "chat.postMessage")
+	posts := digests(t, e.calls())
 	if len(posts) != 1 || posts[0].Body["channel"] != ChannelDigest {
 		t.Fatalf("digest %+v", posts)
 	}
 	txt := allText(posts[0])
-	for _, want := range []string{"New (3)", fmt.Sprintf("#%d fresh item", idNew), "Held (1)", fmt.Sprintf("#%d held item", idHeld),
-		"Needs you (1)", "Active agents: 4 of 6", "08:00–12:00"} {
+	for _, want := range []string{"held 1 · needs you 1 · new 3", "Active agents: 4 of 6", "08:00–12:00"} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("digest lacks %q: %s", want, txt)
 		}
 	}
-	if strings.Contains(txt, "Merged") || strings.Contains(txt, "Failing") {
-		t.Errorf("empty sections shown: %s", txt)
+	// The items themselves are the standup's (standup.go): the digest only counts them.
+	if strings.Contains(txt, "merged") || strings.Contains(txt, "failing") || strings.Contains(txt, "fresh item") || strings.Contains(txt, "held item") {
+		t.Errorf("empty counts or items shown: %s", txt)
 	}
 
 	// No double post: again in the same window, or after a restart.
 	e.clk.Advance(time.Minute)
 	e.b.Tick(e.ctx)
 	e.newBot().Tick(e.ctx)
-	if posts := only(t, e.calls(), "chat.postMessage"); len(posts) != 0 {
+	if posts := digests(t, e.calls()); len(posts) != 0 {
 		t.Fatalf("double digest %+v", posts)
 	}
 
 	// Nothing to report: no message, but the window moves on.
 	e.clk.Advance(4 * time.Hour)
 	e.b.Tick(e.ctx)
-	if posts := only(t, e.calls(), "chat.postMessage"); len(posts) != 0 {
+	if posts := digests(t, e.calls()); len(posts) != 0 {
 		t.Fatalf("empty digest %+v", posts)
 	}
 	if st, _ := e.st.SlackState(e.ctx); !st.LastDigest.Equal(t0.Add(8 * time.Hour)) {
@@ -1099,16 +1096,28 @@ func TestDigest(t *testing.T) {
 	e.calls()
 	e.clk.Advance(4 * time.Hour)
 	e.b.Tick(e.ctx)
-	posts = only(t, e.calls(), "chat.postMessage")
+	posts = digests(t, e.calls())
 	if len(posts) != 1 {
 		t.Fatalf("posts %+v", posts)
 	}
 	txt = allText(posts[0])
-	for _, want := range []string{"Failing (1)", "Last /loop usage: 42%"} {
+	for _, want := range []string{"failing 1", "Last /loop usage: 42%"} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("digest lacks %q: %s", want, txt)
 		}
 	}
+}
+
+// digests are the digest posts among calls (the standup posts to #loop-digest too).
+func digests(t *testing.T, calls []call) []call {
+	t.Helper()
+	var out []call
+	for _, c := range only(t, calls, "chat.postMessage") {
+		if strings.HasPrefix(allText(c), "*Loop digest*") {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func TestDigestAlignsToNewYork(t *testing.T) {
@@ -1183,6 +1192,7 @@ func TestAnswerThroughSocketMode(t *testing.T) {
 
 func TestDigestThatCannotBePostedIsSkippedAfterRetries(t *testing.T) {
 	e := newBotEnv(t)
+	e.st.RecordStandup(e.ctx, t0.Add(time.Hour), true) // today's standup is not due: only the digest posts
 	e.b.Tick(e.ctx)
 	e.clk.Advance(time.Hour)
 	e.add("something")
@@ -1307,6 +1317,20 @@ func TestAddRepoWords(t *testing.T) {
 	}
 }
 
+// SetRepos (loopd reloading --repos-file) applies to the next /loop add: a new alias names its repo.
+func TestAddAfterSetRepos(t *testing.T) {
+	e := newBotEnv(t)
+	repos := []string{"alexberardi/jarvis-loop", "alexberardi/jarvis-recipes-mobile"}
+	aliases := map[string]string{"recipes app": "alexberardi/jarvis-recipes-mobile"}
+	e.st.SetRepos(repos)
+	e.st.SetAliases(aliases)
+	e.b.SetRepos(repos, aliases)
+	out := e.command(Approver, "add recipes app: a pantry list")
+	if d := e.item(1); d.Item.Repo != "alexberardi/jarvis-recipes-mobile" || d.Item.Title != "a pantry list" {
+		t.Fatalf("add: %q %+v", out, d.Item)
+	}
+}
+
 func TestRepoText(t *testing.T) {
 	for _, c := range []struct {
 		repo  string
@@ -1365,5 +1389,28 @@ func TestAddAfter(t *testing.T) {
 	}
 	if out := e.command(Approver, "add more after #1"); !strings.Contains(out, "#1 is closed") {
 		t.Fatalf("closed dependency %q", out)
+	}
+}
+
+func TestPaceMessages(t *testing.T) {
+	e := newBotEnv(t)
+	ev := func(d map[string]any) (string, bool) {
+		m, ok := e.b.paceMessage(e.ctx, store.Event{Kind: store.KindUsagePace, Data: d})
+		return m.Text, ok
+	}
+	slow := map[string]any{"level": float64(pipeline.PaceSlow), "from_level": float64(0), "agents": float64(3), "active_agents": float64(4),
+		"window": "5h", "percent": float64(87), "forecast": "2026-10-15T19:10:00Z"}
+	if txt, ok := ev(slow); !ok || txt != "Pacing claude: the 5h window is at 87% of its budget (at this rate it runs out at Thu 15:10).\nClaude runs at once: 3 of 4; P1 and size S items first; P3–P5 builds of size S or M go to qwen." {
+		t.Errorf("slow: %q", txt)
+	}
+	budget := map[string]any{"level": float64(pipeline.PacePaused), "window": "week", "percent": float64(100)}
+	if txt, _ := ev(budget); txt != "<@"+Approver+"> Claude budget reached: the week is at 100% of its budget.\nClaude claims paused until the window frees up; qwen builds and landing go on, and running agents finish their stage." {
+		t.Errorf("budget: %q", txt)
+	}
+	if txt, ok := ev(map[string]any{"level": float64(0), "from_level": float64(pipeline.PaceSlow)}); !ok || txt != "Claude claims back to normal." {
+		t.Errorf("normal: %q %v", txt, ok)
+	}
+	if _, ok := ev(map[string]any{"level": float64(0), "from_level": float64(0)}); ok {
+		t.Error("a normal pace after a normal one posted")
 	}
 }

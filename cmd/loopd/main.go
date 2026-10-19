@@ -79,22 +79,14 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("--repos: %w", err)
 	}
-	var aliases map[string]string
+	// --repos-file is read again on SIGHUP (reloadReposOnHUP).
+	rsrc := loopd.RepoSource{Flag: repos}
 	if *reposFile != "" {
-		b, err := os.ReadFile(expand(*reposFile))
-		if err != nil {
-			return fmt.Errorf("--repos-file: %w", err)
-		}
-		more, al, err := parseReposFile(string(b))
-		if err != nil {
-			return fmt.Errorf("--repos-file %s: %w", *reposFile, err)
-		}
-		for _, r := range more {
-			if !slices.Contains(repos, r) {
-				repos = append(repos, r)
-			}
-		}
-		aliases = al
+		rsrc.File = expand(*reposFile)
+	}
+	repos, aliases, err := rsrc.Load()
+	if err != nil {
+		return err
 	}
 	log := slog.New(slog.NewJSONHandler(stderr, nil))
 
@@ -181,8 +173,9 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	defer bg.Wait()
 	sctx, stopSlack := context.WithCancel(ctx) // ends the Slack goroutines however run returns
 	defer stopSlack()
+	var bot *slack.Bot
 	if *slackEnv != "" {
-		if _, err := loopd.StartSlack(sctx, &bg, st, loopd.Slack{BaseURL: slack.DefaultBaseURL, Tokens: slackToks,
+		if bot, err = loopd.StartSlack(sctx, &bg, st, loopd.Slack{BaseURL: slack.DefaultBaseURL, Tokens: slackToks,
 			LinkBase: *slackLink, Repos: repos, Aliases: aliases, Clock: clock.Real{}, Log: log, Orchestrator: orchToks}); err != nil {
 			ln.Close()
 			if boardLn != nil {
@@ -194,6 +187,21 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 			return err
 		}
 	}
+
+	// SIGHUP reads the repos again: a repo added to --repos-file needs no restart.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				loopd.ReloadRepos(rsrc, st, bot, log)
+			}
+		}
+	}()
 
 	// Expiry also runs on every request; the ticker covers a quiet server.
 	go func() {
@@ -308,52 +316,6 @@ func parseRepos(s string) ([]string, error) {
 		}
 	}
 	return out, nil
-}
-
-// parseReposFile reads --repos-file: one owner/name slug per line, optionally followed by ':' and
-// comma-separated aliases; blank lines and '#' comments are skipped. An alias may name one repo
-// only, and never another repo's slug or name.
-func parseReposFile(text string) ([]string, map[string]string, error) {
-	var repos []string
-	aliases := map[string]string{}
-	for n, line := range strings.Split(text, "\n") {
-		if i := strings.IndexByte(line, '#'); i >= 0 {
-			line = line[:i]
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		slug, rest, _ := strings.Cut(line, ":")
-		slug = strings.TrimSpace(slug)
-		if !slugRe.MatchString(slug) {
-			return nil, nil, fmt.Errorf("line %d: %q is not an owner/name slug", n+1, slug)
-		}
-		if !slices.Contains(repos, slug) {
-			repos = append(repos, slug)
-		}
-		for _, a := range strings.Split(rest, ",") {
-			a = strings.Join(strings.Fields(strings.ToLower(a)), " ")
-			if a == "" {
-				continue
-			}
-			if strings.ContainsAny(a, "[]:/") {
-				return nil, nil, fmt.Errorf("line %d: alias %q may not contain [ ] : or /", n+1, a)
-			}
-			if prev, ok := aliases[a]; ok && prev != slug {
-				return nil, nil, fmt.Errorf("line %d: alias %q names both %s and %s", n+1, a, prev, slug)
-			}
-			aliases[a] = slug
-		}
-	}
-	for a := range aliases {
-		for _, r := range repos {
-			if _, name, _ := strings.Cut(strings.ToLower(r), "/"); a == name {
-				return nil, nil, fmt.Errorf("alias %q is the name of %s", a, r)
-			}
-		}
-	}
-	return repos, aliases, nil
 }
 
 // checkAddr refuses a non-loopback listen address unless --lan says it is deliberate.

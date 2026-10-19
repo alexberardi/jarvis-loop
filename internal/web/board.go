@@ -4,6 +4,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -48,8 +49,9 @@ type boardPage struct {
 }
 
 // NewBoard returns the handler for GET /board, GET /board/working, GET /board/live.js,
-// GET /board/items/{id}, GET /board/items/{id}/evidence/{n}, GET /board/plans/{id} and
-// GET /board/plans/{id}/{kind}/{v}, and nothing else.
+// GET /board/items/{id}, GET /board/items/{id}/evidence/{n}, GET /board/plans/{id},
+// GET /board/plans/{id}/{kind}/{v}, GET /board/regressions/{id}, its files, and the user's
+// POST /board/regressions, and nothing else.
 func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardConfig) http.Handler {
 	if cfg.Clock == nil {
 		cfg.Clock = clock.Real{}
@@ -63,6 +65,11 @@ func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardCo
 	mux.Handle("GET /board/items/{id}/evidence/{n}", p.auth(p.evidence))
 	mux.Handle("GET /board/plans/{id}", p.auth(p.plan))
 	mux.Handle("GET /board/plans/{id}/{kind}/{v}", p.auth(p.planDoc))
+	mux.Handle("GET /board/regressions/{id}", p.auth(p.regression))
+	mux.Handle("GET /board/regressions/{id}/files/{n}", p.auth(p.regressionFile))
+	// The board's one write: the user's "Run regression" button. The cookie is SameSite=Strict,
+	// and the post is guarded against cross-origin requests too.
+	mux.Handle("POST /board/regressions", http.NewCrossOriginProtection().Handler(p.auth(p.runRegression)))
 	return mux
 }
 
@@ -71,6 +78,8 @@ func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardCo
 const (
 	boardCSP = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'none'; frame-ancestors 'none'"
 	liveCSP  = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; script-src 'self'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'"
+	// boardFormCSP is the board's own for the user's token: its "Run regression" form posts to it.
+	boardFormCSP = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; script-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'"
 )
 
 // boardKinds may read the board: its own read-only kind, and the user, who may do more anyway.
@@ -168,6 +177,11 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, err)
 		return
 	}
+	draining, err := p.st.RunnerStates(r.Context())
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
 	fz, err := p.st.Freezes(r.Context())
 	if err != nil {
 		p.fail(w, err)
@@ -178,13 +192,34 @@ func (p *boardPage) board(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, err)
 		return
 	}
+	regs, err := p.st.Regressions(r.Context(), regLimit)
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
+	rw, err := p.st.Runway(r.Context())
+	if err != nil {
+		p.fail(w, err)
+		return
+	}
 	now := p.cfg.Clock.Now()
 	v := boardView(items, plans, now, r.URL.Query().Get("closed") == "1", p.cfg.SlackWorkspace)
+	v.Draining = draining
 	v.Freezes = fz
 	v.Working = workingView(work, now, 0)
 	v.Orch = orchView(orch, items)
+	if u, err := p.st.Usage(r.Context()); err == nil {
+		v.Usage = usageView(u)
+	} else {
+		p.log.Error("board usage", "err", err)
+	}
 	v.Runners = runnerView(runners, now)
+	v.Regressions = regressionView(regs, p.principal(r).Kind == api.KindUser, now)
+	v.Runway = runwayView(rw)
 	w.Header().Set("Content-Security-Policy", liveCSP)
+	if v.Regressions.CanRun {
+		w.Header().Set("Content-Security-Policy", boardFormCSP)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := boardTmpl.Execute(w, v); err != nil {
 		p.log.Error("render board", "err", err)
@@ -394,16 +429,86 @@ func workingView(work []store.Working, now time.Time, item int64) workingSection
 }
 
 type boardData struct {
+	// Draining are the runners that claim nothing new before a restart (loop-runner drain).
+	Draining []store.RunnerState
 	// Freezes are the repos frozen while their main is red: a red banner each.
-	Freezes    []store.Freeze
-	Working    workingSection
-	Orch       orchSection
-	Runners    runnerSection
+	Freezes []store.Freeze
+	Working workingSection
+	Orch    orchSection
+	Usage   usageSection
+	Runners runnerSection
+	// Regressions are the latest regression runs, and the user's button to start one.
+	Regressions regressionSection
+	// Runway is how much the loop can do without the user (#205); nil: not shown.
+	Runway     *runwaySection
 	Columns    []column
 	ShowClosed bool
 	Now        time.Time
 	Total      int
 	PlanCount  int
+}
+
+// usageSection is the Usage panel: claude's 5h window and week against their budgets, the pace and
+// the forecast, the last days, and this week's costliest items (docs/decisions/2026-10-18-usage-awareness.md).
+type usageSection struct {
+	Show               bool
+	Window, Week, Pace string
+	Forecast           string
+	Paced              bool
+	Days               []usageDay
+	Items              []store.UsageItem
+	Hits               []pipeline.UsageHit
+}
+
+type usageDay struct {
+	Day                  string
+	Claude, Qwen         string
+	Cost                 float64
+	ClaudeRuns, QwenRuns int
+}
+
+func usageView(u store.UsageReport) usageSection {
+	st := u.Claude
+	v := usageSection{Show: len(u.Days) > 0 || len(u.Hits) > 0, Items: u.Items, Hits: u.Hits, Paced: u.Pace.Level != pipeline.PaceNormal}
+	of := func(burn, limit int64) string {
+		if limit <= 0 {
+			return pipeline.FormatTokens(burn) + " (no limit known yet)"
+		}
+		return fmt.Sprintf("%s of %s (%d%%)", pipeline.FormatTokens(burn), pipeline.FormatTokens(limit), burn*100/limit)
+	}
+	if st.WindowStart.IsZero() {
+		v.Window = "none open (the next claude run opens one)"
+	} else {
+		v.Window = fmt.Sprintf("%s · %s to %s", of(st.Burn5h, st.Limit5h), stamp(st.WindowStart), stamp(st.WindowEnd))
+	}
+	v.Week = of(st.BurnWeek, st.LimitWeek) + " · rolling 7 days"
+	if !st.WeekEnd.IsZero() {
+		v.Week = of(st.BurnWeek, st.LimitWeek) + " · resets " + stamp(st.WeekEnd)
+	}
+	v.Pace = u.Pace.Describe(time.UTC)
+	if u.Forecast != nil {
+		v.Forecast = "at this rate the 5h window runs out at " + stamp(*u.Forecast)
+	} else if st.Limit5h > 0 && !st.WindowStart.IsZero() {
+		v.Forecast = "at this rate the 5h window lasts to its reset"
+	}
+	byDay := map[string]*usageDay{}
+	for _, d := range u.Days {
+		row := byDay[d.Key]
+		if row == nil {
+			row = &usageDay{Day: d.Key}
+			byDay[d.Key] = row
+			v.Days = append(v.Days, usageDay{Day: d.Key})
+		}
+		if d.Provider == pipeline.ProviderClaude {
+			row.Claude, row.Cost, row.ClaudeRuns = pipeline.FormatTokens(d.Burn), d.CostUSD, d.Runs
+		} else {
+			row.Qwen, row.QwenRuns = pipeline.FormatTokens(d.Tokens), d.Runs
+		}
+	}
+	for i := range v.Days {
+		v.Days[i] = *byDay[v.Days[i].Day]
+	}
+	return v
 }
 
 // runnerSection is the runner panel: the runners seen within a day and the slots held for their
@@ -527,7 +632,7 @@ func str(m map[string]any, k string) string {
 }
 
 // lanes maps the board's columns to display stages (pipeline.Display). Planning holds the open
-// plans instead (planning is not an item stage); QA has no stage yet.
+// plans instead (planning is not an item stage). QA groups its cards (pipeline.QAGroup).
 var lanes = []struct {
 	name, note string
 	displays   []string
@@ -538,7 +643,7 @@ var lanes = []struct {
 	{"Review", "", []string{"review (queued)", "review", "land (queued)", "land"}},
 	{"Needs you", "", []string{"needs-you"}},
 	{"Approval", "", []string{"held"}},
-	{"QA", "No QA stage yet.", nil},
+	{"QA", "Nothing waits for a check.", []string{"qa"}},
 	{"Done", "", []string{"done", "closed"}},
 }
 
@@ -576,7 +681,17 @@ func boardView(items []store.BoardItem, plans []store.PlanRow, now time.Time, sh
 			if len(l.displays) > 1 {
 				c.Label = it.Display
 			}
+			if it.Display == "qa" {
+				c.Label, c.Reason = pipeline.QAGroup(it.Proof, it.AwaitingDeploy)
+			}
 			col.Cards = append(col.Cards, c)
+		}
+		if l.name == "QA" && len(col.Cards) > 0 {
+			// In the column's groups: waiting for a proof, needs you, failed.
+			slices.SortStableFunc(col.Cards, func(a, b card) int {
+				return slices.Index(pipeline.QAGroups, a.Label) - slices.Index(pipeline.QAGroups, b.Label)
+			})
+			col.Note = ""
 		}
 		v.Total += len(col.Cards)
 		v.Columns = append(v.Columns, col)
@@ -649,6 +764,10 @@ func itemView(d store.Detail, channel, ts string, now time.Time, slackBase strin
 	if it.Stage == pipeline.Held {
 		v.Reason = it.HoldReason
 	}
+	if it.Stage == pipeline.QA {
+		g, why := pipeline.QAGroup(it.Proof, it.AwaitingDeploy)
+		v.Reason = g + ": " + why
+	}
 	if d.Lease != nil {
 		v.ClaimedBy = d.Lease.Runner + "/" + d.Lease.Agent
 	}
@@ -687,12 +806,27 @@ var templateFS embed.FS
 //go:embed templates/live.js
 var liveJS []byte
 
-var funcs = template.FuncMap{"join": strings.Join, "age": age, "size": size, "stamp": stamp, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot}
+var funcs = template.FuncMap{"join": strings.Join, "age": age, "size": size, "stamp": stamp, "tokens": pipeline.FormatTokens, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot}
 
 var (
-	boardTmpl   = template.Must(template.New("board.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/board.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
-	itemTmpl    = template.Must(template.New("item.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/item.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
-	workingTmpl = template.Must(template.New("working.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/working.tmpl"))
-	planTmpl    = template.Must(template.New("plan.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plan.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
-	docTmpl     = template.Must(template.New("plandoc.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plandoc.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
+	boardTmpl      = template.Must(template.New("board.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/board.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
+	itemTmpl       = template.Must(template.New("item.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/item.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
+	workingTmpl    = template.Must(template.New("working.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/working.tmpl"))
+	planTmpl       = template.Must(template.New("plan.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plan.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
+	docTmpl        = template.Must(template.New("plandoc.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plandoc.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
+	regressionTmpl = template.Must(template.New("regression.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/regression.tmpl", "templates/style.tmpl"))
 )
+
+// runwaySection is the board's runway line: the hours, and the user's waiting items that free the
+// most (the first boardRunwayTop).
+type runwaySection struct {
+	store.RunwayReport
+	Low bool
+}
+
+const boardRunwayTop = 3
+
+func runwayView(r store.RunwayReport) *runwaySection {
+	r.Unblockers = r.Unblockers[:min(len(r.Unblockers), boardRunwayTop)]
+	return &runwaySection{RunwayReport: r, Low: r.Threshold > 0 && r.Hours < float64(r.Threshold)}
+}

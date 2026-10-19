@@ -34,9 +34,12 @@ func (r RunnerSeen) Around(now time.Time) bool {
 	return now.Sub(r.LastSeen) <= 2*time.Duration(poll)*time.Second
 }
 
-// SlotHolds is the slots held now, by resource. items, deps, live and frozen are as for Choose.
-func SlotHolds(c Control, items []Item, deps map[int64]Stage, live []LiveLease, runners []RunnerSeen, frozen Frozen, now time.Time) []SlotHold {
-	free := c.ActiveAgents - len(live)
+// SlotHolds is the slots held now, by resource. items, deps, live and frozen are as for Choose;
+// pace is claude's (PaceFor): a slot is held only for an item the pace lets that runner take, so a
+// pause does not keep a slot for a claude build nobody may start. A runner's builders are not
+// recorded, so a build the pace would send to qwen holds no slot while claude is paced.
+func SlotHolds(c Control, pace Pace, items []Item, deps map[int64]Stage, live []LiveLease, runners []RunnerSeen, frozen Frozen, now time.Time) []SlotHold {
+	free := c.ActiveAgents - AgentLeases(live)
 	if c.Stopped || free <= 0 {
 		return nil
 	}
@@ -51,8 +54,13 @@ func SlotHolds(c Control, items []Item, deps map[int64]Stage, live []LiveLease, 
 			if _, ok := byRes[res]; ok {
 				continue
 			}
-			req := ClaimRequest{Runner: r.Name, Capabilities: r.Capabilities, OnlyResources: []string{res}, Stages: r.Stages}
-			if it, ok := Choose(c, items, deps, live, req, frozen); ok {
+			// Land takes no agent slot, so it holds none.
+			stages := agentStages(r.Stages)
+			if len(stages) == 0 {
+				continue
+			}
+			req := ClaimRequest{Runner: r.Name, Capabilities: r.Capabilities, OnlyResources: []string{res}, Stages: stages}
+			if it, ok := choosePaced(c, items, deps, live, req, frozen, newPacing(pace, live, nil).eligible); ok {
 				byRes[res] = SlotHold{Resource: res, Runner: r.Name, ItemID: it.ID}
 			}
 		}
@@ -82,5 +90,20 @@ func HeldReason(holds []SlotHold) string {
 
 // serves says whether w takes an item needing one of the held resources.
 func serves(w Work, holds []SlotHold) bool {
-	return w.Item != nil && slices.ContainsFunc(holds, func(h SlotHold) bool { return slices.Contains(w.Item.Resources, h.Resource) })
+	var res []string
+	switch {
+	case w.Item != nil:
+		res = w.Item.Needs()
+	case w.Reg != nil:
+		res = w.Reg.Resources
+	}
+	return slices.ContainsFunc(holds, func(h SlotHold) bool { return slices.Contains(res, h.Resource) })
+}
+
+// agentStages is stages without land (none: every agent stage).
+func agentStages(stages []Stage) []Stage {
+	if len(stages) == 0 {
+		return []Stage{Triage, Build, Review}
+	}
+	return slices.DeleteFunc(slices.Clone(stages), func(s Stage) bool { return s == Land })
 }

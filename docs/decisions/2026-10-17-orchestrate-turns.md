@@ -29,6 +29,8 @@ a turn sees, and how its result becomes those routes' calls.
     fired for);
   - a wait the orchestrator met ending (`due`): a retry refused inside its backoff (429
     `too_soon`) sets `orch_state.due_at`, and the turn starts when it ends, not at the next sweep;
+  - an item in qa without a proof (`proof_needed`, once per item; since 2026-10-18,
+    [QA proofs](2026-10-18-qa-proofs.md));
   - the user's message to it (`message`, with the words): `store.QueueOrchestrate`. Piece 2
     (#72) wires it: `store.OrchMessage`, which loopd's Slack layer calls for each message to the
     `@orchestrator` app, queues it. The harness's `orchestrator_message` step still queues one
@@ -79,6 +81,7 @@ a turn sees, and how its result becomes those routes' calls.
   | `escalate` | **text**, item_id, recommendation | `POST /orchestrator/escalations` |
   | `agents` | **active_agents** | `POST /orchestrator/agents` |
   | `note` | **text** | `POST /orchestrator/notes` |
+  | `proof` | **item_id**, **checks** | `POST /orchestrator/items/{id}/proof` (since 2026-10-18, [QA proofs](2026-10-18-qa-proofs.md)) |
 
   At most 20 actions a turn. A refused result is retried once in the same session with the reason
   (as [refused results](2026-10-16-refused-results.md)); a second refusal fails the turn (its

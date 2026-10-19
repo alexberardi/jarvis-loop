@@ -171,21 +171,21 @@ func (r *Runner) newPlanRun(cl *Claim, agent string) (*run, error) {
 		return nil, fmt.Errorf("loopd's plan claim has no plan or turn")
 	}
 	p, t := *cl.Plan, *cl.Turn
-	ru := &run{stage: t.Persona, lease: cl.Lease.ID, agent: agent, started: r.Clock.Now(), plan: &p, turn: &t}
+	ru := &run{stage: t.Persona, lease: cl.Lease.ID, agent: agent, cfg: r.Config(), started: r.Clock.Now(), plan: &p, turn: &t}
 	if !slices.Contains(Personas, t.Persona) {
 		return ru, fmt.Errorf("turn %d of plan P%d is for %q, not a persona this runner knows", t.ID, p.ID, t.Persona)
 	}
-	ru.wt = filepath.Join(r.Cfg.WorkRoot, fmt.Sprintf("plan-%d", p.ID))
+	ru.wt = filepath.Join(ru.cfg.WorkRoot, fmt.Sprintf("plan-%d", p.ID))
 	ru.scratch = filepath.Join(ru.wt, ".loop", "scratch")
-	ru.dir = uniqueRunDir(filepath.Join(r.Cfg.WorkRoot, "runs", fmt.Sprintf("P%d-%s-%s", p.ID, t.Persona, ru.started.Format("20060102T150405Z"))))
+	ru.dir = uniqueRunDir(filepath.Join(ru.cfg.WorkRoot, "runs", fmt.Sprintf("P%d-%s-%s", p.ID, t.Persona, ru.started.Format("20060102T150405Z"))))
 	// One settings file per persona, the same bytes for every plan.
-	ru.settings = filepath.Join(r.Cfg.WorkRoot, "settings", "plan-"+t.Persona+".json")
+	ru.settings = filepath.Join(ru.cfg.WorkRoot, "settings", "plan-"+t.Persona+".json")
 	ru.sandbox = fmt.Sprintf("plan-%d", p.ID)
 	ru.resume = p.ProductSession
 	if t.Persona == pipeline.PersonaEngineering {
 		ru.resume = p.EngineeringSession
 	}
-	ru.maxRun = time.Duration(r.Cfg.PlanTurnMinutes) * time.Minute
+	ru.maxRun = time.Duration(ru.cfg.PlanTurnMinutes) * time.Minute
 	return ru, nil
 }
 
@@ -247,8 +247,8 @@ func (r *Runner) preparePlan(ctx context.Context, ru *run) (string, error) {
 	// rest of the plan's directory are read-only to the agent.
 	gc := guard.Config{
 		Worktree: out, Scratch: ru.scratch, Home: home,
-		Protected: r.Cfg.Protected(), Secrets: r.Cfg.Secrets(), Words: []string{r.Cfg.UserEmulator},
-		LoopdAddrs: r.Cfg.LoopdAddrs(), ReadOnly: true,
+		Protected: r.cfgOf(ru).Protected(), Secrets: r.cfgOf(ru).Secrets(), Words: []string{r.cfgOf(ru).UserEmulator},
+		LoopdAddrs: r.cfgOf(ru).LoopdAddrs(), ReadOnly: true,
 		Report: filepath.Join(ru.dir, "refusals.jsonl"), Armed: filepath.Join(ru.dir, "armed"),
 	}
 	b, _ := json.MarshalIndent(gc, "", "  ")
@@ -262,8 +262,8 @@ func (r *Runner) preparePlan(ctx context.Context, ru *run) (string, error) {
 	if err := writeAtomic(ru.settings, settings); err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(r.Cfg.Guard); err != nil {
-		return "", fmt.Errorf("the guard binary %s: %w", r.Cfg.Guard, err)
+	if _, err := os.Stat(r.cfgOf(ru).Guard); err != nil {
+		return "", fmt.Errorf("the guard binary %s: %w", r.cfgOf(ru).Guard, err)
 	}
 	argv, _ := json.Marshal(r.agentCommand(ru).Args[1:])
 	if err := os.WriteFile(filepath.Join(ru.dir, "argv.json"), argv, 0o600); err != nil {
@@ -275,8 +275,8 @@ func (r *Runner) preparePlan(ctx context.Context, ru *run) (string, error) {
 // planSettingsInput is the settings of every plan turn: read-only (no commits), like triage's,
 // and nothing per repo or per plan.
 func (r *Runner) planSettingsInput(home string) SettingsInput {
-	return SettingsInput{Mode: r.Cfg.Mode, Guard: r.Cfg.Guard, Home: home, Protected: r.Cfg.Protected(), Secrets: r.Cfg.Secrets(),
-		LoopdAddrs: r.Cfg.LoopdAddrs(), AllowedDomains: r.Cfg.AllowedDomains, ReadOnly: true}
+	return SettingsInput{Mode: r.Config().Mode, Guard: r.Config().Guard, Home: home, Protected: r.Config().Protected(), Secrets: r.Config().Secrets(),
+		LoopdAddrs: r.Config().LoopdAddrs(), AllowedDomains: r.Config().AllowedDomains, ReadOnly: true}
 }
 
 // planCheckouts checks the plan's repos out under repos/<key>/, detached at their base after a
@@ -284,7 +284,7 @@ func (r *Runner) planSettingsInput(home string) SettingsInput {
 func (r *Runner) planCheckouts(ctx context.Context, ru *run, info *PlanTurnInfo) error {
 	want := map[string]bool{}
 	for _, slug := range ru.plan.Repos {
-		key, rc, ok := r.Cfg.Repo(slug)
+		key, rc, ok := r.cfgOf(ru).Repo(slug)
 		if !ok {
 			info.ContextErrs = append(info.ContextErrs, "the repo "+slug+" (this runner has no such repo configured)")
 			continue
@@ -313,7 +313,7 @@ func (r *Runner) planCheckouts(ctx context.Context, ru *run, info *PlanTurnInfo)
 			continue
 		}
 		path := filepath.Join(ru.wt, dir)
-		for key := range r.Cfg.Repos {
+		for key := range r.cfgOf(ru).Repos {
 			if Slug(key) == e.Name() {
 				mirror := r.mirrorPath(key)
 				unlock := r.lockMirror(mirror)
@@ -328,8 +328,8 @@ func (r *Runner) planCheckouts(ctx context.Context, ru *run, info *PlanTurnInfo)
 
 // reposTable is .loop/context/repos.md for a plan turn: every configured repo.
 func (r *Runner) reposTable() string {
-	keys := make([]string, 0, len(r.Cfg.Repos))
-	for k := range r.Cfg.Repos {
+	keys := make([]string, 0, len(r.Config().Repos))
+	for k := range r.Config().Repos {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
@@ -337,7 +337,7 @@ func (r *Runner) reposTable() string {
 	b.WriteString("# The repos the loop works on\n\nName them by slug (`owner/name`) in `repos` and in the blueprint's pieces.\n\n")
 	b.WriteString("| key | slug | group | base | what it is |\n| --- | --- | --- | --- | --- |\n")
 	for _, k := range keys {
-		rc := r.Cfg.Repos[k]
+		rc := r.Config().Repos[k]
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", k, rc.Slug, cell(rc.Group), rc.Base, cell(rc.Description))
 	}
 	return b.String()
@@ -406,7 +406,7 @@ func (r *Runner) sendTurn(ctx context.Context, ru *run, res pipeline.TurnResult,
 // repoSlugs are the configured repos' slugs.
 func (r *Runner) repoSlugs() []string {
 	var out []string
-	for _, rc := range r.Cfg.Repos {
+	for _, rc := range r.Config().Repos {
 		out = append(out, rc.Slug)
 	}
 	sort.Strings(out)

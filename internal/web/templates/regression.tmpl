@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Regression R{{.Run.ID}} · Jarvis Loop</title>
+{{template "style"}}
+<style>
+main { max-width: 960px; margin: 0 auto; }
+h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 20px 0 6px; }
+h3 { font-size: 15px; margin: 16px 0 4px; overflow-wrap: anywhere; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; overflow-wrap: anywhere; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 0 0 8px; font: 13px/1.45 ui-monospace, monospace; }
+figure { margin: 0 0 12px; }
+figure img { max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; }
+.files { font-size: 13px; color: var(--muted); }
+table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); font-size: 13px; }
+td { padding: 4px 8px; border-top: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+td.st { white-space: nowrap; }
+</style>
+</head>
+<body>
+<main>
+<p class="sub"><a href="/board">← board</a></p>
+<h1>Regression R{{.Run.ID}} ({{.Run.Suite}}): {{.Run.Status}}</h1>
+<dl>
+{{- if or (eq .Run.Status "passed") (eq .Run.Status "failed")}}
+<dt>Tests</dt><dd>{{.Run.Passed}} passed, {{.Run.Failed}} failed, {{.Run.Skipped}} skipped</dd>
+{{- end}}
+<dt>Asked by</dt><dd>{{.Run.RequestedBy}}{{with .Run.Via}} ({{.}}){{end}}, {{stamp .Run.CreatedAt}}</dd>
+{{- with .Run.Runner}}
+<dt>Runner</dt><dd>{{.}}</dd>
+{{- end}}
+{{- with .Run.FinishedAt}}
+<dt>Finished</dt><dd>{{stamp .}}</dd>
+{{- end}}
+{{- with .Run.ServerHead}}
+<dt>jarvis-server</dt><dd><code>{{.}}</code></dd>
+{{- end}}
+{{- with .Run.MobileHead}}
+<dt>jarvis-node-mobile</dt><dd><code>{{.}}</code></dd>
+{{- end}}
+{{- with .Run.E2ERun}}
+<dt>scripts/e2e run</dt><dd><code>{{.}}</code></dd>
+{{- end}}
+{{- with .Run.Error}}
+<dt>Error</dt><dd class="reason">{{.}}</dd>
+{{- end}}
+</dl>
+{{- if .Failures}}
+<h2>Failures · {{len .Failures}}</h2>
+{{- range .Failures}}
+<h3>{{.Suite}}: {{.Title}}</h3>
+<p class="files">{{if .File}}{{.File}}:{{.Line}}, {{end}}{{.Status}} after {{.MS}} ms{{if .ItemID}} · filed as <a href="/board/items/{{.ItemID}}">#{{.ItemID}}</a>{{end}}</p>
+{{- with .Error}}
+<pre>{{.}}</pre>
+{{- end}}
+{{- if .Screenshot}}
+<figure><a href="/board/regressions/{{$.Run.ID}}/files/{{.Screenshot}}"><img src="/board/regressions/{{$.Run.ID}}/files/{{.Screenshot}}" alt="screenshot of {{.Title}}"></a></figure>
+{{- end}}
+{{- end}}
+{{- end}}
+{{- if .Run.Tests}}
+<h2>Tests · {{len .Run.Tests}}</h2>
+<table>
+{{- range .Run.Tests}}
+<tr><td class="st">{{.Status}}</td><td>{{.Suite}}</td><td>{{.Title}}</td><td class="st">{{.MS}} ms</td></tr>
+{{- end}}
+</table>
+{{- end}}
+{{- if .Files}}
+<h2>Files</h2>
+<p class="files">{{range .Files}}<a href="/board/regressions/{{$.Run.ID}}/files/{{.N}}">{{.Name}}</a> ({{size .Size}}) {{end}}</p>
+{{- end}}
+</main>
+</body>
+</html>

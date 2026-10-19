@@ -9,10 +9,12 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 	"github.com/alexberardi/jarvis-loop/internal/runner"
 	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/slackfake"
@@ -261,6 +263,24 @@ func (p *player) problems(e Expect, negatives bool) []string {
 	}
 	if e.BoardOrchestrator != "" {
 		out = append(out, p.orchPanelProblems(e.BoardOrchestrator)...)
+	}
+	if e.BoardRunners != "" {
+		out = append(out, p.runnersProblems(e.BoardRunners)...)
+	}
+	for id, want := range e.BoardRegression {
+		n, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			add("board_regression: %q is not a run id", id)
+			continue
+		}
+		page, err := p.s.RegressionPage(n)
+		if err != nil {
+			add("board_regression R%d: %v", n, err)
+			continue
+		}
+		if ok, err := matches(want, page); err != nil || !ok {
+			add("board_regression R%d: the report page does not match %q (%v):\n%s", n, want, err, page)
+		}
 	}
 	for _, rel := range e.Absent {
 		if _, err := os.Lstat(filepath.Join(p.s.Dir, rel)); err == nil {
@@ -625,7 +645,7 @@ func (p *player) mustNot() []string {
 		}
 	}
 	evs, _ := p.s.Events()
-	known := []string{"loopd", actor("approver"), actor("runner"), actor("hand"), actor("user"), actor("orchestrator")}
+	known := []string{"loopd", pipeline.ActorProof, actor("approver"), actor("runner"), actor("hand"), actor("user"), actor("orchestrator")}
 	for _, e := range evs {
 		if slices.Contains(known, e.Actor) {
 			continue

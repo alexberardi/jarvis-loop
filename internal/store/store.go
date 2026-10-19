@@ -75,25 +75,6 @@ type Store struct {
 	tickAt time.Time
 }
 
-// SetDefaultHoldRules replaces the built-in hold rules (what control's hold_rules means while the
-// user has set none). Nothing is recorded: like SetRepos, it is configuration, not a change. The
-// loop's harness uses it to point the defaults at its scratch repos.
-func (s *Store) SetDefaultHoldRules(rules []pipeline.HoldRule) {
-	s.reposMu.Lock()
-	defer s.reposMu.Unlock()
-	s.rules = append([]pipeline.HoldRule(nil), rules...)
-}
-
-// DefaultHoldRules are the built-in hold rules.
-func (s *Store) DefaultHoldRules() []pipeline.HoldRule {
-	s.reposMu.RLock()
-	defer s.reposMu.RUnlock()
-	if s.rules == nil {
-		return pipeline.DefaultHoldRules()
-	}
-	return append([]pipeline.HoldRule(nil), s.rules...)
-}
-
 // SetRepos sets the repo slugs (owner/name) loopd is configured with (loopd's --repos): the only
 // repos triage may give an item that has none.
 func (s *Store) SetRepos(slugs []string) {
@@ -219,11 +200,17 @@ func (s *Store) migrate() error {
 		return err
 	}
 	sort.Slice(ents, func(i, j int) bool { return ents[i].Name() < ents[j].Name() })
+	seen := map[int]string{}
 	for _, e := range ents {
 		v, err := strconv.Atoi(strings.SplitN(e.Name(), "_", 2)[0])
 		if err != nil {
 			return fmt.Errorf("migration %s: name must start with a number", e.Name())
 		}
+		// Two files with one number: the second would be skipped as already applied.
+		if prev, ok := seen[v]; ok {
+			return fmt.Errorf("migrations %s and %s share version %d", prev, e.Name(), v)
+		}
+		seen[v] = e.Name()
 		body, err := migrations.ReadFile("migrations/" + e.Name())
 		if err != nil {
 			return err
@@ -369,7 +356,7 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
 	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of, ci_red_sha, ci_main_fixed,
-	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust, feature`
+	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust, proof, feature`
 
 type scanner interface{ Scan(...any) error }
 
@@ -378,14 +365,14 @@ func scanItem(row scanner) (pipeline.Item, error) {
 		it                  pipeline.Item
 		stage, ret          string
 		resources, approval string
-		trust               string
+		trust, proof        string
 		dependsOn           string
 		created, updated    int64
 	)
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
 		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf, &it.CIRedSHA, &it.CIMainFixed,
-		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust, &it.Feature)
+		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust, &proof, &it.Feature)
 	if err != nil {
 		return it, err
 	}
@@ -403,6 +390,12 @@ func scanItem(row scanner) (pipeline.Item, error) {
 	if trust != "" {
 		it.Trust = &pipeline.Trust{}
 		if err := json.Unmarshal([]byte(trust), it.Trust); err != nil {
+			return it, err
+		}
+	}
+	if proof != "" {
+		it.Proof = &pipeline.Proof{}
+		if err := json.Unmarshal([]byte(proof), it.Proof); err != nil {
 			return it, err
 		}
 	}
@@ -466,12 +459,20 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 		}
 		trust = string(b)
 	}
+	proof := ""
+	if it.Proof != nil {
+		b, err := json.Marshal(it.Proof)
+		if err != nil {
+			return err
+		}
+		proof = string(b)
+	}
 	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
-		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, ci_main_fixed=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=?, trust=?, feature=? WHERE id=?`,
+		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, ci_main_fixed=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=?, trust=?, proof=?, feature=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
-		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, it.CIMainFixed, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, trust, it.Feature, it.ID)
+		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, it.CIMainFixed, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, trust, proof, it.Feature, it.ID)
 	return err
 }
 
@@ -630,9 +631,11 @@ type Lease struct {
 	EndReason string         `json:"end_reason,omitempty"`
 	// Activity is what the run is doing, from its latest heartbeat (nil: none sent, or ended).
 	Activity *pipeline.Activity `json:"activity,omitempty"`
+	// Builder is the run's builder when it is not claude's (qwen: the item's, or a paced claim's route).
+	Builder string `json:"builder,omitempty"`
 }
 
-const leaseCols = `id, item_id, stage, runner, agent, resources, claimed_at, expires_at, note, ended_at, end_reason, activity`
+const leaseCols = `id, item_id, stage, runner, agent, resources, claimed_at, expires_at, note, ended_at, end_reason, activity, builder`
 
 func scanLease(row scanner) (Lease, error) {
 	var (
@@ -642,7 +645,7 @@ func scanLease(row scanner) (Lease, error) {
 		ended            sql.NullInt64
 		activity         string
 	)
-	if err := row.Scan(&l.ID, &l.ItemID, &stage, &l.Runner, &l.Agent, &resources, &claimed, &expires, &l.Note, &ended, &l.EndReason, &activity); err != nil {
+	if err := row.Scan(&l.ID, &l.ItemID, &stage, &l.Runner, &l.Agent, &resources, &claimed, &expires, &l.Note, &ended, &l.EndReason, &activity, &l.Builder); err != nil {
 		return l, err
 	}
 	l.Activity = parseActivity(activity)
@@ -740,28 +743,6 @@ func (s *Store) Answer(ctx context.Context, actor string, id int64, text string)
 	})
 }
 
-// Approve records the user's approval of a held merge for headSHA.
-func (s *Store) Approve(ctx context.Context, actor string, id int64, headSHA, words string) (pipeline.Item, error) {
-	return s.human(ctx, actor, id, "approve", func(it pipeline.Item) (pipeline.Transition, error) {
-		return pipeline.ApplyApprove(it, actor, headSHA, words, s.clock.Now())
-	})
-}
-
-// Trust records the approver's OK for verify to run headSHA, the commit it refused for changing
-// trusted files.
-func (s *Store) Trust(ctx context.Context, actor string, id int64, headSHA string) (pipeline.Item, error) {
-	return s.human(ctx, actor, id, "trust", func(it pipeline.Item) (pipeline.Transition, error) {
-		return pipeline.ApplyTrust(it, actor, headSHA, s.clock.Now())
-	})
-}
-
-// Hold records the user keeping a held merge held.
-func (s *Store) Hold(ctx context.Context, actor string, id int64, words string) (pipeline.Item, error) {
-	return s.human(ctx, actor, id, "hold", func(it pipeline.Item) (pipeline.Transition, error) {
-		return pipeline.ApplyHold(it, words)
-	})
-}
-
 // Rebuild sends a held or needs_you item back to build with notes for the builder (the user's,
 // or a runner's on a held PR that turned conflicting: a runner's moves only a held item, so its
 // held watch never answers a question that came up meanwhile).
@@ -813,148 +794,6 @@ func (s *Store) humanTx(ctx context.Context, actor string, id int64, action stri
 	return out, nil
 }
 
-// ---- control ----
-
-func (s *Store) loadControl(q interface {
-	QueryRow(string, ...any) *sql.Row
-}) (pipeline.Control, error) {
-	var c pipeline.Control
-	var stopped int
-	var limits, rules string
-	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules, orchestrator_turns_per_day FROM control WHERE id = 1`).
-		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules, &c.OrchTurnsPerDay)
-	if err != nil {
-		return c, err
-	}
-	c.Stopped = stopped != 0
-	if err := json.Unmarshal([]byte(limits), &c.Limits); err != nil {
-		return c, err
-	}
-	if rules == "" {
-		c.HoldRules = s.DefaultHoldRules()
-		return c, nil
-	}
-	err = json.Unmarshal([]byte(rules), &c.HoldRules)
-	return c, err
-}
-
-// saveControl writes the control row. builtInRules keeps hold_rules at ” (the live built-in
-// defaults) instead of writing the list out: a change to another field must not freeze the
-// defaults as if the user had set them.
-func saveControl(tx *sql.Tx, c pipeline.Control, builtInRules bool) error {
-	limits, err := json.Marshal(c.Limits)
-	if err != nil {
-		return err
-	}
-	if c.HoldRules == nil {
-		c.HoldRules = []pipeline.HoldRule{}
-	}
-	rules, err := json.Marshal(c.HoldRules)
-	if err != nil {
-		return err
-	}
-	if builtInRules {
-		rules = nil
-	}
-	stopped := 0
-	if c.Stopped {
-		stopped = 1
-	}
-	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=?, orchestrator_turns_per_day=? WHERE id = 1`,
-		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules), c.OrchTurnsPerDay)
-	return err
-}
-
-// builtInRules reports whether control's hold rules are the built-in defaults (stored as ”).
-func builtInRules(tx *sql.Tx) (bool, error) {
-	var raw string
-	err := tx.QueryRow(`SELECT hold_rules FROM control WHERE id = 1`).Scan(&raw)
-	return raw == "", err
-}
-
-// resetBuiltInCopy puts the hold rules back on the live defaults when the stored list is a copy of
-// a built-in list (pipeline.IsBuiltInHoldRuleSet): a control change before phase 6b wrote the
-// defaults out, which froze them. A list the user changed is theirs and stays.
-func (s *Store) resetBuiltInCopy() error {
-	return s.tx(context.Background(), func(tx *sql.Tx) error {
-		var raw string
-		if err := tx.QueryRow(`SELECT hold_rules FROM control WHERE id = 1`).Scan(&raw); err != nil || raw == "" {
-			return err
-		}
-		var rules []pipeline.HoldRule
-		if json.Unmarshal([]byte(raw), &rules) != nil || !pipeline.IsBuiltInHoldRuleSet(rules) {
-			return nil
-		}
-		_, err := tx.Exec(`UPDATE control SET hold_rules = '' WHERE id = 1`)
-		return err
-	})
-}
-
-// Control returns the current control row.
-func (s *Store) Control(ctx context.Context) (pipeline.Control, error) {
-	return s.loadControl(s.r)
-}
-
-// ControlPatch changes some of the control row; Limits are merged key by key, HoldRules
-// replace the whole list.
-type ControlPatch struct {
-	ActiveAgents  *int                 `json:"active_agents"`
-	Stopped       *bool                `json:"stopped"`
-	MaxRunMinutes *int                 `json:"max_run_minutes"`
-	Limits        map[string]int       `json:"limits"`
-	HoldRules     *[]pipeline.HoldRule `json:"hold_rules"`
-	// OrchTurnsPerDay is the orchestrator's daily cap of turns.
-	OrchTurnsPerDay *int `json:"orchestrator_turns_per_day"`
-}
-
-// SetControl applies a patch to the control row and records it.
-func (s *Store) SetControl(ctx context.Context, actor string, p ControlPatch) (pipeline.Control, error) {
-	var out pipeline.Control
-	err := s.tx(ctx, func(tx *sql.Tx) error {
-		old, err := s.loadControl(tx)
-		if err != nil {
-			return err
-		}
-		c := old
-		c.Limits = map[string]int{}
-		for k, v := range old.Limits {
-			c.Limits[k] = v
-		}
-		if p.ActiveAgents != nil {
-			c.ActiveAgents = *p.ActiveAgents
-		}
-		if p.Stopped != nil {
-			c.Stopped = *p.Stopped
-		}
-		if p.MaxRunMinutes != nil {
-			c.MaxRunMinutes = *p.MaxRunMinutes
-		}
-		if p.OrchTurnsPerDay != nil {
-			c.OrchTurnsPerDay = *p.OrchTurnsPerDay
-		}
-		for k, v := range p.Limits {
-			c.Limits[k] = v
-		}
-		builtIn, err := builtInRules(tx)
-		if err != nil {
-			return err
-		}
-		if p.HoldRules != nil {
-			c.HoldRules = *p.HoldRules
-			builtIn = false
-		}
-		if err := c.Validate(); err != nil {
-			return err
-		}
-		if err := saveControl(tx, c, builtIn); err != nil {
-			return err
-		}
-		out = c
-		return s.event(tx, Event{Actor: actor, Kind: "control", Data: map[string]any{"from": old, "to": c}})
-	})
-	return out, err
-}
-
 // ---- claims and leases ----
 
 // Claim is what a runner gets: the item, the stage it is to work, and the lease; or, with Kind
@@ -968,6 +807,8 @@ type Claim struct {
 	Turn  *pipeline.PlanTurn `json:"turn,omitempty"`
 	// Orch is an orchestrate turn's (Kind orchestrate, stage "orchestrate").
 	Orch *OrchTurn `json:"orchestrate,omitempty"`
+	// Reg is a regression run's (Kind regression, stage "regression").
+	Reg *Regression `json:"regression,omitempty"`
 }
 
 func newLeaseID() (string, error) {
@@ -998,7 +839,7 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		sort.Strings(stages)
 		if _, err := tx.Exec(`INSERT INTO runners (name, capabilities, only_resources, poll_seconds, stages, last_seen) VALUES (?,?,?,?,?,?)
 			ON CONFLICT (name) DO UPDATE SET capabilities = excluded.capabilities, only_resources = excluded.only_resources,
-				poll_seconds = excluded.poll_seconds, stages = excluded.stages, last_seen = excluded.last_seen`,
+				poll_seconds = excluded.poll_seconds, stages = excluded.stages, last_seen = excluded.last_seen, state = ''`,
 			runnerName, strings.Join(caps, ","), strings.Join(only, ","), max(req.PollSeconds, 0), strings.Join(stages, ","), now.UnixNano()); err != nil {
 			return err
 		}
@@ -1006,6 +847,10 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 			return err
 		}
 		cs, err := s.claimState(tx, now)
+		if err != nil {
+			return err
+		}
+		pace, err := s.pace(tx, cs.ctl, now, nil)
 		if err != nil {
 			return err
 		}
@@ -1020,9 +865,19 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 				return err
 			}
 		}
-		w, ok := pipeline.ChooseWork(ctl, waiting, deps, snap, turns, orch, cs.holds, req, cs.frozen)
+		var reg *pipeline.RegCandidate
+		if slices.Contains(req.Kinds, pipeline.WorkRegression) {
+			if reg, err = regCandidate(tx); err != nil {
+				return err
+			}
+		}
+		w, ok := pipeline.ChooseWorkPaced(ctl, pace, waiting, deps, snap, turns, orch, reg, cs.holds, req, cs.frozen)
 		if !ok {
 			return nil
+		}
+		if w.Reg != nil {
+			out, err = s.claimReg(tx, runnerName, req.Agent, *w.Reg)
+			return err
 		}
 		if w.Orch != nil {
 			out, err = s.claimOrch(tx, runnerName, req.Agent, *w.Orch)
@@ -1037,22 +892,33 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		if err != nil {
 			return err
 		}
+		builder := it.Builder
+		if w.RouteQwen {
+			// This run only: the item's builder stays unset, so it builds with claude again once
+			// the pace is back to normal.
+			it.Builder, builder = pipeline.BuilderQwen, pipeline.BuilderQwen
+		}
 		l := Lease{ID: id, ItemID: it.ID, Stage: it.Stage, Runner: runnerName, Agent: req.Agent,
-			Resources: it.Resources, ClaimedAt: now, ExpiresAt: now.Add(LeaseTTL)}
-		if _, err := tx.Exec(`INSERT INTO leases (id, item_id, stage, runner, agent, resources, claimed_at, expires_at) VALUES (?,?,?,?,?,?,?,?)`,
-			l.ID, l.ItemID, string(l.Stage), l.Runner, l.Agent, strings.Join(l.Resources, ","), now.UnixNano(), l.ExpiresAt.UnixNano()); err != nil {
+			Resources: it.Needs(), ClaimedAt: now, ExpiresAt: now.Add(LeaseTTL), Builder: builder}
+		if _, err := tx.Exec(`INSERT INTO leases (id, item_id, stage, runner, agent, resources, claimed_at, expires_at, builder) VALUES (?,?,?,?,?,?,?,?,?)`,
+			l.ID, l.ItemID, string(l.Stage), l.Runner, l.Agent, strings.Join(l.Resources, ","), now.UnixNano(), l.ExpiresAt.UnixNano(), builder); err != nil {
 			return err
 		}
 		out = &Claim{Kind: pipeline.WorkItem, Item: it, Stage: it.Stage, Lease: l}
+		data := map[string]any{"runner": runnerName, "agent": req.Agent, "lease": l.ID}
+		if w.RouteQwen {
+			data["routed"] = pipeline.BuilderQwen
+			data["pace"] = pace.Describe(usageZone())
+		}
 		return s.event(tx, Event{ItemID: it.ID, Actor: "runner:" + runnerName, Kind: "claimed", From: string(it.Stage), To: string(it.Stage),
-			Data: map[string]any{"runner": runnerName, "agent": req.Agent, "lease": l.ID}})
+			Data: data})
 	})
 	return out, err
 }
 
 // claimState is what a claim chooses from: the control, the waiting items and their dependencies'
 // stages, the live leases (items, plan and orchestrate turns), the frozen repos and the slots held
-// (SlotHolds).
+// (SlotHolds, under claude's pace now).
 type claimState struct {
 	ctl     pipeline.Control
 	waiting []pipeline.Item
@@ -1075,21 +941,29 @@ func (s *Store) claimState(tx *sql.Tx, now time.Time) (claimState, error) {
 	}
 	snap := make([]pipeline.LiveLease, len(live))
 	for i, l := range live {
-		snap[i] = pipeline.LiveLease{ItemID: l.ItemID, Stage: l.Stage, Resources: l.Resources}
+		snap[i] = pipeline.LiveLease{ItemID: l.ItemID, Stage: l.Stage, Resources: l.Resources,
+			Claude: l.Stage != pipeline.Land && l.Builder != pipeline.BuilderQwen}
 	}
 	turnLeases, err := livePlanLeases(tx)
 	if err != nil {
 		return cs, err
 	}
 	for range turnLeases {
-		snap = append(snap, pipeline.LiveLease{Stage: pipeline.PlanTurnStage})
+		snap = append(snap, pipeline.LiveLease{Stage: pipeline.PlanTurnStage, Claude: true})
 	}
 	running, err := orchTurnWith(tx, OrchRunning)
 	if err != nil {
 		return cs, err
 	}
 	if running != nil {
-		snap = append(snap, pipeline.LiveLease{Stage: pipeline.OrchestrateStage})
+		snap = append(snap, pipeline.LiveLease{Stage: pipeline.OrchestrateStage, Claude: true})
+	}
+	reg, err := openRegression(tx)
+	if err != nil {
+		return cs, err
+	}
+	if reg != nil && reg.Status == RegRunning {
+		snap = append(snap, pipeline.LiveLease{Stage: pipeline.RegressionStage, Resources: reg.Resources()})
 	}
 	waiting, err := waitingItems(tx)
 	if err != nil {
@@ -1107,8 +981,12 @@ func (s *Store) claimState(tx *sql.Tx, now time.Time) (claimState, error) {
 	if err != nil {
 		return cs, err
 	}
+	pace, _, err := paceNow(tx, ctl, now)
+	if err != nil {
+		return cs, err
+	}
 	return claimState{ctl: ctl, waiting: waiting, deps: deps, live: snap, runners: runners, frozen: frozen,
-		holds: pipeline.SlotHolds(ctl, waiting, deps, snap, runners, frozen, now)}, nil
+		holds: pipeline.SlotHolds(ctl, pace, waiting, deps, snap, runners, frozen, now)}, nil
 }
 
 // RunnerPanel is the board's runners: those seen within pipeline.RunnerSeenWindow, by name, and
@@ -1209,8 +1087,9 @@ func (s *Store) Sweep(ctx context.Context) error {
 	var due int
 	err = s.r.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM leases WHERE ended_at IS NULL AND (expires_at <= ?1 OR claimed_at <= ?2))
 		+ (SELECT COUNT(*) FROM plan_leases WHERE ended_at IS NULL AND (expires_at <= ?1 OR claimed_at <= ?2))
-		+ (SELECT COUNT(*) FROM orch_turns WHERE status = 'running' AND (expires_at <= ?1 OR claimed_at <= ?2))`,
-		now.UnixNano(), now.Add(-ctl.MaxRun()).UnixNano()).Scan(&due)
+		+ (SELECT COUNT(*) FROM orch_turns WHERE status = 'running' AND (expires_at <= ?1 OR claimed_at <= ?2))
+		+ (SELECT COUNT(*) FROM regressions WHERE status = 'running' AND (expires_at <= ?1 OR claimed_at <= ?3))`,
+		now.UnixNano(), now.Add(-ctl.MaxRun()).UnixNano(), now.Add(-pipeline.RegressionMaxRun).UnixNano()).Scan(&due)
 	if err != nil || due == 0 {
 		return err
 	}
@@ -1259,7 +1138,10 @@ func (s *Store) sweep(tx *sql.Tx) error {
 	if err := s.sweepPlans(tx, now, ctl.MaxRun()); err != nil {
 		return err
 	}
-	return s.sweepOrch(tx, now, ctl.MaxRun())
+	if err := s.sweepOrch(tx, now, ctl.MaxRun()); err != nil {
+		return err
+	}
+	return s.sweepReg(tx, now)
 }
 
 // Heartbeat keeps a lease alive. stop is true when the runner should stop: control is stopped
@@ -1287,6 +1169,9 @@ func (s *Store) HeartbeatActivity(ctx context.Context, runnerName, leaseID, note
 				return err
 			}
 			if stop, found, err = s.orchHeartbeat(tx, runnerName, leaseID, note, actJSON); found || err != nil {
+				return err
+			}
+			if stop, found, err = s.regHeartbeat(tx, runnerName, leaseID, note, actJSON); found || err != nil {
 				return err
 			}
 			return errf(CodeNotFound, "no lease %s", leaseID)
@@ -1420,6 +1305,12 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 		if err != nil {
 			return err
 		}
+		// The usage ledger: the run burned its tokens now, whether its result applies now or waits.
+		if u, ok := usageRunFrom(id, string(l.Stage), fields, now); ok {
+			if err := insertUsageRun(tx, u); err != nil {
+				return err
+			}
+		}
 		// In a repo whose main is red the run's result waits, checked now, applied once main is
 		// green. A usage limit is about the runner's account, not the repo, and a merge has already
 		// happened on GitHub (main's CI on it must be taken): both apply now.
@@ -1453,6 +1344,25 @@ func (s *Store) applyAdvance(tx *sql.Tx, actor string, id int64, leaseID string,
 		return err
 	}
 	tr.Data["lease"] = leaseID
+	// A limit hit: claude claims pause until its reset.
+	var hit *pipeline.UsageHit
+	var ctl pipeline.Control
+	if tr.UsagePause {
+		var err error
+		if ctl, err = s.loadControl(tx); err != nil {
+			return err
+		}
+		h, err := recordHit(tx, ctl, id, fields, now)
+		if err != nil {
+			return err
+		}
+		hit = &h
+		until := h.ResetAt
+		if until.IsZero() {
+			until = now.Add(pipeline.UnknownResetPause)
+		}
+		tr.Data["paused_until"] = until.Format(time.RFC3339)
+	}
 	if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
 		return err
 	}
@@ -1473,22 +1383,9 @@ func (s *Store) applyAdvance(tx *sql.Tx, actor string, id int64, leaseID string,
 	if err := s.planItemSettled(tx, tr.Item); err != nil {
 		return err
 	}
-	if tr.ActiveAgentsZero {
-		ctl, err := s.loadControl(tx)
-		if err != nil {
-			return err
-		}
-		before := ctl
-		ctl.ActiveAgents = 0
-		builtIn, err := builtInRules(tx)
-		if err != nil {
-			return err
-		}
-		if err := saveControl(tx, ctl, builtIn); err != nil {
-			return err
-		}
-		if err := s.event(tx, Event{Actor: "loopd", Kind: "control", Data: map[string]any{
-			"from": before, "to": ctl, "reason": "usage_limit", "item": id, "error": fields["error"], "reset": fields["reset"]}}); err != nil {
+	if hit != nil {
+		if _, err := s.pace(tx, ctl, now, map[string]any{"item": id, "error": fields["error"], "reset": fields["reset"],
+			"limit_window": hit.Window, "burn": hit.Burn}); err != nil {
 			return err
 		}
 	}

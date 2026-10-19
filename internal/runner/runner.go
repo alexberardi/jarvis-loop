@@ -30,6 +30,8 @@ import (
 // Runner claims triage, build and review items (config stages) and runs one agent per item; it
 // works land items itself, with no agent (land*.go).
 type Runner struct {
+	// Cfg is the config the runner started with; Config is the current one (Reload replaces it,
+	// reload.go), and each run keeps the one it started with (run.cfg).
 	Cfg    *Config
 	Client *Client
 	Clock  Clock
@@ -65,6 +67,12 @@ type Runner struct {
 	mirrorMu sync.Map     // mirror path -> *sync.Mutex
 	watching atomic.Int64 // main-CI watches running
 	bg       sync.WaitGroup
+
+	cur      atomic.Pointer[Config] // the config after a Reload (nil: Cfg)
+	ctlOnce  sync.Once
+	reloaded chan struct{} // a Reload happened: Run re-sizes its lanes
+	drainC   chan struct{} // closed by Drain
+	draining atomic.Bool
 }
 
 // PRInfo is what GitHub says about a PR.
@@ -95,58 +103,127 @@ func (r *Runner) Paused() string {
 }
 
 // Run works items until ctx ends: agent work in up to Cfg.Slots parallel slots, and land, which
-// runs no agent, in a lane of its own next to them, one item at a time (loopd's land limit), so an
-// approved item never waits for a slot (docs/decisions/2026-10-16-land-lane.md).
+// runs no agent, in up to Cfg.LandSlots lanes of their own next to them (loopd's land limit caps
+// the total), so an approved item never waits for an agent slot, nor for another item's CI
+// (docs/decisions/2026-10-16-land-lane.md, docs/decisions/2026-10-18-land-never-waits.md). A
+// Reload re-sizes the lanes (slots, land slots, stages); after Drain, Run claims nothing and
+// returns once its runs end. Only the end of ctx ends the runs themselves.
 func (r *Runner) Run(ctx context.Context) error {
+	r.ctl()
+	claimCtx, stopClaims := context.WithCancel(ctx)
+	defer stopClaims()
+	go func() {
+		select {
+		case <-r.drainC:
+			stopClaims()
+		case <-claimCtx.Done():
+		}
+	}()
 	var wg sync.WaitGroup
 	if r.Close != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r.closeDroppedLoop(ctx)
+			r.closeDroppedLoop(claimCtx)
 		}()
 	}
 	if r.Revision != "" {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r.reportDeployedLoop(ctx)
+			r.reportDeployedLoop(claimCtx)
 		}()
 	}
-	agent, land := r.Lanes()
-	if r.Land != nil && land != nil {
+	if r.Land != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r.heldWatchLoop(ctx)
+			r.heldWatchLoop(claimCtx)
 		}()
-	}
-	lane := func(stages []string) {
+		// The runner that works on main checks the qa items' proofs there.
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for ctx.Err() == nil {
-				claimed, err := r.ClaimAndRunIn(ctx, stages)
-				if err != nil {
+			r.checkProofsLoop(ctx)
+		}()
+	}
+	var mu sync.Mutex
+	running := map[string]bool{}
+	// lane claims in want()'s stages until it says nil (a Reload took the lane away) or claiming
+	// ends; claims stop with claimCtx, the runs only with ctx.
+	lane := func(key string, want func() []string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if running[key] {
+			return
+		}
+		running[key] = true
+		wg.Add(1)
+		// gone ends the lane when a reload took it away; checked under mu, so a reload that gives
+		// it back meanwhile either sees it running or starts it again.
+		gone := func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			if want() != nil {
+				return false
+			}
+			delete(running, key)
+			return true
+		}
+		go func() {
+			defer wg.Done()
+			for claimCtx.Err() == nil {
+				stages := want()
+				if stages == nil {
+					if gone() {
+						return
+					}
+					continue
+				}
+				claimed, err := r.claimAndRunIn(claimCtx, ctx, stages)
+				if err != nil && claimCtx.Err() == nil {
 					r.Log.Warn("claim", "err", err)
 				}
 				if claimed && err == nil {
 					continue
 				}
-				t := r.Clock.NewTimer(time.Duration(r.Cfg.PollSeconds) * time.Second)
+				t := r.Clock.NewTimer(time.Duration(r.Config().PollSeconds) * time.Second)
 				select {
-				case <-ctx.Done():
+				case <-claimCtx.Done():
 				case <-t.C():
 				}
 				t.Stop()
 			}
+			mu.Lock()
+			delete(running, key)
+			mu.Unlock()
 		}()
 	}
-	for i := 0; agent != nil && i < r.Cfg.Slots; i++ {
-		lane(agent)
+	for claimCtx.Err() == nil {
+		agent, land := r.Lanes()
+		for i := 0; agent != nil && i < r.Config().Slots; i++ {
+			lane(fmt.Sprintf("agent-%d", i), func() []string {
+				if agent, _ := r.Lanes(); agent != nil && i < r.Config().Slots {
+					return agent
+				}
+				return nil
+			})
+		}
+		for i := 0; land != nil && i < r.Config().LandSlots; i++ {
+			lane(fmt.Sprintf("land-%d", i), func() []string {
+				if _, land := r.Lanes(); land != nil && i < r.Config().LandSlots {
+					return land
+				}
+				return nil
+			})
+		}
+		select {
+		case <-claimCtx.Done():
+		case <-r.reloaded:
+		}
 	}
-	if land != nil {
-		lane(land)
+	if r.Draining() {
+		r.Log.Info("draining: waiting for the live runs to end")
 	}
 	wg.Wait()
 	r.bg.Wait()
@@ -156,7 +233,7 @@ func (r *Runner) Run(ctx context.Context) error {
 // Lanes splits the stages this runner claims into the agent lane's (nil when there are none: an
 // empty stages list means any stage to loopd) and the land lane's (nil without land).
 func (r *Runner) Lanes() (agent, land []string) {
-	for _, st := range r.Cfg.Stages {
+	for _, st := range r.Config().Stages {
 		if st == StageLand {
 			land = []string{StageLand}
 		} else {
@@ -175,20 +252,29 @@ func randHex(n int) string {
 // ClaimAndRun claims one item in the stages this runner runs and works it to the end. It reports
 // whether it claimed one.
 func (r *Runner) ClaimAndRun(ctx context.Context) (bool, error) {
-	return r.ClaimAndRunIn(ctx, r.Cfg.Stages)
+	return r.ClaimAndRunIn(ctx, r.Config().Stages)
 }
 
 // ClaimAndRunIn is ClaimAndRun in some of the stages (a lane's). A paused runner claims only land,
-// which runs no agent.
+// which runs no agent; a draining one claims nothing.
 func (r *Runner) ClaimAndRunIn(ctx context.Context, stages []string) (bool, error) {
+	return r.claimAndRunIn(ctx, ctx, stages)
+}
+
+// claimAndRunIn claims with claimCtx and works the claim with ctx.
+func (r *Runner) claimAndRunIn(claimCtx, ctx context.Context, stages []string) (bool, error) {
+	if r.Draining() {
+		return false, nil
+	}
 	if why := r.Paused(); why != "" {
 		if !slices.Contains(stages, StageLand) {
 			return false, nil
 		}
 		stages = []string{StageLand}
 	}
-	agent := r.Cfg.Name + "-" + randHex(4)
-	cl, err := r.Client.ClaimOnly(ctx, agent, r.Cfg.Capabilities, r.Cfg.OnlyResources, stages)
+	cfg := r.Config()
+	agent := cfg.Name + "-" + randHex(4)
+	cl, err := r.Client.ClaimFor(claimCtx, agent, cfg, stages)
 	if err != nil || cl == nil {
 		return false, err
 	}
@@ -202,6 +288,10 @@ func (r *Runner) ClaimAndRunIn(ctx context.Context, stages []string) (bool, erro
 	}
 	if cl.Kind == pipeline.WorkOrchestrate {
 		r.orchestrateTurn(ctx, cl, agent)
+		return true, nil
+	}
+	if cl.Kind == pipeline.WorkRegression {
+		r.regression(ctx, cl, agent)
 		return true, nil
 	}
 	r.work(ctx, cl, agent)
@@ -224,6 +314,8 @@ func Slug(title string) string {
 
 // run is one item's run: where things are.
 type run struct {
+	// cfg is the runner's config when the run started: a Reload applies to the next claim.
+	cfg  *Config
 	item Item
 	// trustUsed is the commit verify ran on the approver's trust OK (reported with the outcome).
 	trustUsed string
@@ -277,6 +369,9 @@ type run struct {
 	rejected string
 	retried  bool
 	spent    time.Duration
+	// noResult: the agent exited cleanly with no result.json; work resumes its session once
+	// (resumedForResult), which counts as the stage's one retry.
+	noResult, resumedForResult bool
 	// first is the refused attempt's numbers, which the run's metrics and footer add to the
 	// retry's.
 	first streamStats
@@ -299,42 +394,42 @@ func (r *Runner) newRun(cl *Claim, agent string) (*run, error) {
 	if stage == "" {
 		stage = it.Stage
 	}
-	ru := &run{item: it, stage: stage, lease: cl.Lease.ID, agent: agent, started: r.Clock.Now()}
+	ru := &run{item: it, stage: stage, lease: cl.Lease.ID, agent: agent, started: r.Clock.Now(), cfg: r.Config()}
 	if !slices.Contains(AgentStages, stage) {
-		return ru, fmt.Errorf("runner %s does not run %q agents", r.Cfg.Name, stage)
+		return ru, fmt.Errorf("runner %s does not run %q agents", ru.cfg.Name, stage)
 	}
-	key, repo, ok := r.Cfg.Repo(it.Repo)
+	key, repo, ok := ru.cfg.Repo(it.Repo)
 	switch {
 	case ok:
 		ru.repoKey, ru.repo = key, repo
 	case stage == StageTriage && it.Repo == "":
 		// Triage decides the repo: every configured repo is checked out.
 	default:
-		return ru, fmt.Errorf("runner %s has no repo %q configured", r.Cfg.Name, it.Repo)
+		return ru, fmt.Errorf("runner %s has no repo %q configured", ru.cfg.Name, it.Repo)
 	}
 	ru.branch = it.Branch
 	if !strings.HasPrefix(ru.branch, "loop/") {
 		ru.branch = fmt.Sprintf("loop/%d-%s", it.ID, Slug(it.Title))
 	}
-	ru.wt = filepath.Join(r.Cfg.WorkRoot, fmt.Sprintf("%d-%s", it.ID, stage))
+	ru.wt = filepath.Join(ru.cfg.WorkRoot, fmt.Sprintf("%d-%s", it.ID, stage))
 	// Inside the worktree (ignored by git), so the agent needs no extra directory: an --add-dir
 	// would differ per item.
 	ru.scratch = filepath.Join(ru.wt, ".loop", "scratch")
 	// Two runs of a stage within a second (a routed item triaged again, a build after a failed
 	// verify) keep separate logs.
-	ru.dir = uniqueRunDir(filepath.Join(r.Cfg.WorkRoot, "runs", fmt.Sprintf("%d-%s-%s", it.ID, stage, ru.started.Format("20060102T150405Z"))))
+	ru.dir = uniqueRunDir(filepath.Join(ru.cfg.WorkRoot, "runs", fmt.Sprintf("%d-%s-%s", it.ID, stage, ru.started.Format("20060102T150405Z"))))
 	// One settings file per repo and stage, the same bytes for every item (prompt caching).
-	ru.settings = filepath.Join(r.Cfg.WorkRoot, "settings", stage+".json")
+	ru.settings = filepath.Join(ru.cfg.WorkRoot, "settings", stage+".json")
 	if ru.repoKey != "" {
 		ru.mirror = r.mirrorPath(ru.repoKey)
-		ru.settings = filepath.Join(r.Cfg.WorkRoot, "settings", Slug(ru.repoKey)+"-"+stage+".json")
+		ru.settings = filepath.Join(ru.cfg.WorkRoot, "settings", Slug(ru.repoKey)+"-"+stage+".json")
 	}
 	ru.sandbox = fmt.Sprintf("loop-%d", it.ID)
 	return ru, nil
 }
 
 func (r *Runner) mirrorPath(key string) string {
-	return filepath.Join(r.Cfg.WorkRoot, "mirrors", Slug(key)+".git")
+	return filepath.Join(r.Config().WorkRoot, "mirrors", Slug(key)+".git")
 }
 
 func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
@@ -362,7 +457,20 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 		r.advance(ctx, ru, "failed", map[string]string{"error": "the runner could not prepare the run: " + clip(err.Error(), 1500)}, nil)
 		return
 	}
-	log.Info("agent starting", "worktree", ru.wt, "branch", ru.branch, "mode", r.Cfg.Mode, "builder", ru.builder, "resume", ru.resume)
+	if raw := r.restoreTrustedResult(ctx, ru, log); raw != nil {
+		// The user OK'd the branch's head after verify refused it: verify runs that commit, with
+		// the result its build left, and the agent does not run (a new commit would need a new OK).
+		log.Info("verify runs the commit the user OK'd, without the agent", "head", ru.item.Trust.HeadSHA)
+		r.reportBuild(cleanupCtx, ru, outcome{}, raw)
+		if ru.rejected == "" {
+			return
+		}
+		log.Warn("the kept result was refused; the agent runs", "why", ru.rejected)
+		r.dropTrustedResult(ru)
+		ru.rejected = ""
+		os.Remove(filepath.Join(ru.wt, ".loop", "result.json"))
+	}
+	log.Info("agent starting", "worktree", ru.wt, "branch", ru.branch, "mode", r.cfgOf(ru).Mode, "builder", ru.builder, "resume", ru.resume)
 	out := r.runAgentHarness(ctx, ru, brief)
 	log.Info("agent ended", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
 	if ru.resumedFrom != nil && r.sessionGone(ru, out) {
@@ -384,6 +492,31 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 	}
 	// Reporting and saving work must finish even when the runner is shutting down.
 	r.report(cleanupCtx, ru, out, log)
+	if ru.noResult {
+		// No result.json after a clean exit (#208): resume the same session once, with a note, in
+		// place of the refused-result retry.
+		ru.noResult, ru.retried, ru.spent = false, true, r.Clock.Now().Sub(ru.started)
+		msg := fmt.Sprintf("the agent exited (code %d) without writing .loop/result.json", out.exitCode)
+		if ctx.Err() != nil || r.maxRun(ctx, ru)-ru.spent < MinRetryTime {
+			r.fail(cleanupCtx, ru, out, msg)
+			return
+		}
+		log.Warn("no result; resuming the session once", "session", out.stats.sessionID)
+		ru.first, ru.resume, ru.resumedForResult = out.stats, out.stats.sessionID, true
+		keepFirstAttempt(ru.dir, log)
+		err := os.WriteFile(filepath.Join(ru.dir, "brief.md"), []byte(NoResultNote), 0o644)
+		if err == nil {
+			err = r.writeArgv(ru)
+		}
+		if err != nil {
+			r.fail(cleanupCtx, ru, out, msg+"; resuming its session failed: "+err.Error())
+			return
+		}
+		out = r.runAgentHarness(ctx, ru, brief)
+		log.Info("agent ended (resumed for its result)", "reason", out.reason, "exit", out.exitCode, "detail", out.detail)
+		r.report(cleanupCtx, ru, out, log)
+		return
+	}
 	why := ru.rejected
 	if why == "" {
 		return
@@ -489,7 +622,7 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 		RepoGroup: ru.repo.Group}
 	if ru.hasHarness() {
 		info.Harness = ru.repo.Harness
-		info.HarnessBin = filepath.Join(r.Cfg.harnessBinDir(), "loop-harness")
+		info.HarnessBin = filepath.Join(r.cfgOf(ru).harnessBinDir(), "loop-harness")
 	}
 	if ru.stage == StageBuild {
 		for _, v := range ru.repo.Verify {
@@ -534,7 +667,7 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 		deny = nil
 		for _, c := range ru.checkouts {
 			deny = append(deny, c.Dir+"/.git")
-			for _, d := range r.Cfg.Repos[c.Key].DenyWrite {
+			for _, d := range r.cfgOf(ru).Repos[c.Key].DenyWrite {
 				deny = append(deny, c.Dir+"/"+d)
 			}
 		}
@@ -542,8 +675,8 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 	gc := guard.Config{
 		Item: ru.item.ID, Worktree: ru.wt, Scratch: ru.scratch, SandboxDir: filepath.Join(ru.wt, ".sandbox", ru.sandbox),
 		Branch: ru.branch, Remote: "origin", Home: home,
-		Protected: r.Cfg.Protected(), Secrets: r.Cfg.Secrets(), Words: []string{r.Cfg.UserEmulator},
-		LoopdAddrs: r.Cfg.LoopdAddrs(), DenyWrite: deny, ReadOnly: ru.stage != StageBuild,
+		Protected: r.cfgOf(ru).Protected(), Secrets: r.cfgOf(ru).Secrets(), Words: []string{r.cfgOf(ru).UserEmulator},
+		LoopdAddrs: r.cfgOf(ru).LoopdAddrs(), DenyWrite: deny, ReadOnly: ru.stage != StageBuild,
 		Report: filepath.Join(ru.dir, "refusals.jsonl"), Armed: filepath.Join(ru.dir, "armed"),
 	}
 	b, _ := json.MarshalIndent(gc, "", "  ")
@@ -554,8 +687,8 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 	// docs/decisions/2026-10-15-prompt-caching.md); written atomically, as parallel slots share
 	// the file.
 	in := SettingsInput{
-		Mode: r.Cfg.Mode, Guard: r.Cfg.Guard, Home: home, Protected: r.Cfg.Protected(), Secrets: r.Cfg.Secrets(),
-		LoopdAddrs: r.Cfg.LoopdAddrs(), AllowedDomains: r.Cfg.AllowedDomains, ExcludedCommands: ru.repo.ExcludedCommands,
+		Mode: r.cfgOf(ru).Mode, Guard: r.cfgOf(ru).Guard, Home: home, Protected: r.cfgOf(ru).Protected(), Secrets: r.cfgOf(ru).Secrets(),
+		LoopdAddrs: r.cfgOf(ru).LoopdAddrs(), AllowedDomains: r.cfgOf(ru).AllowedDomains, ExcludedCommands: ru.repo.ExcludedCommands,
 		ReadOnly: ru.stage != StageBuild,
 	}
 	if ru.hasHarness() {
@@ -568,8 +701,8 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 	if err := writeAtomic(ru.settings, settings); err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(r.Cfg.Guard); err != nil {
-		return "", fmt.Errorf("the guard binary %s: %w", r.Cfg.Guard, err)
+	if _, err := os.Stat(r.cfgOf(ru).Guard); err != nil {
+		return "", fmt.Errorf("the guard binary %s: %w", r.cfgOf(ru).Guard, err)
 	}
 	if err := r.writeArgv(ru); err != nil {
 		return "", err
@@ -745,7 +878,10 @@ type streamStats struct {
 	toolResults int
 	limit       *LimitHit
 	result      *resultEvent
-	act         liveActivity
+	// model is the session's (the init event's); rateLimit the CLI's last rate-limit reading.
+	model     string
+	rateLimit *rateLimit
+	act       liveActivity
 	// A qwen run's tokens (OpenCode's step_finish events); claude's are in result.
 	qwenInput, qwenOutput int64
 }
@@ -779,14 +915,20 @@ func CacheHitRatio(input, creation, read int64) float64 {
 
 // handle reads one stream-json line; it returns a reason to end the run early, or "".
 func (r *Runner) handle(ru *run, st *streamStats, line []byte) (string, string) {
-	if hit, ok := MatchUsageLimit(line); ok && st.limit == nil {
-		st.limit = &hit
+	if hit, ok := MatchUsageLimit(line); ok {
+		if st.limit == nil {
+			st.limit = &hit
+		} else {
+			st.limit.merge(hit)
+		}
 	}
 	var ev struct {
-		Type           string `json:"type"`
-		Subtype        string `json:"subtype"`
-		PermissionMode string `json:"permissionMode"`
-		SessionID      string `json:"session_id"`
+		Type           string     `json:"type"`
+		Subtype        string     `json:"subtype"`
+		PermissionMode string     `json:"permissionMode"`
+		SessionID      string     `json:"session_id"`
+		Model          string     `json:"model"`
+		RateLimit      *rateLimit `json:"rate_limit_info"`
 		Message        *struct {
 			Content json.RawMessage `json:"content"`
 		} `json:"message"`
@@ -798,8 +940,9 @@ func (r *Runner) handle(ru *run, st *streamStats, line []byte) (string, string) 
 	case ev.Type == "system" && ev.Subtype == "init":
 		st.initMode = ev.PermissionMode
 		st.sessionID = ev.SessionID
+		st.model = ev.Model
 		r.recordBuildSession(ru, ev.SessionID)
-		if want := PermissionMode(r.Cfg.Mode); ev.PermissionMode != want {
+		if want := PermissionMode(r.cfgOf(ru).Mode); ev.PermissionMode != want {
 			return endModeMismatch, fmt.Sprintf("the session started in %q, not %q", ev.PermissionMode, want)
 		}
 	case ev.Type == "assistant" && ev.Message != nil:
@@ -835,6 +978,8 @@ func (r *Runner) handle(ru *run, st *streamStats, line []byte) (string, string) 
 				}
 			}
 		}
+	case ev.Type == "rate_limit_event" && ev.RateLimit != nil:
+		st.rateLimit = ev.RateLimit
 	case ev.Type == "result":
 		var res resultEvent
 		if json.Unmarshal(line, &res) == nil {
@@ -851,11 +996,11 @@ func (r *Runner) handle(ru *run, st *streamStats, line []byte) (string, string) 
 // turn adds the session it resumes); the worktree as cwd; the per-run guard config in the
 // environment.
 func (r *Runner) agentCommand(ru *run) *exec.Cmd {
-	cmd := exec.Command(r.Cfg.Claude, ClaudeArgs(AgentArgs{Mode: r.Cfg.Mode, Settings: ru.settings, Model: r.Cfg.Model, Resume: ru.resume})...)
+	cmd := exec.Command(r.cfgOf(ru).Claude, ClaudeArgs(AgentArgs{Mode: r.cfgOf(ru).Mode, Settings: ru.settings, Model: r.cfgOf(ru).Model, Resume: ru.resume})...)
 	cmd.Dir = ru.wt
 	env := r.agentEnv()
 	if ru.hasHarness() {
-		env = prependPath(env, r.Cfg.harnessBinDir())
+		env = prependPath(env, r.cfgOf(ru).harnessBinDir())
 	}
 	cmd.Env = append(env,
 		guard.ConfigEnv+"="+filepath.Join(ru.dir, "guard.json"),
@@ -1181,6 +1326,23 @@ func (r *Runner) metrics(ru *run, out outcome, f map[string]string) map[string]s
 	if ru.first.sessionID != "" {
 		f["first_session_id"] = ru.first.sessionID
 	}
+	// The usage ledger's (docs/decisions/2026-10-18-usage-awareness.md): the model, and the CLI's
+	// last rate-limit reading, whose allowed_warning is the early sign of a limit.
+	if m := firstNonEmpty(out.stats.model, ru.first.model); m != "" {
+		f["model"] = m
+	}
+	if rl := out.stats.rateLimit; rl != nil {
+		f["rate_limit_status"] = rl.Status
+		if rl.Type != "" {
+			f["rate_limit_type"] = rl.Type
+		}
+		if rl.ResetsAt > 0 {
+			f["rate_limit_resets_at"] = unixReset(int64(rl.ResetsAt))
+		}
+		if rl.Utilization != nil {
+			f["rate_limit_utilization"] = strconv.FormatFloat(*rl.Utilization, 'f', -1, 64)
+		}
+	}
 	if ru.claudeBuild() {
 		// Resumed vs new sessions, for the flow panel.
 		f["resumed"] = strconv.FormatBool(ru.resumedFrom != nil)
@@ -1204,6 +1366,9 @@ func (r *Runner) metrics(ru *run, out outcome, f map[string]string) map[string]s
 	}
 	if ru.retried {
 		f["result_retried"] = "true"
+	}
+	if ru.resumedForResult {
+		f["result_resumed"] = "true"
 	}
 	return f
 }
@@ -1299,12 +1464,25 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 		if hit.Reset != "" {
 			f["reset"] = hit.Reset
 		}
+		if hit.Window != "" {
+			f["limit_window"] = hit.Window
+		}
 		r.advance(ctx, ru, "usage_limit", r.metrics(ru, out, f), nil)
 		return
 	}
 	raw, err := readResult(filepath.Join(ru.wt, ".loop", "result.json"))
 	if err != nil {
-		r.fail(ctx, ru, out, fmt.Sprintf("the agent exited (code %d) without a usable .loop/result.json (%v)", out.exitCode, err))
+		if errors.Is(err, fs.ErrNotExist) && out.reason == endExited && out.exitCode == 0 && out.stats.sessionID != "" && !ru.retried {
+			// The agent ended its turn without a result, as one waiting on a background command
+			// does: work resumes its session once.
+			ru.noResult = true
+			return
+		}
+		msg := fmt.Sprintf("the agent exited (code %d) without a usable .loop/result.json (%v)", out.exitCode, err)
+		if ru.resumedForResult {
+			msg = fmt.Sprintf("the agent exited (code %d) after its session was resumed once, still without a usable .loop/result.json (%v)", out.exitCode, err)
+		}
+		r.fail(ctx, ru, out, msg)
 		return
 	}
 	switch ru.stage {
@@ -1355,6 +1533,7 @@ func (r *Runner) reportBuild(ctx context.Context, ru *run, out outcome, raw []by
 	}
 	var tr *trustRefusal
 	if errors.As(err, &tr) {
+		r.saveTrustedResult(ru, tr.head, raw, files)
 		r.refuseTrusted(ctx, ru, out, tr)
 		return
 	}
@@ -1413,6 +1592,9 @@ func (r *Runner) reportBuild(ctx context.Context, ru *run, out outcome, raw []by
 	if v.NeedsReview {
 		fields["needs_review"] = "true"
 	}
+	if v.ProofChecks != nil {
+		fields["proof"] = string(v.Proof)
+	}
 	r.advance(ctx, ru, "pr_opened", r.metrics(ru, out, fields), facts.ChangedPaths)
 }
 
@@ -1450,7 +1632,7 @@ func (r *Runner) publish(ctx context.Context, ru *run, v Valid, files []Evidence
 	}
 	st := r.runStats(ru, out)
 	body := filepath.Join(ru.dir, "pr-body.md")
-	if err := os.WriteFile(body, []byte(PRBody(v.PRBody, ru.item.ID, files, evidenceLabels(v.Result), st, vres)), 0o600); err != nil {
+	if err := os.WriteFile(body, []byte(PRBody(v.PRBody, ru.item.ID, files, evidenceLabels(v.Result), st, vres, v.ProofChecks)), 0o600); err != nil {
 		return 0, "", err
 	}
 	spec := PRSpec{Slug: ru.repo.Slug, Head: ru.branch, Base: ru.repo.Base, Title: v.PRTitle, BodyFile: body}

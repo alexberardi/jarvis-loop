@@ -26,7 +26,7 @@ Work moves one stage at a time and cannot skip one; only the two gates wait on t
 | Land | a script | merged with `main` green, or held; red CI goes back to build as a counted bounce, and a rebuild that leaves the red head unchanged goes to needs-you ([decision](decisions/2026-10-15-ci-red-unchanged-head.md)) | 1 at a time |
 | Needs-you | the user, in the item's thread | answered; it returns to the stage that asked | none |
 | Held | the user, button or reply | approved (merge, then done), kept holding, or sent back to build: by the user's reply that is not an approval (a note for the builder), or on its own when the held PR turns conflicting ([decision](decisions/2026-10-16-held-back-to-build.md)) | none |
-| QA | the user, after merge (opt-in) | **Verified** → done, or **Reopen** with words → done, and a new P2 item with those words. Only items marked needs_qa (by triage, review, `/loop qa <id>` before land, or the repo's `qa: true`) come here instead of done; nothing claims it ([decision](decisions/2026-10-15-qa.md)). For the loop's own repo (`qa_after_deploy: true`) the check is asked for once a runner built from a commit containing the merge reports `deployed` ([decision](decisions/2026-10-16-qa-after-deploy.md)) | none |
+| QA | the user, after merge (opt-in) | **Verified** → done, or **Reopen** with words → done, and a new P2 item with those words. Only items marked needs_qa (by triage, review, `/loop qa <id>` before land, or the repo's `qa: true`) come here instead of done; nothing claims it ([decision](decisions/2026-10-15-qa.md)). For the loop's own repo (`qa_after_deploy: true`) the check is asked for once a runner built from a commit containing the merge reports `deployed` ([decision](decisions/2026-10-16-qa-after-deploy.md)). Since 2026-10-18 an item in qa carries a **proof** (usage, command, pi, e2e and manual checks; the build states it, the proof sweep writes one for an item without): the loop verifies it when every automatic check passes and reopens it when a command fails twice, and only manual checks wait for the user ([decision](decisions/2026-10-18-qa-proofs.md)) | none |
 
 ## Priority
 
@@ -71,7 +71,7 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | evidence | files attached to an item: screenshots, scenario logs, `llm.jsonl` slices, diffs. Stored on the server's disk, served behind a LAN link |
 | runners | each machine that does work: name, capabilities (`gpu`, `voice`, `emulator`, `macos`), last heartbeat |
 | leases | which runner and agent hold which item at which stage, with an expiry kept alive by heartbeats. An expired lease returns the item to its queue |
-| control | the active-agents number (0–6), stop, the per-run time cap |
+| control | the active-agents number (0–6), stop, the per-run time cap, the usage budgets |
 
 **API** (JSON over HTTP, a bearer token per runner and one for the user; a `board` token reads the web board only and is refused by every API route; an `orchestrator` token reads and acts only through `/orchestrator/…` within its limits, [decision](decisions/2026-10-16-orchestrator-token.md))
 
@@ -89,7 +89,8 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | `POST /items/{id}/drop` | the user closes an item they won't land, from any open stage; the runner then closes its PR |
 | `POST /items/{id}/edit`, `/link`, `/unlink`, `/resources` | *since 2026-10-18*, the user's corrections to a filed item, each an event with what it replaced: the title and ask before build starts, the items it waits for, the resources after triage ([decision](decisions/2026-10-18-item-corrections.md)) |
 | `POST /items/{id}/qa`, `/verified`, `/reopen` | the QA lane: mark an item for the user's check before it lands; the check passed (qa → done) or failed (qa → done, and a new P2 item with the words) |
-| `GET`, `PUT /control` | the active-agents number, stop and resume |
+| `GET`, `PUT /control` | the active-agents number, stop and resume, the usage budgets |
+| `GET /usage` | claude's 5h window and week against their budgets, the pace, the forecast, the last days, the costliest items |
 | `GET /board`, `/board/items/{id}`, `/board/items/{id}/evidence/{n}` | the swim-lane web board (HTML, read-only), also on the optional LAN listener `--board-addr`, which serves nothing else ([decision](decisions/2026-10-15-board.md)) |
 
 The `loop` CLI wraps the same API: `loop add` (`--json` or `-q` for scripts), `loop status`, `loop show`, `loop answer`, `loop edit`, `loop link`/`unlink`, `loop resources`, `loop feature`, `loop rebuild`, `loop agents <n>`; its flags go anywhere on the line.
@@ -102,12 +103,15 @@ A runner is a small daemon on a machine that can do the work. It polls `loopd` c
 
 | Resource | Limit | Why |
 | --- | --- | --- |
-| agents in total | the active-agents number (0–6, default 4) | the user's throttle (Usage control) |
+| agents in total | the active-agents number (0–6, default 4); land runs no agent and takes no slot | the user's throttle (Usage control) |
+| land | 3 at a time, in each runner's `land_slots` lanes (default 3) | land mostly waits on CI; one at a time drained the queue one CI run at a time ([2026-10-18](decisions/2026-10-18-land-never-waits.md)) |
 | `gpu` (the shared live model) | 2 | the installed engine has one slot; the house comes first |
 | `voice` (CPU whisper) | 1 | about 2.4 s of CPU per utterance at 8 threads |
 | `emulator` | 1 | a headless emulator plus a release build is heavy |
 
 A runner that takes only some resources (a Mac's `only_resources: [macos]`) gets the last free agent slot held for it while it has polled lately and one of its items can run now; otherwise the last slot goes to whoever asks ([2026-10-18](decisions/2026-10-18-slot-hold.md)).
+
+An item's resources gate its agent stages (triage, build, review) only: land (CI, merge, hold) needs none of them, so any runner that takes land lands it, past the resource limits ([2026-10-18](decisions/2026-10-18-land-needs-no-resources.md)).
 
 **The brief every agent gets** (one skill per stage in this repo, sharing a preamble) carries the rules 2026-10-13/14 taught:
 
@@ -134,6 +138,12 @@ asks the runner, through a spool in the agent's own worktree (checked by the run
 same fence, next to a keeper fence that holds the running sandbox until the agent ends. Details:
 `docs/decisions/2026-10-16-harness-broker.md`.
 
+**Config and updates without lost work (2026-10-18):** SIGHUP (`loop-runner reload`) reloads the
+runner's config for the next claim while live runs keep theirs; a bad file is refused. A binary
+update drains first (`loop-runner drain`): no new claims, the board shows the runner draining, and it
+exits once its runs end for its service to restart it. loopd reloads `--repos-file` on SIGHUP.
+Details: `docs/decisions/2026-10-18-runner-reload-drain.md`.
+
 **Cleanup** is the runner's, not the agent's: when a lease ends for any reason it removes that item's worktree, takes down its sandbox and stops its emulator. It never touches anything it did not start, so a stray process from another session is reported, not killed.
 
 ## Slack
@@ -151,13 +161,13 @@ Slack is the user's whole interface: add work, answer questions and approve merg
 | set priority | words when adding, or the dropdown on the item's first message |
 | see the board | `/loop status`; `/loop show <id>` for one item; on the LAN, the web board at `/board` (a "Working now" card per running agent, refreshed every 5 s; columns per stage, read-only, refreshes every 30 s) |
 | turn spending up or down | the pinned **Active agents** message, `/loop agents <n>`, `/loop stop` |
-| catch up | a digest every 4 hours in `#loop-digest`: merged, held, failing, new, waiting for your check (qa), estimated spend |
+| catch up | a standup at 09:00 in `#loop-digest` (the orchestrator's: merged, in flight, waiting and on what, needs you, what it did, its spend); a digest every 4 hours with the counts, main's CI and estimated spend |
 
 **What never goes to Slack** (a third party): full logs, model-call transcripts, sandbox credentials, tokens, and host names from `HOSTS.local.md`. The bot posts summaries, PR links and small evidence (a cropped screenshot, one failing scenario line); everything else is a link to `loopd` that works only on the LAN, or through the tunnel later.
 
 ## Usage control
 
-Claude Code gives a runner no reading of plan usage (`/usage` is interactive only; `claude -p` reports tokens and a cost estimate, not limits; checked against the docs 2026-10-14), so the loop does not guess. The user sets the throttle.
+Claude Code gives a runner no reading of plan usage (`/usage` is interactive only; `claude -p` reports tokens and a cost estimate, not limits; checked against the docs 2026-10-14), so the loop does not guess the plan's numbers: it learns from what it sees (its own runs, and the limits they hit and their resets). The user sets the throttle and the budgets.
 
 **Active agents:** one number, 0 to 6, is the most agents the loop may run at once; 0 is paused. Turning it down lets running agents finish their current stage; no new claims start above the new number.
 
@@ -168,9 +178,11 @@ Claude Code gives a runner no reading of plan usage (`/usage` is interactive onl
 
 **Stop:** running agents stop at their next heartbeat (within a minute), their work is saved as a WIP branch, and each item returns to its queue; a Claude build resumes its session on the next claim on the same runner ([decision](decisions/2026-10-18-build-resume.md)). **Resume** clears it.
 
-**Automatic:** when an agent run ends with a usage-limit or rate-limit error, `loopd` sets the active-agents number to 0, posts the error with its reset time in `#loop-digest` with an @mention, and does not raise it again on its own.
+**Usage awareness** (2026-10-18, [decision](decisions/2026-10-18-usage-awareness.md)): every run's usage goes into a ledger (model, tokens, cache, cost; qwen's tokens and requests), per item, stage and day. A usage or rate limit a run hits is recorded with its window (5h or week), the reset the CLI reported, and the window's burn at that moment, which is the learned limit. The user sets budgets per window (`loop budget claude --per-5h 2M --per-week 80%`: weighted tokens, or a percent of what got us limited last time, the default 100%). **Pacing happens at claim, never in a run:** from 85% of a budget (or the CLI's `allowed_warning`), claude runs at once drop by one, and by one more each further step to the budget; claude takes only P1 and size S items, triage and P1 plan turns; P3–P5 builds of size S or M go to qwen for that run when the runner has it. At a budget or a limit, claude claims pause until the reset (qwen builds and landing go on) with a note in `#loop-digest`, and resume on their own at the reset. A run that hits a limit goes back to its queue, not to the user. The active-agents number stays the user's throughout. The board's Usage panel and `loop usage` show the windows, the forecast ("at this rate the 5h window runs out at 03:10"), the days and the costliest items. The loop only sees its own usage, not interactive sessions.
 
-**Advisory, not enforced:** every digest shows the loop's estimated spend today (from each run's tokens and `total_cost_usd`) against about 1/7 of a week, learned when the weekly limit is hit and whenever the user posts `/loop usage 42%` from `/usage`. It tells the user when to turn the number down; it never changes it. The loop only sees its own spend, not interactive sessions.
+**A run that ends with no result** (exit 0, no `.loop/result.json`, as one waiting on a background command does) resumes its session once in the same claim, with a short note; the briefs say to run every check in the foreground ([decision](decisions/2026-10-18-no-result-resume.md)).
+
+**Advisory:** every digest also shows the window's builds per builder and the last `/loop usage 42%` the user posted from `/usage`.
 
 **Prompt caching** (user, 2026-10-14: a previous agent setup burned usage far faster than terminal use). Every agent run for a stage starts from a byte-identical system prompt, tool set and settings; the item's brief is the first user message, never the system prompt; no MCP servers in agent runs; nothing dynamic at the start. Conversational stages (the `#plan` threads) resume one Claude session per thread instead of replaying the thread. Every run records cache-read and cache-write tokens; the digest shows the loop's cache hit rate and flags runs below 50%.
 
@@ -193,7 +205,7 @@ The script then:
 1. If `main` moved and the PR no longer merges, merges `main` in, pushes, and waits for all three gates again. A conflict outside `docs/` sends the item back to build.
 2. Squash-merges, and watches `main`'s CI on the merge commit. Red files a P1 item linked to this one and @mentions the user. Red (still red after one re-run of the failed jobs) also freezes the repo until `main` is green: nothing else in it moves stages, runs already going finish and their results wait, and the P1 goes first ([decision](decisions/2026-10-18-main-red-freeze.md)).
 
-**As built (phase 6, 2026-10-15):** the script is the runner's `land` stage, plain code with no agent: it holds the GitHub login, loopd still holds none. Every pass re-derives the gates from GitHub and git (the PR, review approval for its current head, the changed paths, CI, the harness evidence, the hold list, mergeability); it merges only with `--match-head-commit` (never `--auto` or `--admin`), checks the hold rules itself before merging, resolves conflicts only under `docs/` (git's union merge) and sends any new head back to review. Hold rules are per repo: jarvis-loop's own list holds changes to who may approve or merge, token handling and the landing gates, so the loop never lands a change to itself without the user. Details: `docs/decisions/2026-10-15-land.md`.
+**As built (phase 6, 2026-10-15):** the script is the runner's `land` stage, plain code with no agent: it holds the GitHub login, loopd still holds none. Every pass re-derives the gates from GitHub and git (the PR, review approval for its current head, the changed paths, CI, the harness evidence, the hold list, mergeability); it merges only with `--match-head-commit` (never `--auto` or `--admin`), checks the hold rules itself before merging, resolves conflicts only under `docs/` (git's union merge) and sends any new head back to review. Hold rules are per repo: jarvis-loop's own list holds changes to who may approve or merge, API auth, token handling, the hold rules, the guard and the landing gates, so the loop never lands such a change to itself without the user. *Since 2026-10-18 (#204)* it names those files rather than whole packages: a reviewed, green loop PR to the rest of `internal/pipeline`, `internal/api`, `internal/store` or `cmd/loopd` lands on its own ([decision](decisions/2026-10-18-narrow-loop-holds.md)). Details: `docs/decisions/2026-10-15-land.md`.
 
 **Hold list (it stays):** jarvis-server's `CLAUDE.md` also holds PRs that change auth or access, update signing or the helper, or prod, that weaken a test or CI check, or that are marked "needs review". They still need the three gates, and then the user's approval, by button or in plain words in the item's thread ("yea, removing that old test is fine"):
 
@@ -227,7 +239,7 @@ Each phase is usable on its own and proves one thing before the next builds on i
 5. **Triage and review.** The two agent stages around build; bounce and needs-you. *Proves:* bad fixes and stale reports get caught before the user sees them.
 6. **Land.** The landing script, held merges through Slack. *Proves:* end to end without a human in the middle.
 7. **Move to the prod box.** `loopd` runs there as its own service; the dev box becomes just a runner. *Proves:* the split, and survives the dev box rebooting.
-8. **Nightly regressions, at 19:00 America/New_York.** The scenarios, admin, desktop and mobile shots on `main`, with failures filed as items. *Proves:* the loop finds work on its own.
+8. **Nightly regressions, at 19:00 America/New_York.** The scenarios, admin, desktop and mobile shots on `main`, with failures filed as items. *Proves:* the loop finds work on its own. The manual trigger comes first: `@jarvis-loop regression [web|mobile|all]` or the board's button runs jarvis-server's `scripts/e2e` on a runner and reports it in `#loop`, a failure filed with one press ([decision](decisions/2026-10-18-regression-trigger.md)).
    Then **6b, every active repo** (2026-10-15): routing triage, the runner's verify step, setup commands, repo aliases in Slack and the hold rules for the mobile apps, docs, installer and packages. *Proves:* an item about any of them goes from a Slack message to a merged PR with the same gates.
 9. **Later:** a Mac runner, the Cloudflare Tunnel.
 
@@ -238,4 +250,4 @@ Each phase is usable on its own and proves one thing before the next builds on i
 - A digest every 4 hours; the nightly run at 19:00 America/New_York.
 - Merge rule, every repo: an external agent's review (judging test coverage), harness verification with screenshots in the PR, and CI. The hold list stays on top; approval by button or a plain reply.
 - New features go through planning first: `#plan`, a product persona (brief) then an engineering persona (feasibility, blueprint, loop-sized pieces), each approved by the user; briefs and blueprints are pages, with a final copy in the target repo.
-- Plan usage is not readable by a runner: the user sets the active-agents number (0–6); spend against ~1/7 of a week is advice only. 45 minutes per run.
+- Plan usage is not readable by a runner: the user sets the active-agents number (0–6); the loop records its own usage, learns the limits from the ones it hits, and paces claims against the user's budgets (decision 2026-10-18). 45 minutes per run.

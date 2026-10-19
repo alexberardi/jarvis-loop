@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -49,6 +50,10 @@ const (
 	// runner's (one in its worktree, one in a checkout of demo as jarvis-server's mobile-shot runs).
 	MobileKey  = "jarvis-node-mobile"
 	MobileSlug = "sandbox/jarvis-node-mobile"
+	// ExtraKey and ExtraSlug are a fourth scratch repo (Options.ExtraRepo), on the fake GitHub
+	// only: neither loopd nor the runner knows it until a reload adds it.
+	ExtraKey   = "extra"
+	ExtraSlug  = "sandbox/extra"
 	RunnerName = "sandbox"
 	HandRunner = "hand"
 	UserName   = "sandbox"
@@ -87,6 +92,8 @@ type Options struct {
 	// Stages are the stages the runner claims (default: triage, build and review, as a real
 	// runner).
 	Stages []string
+	// ExtraRepo makes ExtraSlug's remote on the fake GitHub, for a reload to add.
+	ExtraRepo bool
 	// Slots are the runner's agent slots (default 1).
 	Slots int
 }
@@ -111,7 +118,10 @@ type Stack struct {
 	// LoopRemote is the second repo's remote (LoopSlug), MobileRemote the third's.
 	LoopRemote   string
 	MobileRemote string
-	LoopMainSHA  string // LoopRemote's main when the stack started
+	ExtraRemote  string // ExtraSlug's, with Options.ExtraRepo
+
+	runnerCfg   string // the runner's config file, which reload_runner rewrites
+	LoopMainSHA string // LoopRemote's main when the stack started
 
 	// Secrets are every token the stack holds: none may appear in a Slack message.
 	Secrets []string
@@ -321,7 +331,14 @@ func StartStack(opts Options) (st *Stack, err error) {
 	if s.MobileRemote, _, err = makeRemote(dir, "jarvis-node-mobile"); err != nil {
 		return nil, err
 	}
-	s.GitHub = NewGitHub(map[string]string{RepoSlug: s.Remote, LoopSlug: s.LoopRemote, MobileSlug: s.MobileRemote})
+	remotes := map[string]string{RepoSlug: s.Remote, LoopSlug: s.LoopRemote, MobileSlug: s.MobileRemote}
+	if opts.ExtraRepo {
+		if s.ExtraRemote, _, err = makeRemote(dir, "extra"); err != nil {
+			return nil, err
+		}
+		remotes[ExtraSlug] = s.ExtraRemote
+	}
+	s.GitHub = NewGitHub(remotes)
 
 	// The runner, from a 0600 config file as loop-runner reads it.
 	s.scripts = filepath.Join(dir, "scripts")
@@ -352,6 +369,8 @@ func StartStack(opts Options) (st *Stack, err error) {
 				Description: "the household's phone app (screens, chat, pairing)", Verify: MobileVerify(dir), QA: true,
 				DenyWrite: []string{MobileTrustedFile}},
 		},
+		// The demo repo stands in for jarvis-server (its scripts/e2e from a scenario's e2e step).
+		Regression: &runner.RegressionConfig{Repo: RepoKey, MobileRepo: MobileKey},
 	}
 	if s.qwen, err = startFakeQwen(); err != nil {
 		return nil, err
@@ -361,6 +380,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	cfgPath := filepath.Join(dir, "runner.json")
+	s.runnerCfg = cfgPath
 	if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
 		return nil, err
 	}
@@ -370,7 +390,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 	}
 	// The runner pushes the item's branch to the scratch remote with git, as it would to GitHub,
 	// and opens the PR through the fake (the runner's PR client), with its PR check on.
-	s.Runner = &runner.Runner{Cfg: rcfg, Client: &runner.Client{Base: s.LoopdURL, Token: runnerTok, PollSeconds: rcfg.PollSeconds, Stages: rcfg.Stages}, Clock: rclk,
+	s.Runner = &runner.Runner{Cfg: rcfg, Client: &runner.Client{Base: s.LoopdURL, Token: runnerTok}, Clock: rclk,
 		Log: log.With("component", "runner"), Env: agentEnv(s.scripts, opts.Bin.Env), PRs: s.GitHub,
 		VerifyPR: s.GitHub.Verify, Land: s.GitHub, Close: s.GitHub, HeartbeatEvery: 60 * time.Second}
 	s.user = &apiClient{base: s.LoopdURL, token: userTok}
@@ -523,12 +543,13 @@ func (s *Stack) Close() {
 type Claimed struct {
 	Item, Plan int64
 	Orch       int64  // an orchestrate turn's id
+	Reg        int64  // a regression run's id
 	Stage      string // the item's stage when claimed ("" for a plan turn)
 }
 
 // Poll has the runner claim once, as its poll loop would, and work the item (or plan turn) in the
 // background. It returns once the claim is decided: what it claimed, or nothing. It keeps to the
-// runner's lanes as Run does: with every agent slot working it claims only land, with the land
+// runner's lanes as Run does: with every agent slot working it claims only land, with every land
 // lane working only agent stages, and with both, nothing; with room in both, it claims once in
 // every stage (Run's lanes would each claim; the scenario sees the one loopd hands out first).
 func (s *Stack) Poll(timeout time.Duration) (Claimed, error) {
@@ -537,10 +558,10 @@ func (s *Stack) Poll(timeout time.Duration) (Claimed, error) {
 		return Claimed{}, err
 	}
 	agentLane, landLane := s.Runner.Lanes()
-	stages := s.Runner.Cfg.Stages
+	stages := s.Runner.Config().Stages
 	run := &pollRun{}
 	s.runsMu.Lock()
-	switch agentFull, landFull := s.agentRuns >= s.Runner.Cfg.Slots, s.landRuns >= 1; {
+	switch agentFull, landFull := s.agentRuns >= s.Runner.Config().Slots, s.landRuns >= s.Runner.Config().LandSlots; {
 	case agentFull && landFull:
 		stages = nil
 	case agentFull:
@@ -555,7 +576,7 @@ func (s *Stack) Poll(timeout time.Duration) (Claimed, error) {
 		defer close(ended)
 		defer s.runEnded(run)
 		// As Run does each poll: close the PRs of dropped items, report the deploys, check the held
-		// PRs, then claim.
+		// PRs and the due proofs (the land lane's runner), then claim.
 		if err := s.Runner.CloseDropped(s.ctx); err != nil {
 			s.log.Warn("close dropped PRs", "err", err)
 		}
@@ -564,6 +585,11 @@ func (s *Stack) Poll(timeout time.Duration) (Claimed, error) {
 		}
 		if err := s.Runner.ReportDeployed(s.ctx); err != nil {
 			s.log.Warn("report deployed", "err", err)
+		}
+		if len(landLane) > 0 {
+			if err := s.Runner.CheckProofs(s.ctx); err != nil {
+				s.log.Warn("check proofs", "err", err)
+			}
 		}
 		if stages == nil {
 			return
@@ -696,15 +722,23 @@ func (s *Stack) claimedSince(id int64) (Claimed, bool) {
 		case store.KindOrchClaimed:
 			n, _ := e.Data["turn"].(float64)
 			return Claimed{Orch: int64(n)}, true
+		case store.KindRegClaimed:
+			n, _ := e.Data["regression"].(float64)
+			return Claimed{Reg: int64(n)}, true
 		}
 	}
 	return Claimed{}, false
 }
 
 // SetScript sets how the fake claude plays item id's next runs of a stage ("" or "build": its
-// build runs); repo is the repo a triage run picks for an item that has none.
-func (s *Stack) SetScript(id int64, stage, play, file, repo string) error {
-	b, _ := json.Marshal(map[string]string{"play": play, "file": file, "repo": repo})
+// build runs); repo is the repo a triage run picks for an item that has none; proof is the proof a
+// build states (for "proof": the one the orchestrator's proofs play writes for the item).
+func (s *Stack) SetScript(id int64, stage, play, file, repo string, proof json.RawMessage) error {
+	m := map[string]any{"play": play, "file": file, "repo": repo}
+	if len(proof) > 0 {
+		m["proof"] = proof
+	}
+	b, _ := json.Marshal(m)
 	name := fmt.Sprintf("%d.json", id)
 	if stage != "" && stage != runner.StageBuild {
 		name = fmt.Sprintf("%d-%s.json", id, stage)
@@ -741,12 +775,54 @@ func (s *Stack) PlanAgentState(id int64) []string {
 	return strings.Fields(string(b))
 }
 
+// ReloadRunner rewrites the runner's config file from its current config (slots > 0 sets the
+// slots, addRepo ExtraKey adds the extra repo, invalid truncates the file) and reloads it, as
+// SIGHUP does.
+func (s *Stack) ReloadRunner(slots int, addRepo string, invalid bool) error {
+	c := *s.Runner.Config()
+	c.Repos = maps.Clone(c.Repos)
+	if slots > 0 {
+		c.Slots = slots
+	}
+	switch addRepo {
+	case "":
+	case ExtraKey:
+		if s.ExtraRemote == "" {
+			return fmt.Errorf("add_repo %q needs the scenario's extra_repo", addRepo)
+		}
+		c.Repos[ExtraKey] = runner.RepoConfig{Remote: s.ExtraRemote, Slug: ExtraSlug, Base: "main", Group: "package",
+			Description: "a repo a reload added"}
+	default:
+		return fmt.Errorf("add_repo %q: only %q", addRepo, ExtraKey)
+	}
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	if invalid {
+		b = b[:len(b)/2]
+	}
+	if err := os.WriteFile(s.runnerCfg, b, 0o600); err != nil {
+		return err
+	}
+	return s.Runner.Reload()
+}
+
+// ReloadLoopd writes loopd's --repos-file and reads the repos again, as SIGHUP does.
+func (s *Stack) ReloadLoopd(text string) error {
+	p := filepath.Join(s.Dir, "repos-file")
+	if err := os.WriteFile(p, []byte(text), 0o600); err != nil {
+		return err
+	}
+	return loopd.ReloadRepos(loopd.RepoSource{Flag: Repos, File: p}, s.Store, s.Bot, s.log)
+}
+
 // ReleasePlan lets a plan's waiting fake agent (play "wait") finish its turn.
 func (s *Stack) ReleasePlan(id int64) error {
 	return os.WriteFile(filepath.Join(s.scripts, fmt.Sprintf("P%d.release", id)), nil, 0o644)
 }
 
-// Release lets an item's run that plays wait go on.
+// Release lets an item's waiting build (play "wait" or "wait_release") go on.
 func (s *Stack) Release(id int64) error {
 	return os.WriteFile(filepath.Join(s.scripts, fmt.Sprintf("%d.release", id)), nil, 0o644)
 }

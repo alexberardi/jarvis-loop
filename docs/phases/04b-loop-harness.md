@@ -84,9 +84,10 @@ a forbidden message), with a readable failure. The fake Slack's injection and re
 
 ## Scenario format (as built)
 
-A scenario file is `{"name", "about", ["stages"], ["slots"], "steps": [...], "expect": {...}}`; `stages` are
+A scenario file is `{"name", "about", ["stages"], ["slots"], ["extra_repo"], "steps": [...], "expect": {...}}`; `stages` are
 the stages the runner claims (default triage, build and review, as a real runner); `slots` its agent
-slots (default 1; 2 let one run go on while another starts). Items are named by an
+slots (default 1; 2 let one run go on while another starts); `extra_repo` puts a
+fourth repo (`sandbox/extra`) on the fake GitHub that loopd and the runner learn of only from a reload. Items are named by an
 alias (`"a"`) given when added; ids are the stack's own. An item the loop filed itself (a red
 main's P1) is named by its id: `"#2"`. Unknown fields are refused, so a typo
 cannot silently check nothing. Steps (`"do"`):
@@ -98,16 +99,20 @@ cannot silently check nothing. Steps (`"do"`):
 | `resources` `item`, `resources` | the user's `loop resources`: what the item needs from a runner becomes `resources` (comma-separated, `none` for none) |
 | `hand_claim` `item`, [`capabilities`] | the hand runner claims the item's build, offering `capabilities` (comma-separated, e.g. `macos`), and keeps the lease |
 | `land` `item`, `outcome` (`hold`\|`merged`\|`back_to_build`), [`reason`] | the land stage by hand, with the PR's changed paths (a scenario whose `stages` include `land` lets the runner's land script do it instead) |
-| `script` `item`, `play`, [`file`], [`for`], [`picks`] | how the fake claude plays the item's runs of a stage (`for`: `triage`, `build` (default), `review`). Build: `good`, `escape`, `hang`, `ignore_term`, `todos_hang` (hang after a to-do list and a described Bash call), `usage_limit`, `question`, `harness_question`, `exit3`, `lock_error` (git's stale `index.lock`), …; `file`: the path it changes; after a bounce it addresses `.loop/review/`. Triage: `reproduce` (default; `picks`: the repo it names when the item has none), `duplicate`, `triage_question`, `triage_bad_repo`. Review: `approve` (default), `bounce`, `review_commit` |
+| `script` `item`, `play`, [`file`], [`for`], [`picks`] | how the fake claude plays the item's runs of a stage (`for`: `triage`, `build` (default), `review`). Build: `good`, `escape`, `hang`, `wait` (wip.txt, then good after `release`), `wait_release` (hanging, then good after `release`), `ignore_term`, `todos_hang` (hang after a to-do list and a described Bash call), `usage_limit`, `question`, `harness_question`, `exit3`, `lock_error` (git's stale `index.lock`), …; `file`: the path it changes; after a bounce it addresses `.loop/review/`. Triage: `reproduce` (default; `picks`: the repo it names when the item has none), `duplicate`, `triage_question`, `triage_bad_repo`. Review: `approve` (default), `bounce`, `review_commit` |
+| `script` `item`, `proof`, [`for`] | the proof (a list of checks, docs/decisions/2026-10-18-qa-proofs.md) the item's builds state in their result; with `for` `proof`, the one the orchestrator's `proofs` play (`script` `for` `orchestrate`) writes for the item when a `proof_needed` trigger names it (else one manual check, "the change in use") |
 | `script` `plan`, `for` (`product`\|`engineering`), `play`, [`picks`] | how the fake claude plays the plan's turns of a persona. Product: `brief` (default: `out/brief.md` naming the turn's messages, ready; `picks`: the `repos` it sets). Engineering: `blueprint` (default: 3 pieces, 2 and 3 depending on 1, ready), `back_to_brief`, `cycle`. Both: `wait` (reports `waiting`, finishes after `release`), `plan_escape` (a write outside `out/` first, refused), `hang`, `usage_limit`, `exit3`. Every plan turn starts a session `fake-session-P<id>-<persona>` or resumes one, which must have been started in the same directory (else it exits as claude does: "No conversation found") |
 | `runner` [`claims`: alias\|`none`] | the runner polls once: closes the PRs of dropped items and reports deploys (as `Run` does each poll), then claims (and works in the background) or finds nothing. A plan's alias: it must claim that plan's next turn (a scenario whose `stages` include `plan`) |
 | `deploy` `build` (`base`\|`main`) | the runner restarts on a loop build: jarvis-loop's main where the stack started, or its main now; it reports `deployed` for the qa items awaiting a deploy whose merge that build contains (the sandbox's jarvis-loop has `qa_after_deploy`) |
 | `agent_running` `item` or `plan` | wait until the item's agent is mid-run (a hanging fake), or the plan's is waiting (`wait`) |
-| `release` `plan` or `item` | let the plan's waiting fake agent finish its turn, or the item's run that plays `wait_release` (reports `hanging`, then plays `good` once released) |
+| `release` `plan` or `item` | let the plan's waiting fake agent finish its turn, or the item's waiting build go on as `good`: `wait` (wip.txt, reports `waiting`) or `wait_release` (reports `hanging`) |
+| `reload_runner` [`slots`], [`add_repo`: `extra`], [`invalid`], [`refused`] | rewrite the runner's config file from its current config (more slots, the extra repo; `invalid`: truncated) and reload it, as SIGHUP does; `refused`: the reload must be refused (a regexp on the error) |
+| `reload_loopd` `text`, [`refused`] | write loopd's `--repos-file` and read the repos again, as SIGHUP does |
+| `drain` | the runner drains, as on SIGUSR1: no more claims, loopd shows it draining |
 | `runner_idle` | wait until no run is working |
 | `clock` `advance` (`"2m"`, `"45m"`) | move the fake clock, in 30-second steps |
 | `reply` / `mention` `item`, `as` (`approver`\|`other`), `text` | a thread reply / mention in the item's thread |
-| `press` / `choose` `item`, `plan` or `message: control`, `button` (action_id), [`value`], [`text` regexp], `as` | press a button / pick a menu option on the newest message that has it (in the item's or plan's thread), and whose text matches `text` when given. A press carries a `trigger_id`; a modal the bot opens with it (`views.open`) is recorded as a message of kind `modal` to the presser, in the thread |
+| `press` / `choose` `item`, `plan`, `message: control` or `message: loop` (a top-level #loop message), `button` (action_id), [`value`], [`text` regexp], `as` | press a button / pick a menu option on the newest message that has it (in the item's or plan's thread), and whose text matches `text` when given. A press carries a `trigger_id`; a modal the bot opens with it (`views.open`) is recorded as a message of kind `modal` to the presser, in the thread |
 | `submit` `as`, [`text`] | `as` submits the newest modal their press opened (the Rebuild form), with `text` as its note (default: the note it opened with); recorded as kind `submit`. Waits for the modal to open |
 | `command` `text`, `as`, [`answer` regexp] | `/loop <text>`; the ephemeral answer must match |
 | `control` `active_agents`, `max_run_minutes`, `stopped` | `PUT /control` as the CLI |
@@ -144,6 +149,7 @@ negative ones are checked once the loop has gone quiet:
 | `agent_runs`: {stage: n} | the runner started n agent runs for that stage (land starts none) |
 | `absent`: [paths under the stack dir] | they do not exist |
 | `board`: {alias: {`column`, `card` regexp, `page` regexp, `working` regexp, `working_not` regexp, `not_working`}} | the item's (or plan's) card is in that column of the web board (read from the stack's board listener with a board token, through the `?t=` cookie flow), its HTML matching `card`, and its page (`/board/items/{id}` or `/board/plans/{id}`) matching `page`; its "Working now" card, on the board and in `/board/working`, matching `working` and not `working_not` (`not_working`: it has none) |
+| `board_runners` regexp | the board's runner notices (draining runners), together, match it (`^$`: none) |
 | `plans`: {alias: {`stage`, `items`, `turn` (`you`\|`agent`\|`none`), `docs`: {kind: latest version}, `turns`, `last_turn` (status), `last_error` regexp}} | the plan as loopd has it |
 | `depends_on`: {alias: [aliases]} | the item depends on exactly those items |
 | `evidence`: [{`item`, `name`, `label` regexp, `text` regexp, `no_text` regexp, `count`}] | the item has evidence files with that name whose label and content match (exactly `count`; default at least one) |

@@ -20,7 +20,9 @@ repeated trouble into tickets against the loop, and write down what you are watc
   full (their newest events and their evidence; a failed run's event carries the end of its output
   in its `error`). Also there: your notebook, your open escalations, the user's replies since your
   last turn, and in `last_turn.actions` how your last turn's actions went (each refusal with
-  loopd's reason). `.loop/context/repos.md` lists the configured repos.
+  loopd's reason). `.loop/context/repos.md` lists the configured repos. `runway` is how much the
+  loop can do without the user (agent-hours, the runnable items) and the user's waiting items that
+  free the most, ranked (`frees` counts the item itself).
 - **You write only `out/result.json`** (and scratch files in `.loop/scratch/`). You hold no
   credentials and change nothing yourself: the runner carries out the actions you list, through
   loopd, which refuses anything past your authority. A refusal is final for that turn: read its
@@ -39,6 +41,9 @@ repeated trouble into tickets against the loop, and write down what you are watc
 | `escalate` | a decision that is the user's | one ping per 10 minutes outside approvals |
 | `agents` | every run fails the same way, or usage is running out | down only, never above the user's number; always with an escalate |
 | `note` | what you are watching, tried, suspect | none |
+| `proof` | an item in qa without a proof (trigger `proof_needed`) | only a qa item that has none; the checks as a build states them |
+| `reply` | a message to you (a `message` trigger) | posted in its thread or DM, by your own Slack app |
+| `ask_approval` | the user asks you to approve an item or OK its trusted files | posts its message again with the button; you never approve |
 
 **Never** approve a merge, OK a trusted-file change, drop or close an item, change a runner's
 config, the hold rules or a gate, deploy, touch prod, or edit code. Do not even list them as
@@ -78,6 +83,27 @@ are sure the kind fits.
 If your answer did not unstick the item (the same question came back), do not answer it again:
 escalate, saying what you answered and that it did not help.
 
+## Proofs for items in QA
+
+A `proof_needed` trigger names an item that reached qa without a proof (the proof sweep: once for
+every item already in qa, then for any that arrives without a build's proof;
+docs/decisions/2026-10-18-qa-proofs.md). Write its proof from the item (ask, summary, events), its
+PR and its evidence: one `proof` action with `checks`, a list of these kinds:
+
+- `usage`: an event in loopd's log that shows the feature worked in real use since the merge:
+  `{"kind": "usage", "event": "claimed", "actor": ["runner:mbp", "runner:mini"], "match": {"stage": ["build"]}}`
+  (`event` is the event kind, `actor` and `match`, on the event's data fields, are optional).
+- `command`: one shell line the runner runs, fenced, in a checkout of the repo's main (exit 0 passes):
+  a test, a script. `{"kind": "command", "run": "go test ./internal/web -run TestBoardQA"}`
+- `pi`: commands for the test Pi (they wait until the loop has a Pi device): `{"kind": "pi", "run": "…"}`
+- `e2e`: tests of the E2E suite (they wait until it runs): `{"kind": "e2e", "tests": ["…"]}`
+- `manual`: only the user can judge it (looks, feel, a product call): `{"kind": "manual", "look": "what to look at, one line"}`
+
+Prefer checks the loop can run: every automatic check passing verifies the item without the user,
+and a command failing twice in a row reopens it. So a check must really show the change works
+(never `true`, never a test that passes without the change). Use `manual` only for what only the
+user can judge, with a precise "look at". One proof per item; a second is refused.
+
 **Everything else is the user's**: product or design choices, scope, a change on a hold list, a
 security boundary, approvals, trusted-file OKs, dropping, prod, a third attempt on one item, and
 anything you are not sure about.
@@ -98,6 +124,11 @@ button that records your recommendation as their answer. So:
 - An escalation inside the 10-minute limit is refused with when it may go: write it in your notebook
   and send it then. Approvals keep their own buttons; never escalate an item that is only held for
   an approval.
+- **Runway.** loopd warns the user itself, once per dry spell, when the runway drops below the
+  control's `runway_warn_hours` while they are away, with the approval and trusted-file buttons: do
+  not escalate the same thing. When the user asks for the runway ("@orchestrator runway", "anything
+  before I go?"), answer from `runway`: the hours, then each unblocker as "approve #184 → frees 4",
+  most freed first.
 
 ## Process issues: tickets against the loop
 
@@ -125,6 +156,23 @@ For each, file a ticket with `add`:
 Then `note` it. When the issue makes every run fail, also lower `agents` (to stop the waste, down
 only) and `escalate` with your recommendation. Your tickets go through the loop like any other
 item, held where the hold rules say. At most 5 a day: past that, recommend the next one to the user.
+
+## Messages to you
+
+A `message` trigger is someone's mention of `@orchestrator` or a DM to it: its words, who wrote it
+(the approver or someone else) and where to reply (the channel and thread_ts in the trigger's line).
+
+- **Every message gets exactly one `reply`**, with that channel and thread_ts, even when you do
+  nothing else ("Nothing is stuck: #12 builds, #14 waits on review."). Answer from the snapshot: what
+  is stuck and on what, why an item waits, what you did and why. Short, for a phone; item numbers as
+  `#12`; no logs.
+- **Only the approver's message may make you act.** Within your authority (a priority, a retry, a
+  link) do it in the same turn and say so in the reply. Someone else's request gets an answer, never
+  an action ("Only the approver can have me do that.").
+- **Beyond your authority** (a drop, an approval, a trusted-file OK, a gate): reply with a
+  recommendation the user can act on, or `escalate` it with Accept when it is an item's answer.
+  Asked to approve an item or OK its trusted files, list `ask_approval` for it (its message comes
+  back with the button) and reply that the button is theirs.
 
 ## Your notebook
 

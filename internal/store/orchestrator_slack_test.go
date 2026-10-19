@@ -31,13 +31,17 @@ func TestOrchMessageRecordsOnce(t *testing.T) {
 		q.Triggers[0].ItemID != 7 || q.Triggers[0].Text != "drop #61" {
 		t.Fatalf("queued turn: %+v", q)
 	}
+	// It carries where the message came from, so the turn's reply lands in its thread.
+	if tr := q.Triggers[0]; tr.Channel != "D1" || tr.TS != "1.1" || tr.ThreadTS != "" || !tr.Approver || tr.ReplyThread() != "1.1" {
+		t.Fatalf("trigger's origin: %+v", tr)
+	}
 	if _, err := s.UseApproverMessage(ctx, "D1", "1.1", "U0APPROVER", "drop", "61", orch); err != nil {
 		t.Fatalf("the recorded message acts for the user: %v", err)
 	}
-	if _, _, err := s.OrchMessage(ctx, OrchestratorMessage{Channel: "D1", TS: "1.2", User: "U0OTHER", Text: "drop #61"}); err != nil {
+	if _, _, err := s.OrchMessage(ctx, OrchestratorMessage{Channel: "D1", TS: "1.2", ThreadTS: "1.0", User: "U0OTHER", Text: "drop #61"}); err != nil {
 		t.Fatal(err)
 	}
-	if q := queued(t, s); len(q.Triggers) != 2 || q.Triggers[1].ItemID != 0 {
+	if q := queued(t, s); len(q.Triggers) != 2 || q.Triggers[1].ItemID != 0 || q.Triggers[1].Approver || q.Triggers[1].ReplyThread() != "1.0" {
 		t.Fatalf("a second message joins the turn: %+v", q.Triggers)
 	}
 	all, err := s.OrchMessages(ctx, 0, 0)
@@ -59,17 +63,17 @@ func TestOrchMessageRecordsOnce(t *testing.T) {
 func TestOrchReply(t *testing.T) {
 	s, _ := open(t)
 	ctx := context.Background()
-	if _, err := s.OrchReply(ctx, orch, "D1", "1.1", " "); code(err) != pipeline.CodeMissingField {
+	if _, err := s.OrchReply(ctx, orch, "D1", "1.1", " ", ""); code(err) != pipeline.CodeMissingField {
 		t.Fatalf("no text: %v", err)
 	}
-	if _, err := s.OrchReply(ctx, orch, "", "1.1", "hi"); code(err) != pipeline.CodeMissingField {
+	if _, err := s.OrchReply(ctx, orch, "", "1.1", "hi", ""); code(err) != pipeline.CodeMissingField {
 		t.Fatalf("no channel: %v", err)
 	}
-	e, err := s.OrchReply(ctx, orch, "D1", "1.1", " #35 waits on #34. ")
+	e, err := s.OrchReply(ctx, orch, "D1", "1.1", " #35 waits on #34. ", " you asked ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.Kind != KindOrchReply || e.Actor != orch || e.Data["channel"] != "D1" || e.Data["thread_ts"] != "1.1" || e.Data["text"] != "#35 waits on #34." {
+	if e.Kind != KindOrchReply || e.Actor != orch || e.Data["channel"] != "D1" || e.Data["thread_ts"] != "1.1" || e.Data["text"] != "#35 waits on #34." || e.Data["reason"] != "you asked" {
 		t.Fatalf("event %+v", e)
 	}
 }

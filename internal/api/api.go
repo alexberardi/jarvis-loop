@@ -4,7 +4,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -22,14 +21,6 @@ import (
 
 const maxJSONBody = 1 << 20
 
-type ctxKey struct{}
-
-// PrincipalFrom returns the authenticated principal of a request.
-func PrincipalFrom(ctx context.Context) Principal {
-	p, _ := ctx.Value(ctxKey{}).(Principal)
-	return p
-}
-
 type server struct {
 	st     *store.Store
 	tokens *Tokens
@@ -40,32 +31,6 @@ type server struct {
 func New(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
 	s := &server{st: st, tokens: tokens, log: log}
 	return Logged(log, s.routes())
-}
-
-// CodeRunnersOnly refuses a token that is not a runner's on the remote runners' listener.
-const CodeRunnersOnly = "runners_only"
-
-// NewRunners is the API for remote runners only: what loopd's LAN listener (--runner-addr)
-// serves, so the main API, the status page and the board stay on their own listeners. A token of
-// any other kind (user, board, orchestrator) is refused on every route before routing, which also
-// rules out acting for the user; a runner token then meets New's routes and rules.
-func NewRunners(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
-	s := &server{st: st, tokens: tokens, log: log}
-	mux := s.routes()
-	return Logged(log, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p, ok := tokens.Lookup(BearerToken(r))
-		if !ok {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="loopd"`)
-			writeErr(w, http.StatusUnauthorized, "unauthorized", "a valid bearer token is required")
-			return
-		}
-		if p.Kind != KindRunner {
-			SetActor(w, p)
-			writeErr(w, http.StatusForbidden, CodeRunnersOnly, "this listener is for runners: "+article(p.Kind)+" "+p.Kind+" token is refused here")
-			return
-		}
-		mux.ServeHTTP(w, r)
-	}))
 }
 
 // routes are the API's routes, each behind its token rule.
@@ -85,6 +50,7 @@ func (s *server) routes() *http.ServeMux {
 	route("PATCH /items/{id}", both, s.patchItem)
 	route("POST /claim", runner, s.claim)
 	route("POST /leases/{id}/heartbeat", runner, s.heartbeat)
+	route("POST /runners/self/state", runner, s.runnerState)
 	route("POST /items/{id}/advance", runner, s.advance)
 	route("POST /items/{id}/evidence", runner, s.uploadEvidence)
 	route("POST /items/{id}/events", runner, s.runnerEvent)
@@ -115,12 +81,14 @@ func (s *server) routes() *http.ServeMux {
 	route("GET /freezes", reads, s.listFreezes)
 	route("POST /unfreeze", user, s.unfreeze)
 	route("PUT /control", user, s.putControl)
+	route("GET /usage", reads, s.getUsage)
 	// The orchestrator's own actions (orchestrator.go).
 	route("POST /orchestrator/items", orch, s.orchAdd)
 	route("POST /orchestrator/items/{id}/answer", orch, s.orchAnswer)
 	route("POST /orchestrator/items/{id}/retry", orch, s.orchRetry)
 	route("POST /orchestrator/items/{id}/priority", orch, s.orchPriority)
 	route("POST /orchestrator/items/{id}/link", orch, s.orchLink)
+	route("POST /orchestrator/items/{id}/proof", orch, s.orchProof)
 	route("POST /orchestrator/escalations", orch, s.orchEscalate)
 	route("POST /orchestrator/agents", orch, s.orchAgents)
 	route("POST /orchestrator/notes", orch, s.orchNote)
@@ -132,6 +100,14 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /orchestrator/items/{id}/approval", orch, s.orchAskApproval)
 	route("GET /orchestrator/snapshot", reads, s.orchSnapshot)
 	route("POST /orchestrate/turns/{turn}/result", runner, s.orchTurnResult)
+	// Regression runs (regression.go).
+	route("POST /regressions", user, s.queueRegression)
+	route("GET /regressions", reads, s.listRegressions)
+	route("GET /regressions/{id}", reads, s.getRegression)
+	route("GET /regressions/{id}/files/{n}", reads, s.downloadRegressionFile)
+	route("POST /regressions/{id}/files", runner, s.uploadRegressionFile)
+	route("POST /regressions/{id}/result", runner, s.regressionResult)
+	route("POST /regressions/{id}/tests/{n}/file", user, s.fileRegressionTest)
 	return mux
 }
 
@@ -167,47 +143,6 @@ func SetActor(w http.ResponseWriter, p Principal) {
 	}
 }
 
-// BearerToken extracts the token of an "Authorization: Bearer" header.
-func BearerToken(r *http.Request) string {
-	h := r.Header.Get("Authorization")
-	if len(h) > 7 && strings.EqualFold(h[:7], "bearer ") {
-		return strings.TrimSpace(h[7:])
-	}
-	return ""
-}
-
-func (s *server) auth(pattern string, kinds []string, next http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p, ok := s.tokens.Lookup(BearerToken(r))
-		if !ok {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="loopd"`)
-			writeErr(w, http.StatusUnauthorized, "unauthorized", "a valid bearer token is required")
-			return
-		}
-		SetActor(w, p)
-		onBehalf := r.Header.Get(OnBehalfHeader)
-		if onBehalf == "" && !slices.Contains(kinds, p.Kind) {
-			s.fail(w, s.refusedRoute(r, p, pattern, &pipeline.Error{Code: CodeForbidden, Message: article(p.Kind) + " " + p.Kind + " token cannot do this"}))
-			return
-		}
-		// Expiry is evaluated on every request, so a read never shows a dead lease as live.
-		if err := s.st.Sweep(r.Context()); err != nil {
-			s.fail(w, err)
-			return
-		}
-		ctx := r.Context()
-		if onBehalf != "" {
-			np, nctx, err := s.actForUser(ctx, r, p, pattern, onBehalf)
-			if err != nil {
-				s.fail(w, err)
-				return
-			}
-			p, ctx = np, nctx
-		}
-		next(w, r.WithContext(context.WithValue(ctx, ctxKey{}, p)))
-	})
-}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -228,6 +163,7 @@ var statusByCode = map[string]int{
 	store.CodeNotApprover:         http.StatusForbidden,
 	store.CodeUsed:                http.StatusConflict,
 	store.CodeNotFrozen:           http.StatusConflict,
+	store.CodeRegressionOpen:      http.StatusConflict,
 	pipeline.CodeLimit:            http.StatusConflict,
 	pipeline.CodeTooSoon:          http.StatusTooManyRequests,
 	CodeForbidden:                 http.StatusForbidden,
@@ -350,6 +286,23 @@ func (s *server) listItems(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "awaiting_deploy must be 1 or 0"})
 		return
 	}
+	switch r.URL.Query().Get("proof_due") {
+	case "":
+	case "1", "true":
+		// The qa items whose proof is due a check (the runner's proof pass); the other filters
+		// do not apply.
+		rows, err := s.st.ProofsDue(r.Context())
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": rows})
+		return
+	case "0", "false":
+	default:
+		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "proof_due must be 1 or 0"})
+		return
+	}
 	rows, err := s.st.ListItemsFilter(r.Context(), store.ListFilter{Stage: stage, Priority: pri, Open: open, PRToClose: toClose, AwaitingDeploy: awaiting})
 	if err != nil {
 		s.fail(w, err)
@@ -413,15 +366,23 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		// RunnerStages: the work stages the runner takes in all its lanes (the held slots count
 		// only its work in them); empty: it did not say.
 		RunnerStages []string `json:"runner_stages"`
-		// Kinds: item, plan (plan turns), orchestrate; empty is items only.
+		// Kinds: item, plan (plan turns), orchestrate, regression; empty is items only.
 		Kinds []string `json:"kinds"`
+		// Builders: the other builders the runner can run (qwen), for a paced claim's route.
+		Builders []string `json:"builders"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
+	for _, b := range body.Builders {
+		if b != pipeline.BuilderQwen {
+			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "builders may be qwen, got " + strconv.Quote(b)})
+			return
+		}
+	}
 	for _, k := range body.Kinds {
-		if k != pipeline.WorkItem && k != pipeline.WorkPlan && k != pipeline.WorkOrchestrate {
-			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kinds may be item, plan and orchestrate, got " + strconv.Quote(k)})
+		if !validKind(k) {
+			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kinds may be item, plan, orchestrate and regression, got " + strconv.Quote(k)})
 			return
 		}
 	}
@@ -467,7 +428,7 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds})
+	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds, Builders: body.Builders})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -484,9 +445,28 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"kind": c.Kind, "stage": c.Stage, "orchestrate": c.Orch, "lease": c.Lease})
 		return
 	}
+	if c.Kind == pipeline.WorkRegression {
+		writeJSON(w, http.StatusOK, map[string]any{"kind": c.Kind, "stage": c.Stage, "regression": c.Reg, "lease": c.Lease})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"kind": c.Kind, "item": c.Item, "stage": c.Stage, "lease": c.Lease, "brief": Brief{Stage: c.Stage, Item: c.Item},
 	})
+}
+
+// runnerState records the calling runner's state: "draining" (loop-runner drain) or "" (working).
+func (s *server) runnerState(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		State string `json:"state"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if err := s.st.SetRunnerState(r.Context(), PrincipalFrom(r.Context()).Name, body.State); err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"state": body.State})
 }
 
 func (s *server) heartbeat(w http.ResponseWriter, r *http.Request) {
@@ -551,6 +531,11 @@ const KindPRClosed = "pr_closed"
 // commit (docs/decisions/2026-10-16-qa-after-deploy.md): there is no lease, any runner may.
 const KindDeployed = "deployed"
 
+// KindProofChecked is a runner's check of a qa item's due proof (docs/decisions/2026-10-18-qa-proofs.md):
+// its command checks' results; loopd evaluates the usage checks and decides. No lease, any
+// runner may (store.ProofChecked).
+const KindProofChecked = store.KindProofChecked
+
 func (s *server) runnerEvent(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	if !ok {
@@ -574,10 +559,12 @@ func (s *server) runnerEvent(w http.ResponseWriter, r *http.Request) {
 		ev, err = s.st.PRClosed(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Data)
 	case body.Kind == KindDeployed:
 		ev, err = s.st.Deployed(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Data)
+	case body.Kind == KindProofChecked:
+		ev, err = s.st.ProofChecked(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Data)
 	case slices.Contains(RunnerEventKinds, body.Kind):
 		ev, err = s.st.RunnerEvent(r.Context(), PrincipalFrom(r.Context()).Name, id, body.Kind, body.Data)
 	default:
-		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kind must be one of " + strings.Join(append(RunnerEventKinds, KindMainCI, KindPRClosed, KindDeployed), ", ")})
+		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kind must be one of " + strings.Join(append(RunnerEventKinds, KindMainCI, KindPRClosed, KindDeployed, KindProofChecked), ", ")})
 		return
 	}
 	if err != nil {
@@ -656,18 +643,24 @@ func (s *server) downloadEvidence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
+	w.Header().Set("X-Evidence-SHA256", ev.SHA256)
+	serveFile(w, r, ev.Name, ev.ContentType, ev.At, f)
+}
+
+// serveFile serves an uploaded file: an image or plain text inline, anything else as a download,
+// in a sandbox either way.
+func serveFile(w http.ResponseWriter, r *http.Request, name, contentType string, at time.Time, f io.ReadSeeker) {
 	h := w.Header()
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Content-Security-Policy", "sandbox; default-src 'none'")
-	h.Set("X-Evidence-SHA256", ev.SHA256)
-	if slices.Contains(inlineTypes, ev.ContentType) {
-		h.Set("Content-Type", ev.ContentType)
-		h.Set("Content-Disposition", `inline; filename="`+ev.Name+`"`)
+	if slices.Contains(inlineTypes, contentType) {
+		h.Set("Content-Type", contentType)
+		h.Set("Content-Disposition", `inline; filename="`+name+`"`)
 	} else {
 		h.Set("Content-Type", "application/octet-stream")
-		h.Set("Content-Disposition", `attachment; filename="`+ev.Name+`"`)
+		h.Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	}
-	http.ServeContent(w, r, "", ev.At, f)
+	http.ServeContent(w, r, "", at, f)
 }
 
 // ---- user calls ----
@@ -684,65 +677,6 @@ func (s *server) answer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, err := s.st.Answer(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Text)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, it)
-}
-
-func (s *server) approve(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		HeadSHA string `json:"head_sha"`
-		Words   string `json:"words"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	it, err := s.st.Approve(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.HeadSHA, body.Words)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, it)
-}
-
-// trust is the approver's OK for verify to run the commit it refused for changing trusted files.
-func (s *server) trust(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		HeadSHA string `json:"head_sha"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	it, err := s.st.Trust(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.HeadSHA)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, it)
-}
-
-func (s *server) hold(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		Words string `json:"words"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	it, err := s.st.Hold(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Words)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -984,6 +918,16 @@ func (s *server) getControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
+}
+
+// getUsage is the usage report: claude's windows, pace and forecast, the days, stages and items.
+func (s *server) getUsage(w http.ResponseWriter, r *http.Request) {
+	u, err := s.st.Usage(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, u)
 }
 
 func (s *server) putControl(w http.ResponseWriter, r *http.Request) {

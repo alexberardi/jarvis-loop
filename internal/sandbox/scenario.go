@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/alexberardi/jarvis-loop/internal/api"
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
+	"github.com/alexberardi/jarvis-loop/internal/runner"
 	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/slackfake"
 	"github.com/alexberardi/jarvis-loop/internal/store"
@@ -31,6 +33,9 @@ type Scenario struct {
 	// Stages are the stages the sandbox's runner claims (default: triage, build and review). A
 	// scenario that does triage or review by hand while the runner builds names ["build"].
 	Stages []string `json:"stages,omitempty"`
+	// ExtraRepo: the fake GitHub has a fourth repo (sandbox/extra) that loopd and the runner
+	// learn of only from a reload_loopd and a reload_runner step.
+	ExtraRepo bool `json:"extra_repo,omitempty"`
 	// Slots are the runner's agent slots (default 1): two let a run go on while another starts.
 	Slots int     `json:"slots,omitempty"`
 	Steps []Step  `json:"steps"`
@@ -70,6 +75,9 @@ type Step struct {
 	Play  string `json:"play,omitempty"`
 	File  string `json:"file,omitempty"`
 	Picks string `json:"picks,omitempty"` // the repo a triage run picks
+	// Proof: the proof (a list of checks) the item's builds state; with For "proof", the one the
+	// orchestrator's proofs play writes for it (the proof sweep).
+	Proof json.RawMessage `json:"proof,omitempty"`
 	// runner: which item the claim must take ("none": nothing, "orchestrator": an orchestrate
 	// turn). script with For "orchestrate" sets the orchestrator's play (no item);
 	// orchestrator_message is the user's message (Text) to it, about Item when set.
@@ -78,7 +86,8 @@ type Step struct {
 	Outcome string `json:"outcome,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	// Slack: who acts ("approver" or "other"), what they type, which button or menu, which
-	// message ("control" for the active-agents message; otherwise the item's thread)
+	// message ("control" for the active-agents message, "loop" for a top-level message in #loop;
+	// otherwise the item's thread)
 	As      string `json:"as,omitempty"`
 	Text    string `json:"text,omitempty"`
 	Button  string `json:"button,omitempty"`
@@ -115,6 +124,10 @@ type Step struct {
 	Stopped       *bool `json:"stopped,omitempty"`
 	// OrchTurnsPerDay is the orchestrator's daily cap of turns.
 	OrchTurnsPerDay *int `json:"orchestrator_turns_per_day,omitempty"`
+	// Budgets are usage budgets per provider (docs/decisions/2026-10-18-usage-awareness.md).
+	Budgets map[string]pipeline.Budget `json:"budgets,omitempty"`
+	// Size is the size triage gives (default S).
+	Size string `json:"size,omitempty"`
 
 	// plans (docs/phases/07-planning.md), driven through the API: Plan is a plan's alias. plan
 	// starts one (title, priority, text); plan_say is the user's message; plan_turn is a fake
@@ -136,6 +149,15 @@ type Step struct {
 	Refused     string   `json:"refused,omitempty"`
 	Pieces      []string `json:"pieces,omitempty"`
 
+	// reload_runner: the runner's config file is rewritten and reloaded, as on SIGHUP: Slots sets
+	// its slots, AddRepo "extra" adds the ExtraRepo remote's repo, Invalid writes a truncated
+	// file; with Refused the reload must be refused (a regexp on the error). reload_loopd: Text is
+	// loopd's new --repos-file (added to its --repos), read again as on SIGHUP. drain: the runner
+	// drains, as on SIGUSR1. release with Item: the item's "wait" build goes on.
+	Slots   int    `json:"slots,omitempty"`
+	AddRepo string `json:"add_repo,omitempty"`
+	Invalid bool   `json:"invalid,omitempty"`
+
 	// orchestrator: the orchestrator's token calls loopd: Action is "METHOD /path" ({item} is the
 	// item's id), Body its JSON (a value "{head}" is the item's head sha, "{id}" its id,
 	// "{last_channel}" and "{last_ts}" those of the last message sent the @orchestrator app). With As, it acts on a
@@ -148,6 +170,16 @@ type Step struct {
 	Action string         `json:"action,omitempty"`
 	Body   map[string]any `json:"body,omitempty"`
 	Where  string         `json:"where,omitempty"`
+
+	// Regression runs (docs/decisions/2026-10-18-regression-trigger.md). e2e: the demo repo's
+	// main gets the stand-in scripts/e2e, playing Outcome (fail, pass, no_report). regression:
+	// Via "slack" (default) is As's top-level mention of the loop bot in #loop with Text (default
+	// "regression"); Via "board" presses the board's Run regression button with Suite, signed in
+	// As "user" or "board", and the answer must be Status (default 303). runner Claims
+	// "regression": the claim must take the queued run. press with Message "loop": the latest
+	// top-level message in #loop with the button.
+	Suite  string `json:"suite,omitempty"`
+	Status int    `json:"status,omitempty"`
 
 	Expect
 }
@@ -186,6 +218,11 @@ type Expect struct {
 	// BoardOrchestrator: a regexp the board's Orchestrator panel must match ("" when the board
 	// has none: "^$").
 	BoardOrchestrator string `json:"board_orchestrator,omitempty"`
+	// BoardRunners: a regexp the board's runner notices (draining runners) must match, all of
+	// them together ("^$" when there are none).
+	BoardRunners string `json:"board_runners,omitempty"`
+	// BoardRegression: run id ("1") -> a regexp its report page on the board must match.
+	BoardRegression map[string]string `json:"board_regression,omitempty"`
 	// Plans: alias -> the plan as loopd has it; DependsOn: item alias -> the aliases of the items
 	// it depends on, exactly.
 	Plans     map[string]PlanMatch `json:"plans,omitempty"`
@@ -421,6 +458,23 @@ func describeStep(st Step) string {
 	return strings.Join(parts, " ")
 }
 
+// refusedAs checks err against a step's Refused: nil when it must succeed, a regexp the error
+// must match otherwise.
+func refusedAs(refused string, err error) error {
+	if refused == "" {
+		return err
+	}
+	if err == nil {
+		return fmt.Errorf("not refused, want an error matching %q", refused)
+	}
+	if ok, rerr := matches(refused, err.Error()); rerr != nil {
+		return rerr
+	} else if !ok {
+		return fmt.Errorf("refused with %q, want %q", err, refused)
+	}
+	return nil
+}
+
 func (p *player) step(st Step) error {
 	s := p.s
 	switch st.Do {
@@ -439,7 +493,11 @@ func (p *player) step(st Step) error {
 		if err := s.hand.Upload(p.ctx, r.id, f, "repro.txt", "repro"); err != nil {
 			return err
 		}
-		return s.hand.Advance(p.ctx, r.id, "reproduced", map[string]string{"area": "sandbox", "size": "S", "risk": "normal", "resources": st.Resources}, nil)
+		size := "S"
+		if st.Size != "" {
+			size = st.Size
+		}
+		return s.hand.Advance(p.ctx, r.id, "reproduced", map[string]string{"area": "sandbox", "size": size, "risk": "normal", "resources": st.Resources}, nil)
 	case "hand_claim":
 		var caps, only []string
 		if st.Capabilities != "" {
@@ -456,13 +514,13 @@ func (p *player) step(st Step) error {
 		default:
 			return fmt.Errorf("hand_claim via %q: want runner_listener or nothing", st.Via)
 		}
+		cfg := &runner.Config{Capabilities: caps, OnlyResources: only}
 		stages := []string{"build"}
 		if st.RunnerStages != "" {
-			c := *hand
-			c.Stages = strings.Split(st.RunnerStages, ",")
-			hand, stages = &c, c.Stages
+			cfg.Stages = strings.Split(st.RunnerStages, ",")
+			stages = cfg.Stages
 		}
-		cl, err := hand.ClaimOnly(p.ctx, "hand-builder", caps, only, stages)
+		cl, err := hand.ClaimFor(p.ctx, "hand-builder", cfg, stages)
 		if err != nil {
 			return err
 		}
@@ -498,7 +556,7 @@ func (p *player) step(st Step) error {
 		if err != nil {
 			return err
 		}
-		return s.SetScript(r.id, st.For, st.Play, st.File, st.Picks)
+		return s.SetScript(r.id, st.For, st.Play, st.File, st.Picks, st.Proof)
 	case "runner":
 		c, err := s.Poll(30 * time.Second)
 		if err != nil {
@@ -512,6 +570,8 @@ func (p *player) step(st Step) error {
 			got = fmt.Sprintf("a turn of P%d", c.Plan)
 		case c.Orch != 0:
 			got = fmt.Sprintf("orchestrate turn %d", c.Orch)
+		case c.Reg != 0:
+			got = fmt.Sprintf("regression R%d", c.Reg)
 		}
 		switch st.Claims {
 		case "":
@@ -522,6 +582,10 @@ func (p *player) step(st Step) error {
 		case "orchestrator":
 			if c.Orch == 0 {
 				return fmt.Errorf("the runner claimed %s, want an orchestrate turn", got)
+			}
+		case "regression":
+			if c.Reg == 0 {
+				return fmt.Errorf("the runner claimed %s, want a regression run", got)
 			}
 		default:
 			if id, ok := p.plans[st.Claims]; ok {
@@ -573,7 +637,7 @@ func (p *player) step(st Step) error {
 		}
 		return eventually(30*time.Second, func() error {
 			for _, x := range s.AgentState(r.id) {
-				if x == "hanging" {
+				if x == "hanging" || x == "waiting" {
 					return nil
 				}
 			}
@@ -581,6 +645,12 @@ func (p *player) step(st Step) error {
 		})
 	case "runner_idle":
 		return s.WaitRuns(60 * time.Second)
+	case "reload_runner":
+		return refusedAs(st.Refused, s.ReloadRunner(st.Slots, st.AddRepo, st.Invalid))
+	case "reload_loopd":
+		return refusedAs(st.Refused, s.ReloadLoopd(st.Text))
+	case "drain":
+		return s.Runner.Drain(s.ctx)
 	case "review":
 		r, err := p.ref(st.Item)
 		if err != nil {
@@ -723,6 +793,35 @@ func (p *player) step(st Step) error {
 		return err
 	case "press", "choose":
 		return p.press(st)
+	case "e2e":
+		return s.InstallE2E(st.Outcome)
+	case "regression":
+		switch st.Via {
+		case "", "slack":
+			user, err := userID(st.As)
+			if err != nil {
+				return err
+			}
+			text := st.Text
+			if text == "" {
+				text = "regression"
+			}
+			return s.RegressionSlack(user, "<@"+slackfake.BotUser+"> "+text)
+		case "board":
+			code, err := s.RegressionBoard(st.As, st.Suite)
+			if err != nil {
+				return err
+			}
+			want := st.Status
+			if want == 0 {
+				want = http.StatusSeeOther
+			}
+			if code != want {
+				return fmt.Errorf("the board's Run regression answered %d, want %d", code, want)
+			}
+			return nil
+		}
+		return fmt.Errorf("regression via %q: use slack or board", st.Via)
 	case "submit":
 		// As submits the modal their last press opened (the Rebuild form), with Text as its note
 		// when set (else the note it opened with).
@@ -794,6 +893,9 @@ func (p *player) step(st Step) error {
 		}
 		if st.OrchTurnsPerDay != nil {
 			patch["orchestrator_turns_per_day"] = *st.OrchTurnsPerDay
+		}
+		if st.Budgets != nil {
+			patch["budgets"] = st.Budgets
 		}
 		return s.user.do("PUT", "/control", patch, nil)
 	case "unfreeze":
@@ -1103,7 +1205,7 @@ func (p *player) press(st Step) error {
 	err = eventually(within, func() error {
 		var thread string
 		switch {
-		case st.Message == "control":
+		case st.Message == "control" || st.Message == "loop":
 			thread = ""
 		case st.Plan != "":
 			id, err := p.planRef(st.Plan)
@@ -1120,7 +1222,7 @@ func (p *player) press(st Step) error {
 			}
 			thread = p.s.Thread(r.id)
 		default:
-			return errors.New("press needs item, plan or message: control")
+			return errors.New("press needs item, plan or message: control or loop")
 		}
 		msgs := p.s.Slack.Messages()
 		for i := len(msgs) - 1; i >= 0; i-- {
@@ -1135,7 +1237,8 @@ func (p *player) press(st Step) error {
 					continue
 				}
 			}
-			if st.Message == "control" && m.TS == p.s.ControlTS() || thread != "" && (m.TS == thread || m.ThreadTS == thread) {
+			loop := st.Message == "loop" && m.Channel == slack.ChannelLoop && (m.ThreadTS == "" || m.ThreadTS == m.TS) && m.TS != p.s.ControlTS()
+			if st.Message == "control" && m.TS == p.s.ControlTS() || loop || thread != "" && (m.TS == thread || m.ThreadTS == thread) {
 				target = m
 				return nil
 			}

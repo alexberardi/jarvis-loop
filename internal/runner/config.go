@@ -33,10 +33,15 @@ type Config struct {
 	// of its capabilities): a Mac runner with ["macos"] leaves everything else to the dev box.
 	OnlyResources []string `json:"only_resources,omitempty"`
 	// Slots is how many agent runs this runner works at once; loopd's active-agents number still
-	// caps the total. Land, with no agent, has its own lane next to them, one item at a time.
+	// caps the total. Land, with no agent, has its own lanes next to them.
 	Slots int `json:"slots"`
+	// LandSlots is how many land runs this runner works at once (default 3), each in its own lane
+	// next to the agent slots; loopd's land limit still caps the total. A land run mostly waits on
+	// CI, so one lane would land one item per CI run (#213).
+	LandSlots int `json:"land_slots,omitempty"`
 	// Stages are the stages this runner claims: triage, build and review (the default, all
-	// three), or a subset; land, and plan (plan turns, docs/phases/07-planning.md), only when named.
+	// three), or a subset; land, plan (plan turns, docs/phases/07-planning.md), orchestrate and
+	// regression (regression.go) only when named.
 	Stages   []string `json:"stages,omitempty"`
 	WorkRoot string   `json:"work_root"`
 	// Claude and Guard are the binaries; Guard defaults to loop-guard next to the runner.
@@ -89,6 +94,9 @@ type Config struct {
 	// Qwen is the Qwen builder for items whose builder is qwen (qwen.go); nil: they build with
 	// claude.
 	Qwen *QwenConfig `json:"qwen,omitempty"`
+	// Regression is the end-to-end regression a runner with stage regression runs (regression.go,
+	// docs/decisions/2026-10-18-regression-trigger.md).
+	Regression *RegressionConfig `json:"regression,omitempty"`
 
 	path             string
 	ciWait, mainWait time.Duration
@@ -182,6 +190,31 @@ func (v VerifyStep) Timeout() time.Duration {
 	return DefaultVerifyTimeout
 }
 
+// RegressionConfig is where the regression runs: Repo's scripts/e2e (jarvis-server), at its base
+// branch, with MobileRepo's base checked out for the mobile flows (jarvis-node-mobile).
+type RegressionConfig struct {
+	// Repo and MobileRepo are repo keys of this config. Without MobileRepo, scripts/e2e fetches
+	// the app itself.
+	Repo       string `json:"repo"`
+	MobileRepo string `json:"mobile_repo,omitempty"`
+	// TimeoutText is a Go duration (default 150m): the run is ended after it.
+	TimeoutText string `json:"timeout,omitempty"`
+
+	timeout time.Duration
+}
+
+// DefaultRegressionTimeout is a regression run's time limit when the config gives none: inside
+// loopd's own cap on it (pipeline.RegressionMaxRun).
+const DefaultRegressionTimeout = 150 * time.Minute
+
+// Timeout is the run's time limit.
+func (c RegressionConfig) Timeout() time.Duration {
+	if c.timeout > 0 {
+		return c.timeout
+	}
+	return DefaultRegressionTimeout
+}
+
 // HarnessConfig is a repo's harness for its agents: Up starts it (in the keeper fence, which
 // keeps what it starts alive until the agent's run ends), Down stops it. Both are bash command
 // lines with the verify steps' environment (LOOP_SANDBOX is the item's sandbox name).
@@ -255,9 +288,16 @@ func Expand(p string) string {
 	return p
 }
 
+// DefaultLandSlots is a runner's land lanes when its config does not say (loopd's default land
+// limit).
+const DefaultLandSlots = 3
+
 func (c *Config) normalize() error {
 	if c.Slots <= 0 {
 		c.Slots = 1
+	}
+	if c.LandSlots <= 0 {
+		c.LandSlots = DefaultLandSlots
 	}
 	if c.PollSeconds <= 0 {
 		c.PollSeconds = 30
@@ -457,6 +497,35 @@ func (c *Config) normalize() error {
 			}
 		}
 		c.Repos[name] = r
+	}
+	return c.normalizeRegression()
+}
+
+func (c *Config) normalizeRegression() error {
+	g := c.Regression
+	if g == nil {
+		if slices.Contains(c.Stages, StageRegression) {
+			return fmt.Errorf("config: stage regression needs a regression section (its repo)")
+		}
+		return nil
+	}
+	if _, ok := c.Repos[g.Repo]; !ok {
+		return fmt.Errorf("config: regression.repo %q is not a configured repo (use its key)", g.Repo)
+	}
+	if _, ok := c.Repos[g.MobileRepo]; g.MobileRepo != "" && !ok {
+		return fmt.Errorf("config: regression.mobile_repo %q is not a configured repo (use its key)", g.MobileRepo)
+	}
+	// A runner with the emulator takes mobile runs: without its own checkout, scripts/e2e would look
+	// for jarvis-node-mobile outside the run's checkouts.
+	if g.MobileRepo == "" && slices.Contains(c.Stages, StageRegression) && slices.Contains(c.Capabilities, "emulator") {
+		return fmt.Errorf("config: a runner with the emulator capability takes mobile regression runs, so regression.mobile_repo is required")
+	}
+	if g.TimeoutText != "" {
+		d, err := time.ParseDuration(g.TimeoutText)
+		if err != nil || d <= 0 || d >= pipeline.RegressionMaxRun {
+			return fmt.Errorf("config: regression.timeout must be a positive duration under %s, not %q", pipeline.RegressionMaxRun, g.TimeoutText)
+		}
+		g.timeout = d
 	}
 	return nil
 }

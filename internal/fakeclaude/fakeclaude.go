@@ -82,10 +82,17 @@ const (
 	// says the user OK'd that commit for verify, it commits nothing; on any other rerun it commits
 	// another change to the file (a new head, which needs a new OK).
 	TrustedChange = "trusted_change"
+	// TrustedChangeEager is TrustedChange by an agent that ignores the brief's line about the
+	// OK: every run commits another change to the file (#144, #142).
+	TrustedChangeEager = "trusted_change_eager"
 	// Harness is good, after using the repo's harness through the runner: loop-harness up, then a
 	// run that writes .loop/evidence/harness.txt. HarnessHang does the same, then hangs.
 	Harness     = "harness"
 	HarnessHang = "harness_hang"
+	// Background starts a check in the background, says it will wait for it and exits 0 with no
+	// result, as the agents of #208 did; resumed with the runner's note, it plays the stage's usual.
+	// It plays in any stage.
+	Background = "background"
 
 	// Triage plays (a triage run of a build play plays Reproduce).
 	Reproduce      = "reproduce"       // reproduced, with notes and a repro file; picks the script's repo when the item has none
@@ -118,6 +125,7 @@ const (
 	PlanEscape    = "plan_escape"   // tries to write outside out/ (refused), then the persona's usual
 	// PlanWait waits until the harness releases it (the file <dir>/P<id>.release), reporting
 	// "waiting", then plays the persona's usual.
+	// A build run plays it too: wip.txt, then it waits for <dir>/<id>.release and plays good.
 	PlanWait = "wait"
 
 	// Orchestrate turns (a prompt with "- Orchestrate: turn <n>"; the script is
@@ -133,15 +141,18 @@ const (
 	// OrchPersona plays the orchestrator's skill as rules on the snapshot (persona.go): retries
 	// and failure signatures, the answer kinds, escalations with a recommendation, P1 tickets.
 	OrchPersona = "persona"
+	// OrchProofs writes a proof for each item a proof_needed trigger names: the item's
+	// <id>-proof.json script's proof, else one manual check.
+	OrchProofs = "proofs"
 )
 
 var stagePlays = map[string][]string{
-	"triage": {Reproduce, Duplicate, TriageQuestion, TriageBadRepo, Route, Hang, UsageLimit, Exit3},
-	"review": {Approve, Bounce, ReviewCommit, ApproveHold, ApproveQA, ApproveToolState, ApproveNamesDir, ApproveNamesDirOnce, Hang, UsageLimit, Exit3},
+	"triage": {Reproduce, Duplicate, TriageQuestion, TriageBadRepo, Route, Hang, UsageLimit, Exit3, Background},
+	"review": {Approve, Bounce, ReviewCommit, ApproveHold, ApproveQA, ApproveToolState, ApproveNamesDir, ApproveNamesDirOnce, Hang, UsageLimit, Exit3, Background},
 	// Plan personas.
 	"product":     {PlanBrief, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
 	"engineering": {PlanBlueprint, BackToBrief, PlanCycle, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
-	"orchestrate": {OrchReact, OrchNote, OrchAgentsUp, OrchInvalid, OrchInvalidOnce, OrchPersona, Hang, UsageLimit, Exit3},
+	"orchestrate": {OrchReact, OrchNote, OrchAgentsUp, OrchInvalid, OrchInvalidOnce, OrchPersona, OrchProofs, Hang, UsageLimit, Exit3},
 }
 
 type fake struct {
@@ -324,6 +335,18 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			scenario = Hang
 		}
 	}
+	if scenario == PlanWait && stage == "build" {
+		f.write("wip.txt", "half done\n")
+		progress("waiting")
+		release := filepath.Join(os.Getenv("FAKE_CLAUDE_SCRIPTS"), item+".release")
+		for deadline := time.Now().Add(2 * time.Minute); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			if os.Remove(release) == nil {
+				break
+			}
+		}
+		os.Remove(filepath.Join(f.cwd, "wip.txt"))
+		scenario = Good
+	}
 	if scenario == Wait {
 		progress("hanging")
 		release := filepath.Join(os.Getenv("FAKE_CLAUDE_SCRIPTS"), item+".release")
@@ -368,7 +391,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f.result("Asked a question.")
 		return 0
 	case UsageLimit:
-		f.emit(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "rejected", "resetsAt": 1792000000}})
+		f.emit(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "rejected", "resetsAt": 1792079100}})
 		f.emit(map[string]any{"type": "assistant", "error": "rate_limit", "message": map[string]any{"content": []any{
 			map[string]any{"type": "text", "text": "You've hit your session limit · resets 3:45pm"}}}})
 		f.emit(map[string]any{"type": "result", "subtype": "success", "is_error": true, "num_turns": 1, "duration_ms": 900,
@@ -419,6 +442,20 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if stage != "product" && stage != "engineering" && bytes.Contains(brief, []byte("`.loop/context/blueprint.md`")) {
 		f.bash("cat .loop/context/blueprint.md")
 	}
+	if scenario == Background {
+		if !bytes.HasPrefix(brief, []byte(noResultHeading)) {
+			f.tool("Bash", map[string]any{"command": "go test -race ./... > .loop/scratch/race.log 2>&1", "description": "the race suite",
+				"run_in_background": true}, func() (string, error) { return "Command running in background with ID: bg1", nil })
+			f.say("The race suite is still running. I'll be notified when it finishes.")
+			f.result("The race suite is still running. I'll be notified when it finishes.")
+			return 0
+		}
+		scenario, brief = Good, meta // the plays read the item from the brief the session has
+		if plays, ok := stagePlays[stage]; ok {
+			scenario = plays[0]
+		}
+		f.scenario = scenario
+	}
 	switch stage {
 	case "triage":
 		return f.triage(scenario, brief, sc)
@@ -436,8 +473,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	resumed := strings.TrimSpace(git(f.cwd, "rev-list", "--count", "origin/"+base+"..HEAD")) != "0"
 	if scenario == NoChange && resumed {
 		// Nothing to fix: no commit.
-	} else if scenario == TrustedChange {
-		if !resumed || !bytes.Contains(brief, []byte(trustedBrief)) {
+	} else if scenario == TrustedChange || scenario == TrustedChangeEager {
+		if !resumed || scenario == TrustedChangeEager || !bytes.Contains(brief, []byte(trustedBrief)) {
 			f.bash("mkdir -p \"$(dirname " + shellQuote(change) + ")\" && echo 'shoot --dark' >> " + shellQuote(change) + " && git add " + shellQuote(change) +
 				" && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'harness: shoot dark mode too'")
 		}
@@ -494,10 +531,14 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if reviewed != "" {
 		body += "\n\nAddressed the review (" + reviewed + ")."
 	}
-	res, _ := json.Marshal(map[string]any{"outcome": "ready_for_pr", "pr_title": "Add a feature",
+	result := map[string]any{"outcome": "ready_for_pr", "pr_title": "Add a feature",
 		"pr_body": body, "head_sha": head,
 		"summary": "Added a feature, test first.", "not_verified": []string{"nothing on a phone"},
-		"evidence": []any{map[string]string{"file": "evidence/after.txt", "label": "tests"}}})
+		"evidence": []any{map[string]string{"file": "evidence/after.txt", "label": "tests"}}}
+	if len(sc.Proof) > 0 {
+		result["proof"] = sc.Proof
+	}
+	res, _ := json.Marshal(result)
 	f.write(".loop/result.json", string(res))
 	f.say("Ready for a PR.")
 	f.result("Ready for a PR.")
@@ -507,6 +548,10 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // retryHeading opens the section the runner adds to the brief of its one retry after refusing a
 // result (runner.RetryHeading; not imported, as the runner's tests import this package).
 const retryHeading = "## Your previous result was refused"
+
+// noResultHeading starts the runner's note when it resumes a session that ended with no result
+// (runner.NoResultHeading).
+const noResultHeading = "# Your run ended without a result"
 
 // trustedBrief is how the runner's brief says the user OK'd a trusted-file commit (runner brief.go).
 const trustedBrief = "The user OK'd verify running commit"
@@ -644,6 +689,9 @@ type script struct {
 	File string `json:"file"`
 	// Repo is the repo triage picks for an item that has none.
 	Repo string `json:"repo"`
+	// Proof is the proof a build states in its result (its checks), or, in <id>-proof.json, the
+	// one the orchestrator's proofs play writes for the item.
+	Proof json.RawMessage `json:"proof,omitempty"`
 }
 
 func loadScript(dir, item, stage string) script {
@@ -948,6 +996,19 @@ func (f *fake) orchestrate(play, turn string, brief []byte, progress func(string
 		actions = append(actions, map[string]any{"action": "note", "text": "turn " + turn + ": looked at the board", "reason": "a sweep"})
 	case OrchPersona:
 		actions = personaActions(turn, []byte(readFile(filepath.Join(f.cwd, ".loop", "context", "snapshot.json"))))
+	case OrchProofs:
+		if snap.Turn != nil {
+			for _, tr := range snap.Turn.Triggers {
+				if tr.Reason != "proof_needed" {
+					continue
+				}
+				checks := json.RawMessage(`[{"kind":"manual","look":"the change in use"}]`)
+				if p := loadScript(os.Getenv("FAKE_CLAUDE_SCRIPTS"), fmt.Sprint(tr.ItemID), "proof").Proof; len(p) > 0 {
+					checks = p
+				}
+				actions = append(actions, map[string]any{"action": "proof", "item_id": tr.ItemID, "checks": checks, "reason": "from the item, its PR and evidence"})
+			}
+		}
 	default: // OrchReact
 		stage := map[int64]string{}
 		for _, it := range snap.Items {

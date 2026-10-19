@@ -45,6 +45,8 @@ type OrchSnapRunner struct {
 	Capabilities []string  `json:"capabilities"`
 	LastSeen     time.Time `json:"last_seen"`
 	LastClaim    time.Time `json:"last_claim,omitempty"`
+	// State is "draining" while the runner claims nothing new before a restart ("" working).
+	State string `json:"state,omitempty"`
 }
 
 // OrchSnapTriggered is an item that triggered the turn, in full.
@@ -71,6 +73,9 @@ type OrchSnapshot struct {
 	Notebook     []Event             `json:"notebook"`
 	Escalations  []Event             `json:"escalations"`
 	Replies      []Event             `json:"replies"`
+	// Runway is how much the loop can do without the user, and what of theirs frees the most
+	// (#205): what it answers "runway" with.
+	Runway RunwayReport `json:"runway"`
 }
 
 // Snapshot sizes.
@@ -89,6 +94,9 @@ func (s *Store) OrchSnapshot(ctx context.Context) (OrchSnapshot, error) {
 		return snap, err
 	}
 	snap.TurnsPerDay, snap.ActiveAgents, snap.Stopped = ctl.OrchTurnsPerDay, ctl.ActiveAgents, ctl.Stopped
+	if snap.Runway, _, err = s.runway(s.r); err != nil {
+		return snap, err
+	}
 	if err := s.r.QueryRowContext(ctx, `SELECT COUNT(*) FROM orch_turns WHERE day = ? AND status != ?`, snap.Day, OrchQueued).
 		Scan(&snap.TurnsToday); err != nil {
 		return snap, err
@@ -155,7 +163,7 @@ func (s *Store) OrchSnapshot(ctx context.Context) (OrchSnapshot, error) {
 	}
 
 	// The runners.
-	rrows, err := s.r.QueryContext(ctx, `SELECT r.name, r.capabilities, r.last_seen,
+	rrows, err := s.r.QueryContext(ctx, `SELECT r.name, r.capabilities, r.last_seen, r.state,
 		COALESCE((SELECT MAX(e.at) FROM events e WHERE e.actor = 'runner:' || r.name AND e.kind IN ('claimed','plan_turn_claimed','orchestrate_claimed')), 0)
 		FROM runners r ORDER BY r.name`)
 	if err != nil {
@@ -165,7 +173,7 @@ func (s *Store) OrchSnapshot(ctx context.Context) (OrchSnapshot, error) {
 		var r OrchSnapRunner
 		var caps string
 		var seen, claim int64
-		if err := rrows.Scan(&r.Name, &caps, &seen, &claim); err != nil {
+		if err := rrows.Scan(&r.Name, &caps, &seen, &r.State, &claim); err != nil {
 			rrows.Close()
 			return snap, err
 		}

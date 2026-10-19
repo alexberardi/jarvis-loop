@@ -292,7 +292,7 @@ func TestMaxRunTime(t *testing.T) {
 }
 
 func TestStopAndUsageLimit(t *testing.T) {
-	s, _ := open(t)
+	s, clk := open(t)
 	ctx := context.Background()
 	it := add(t, s, "x", "")
 	c := claim(t, s, "a")
@@ -321,16 +321,22 @@ func TestStopAndUsageLimit(t *testing.T) {
 	if _, err := s.Advance(ctx, runner, it.ID, pipeline.UsageLimit, map[string]string{"error": "429", "reset": "17:00"}, nil); err != nil {
 		t.Fatal(err)
 	}
+	// A limit pauses claude claims until its reset (unreadable here: an hour) and leaves the
+	// active-agents number alone.
 	ctl, _ := s.Control(ctx)
-	if ctl.ActiveAgents != 0 {
-		t.Fatalf("usage_limit must set active agents to 0, got %d", ctl.ActiveAgents)
+	if ctl.ActiveAgents != 4 {
+		t.Fatalf("usage_limit must leave active agents alone, got %d", ctl.ActiveAgents)
 	}
 	if c := claim(t, s, "a"); c != nil {
-		t.Fatal("claim at active agents 0")
+		t.Fatal("claim while claude is paused")
 	}
 	d, _ = s.GetItem(ctx, it.ID)
 	if d.Item.Stage != pipeline.Triage || d.Lease != nil {
 		t.Fatalf("usage_limit item: %+v", d)
+	}
+	clk.Advance(pipeline.UnknownResetPause)
+	if c := claim(t, s, "a"); c == nil {
+		t.Fatal("no claim after the pause")
 	}
 	n := 7
 	if _, err := s.SetControl(ctx, user, ControlPatch{ActiveAgents: &n}); code(err) != pipeline.CodeInvalidField {
@@ -620,6 +626,49 @@ func TestHoldRulesMigrationTagsJarvisServer(t *testing.T) {
 	}
 }
 
+// Migration 0022 raises land's limit from the old default of 1 to 3 (#213); a land limit the
+// user set to anything else stays, and a fresh database starts at 3.
+func TestLandLimitMigration(t *testing.T) {
+	for _, c := range []struct {
+		before string
+		want   int
+	}{
+		{`{"land":1,"review":2,"triage":1}`, 3},
+		{`{"land":2,"review":2,"triage":1}`, 2},
+		{`{"land":0,"review":2}`, 0},
+	} {
+		dir := t.TempDir()
+		clk := clock.NewFake(t0)
+		s, err := Open(dir, clk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// As a database at version 21 would look.
+		if _, err := s.w.Exec(`DELETE FROM schema_migrations WHERE version = 22`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.w.Exec(`UPDATE control SET limits = ?`, c.before); err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+		if s, err = Open(dir, clk); err != nil {
+			t.Fatal(err)
+		}
+		ctl, err := s.Control(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := ctl.Limits["land"]; got != c.want || ctl.Limits["review"] != 2 {
+			t.Errorf("%s: limits after %v, want land %d", c.before, ctl.Limits, c.want)
+		}
+		s.Close()
+	}
+	s, _ := open(t)
+	if ctl, _ := s.Control(context.Background()); ctl.Limits["land"] != 3 {
+		t.Fatalf("fresh limits %v, want land 3", ctl.Limits)
+	}
+}
+
 // toDone takes an item through every stage, merged by runnerName.
 func toDone(t *testing.T, s *Store, runnerName string) pipeline.Item {
 	t.Helper()
@@ -628,6 +677,12 @@ func toDone(t *testing.T, s *Store, runnerName string) pipeline.Item {
 
 // toMerged is toDone with a hook after the item is added, and extra fields for merged.
 func toMerged(t *testing.T, s *Store, runnerName string, after func(pipeline.Item), mergedFields map[string]string) pipeline.Item {
+	t.Helper()
+	return toMergedBuild(t, s, runnerName, after, nil, mergedFields)
+}
+
+// toMergedBuild is toMerged with extra fields for the build's pr_opened (a proof).
+func toMergedBuild(t *testing.T, s *Store, runnerName string, after func(pipeline.Item), buildFields, mergedFields map[string]string) pipeline.Item {
 	t.Helper()
 	ctx := context.Background()
 	it := add(t, s, "ship it", "")
@@ -654,7 +709,11 @@ func toMerged(t *testing.T, s *Store, runnerName string, after func(pipeline.Ite
 		}
 	}
 	step("triager", pipeline.Reproduced, map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": ""}, nil, true)
-	step("builder", pipeline.PROpened, map[string]string{"repo": "o/r", "pr": "7", "branch": "loop/1-x", "head_sha": shaA}, []string{"M x.go"}, true)
+	built := map[string]string{"repo": "o/r", "pr": "7", "branch": "loop/1-x", "head_sha": shaA}
+	for k, v := range buildFields {
+		built[k] = v
+	}
+	step("builder", pipeline.PROpened, built, []string{"M x.go"}, true)
 	step("reviewer", pipeline.Approved, map[string]string{"summary": "ok", "head_sha": shaA}, nil, false)
 	step("lander", pipeline.Merged, merged, []string{"M x.go"}, false)
 	return it
@@ -742,20 +801,16 @@ func TestControlChangeKeepsLiveDefaultRules(t *testing.T) {
 // fix above) goes back to the live defaults when loopd opens it; anything else is the user's and
 // stays.
 func TestOpenResetsACopyOfBuiltInRules(t *testing.T) {
-	var phase6 []pipeline.HoldRule
-	for _, r := range pipeline.DefaultHoldRules() {
-		if r.Name == "trusted-file" {
-			continue // added after phase 6b: no earlier loopd wrote them out
-		}
-		if r.Repo == pipeline.ServerRepo || r.Repo == pipeline.LoopRepo {
-			phase6 = append(phase6, r)
-		}
-	}
+	earlier := pipeline.EarlierDefaultHoldRules()
+	phase6 := earlier[1] // jarvis-server's and jarvis-loop's
+	// The full default list before #204 narrowed jarvis-loop's rules
+	// (docs/decisions/2026-10-18-narrow-loop-holds.md).
+	before204 := earlier[len(earlier)-1]
 	custom := append(append([]pipeline.HoldRule(nil), phase6...), pipeline.HoldRule{Name: "mine", Glob: "x/**", Repo: pipeline.LoopRepo})
 	for name, c := range map[string]struct {
 		rules []pipeline.HoldRule
 		reset bool
-	}{"phase 6 copy": {phase6, true}, "custom": {custom, false}} {
+	}{"phase 6 copy": {phase6, true}, "before #204 copy": {before204, true}, "custom": {custom, false}} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			clk := clock.NewFake(t0)
