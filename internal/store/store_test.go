@@ -292,7 +292,7 @@ func TestMaxRunTime(t *testing.T) {
 }
 
 func TestStopAndUsageLimit(t *testing.T) {
-	s, _ := open(t)
+	s, clk := open(t)
 	ctx := context.Background()
 	it := add(t, s, "x", "")
 	c := claim(t, s, "a")
@@ -321,16 +321,22 @@ func TestStopAndUsageLimit(t *testing.T) {
 	if _, err := s.Advance(ctx, runner, it.ID, pipeline.UsageLimit, map[string]string{"error": "429", "reset": "17:00"}, nil); err != nil {
 		t.Fatal(err)
 	}
+	// A limit pauses claude claims until its reset (unreadable here: an hour) and leaves the
+	// active-agents number alone.
 	ctl, _ := s.Control(ctx)
-	if ctl.ActiveAgents != 0 {
-		t.Fatalf("usage_limit must set active agents to 0, got %d", ctl.ActiveAgents)
+	if ctl.ActiveAgents != 4 {
+		t.Fatalf("usage_limit must leave active agents alone, got %d", ctl.ActiveAgents)
 	}
 	if c := claim(t, s, "a"); c != nil {
-		t.Fatal("claim at active agents 0")
+		t.Fatal("claim while claude is paused")
 	}
 	d, _ = s.GetItem(ctx, it.ID)
 	if d.Item.Stage != pipeline.Triage || d.Lease != nil {
 		t.Fatalf("usage_limit item: %+v", d)
+	}
+	clk.Advance(pipeline.UnknownResetPause)
+	if c := claim(t, s, "a"); c == nil {
+		t.Fatal("no claim after the pause")
 	}
 	n := 7
 	if _, err := s.SetControl(ctx, user, ControlPatch{ActiveAgents: &n}); code(err) != pipeline.CodeInvalidField {
@@ -672,6 +678,12 @@ func toDone(t *testing.T, s *Store, runnerName string) pipeline.Item {
 // toMerged is toDone with a hook after the item is added, and extra fields for merged.
 func toMerged(t *testing.T, s *Store, runnerName string, after func(pipeline.Item), mergedFields map[string]string) pipeline.Item {
 	t.Helper()
+	return toMergedBuild(t, s, runnerName, after, nil, mergedFields)
+}
+
+// toMergedBuild is toMerged with extra fields for the build's pr_opened (a proof).
+func toMergedBuild(t *testing.T, s *Store, runnerName string, after func(pipeline.Item), buildFields, mergedFields map[string]string) pipeline.Item {
+	t.Helper()
 	ctx := context.Background()
 	it := add(t, s, "ship it", "")
 	if after != nil {
@@ -697,7 +709,11 @@ func toMerged(t *testing.T, s *Store, runnerName string, after func(pipeline.Ite
 		}
 	}
 	step("triager", pipeline.Reproduced, map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": ""}, nil, true)
-	step("builder", pipeline.PROpened, map[string]string{"repo": "o/r", "pr": "7", "branch": "loop/1-x", "head_sha": shaA}, []string{"M x.go"}, true)
+	built := map[string]string{"repo": "o/r", "pr": "7", "branch": "loop/1-x", "head_sha": shaA}
+	for k, v := range buildFields {
+		built[k] = v
+	}
+	step("builder", pipeline.PROpened, built, []string{"M x.go"}, true)
 	step("reviewer", pipeline.Approved, map[string]string{"summary": "ok", "head_sha": shaA}, nil, false)
 	step("lander", pipeline.Merged, merged, []string{"M x.go"}, false)
 	return it

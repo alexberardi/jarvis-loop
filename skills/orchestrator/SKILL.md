@@ -41,6 +41,7 @@ repeated trouble into tickets against the loop, and write down what you are watc
 | `escalate` | a decision that is the user's | one ping per 10 minutes outside approvals |
 | `agents` | every run fails the same way, or usage is running out | down only, never above the user's number; always with an escalate |
 | `note` | what you are watching, tried, suspect | none |
+| `proof` | an item in qa without a proof (trigger `proof_needed`) | only a qa item that has none; the checks as a build states them |
 | `reply` | a message to you (a `message` trigger) | posted in its thread or DM, by your own Slack app |
 | `ask_approval` | the user asks you to approve an item or OK its trusted files | posts its message again with the button; you never approve |
 
@@ -81,6 +82,27 @@ are sure the kind fits.
 
 If your answer did not unstick the item (the same question came back), do not answer it again:
 escalate, saying what you answered and that it did not help.
+
+## Proofs for items in QA
+
+A `proof_needed` trigger names an item that reached qa without a proof (the proof sweep: once for
+every item already in qa, then for any that arrives without a build's proof;
+docs/decisions/2026-10-18-qa-proofs.md). Write its proof from the item (ask, summary, events), its
+PR and its evidence: one `proof` action with `checks`, a list of these kinds:
+
+- `usage`: an event in loopd's log that shows the feature worked in real use since the merge:
+  `{"kind": "usage", "event": "claimed", "actor": ["runner:mbp", "runner:mini"], "match": {"stage": ["build"]}}`
+  (`event` is the event kind, `actor` and `match`, on the event's data fields, are optional).
+- `command`: one shell line the runner runs, fenced, in a checkout of the repo's main (exit 0 passes):
+  a test, a script. `{"kind": "command", "run": "go test ./internal/web -run TestBoardQA"}`
+- `pi`: commands for the test Pi (they wait until the loop has a Pi device): `{"kind": "pi", "run": "…"}`
+- `e2e`: tests of the E2E suite (they wait until it runs): `{"kind": "e2e", "tests": ["…"]}`
+- `manual`: only the user can judge it (looks, feel, a product call): `{"kind": "manual", "look": "what to look at, one line"}`
+
+Prefer checks the loop can run: every automatic check passing verifies the item without the user,
+and a command failing twice in a row reopens it. So a check must really show the change works
+(never `true`, never a test that passes without the change). Use `manual` only for what only the
+user can judge, with a precise "look at". One proof per item; a second is refused.
 
 **Everything else is the user's**: product or design choices, scope, a change on a hold list, a
 security boundary, approvals, trusted-file OKs, dropping, prod, a third attempt on one item, and

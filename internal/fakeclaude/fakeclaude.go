@@ -147,6 +147,9 @@ const (
 	// OrchPersona plays the orchestrator's skill as rules on the snapshot (persona.go): retries
 	// and failure signatures, the answer kinds, escalations with a recommendation, P1 tickets.
 	OrchPersona = "persona"
+	// OrchProofs writes a proof for each item a proof_needed trigger names: the item's
+	// <id>-proof.json script's proof, else one manual check.
+	OrchProofs = "proofs"
 )
 
 var stagePlays = map[string][]string{
@@ -155,7 +158,7 @@ var stagePlays = map[string][]string{
 	// Plan personas.
 	"product":     {PlanBrief, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
 	"engineering": {PlanBlueprint, BackToBrief, PlanCycle, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
-	"orchestrate": {OrchReact, OrchNote, OrchAgentsUp, OrchInvalid, OrchInvalidOnce, OrchPersona, Hang, UsageLimit, Exit3},
+	"orchestrate": {OrchReact, OrchNote, OrchAgentsUp, OrchInvalid, OrchInvalidOnce, OrchPersona, OrchProofs, Hang, UsageLimit, Exit3},
 }
 
 type fake struct {
@@ -394,7 +397,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f.result("Asked a question.")
 		return 0
 	case UsageLimit:
-		f.emit(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "rejected", "resetsAt": 1792000000}})
+		f.emit(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "rejected", "resetsAt": 1792079100}})
 		f.emit(map[string]any{"type": "assistant", "error": "rate_limit", "message": map[string]any{"content": []any{
 			map[string]any{"type": "text", "text": "You've hit your session limit · resets 3:45pm"}}}})
 		f.emit(map[string]any{"type": "result", "subtype": "success", "is_error": true, "num_turns": 1, "duration_ms": 900,
@@ -542,10 +545,14 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if reviewed != "" {
 		body += "\n\nAddressed the review (" + reviewed + ")."
 	}
-	res, _ := json.Marshal(map[string]any{"outcome": "ready_for_pr", "pr_title": "Add a feature",
+	result := map[string]any{"outcome": "ready_for_pr", "pr_title": "Add a feature",
 		"pr_body": body, "head_sha": head,
 		"summary": "Added a feature, test first.", "not_verified": []string{"nothing on a phone"},
-		"evidence": []any{map[string]string{"file": "evidence/after.txt", "label": "tests"}}})
+		"evidence": []any{map[string]string{"file": "evidence/after.txt", "label": "tests"}}}
+	if len(sc.Proof) > 0 {
+		result["proof"] = sc.Proof
+	}
+	res, _ := json.Marshal(result)
 	f.write(".loop/result.json", string(res))
 	f.say("Ready for a PR.")
 	f.result("Ready for a PR.")
@@ -696,6 +703,9 @@ type script struct {
 	File string `json:"file"`
 	// Repo is the repo triage picks for an item that has none.
 	Repo string `json:"repo"`
+	// Proof is the proof a build states in its result (its checks), or, in <id>-proof.json, the
+	// one the orchestrator's proofs play writes for the item.
+	Proof json.RawMessage `json:"proof,omitempty"`
 }
 
 func loadScript(dir, item, stage string) script {
@@ -1000,6 +1010,19 @@ func (f *fake) orchestrate(play, turn string, brief []byte, progress func(string
 		actions = append(actions, map[string]any{"action": "note", "text": "turn " + turn + ": looked at the board", "reason": "a sweep"})
 	case OrchPersona:
 		actions = personaActions(turn, []byte(readFile(filepath.Join(f.cwd, ".loop", "context", "snapshot.json"))))
+	case OrchProofs:
+		if snap.Turn != nil {
+			for _, tr := range snap.Turn.Triggers {
+				if tr.Reason != "proof_needed" {
+					continue
+				}
+				checks := json.RawMessage(`[{"kind":"manual","look":"the change in use"}]`)
+				if p := loadScript(os.Getenv("FAKE_CLAUDE_SCRIPTS"), fmt.Sprint(tr.ItemID), "proof").Proof; len(p) > 0 {
+					checks = p
+				}
+				actions = append(actions, map[string]any{"action": "proof", "item_id": tr.ItemID, "checks": checks, "reason": "from the item, its PR and evidence"})
+			}
+		}
 	default: // OrchReact
 		stage := map[int64]string{}
 		for _, it := range snap.Items {

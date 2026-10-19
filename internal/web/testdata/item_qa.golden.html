@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>#16 Rebuild button · Jarvis Loop</title>
+<style>
+:root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --card: #fff; --lane: #f5f5f4; --accent: #2563eb; --warn: #b45309; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --card: #292524; --lane: #231f1d; --accent: #60a5fa; --warn: #fbbf24; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+a { color: var(--accent); }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+.muted { color: var(--muted); }
+.reason { color: var(--warn); }
+</style>
+<style>
+.working { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 8px; margin-bottom: 16px; }
+.working > h2, .working > .note { grid-column: 1 / -1; }
+.working > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 0 0; }
+.working > .note { color: var(--muted); font-size: 13px; margin: 0; }
+.work { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; min-width: 0; }
+.work .meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.work .label { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.work .title { font-weight: 600; text-decoration: none; color: var(--fg); display: block; overflow-wrap: anywhere; }
+.work ul, .work ol { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; overflow-wrap: anywhere; }
+.work .todos .completed { color: var(--muted); text-decoration: line-through; }
+.work .todos .in_progress { font-weight: 600; }
+.work .calls li { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12px; }
+.work .said { margin: 6px 0 0; font-size: 13px; font-style: italic; overflow-wrap: anywhere; }
+</style>
+<style>
+main { max-width: 960px; margin: 0 auto; }
+h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 20px 0 6px; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; overflow-wrap: anywhere; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 0; font: 13px/1.45 ui-monospace, monospace; }
+figure { margin: 0 0 12px; }
+figure img { max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; }
+figcaption, .files { font-size: 13px; color: var(--muted); }
+.events { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); font-size: 13px; }
+td { padding: 4px 8px; border-top: 1px solid var(--line); vertical-align: top; }
+td.when { white-space: nowrap; color: var(--muted); }
+td.data { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<main>
+<p class="sub"><a href="/board">← board</a></p>
+<h1>#16 Rebuild button</h1>
+<dl>
+<dt>Stage</dt><dd>qa</dd>
+<dt>Repo</dt><dd>jarvis-loop</dd>
+<dt>Priority</dt><dd>P2</dd>
+<dt>Age</dt><dd>1h</dd>
+<dt>PR</dt><dd><a href="https://github.com/alexberardi/jarvis-loop/pull/62">#62</a></dd>
+<dt>QA</dt><dd class="reason">failed: failed once, checked again before it reopens: command: `scripts/loop-sandbox run scenarios/64-rebuild-button.json`: exit 1 after 9s: 1 of 1 failed</dd>
+</dl>
+<h2>Proof · by build · checked 2026-10-15 11:00 UTC</h2>
+<ul class="proof">
+<li><span class="label">passed</span> usage: `rebuild` source=needs_you<pre>seen 2 time(s) since the merge (newest: event 913)</pre></li>
+<li><span class="label">failed</span> command: `scripts/loop-sandbox run scenarios/64-rebuild-button.json`<pre>exit 1 after 9s: 1 of 1 failed
+&lt;details&gt;</pre></li>
+<li><span class="label">manual</span> look at the button&#39;s colour</li>
+</ul>
+<h2>Evidence · 0</h2>
+<p class="muted">None.</p>
+<h2>Events · 0</h2>
+<div class="events">
+<table>
+</table>
+</div>
+</main>
+</body>
+</html>
