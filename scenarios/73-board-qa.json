@@ -1,0 +1,28 @@
+{
+  "name": "board-qa",
+  "about": "The board's QA lane (#219): a merged jarvis-loop item waits in qa for a deploy, so its card is in QA and says it waits for a deploy that contains it; once a build with the merge runs, the card says it waits for your check; Verified moves it to Done.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "Loop change", "text": "jarvis-loop: make the digest shorter"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "qa"},
+     "board": {"a": {"column": "QA", "card": "(?s)make the digest shorter.*PR #101</a>.*class=\"reason\">Merged; waiting for a deploy that contains it, then for your check\\.<"}}},
+    {"do": "deploy", "build": "main"},
+    {"do": "expect", "stage": {"a": "qa"},
+     "board": {"a": {"column": "QA", "card": "class=\"reason\">Merged; waiting for your check\\.<"}}},
+    {"do": "runner", "claims": "none"},
+    {"do": "press", "item": "a", "button": "qa_verified", "as": "approver"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "board": {"a": {"column": "Done", "card": "PR #101"}}
+  }
+}

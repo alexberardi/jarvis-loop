@@ -215,7 +215,8 @@ func TestBoardEvidence(t *testing.T) {
 }
 
 // goldenItems has a card for every column the board fills, plus the edge cases: done 15 days ago
-// (gone), closed (shown with the toggle only).
+// (gone), closed (shown with the toggle only), qa waiting on the user's check and on a deploy (shown
+// however long ago they merged).
 func goldenItems() []store.BoardItem {
 	day := 24 * time.Hour
 	row := func(id int64, title, pri, stage, display, repo string, pr int, claimed string, age time.Duration) store.BoardRow {
@@ -241,6 +242,9 @@ func goldenItems() []store.BoardItem {
 			Question: "Should the test use the sandbox emulator or a fake?", SlackChannel: "C0LOOP", SlackTS: "1760000001.000200", UpdatedAt: now},
 		{BoardRow: row(8, "Token rotation", "P2", "held", "held", "alexberardi/jarvis-loop", 12, "", 6*day),
 			HoldReason: "triage: risk hold; touches internal/api/auth.go", UpdatedAt: now},
+		{BoardRow: row(16, "Night mode toggle", "P2", "qa", "qa", "alexberardi/jarvis-node-mobile", 40, "", 2*day), UpdatedAt: now.Add(-day)},
+		{BoardRow: row(17, "Runner reports its build", "P1", "qa", "qa", "alexberardi/jarvis-loop", 41, "", 3*day),
+			AwaitingDeploy: true, UpdatedAt: now.Add(-20 * day)},
 		{BoardRow: row(9, "Fix the digest time", "P2", "done", "done", "alexberardi/jarvis-loop", 9, "", 10*day), UpdatedAt: now.Add(-13 * day)},
 		{BoardRow: row(10, "Old done item", "P2", "done", "done", "alexberardi/jarvis-loop", 3, "", 30*day), UpdatedAt: now.Add(-15 * day)},
 		{BoardRow: row(11, "Not worth it", "P3", "closed", "closed", "", 0, "", 8*day), UpdatedAt: now.Add(-2 * day)},
@@ -336,14 +340,24 @@ func TestBoardColumns(t *testing.T) {
 	if strings.Join(names, ",") != "Planning,Triage,Build,Review,Needs you,Approval,QA,Done" {
 		t.Errorf("columns %v", names)
 	}
-	want := map[string][]int64{"Triage": {1, 2, 12}, "Build": {3, 4, 13, 14}, "Review": {5, 6}, "Needs you": {7}, "Approval": {8}, "Done": {9}}
+	want := map[string][]int64{"Triage": {1, 2, 12}, "Build": {3, 4, 13, 14}, "Review": {5, 6}, "Needs you": {7}, "Approval": {8}, "QA": {16, 17}, "Done": {9}}
 	for k, ids := range want {
 		if !slicesEqual(got[k], ids) {
 			t.Errorf("%s: %v, want %v", k, got[k], ids)
 		}
 	}
-	if len(got["Planning"]) != 0 || len(got["QA"]) != 0 {
-		t.Errorf("planning/QA hold items: %v", got)
+	if len(got["Planning"]) != 0 {
+		t.Errorf("planning holds items: %v", got)
+	}
+	// A qa card says what it waits for.
+	reasons := map[int64]string{}
+	for _, c := range v.Columns {
+		for _, cd := range c.Cards {
+			reasons[cd.ID] = cd.Reason
+		}
+	}
+	if reasons[16] != "Merged; waiting for your check." || reasons[17] != "Merged; waiting for a deploy that contains it, then for your check." {
+		t.Errorf("qa reasons: %q / %q", reasons[16], reasons[17])
 	}
 	// No open plans: the Planning column says so.
 	if c := boardView(goldenItems(), nil, now, false, "").Columns[0]; c.Name != "Planning" || c.Note != "No open plans." || c.Count() != 0 {
@@ -504,5 +518,18 @@ func TestBoardRunwayLine(t *testing.T) {
 	}
 	if strings.Contains(got, "#8</a>") {
 		t.Error("board shows more than the top 3 unblockers")
+	}
+}
+
+// Every stage's items land in some lane, claimed or not: a stage no lane lists vanishes from the board.
+func TestEveryStageHasALane(t *testing.T) {
+	for _, s := range pipeline.AllStages {
+		for _, claimed := range []bool{false, true} {
+			d := pipeline.Display(s, claimed)
+			it := store.BoardItem{BoardRow: store.BoardRow{ID: 99, Stage: string(s), Display: d}, UpdatedAt: now}
+			if v := boardView([]store.BoardItem{it}, nil, now, true, ""); v.Total == 0 {
+				t.Errorf("stage %s (display %q) appears in no lane", s, d)
+			}
+		}
 	}
 }

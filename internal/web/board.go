@@ -372,7 +372,7 @@ type card struct {
 	Label    string
 	PRURL    string
 	SlackURL string
-	// Reason is why it waits on the user: the question or the hold reason.
+	// Reason is why it waits on the user: the question, the hold reason, or what a qa item waits for.
 	Reason string
 }
 
@@ -562,7 +562,8 @@ func str(m map[string]any, k string) string {
 }
 
 // lanes maps the board's columns to display stages (pipeline.Display). Planning holds the open
-// plans instead (planning is not an item stage); QA has no stage yet.
+// plans instead (planning is not an item stage). Every display stage is in one lane
+// (TestEveryStageHasALane).
 var lanes = []struct {
 	name, note string
 	displays   []string
@@ -573,7 +574,7 @@ var lanes = []struct {
 	{"Review", "", []string{"review (queued)", "review", "land (queued)", "land"}},
 	{"Needs you", "", []string{"needs-you"}},
 	{"Approval", "", []string{"held"}},
-	{"QA", "No QA stage yet.", nil},
+	{"QA", "", []string{"qa"}},
 	{"Done", "", []string{"done", "closed"}},
 }
 
@@ -605,8 +606,11 @@ func boardView(items []store.BoardItem, plans []store.PlanRow, now time.Time, sh
 			}
 			c := card{BoardItem: it, RepoName: repoName(it.Repo), PRURL: prURL(it.Repo, it.PR),
 				SlackURL: slackURL(slackBase, it.SlackChannel, it.SlackTS), Reason: it.Question}
-			if it.Display == "held" {
+			switch it.Display {
+			case "held":
 				c.Reason = it.HoldReason
+			case "qa":
+				c.Reason = qaReason(it.AwaitingDeploy)
 			}
 			if len(l.displays) > 1 {
 				c.Label = it.Display
@@ -617,6 +621,14 @@ func boardView(items []store.BoardItem, plans []store.PlanRow, now time.Time, sh
 		v.Columns = append(v.Columns, col)
 	}
 	return v
+}
+
+// qaReason is what a merged item in qa waits for, in the Slack ask's words (internal/slack/qa.go).
+func qaReason(awaitingDeploy bool) string {
+	if awaitingDeploy {
+		return "Merged; waiting for a deploy that contains it, then for your check."
+	}
+	return "Merged; waiting for your check."
 }
 
 func repoName(slug string) string {
@@ -681,8 +693,11 @@ func itemView(d store.Detail, channel, ts string, now time.Time, slackBase strin
 	it := d.Item
 	v := itemData{Item: it, Display: d.Display, RepoName: repoName(it.Repo), PRURL: prURL(it.Repo, it.PR),
 		SlackURL: slackURL(slackBase, channel, ts), Reason: it.Question, Age: int64(now.Sub(it.CreatedAt) / time.Second)}
-	if it.Stage == pipeline.Held {
+	switch it.Stage {
+	case pipeline.Held:
 		v.Reason = it.HoldReason
+	case pipeline.QA:
+		v.Reason = qaReason(it.AwaitingDeploy)
 	}
 	if d.Lease != nil {
 		v.ClaimedBy = d.Lease.Runner + "/" + d.Lease.Agent
