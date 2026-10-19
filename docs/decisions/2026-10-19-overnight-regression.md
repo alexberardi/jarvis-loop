@@ -41,6 +41,9 @@ run; camera and biometrics stay manual. This piece is the overnight run.
 - **The hold:** while an overnight run's lease is live (`LiveLease.Holds`), a claim gets only land:
   no item, plan turn or orchestrate turn, not even a frozen repo's fix (the run has the emulator,
   the sandbox ports and the CPU; the user is asleep). A manual run holds nothing, as before.
+- **A lease that ends early** (its runner went away, the loop stopped) puts the run back in the
+  queue as `queued`, as a manual run's: it already passed the gate, and starts again at the next
+  free slot.
 - **Its cap:** `pipeline.OvernightMaxRun`, **6 h** (three lanes and the reruns), instead of the
   3 h of a manual run. The runner gives each lane at most `regression.timeout` (150 m) and stops
   starting lanes and reruns 30 minutes before loopd's cap, a lane not run being the run's error.
