@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"math"
 	"slices"
 	"time"
@@ -11,8 +12,8 @@ import (
 )
 
 // The runway warning (#205, pipeline/runway.go): once a minute loopd works out how much the loop
-// can do without the user; below the control's runway_warn_hours, with the user away, it records
-// one runway_low event per dry spell (the Slack layer posts it, with the buttons).
+// can do without the user; below the control's runway_warn_hours, with the user away, it records a
+// runway_low event per real change in a dry spell (#227; the Slack layer posts it, with the buttons).
 
 // KindRunwayLow is the dry-spell warning: data.hours, data.threshold, data.runnable (a count) and
 // data.unblockers ([{item, action, frees, sha}], most freed first, at most MaxRunwayUnblockers).
@@ -178,36 +179,48 @@ func lastUserAction(tx *sql.Tx, since time.Time) (time.Time, error) {
 	return fromNanos(at.Int64), nil
 }
 
-// runwayCheck records the dry-spell warning when it is due (pipeline.RunwayWarn), and keeps
-// orch_state's flag of one per dry spell.
+// runwayCheck records the dry-spell warning when it is due (pipeline.RunwayWarn), and keeps what
+// the spell's warnings said in orch_state.runway_last: one warning per real change (#227). While the
+// loop is paused nothing runs dry, and the spell is left as it is.
 func (s *Store) runwayCheck(tx *sql.Tx, now time.Time) error {
 	rep, running, err := s.runway(tx)
-	if err != nil {
+	if err != nil || !running {
 		return err
 	}
-	var warned bool
-	if err := tx.QueryRow(`SELECT runway_warned FROM orch_state WHERE id = 1`).Scan(&warned); err != nil {
+	var raw string
+	if err := tx.QueryRow(`SELECT runway_last FROM orch_state WHERE id = 1`).Scan(&raw); err != nil {
 		return err
 	}
-	threshold := rep.Threshold
-	if !running {
-		threshold = 0 // the user paused the loop: nothing runs dry
+	var last pipeline.RunwayWarned
+	if raw != "" {
+		if err := json.Unmarshal([]byte(raw), &last); err != nil {
+			return err
+		}
 	}
+	shown := rep.Unblockers[:min(len(rep.Unblockers), MaxRunwayUnblockers)]
 	r := pipeline.Runway{Hours: rep.Hours}
-	for _, u := range rep.Unblockers {
+	for _, u := range shown {
 		r.Unblockers = append(r.Unblockers, u.Unblocker)
 	}
 	away := false
-	if send, _ := pipeline.RunwayWarn(r, threshold, true, warned); send {
-		last, err := lastUserAction(tx, now.Add(-pipeline.RunwayAwayAfter))
+	if send, _ := pipeline.RunwayWarn(r, rep.Threshold, true, last, now); send {
+		at, err := lastUserAction(tx, now.Add(-pipeline.RunwayAwayAfter))
 		if err != nil {
 			return err
 		}
-		away = pipeline.UserAway(last, now, s.orchLoc())
+		away = pipeline.UserAway(at, now, s.orchLoc())
 	}
-	send, keep := pipeline.RunwayWarn(r, threshold, away, warned)
-	if keep != warned {
-		if _, err := tx.Exec(`UPDATE orch_state SET runway_warned = ? WHERE id = 1`, keep); err != nil {
+	send, next := pipeline.RunwayWarn(r, rep.Threshold, away, last, now)
+	nextRaw := ""
+	if next.Warned {
+		b, err := json.Marshal(next)
+		if err != nil {
+			return err
+		}
+		nextRaw = string(b)
+	}
+	if nextRaw != raw {
+		if _, err := tx.Exec(`UPDATE orch_state SET runway_last = ? WHERE id = 1`, nextRaw); err != nil {
 			return err
 		}
 	}
@@ -215,7 +228,7 @@ func (s *Store) runwayCheck(tx *sql.Tx, now time.Time) error {
 		return nil
 	}
 	var ubs []map[string]any
-	for _, u := range rep.Unblockers[:min(len(rep.Unblockers), MaxRunwayUnblockers)] {
+	for _, u := range shown {
 		ub := map[string]any{"item": u.ItemID, "action": u.Action, "frees": u.Frees}
 		if u.SHA != "" {
 			ub["sha"] = u.SHA
