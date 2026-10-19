@@ -132,9 +132,12 @@ func (g GH) Create(ctx context.Context, s PRSpec) (int, error) {
 	return strconv.Atoi(m[1])
 }
 
-// Edit replaces the PR's title and body.
+// Edit replaces the PR's title and body through REST (gh api PATCH), not gh pr edit: older gh
+// releases' pr edit asks GraphQL for classic project cards, which GitHub now refuses (#274). The
+// title goes as a raw string (-f), so one starting with @ is not read as a file.
 func (g GH) Edit(ctx context.Context, pr int, s PRSpec) error {
-	_, err := g.run(ctx, "pr", "edit", strconv.Itoa(pr), "--repo", s.Slug, "--title", s.Title, "--body-file", s.BodyFile)
+	_, err := g.run(ctx, "api", fmt.Sprintf("repos/%s/pulls/%d", s.Slug, pr), "--method", "PATCH",
+		"-f", "title="+s.Title, "-F", "body=@"+s.BodyFile, "--silent")
 	return err
 }
 

@@ -27,7 +27,8 @@ func TestGH(t *testing.T) {
 	gh, log := fakeGH(t, `case "$1 $2" in
 "pr list") echo '[{"number":12,"headRefName":"loop/1-xy"},{"number":5,"headRefName":"loop/1-x"}]';;
 "pr create") echo 'https://github.com/o/r/pull/42';;
-"pr edit") echo 'https://github.com/o/r/pull/5';;
+"api repos/o/r/pulls/5") ;;
+*) echo "unexpected gh $*" >&2; exit 1;;
 esac
 `)
 	if n, err := gh.Find(ctx, "o/r", "loop/1-x"); err != nil || n != 5 {
@@ -48,7 +49,9 @@ esac
 		"pr list --repo o/r --head loop/1-x --state open --json number,headRefName",
 		"pr list --repo o/r --head loop/2-y --state open --json number,headRefName",
 		"pr create --repo o/r --head loop/1-x --base main --title Fix it; `rm -rf /` --body-file /run/body.md",
-		"pr edit 5 --repo o/r --title Fix it; `rm -rf /` --body-file /run/body.md",
+		// REST, not gh pr edit: older gh's pr edit asks GraphQL for classic project cards, which
+		// GitHub now refuses (#274).
+		"api repos/o/r/pulls/5 --method PATCH -f title=Fix it; `rm -rf /` -F body=@/run/body.md --silent",
 	}
 	if got := strings.Split(strings.TrimSpace(string(b)), "\n"); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("gh argv:\n%s", b)
@@ -67,6 +70,10 @@ esac
 	}
 	if _, err := gh.Find(ctx, "o/r", "loop/1-x"); err == nil || !strings.Contains(err.Error(), "Bad credentials") {
 		t.Fatalf("find: %v", err)
+	}
+	if err := gh.Edit(ctx, 5, PRSpec{Slug: "o/r", Title: "t", BodyFile: "b"}); err == nil ||
+		!strings.Contains(err.Error(), "gh api repos/o/r/pulls/5") || !strings.Contains(err.Error(), "Bad credentials") {
+		t.Fatalf("edit: %v", err)
 	}
 }
 
