@@ -71,10 +71,13 @@ type Step struct {
 	RunnerStages string `json:"runner_stages,omitempty"`
 	// script: how the fake claude plays the item's runs of a stage (default build), and the repo
 	// a triage run picks
-	For   string `json:"for,omitempty"` // the stage the script is for: triage, build (default), review
-	Play  string `json:"play,omitempty"`
-	File  string `json:"file,omitempty"`
-	Picks string `json:"picks,omitempty"` // the repo a triage run picks
+	For  string `json:"for,omitempty"` // the stage the script is for: triage, build (default), review
+	Play string `json:"play,omitempty"`
+	File string `json:"file,omitempty"`
+	// gemini: turn the runner's Gemini second opinion on, the fake agy playing Play (ok, none,
+	// quota, garbage, failed, hang), advisory unless Blocking
+	Blocking bool   `json:"blocking,omitempty"`
+	Picks    string `json:"picks,omitempty"` // the repo a triage run picks
 	// Proof: the proof (a list of checks) the item's builds state; with For "proof", the one the
 	// orchestrator's proofs play writes for it (the proof sweep).
 	Proof json.RawMessage `json:"proof,omitempty"`
@@ -542,6 +545,8 @@ func (p *player) step(st Step) error {
 		return nil
 	case "runner_listener":
 		return s.runnerListener(st.As, st.Refused)
+	case "gemini":
+		return s.Gemini(st.Play, st.Blocking)
 	case "script":
 		if st.For == "orchestrate" {
 			b, _ := json.Marshal(map[string]string{"play": st.Play})
