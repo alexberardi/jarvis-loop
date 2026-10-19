@@ -534,6 +534,9 @@ func (f *Flow) waiting(tx *sql.Tx, cs claimState, now time.Time) error {
 	by := map[string]*FlowWait{}
 	for _, it := range items {
 		why := pipeline.WaitReason(cs.ctl, cs.pace, it, deps, cs.live, flagged[it.ID], cs.frozen, cs.holds, builders)
+		if why != "" && it.Deferred(now) {
+			why = pipeline.WaitCIPending
+		}
 		if why == "" {
 			continue
 		}

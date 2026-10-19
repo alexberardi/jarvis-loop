@@ -65,7 +65,12 @@ Everything is re-derived from GitHub and git, never from an agent's words.
    at `…`: rebase on main" to the reason; the same-head question then recommends a rebuild, not a
    rerun (`docs/decisions/2026-10-17-needs-you-rebuild.md`).* Any pending → wait: poll every 30 s with heartbeats, up to `land_ci_wait`
    (config, default 30 min), then `failed` ("CI still pending after 30m"). No checks at all → wait
-   the same way (a repo with no CI configured is a config error, not a pass).
+   the same way (a repo with no CI configured is a config error, not a pass). *As built (2026-10-19,
+   item #278): checks still pending (or GitHub's mergeability) at `land_ci_wait` → `ci_pending`: the
+   run gives back its lease, the item stays in land and is claimed again 10 min later, and the next
+   run carries on the first wait's start on that head. Only no checks at all after `land_ci_wait`, or
+   CI pending on one head for `land_ci_give_up` (config, default 3 h) over all the runs, is `failed`
+   (`docs/decisions/2026-10-19-ci-pending-requeue.md`).*
 5. **Harness evidence:** the item has at least one evidence file from build (`pr_opened`) and the
    PR body contains the runner's Verification footer. Missing → `back_to_build` with that note.
    *As built:* the body must **end** with the footer's trailer line.
@@ -152,6 +157,9 @@ gates, or the land script would merge changes to itself.
 ## loopd changes
 
 - Outcome `back_to_review` (land → review, `notes` and `head_sha` required).
+- *As built (2026-10-19, #278):* outcome `ci_pending` (land → land, `wait`, `head_sha` and `since`
+  required): sets the item's `not_before` (claims skip it until then) and keeps the first
+  `since` on that head.
 - `POST /items/{id}/events` kind `main_ci` (runner token; the item must be `done` and merged by a
   run of this runner; data `result`, `urls`), shown in `loop show` and the digest.
 - Per-repo hold rules as above, with a migration that tags the existing rows.

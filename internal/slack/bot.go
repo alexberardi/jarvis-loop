@@ -433,20 +433,34 @@ func itemRefs(ids []int64) string {
 	return strings.Join(out, ", ")
 }
 
-// landWaiting is what a land run has been waiting on for a while (its land_waiting event, while
-// that is the item's latest), for the parent's stage line: ", waiting for CI (check) since 14:05
-// UTC".
+// landWaiting is what a land run has been waiting on for a while (its land_waiting event, or the
+// ci_pending that put it back in the land queue, while that is the item's latest), for the
+// parent's stage line: ", waiting for CI (check) since 14:05 UTC".
 func landWaiting(d store.Detail) string {
 	if d.Item.Stage != pipeline.Land || len(d.Events) == 0 {
 		return ""
 	}
 	e := d.Events[len(d.Events)-1]
-	if e.Kind != "land_waiting" {
+	requeued := false // nobody holds it: the ci_pending's not-before is when it is checked next
+	if e.Kind == "claimed" && e.Data["ci_pending"] == true && len(d.Events) > 1 {
+		e = d.Events[len(d.Events)-2] // land again after ci_pending: still that wait
+	} else {
+		requeued = true
+	}
+	var out string
+	switch {
+	case e.Kind == "land_waiting":
+		out = ", waiting for " + Escape(Clip(str(e.Data, "waiting_for"), 120, ""))
+	case e.Kind == "advanced" && pipeline.Outcome(e.Outcome) == pipeline.CIPending:
+		out = ", waiting for " + Escape(Clip(str(e.Data, "wait"), 120, ""))
+	default:
 		return ""
 	}
-	out := ", waiting for " + Escape(Clip(str(e.Data, "waiting_for"), 120, ""))
 	if t, err := time.Parse(time.RFC3339, str(e.Data, "since")); err == nil {
 		out += " since " + t.UTC().Format("15:04") + " UTC"
+	}
+	if t, err := time.Parse(time.RFC3339, str(e.Data, "not_before")); err == nil && requeued {
+		out += ", checking again at " + t.UTC().Format("15:04") + " UTC"
 	}
 	return out
 }
@@ -614,6 +628,9 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	var text string
 	switch e.Kind {
 	case "claimed":
+		if e.Data["ci_pending"] == true {
+			return Message{}, false // land again after ci_pending: the parent's stage line says it
+		}
 		text = fmt.Sprintf("Claimed for %s.", e.From)
 		if str(e.Data, "routed") == pipeline.BuilderQwen {
 			text = fmt.Sprintf("Claimed for %s, with qwen this run (%s).", e.From, f("pace", 200))
@@ -781,6 +798,8 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 			text = "Back to build: " + f("reason", 400)
 		case pipeline.BackToReview:
 			text = "Back to review: " + f("notes", 400)
+		case pipeline.CIPending:
+			return Message{}, false // still pending CI does not post; the parent's stage line says it
 		default:
 			text = fmt.Sprintf("%s → %s.", Escape(e.Outcome), e.To)
 		}

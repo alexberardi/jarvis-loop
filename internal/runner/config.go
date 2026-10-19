@@ -72,6 +72,9 @@ type Config struct {
 	// default "30m" each.
 	LandCIWait   string `json:"land_ci_wait,omitempty"`
 	LandMainWait string `json:"land_main_wait,omitempty"`
+	// LandCIGiveUp is how long CI may stay pending on one head, over all the land runs that ended
+	// with it pending (ci_pending), before land gives the item to the user. Default "3h".
+	LandCIGiveUp string `json:"land_ci_give_up,omitempty"`
 	// PlanTurnMinutes caps one plan turn (stage plan): the agent is stopped and the turn fails
 	// after it, as an item's run is at loopd's max_run_minutes. Default 15.
 	PlanTurnMinutes int `json:"plan_turn_minutes,omitempty"`
@@ -101,8 +104,8 @@ type Config struct {
 	// docs/decisions/2026-10-18-regression-trigger.md).
 	Regression *RegressionConfig `json:"regression,omitempty"`
 
-	path             string
-	ciWait, mainWait time.Duration
+	path                       string
+	ciWait, mainWait, ciGiveUp time.Duration
 }
 
 // RepoConfig is one repository the runner works on, keyed by the item's repo field.
@@ -344,8 +347,10 @@ func (c *Config) normalize() error {
 	for _, w := range []struct {
 		name, val string
 		to        *time.Duration
-	}{{"land_ci_wait", c.LandCIWait, &c.ciWait}, {"land_main_wait", c.LandMainWait, &c.mainWait}} {
-		*w.to = 30 * time.Minute
+		def       time.Duration
+	}{{"land_ci_wait", c.LandCIWait, &c.ciWait, 30 * time.Minute}, {"land_main_wait", c.LandMainWait, &c.mainWait, 30 * time.Minute},
+		{"land_ci_give_up", c.LandCIGiveUp, &c.ciGiveUp, 3 * time.Hour}} {
+		*w.to = w.def
 		if w.val == "" {
 			continue
 		}

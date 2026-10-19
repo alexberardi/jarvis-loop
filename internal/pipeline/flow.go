@@ -26,6 +26,9 @@ const (
 	WaitPaused = "usage paused"
 	// WaitOvernight: an overnight regression runs (HoldsClaims) and the claim takes only land.
 	WaitOvernight = "overnight regression"
+	// WaitCIPending: land put it back after CI stayed pending (ci_pending); it is claimed again at
+	// its not-before time (Item.Deferred).
+	WaitCIPending = "CI pending, checking again later"
 	// WaitReady: nothing holds it; it goes to the next runner that asks for its stage.
 	WaitReady = "ready"
 )

@@ -1,0 +1,218 @@
+{
+  "name": "ci-pending-give-up",
+  "about": "CI that never finishes (#278): each land run that ends with the checks still pending gives the item back (ci_pending), and the next one picks up the first wait's start on that head; once CI has been pending for land_ci_give_up (3 hours) in all, land gives the item to the user, as a run did after 30 minutes before.",
+  "stages": [
+    "build",
+    "review",
+    "land"
+  ],
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Fix the digest wording"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "ci",
+      "main": {
+        "ci": "pass"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "ci",
+      "item": "a",
+      "checks": {
+        "check": "pending"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "clock",
+      "advance": "30m30s"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "land"
+      },
+      "leased": {
+        "a": false
+      }
+    },
+    {
+      "do": "clock",
+      "advance": "10m"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "clock",
+      "advance": "30m30s"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "land"
+      },
+      "leased": {
+        "a": false
+      }
+    },
+    {
+      "do": "clock",
+      "advance": "10m"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "clock",
+      "advance": "30m30s"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "land"
+      },
+      "leased": {
+        "a": false
+      }
+    },
+    {
+      "do": "clock",
+      "advance": "10m"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "clock",
+      "advance": "30m30s"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "land"
+      },
+      "leased": {
+        "a": false
+      }
+    },
+    {
+      "do": "clock",
+      "advance": "10m"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "clock",
+      "advance": "17m"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "land"
+      },
+      "leased": {
+        "a": true
+      }
+    },
+    {
+      "do": "clock",
+      "advance": "1m30s"
+    },
+    {
+      "do": "runner_idle"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "needs_you"
+    },
+    "question": {
+      "a": "^CI \\(check\\) still pending after 3h\\d*m?$"
+    },
+    "pr": {
+      "a": {
+        "state": "OPEN",
+        "merge_calls": 0
+      }
+    },
+    "events": [
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "ci_pending",
+        "actor": "runner",
+        "count": 4
+      },
+      {
+        "item": "a",
+        "kind": "land_waiting",
+        "count": 1
+      },
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "failed",
+        "actor": "runner",
+        "count": 1
+      }
+    ],
+    "no_events": [
+      {
+        "item": "a",
+        "kind": "lease_expired"
+      },
+      {
+        "item": "a",
+        "kind": "run_overtime"
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "text": "needs you: CI \\(check\\) still pending after 3h"
+      }
+    ]
+  }
+}
