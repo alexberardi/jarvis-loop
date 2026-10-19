@@ -832,10 +832,11 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 			stages = append(stages, string(st))
 		}
 		sort.Strings(stages)
-		if _, err := tx.Exec(`INSERT INTO runners (name, capabilities, only_resources, poll_seconds, stages, last_seen) VALUES (?,?,?,?,?,?)
+		if _, err := tx.Exec(`INSERT INTO runners (name, capabilities, only_resources, poll_seconds, stages, last_seen, slots, builders) VALUES (?,?,?,?,?,?,?,?)
 			ON CONFLICT (name) DO UPDATE SET capabilities = excluded.capabilities, only_resources = excluded.only_resources,
-				poll_seconds = excluded.poll_seconds, stages = excluded.stages, last_seen = excluded.last_seen, state = ''`,
-			runnerName, strings.Join(caps, ","), strings.Join(only, ","), max(req.PollSeconds, 0), strings.Join(stages, ","), now.UnixNano()); err != nil {
+				poll_seconds = excluded.poll_seconds, stages = excluded.stages, last_seen = excluded.last_seen, state = '',
+				slots = excluded.slots, builders = excluded.builders`,
+			runnerName, strings.Join(caps, ","), strings.Join(only, ","), max(req.PollSeconds, 0), strings.Join(stages, ","), now.UnixNano(), req.Slots, strings.Join(req.Builders, ",")); err != nil {
 			return err
 		}
 		if err := s.checkUnservable(tx, now); err != nil {
@@ -919,6 +920,42 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 	return out, err
 }
 
+// liveSnapshot is every running run as the claim rules count them: the item leases, then one per
+// running plan turn, the running orchestrate turn and the running regression.
+func liveSnapshot(tx *sql.Tx) ([]pipeline.LiveLease, error) {
+	live, err := liveLeases(tx)
+	if err != nil {
+		return nil, err
+	}
+	snap := make([]pipeline.LiveLease, len(live))
+	for i, l := range live {
+		snap[i] = pipeline.LiveLease{ItemID: l.ItemID, Stage: l.Stage, Resources: l.Resources,
+			Claude: l.Stage != pipeline.Land && l.Builder != pipeline.BuilderQwen}
+	}
+	turnLeases, err := livePlanLeases(tx)
+	if err != nil {
+		return nil, err
+	}
+	for range turnLeases {
+		snap = append(snap, pipeline.LiveLease{Stage: pipeline.PlanTurnStage, Claude: true})
+	}
+	running, err := orchTurnWith(tx, OrchRunning)
+	if err != nil {
+		return nil, err
+	}
+	if running != nil {
+		snap = append(snap, pipeline.LiveLease{Stage: pipeline.OrchestrateStage, Claude: true})
+	}
+	reg, err := openRegression(tx)
+	if err != nil {
+		return nil, err
+	}
+	if reg != nil && reg.Status == RegRunning {
+		snap = append(snap, pipeline.LiveLease{Stage: pipeline.RegressionStage, Resources: reg.Resources(), Holds: reg.Overnight()})
+	}
+	return snap, nil
+}
+
 // claimState is what a claim chooses from: the control, the waiting items and their dependencies'
 // stages, the live leases (items, plan and orchestrate turns), the frozen repos and the slots held
 // (SlotHolds, under claude's pace now).
@@ -930,6 +967,7 @@ type claimState struct {
 	runners []pipeline.RunnerSeen
 	frozen  pipeline.Frozen
 	holds   []pipeline.SlotHold
+	pace    pipeline.Pace
 }
 
 func (s *Store) claimState(tx *sql.Tx, now time.Time) (claimState, error) {
@@ -938,35 +976,9 @@ func (s *Store) claimState(tx *sql.Tx, now time.Time) (claimState, error) {
 	if err != nil {
 		return cs, err
 	}
-	live, err := liveLeases(tx)
+	snap, err := liveSnapshot(tx)
 	if err != nil {
 		return cs, err
-	}
-	snap := make([]pipeline.LiveLease, len(live))
-	for i, l := range live {
-		snap[i] = pipeline.LiveLease{ItemID: l.ItemID, Stage: l.Stage, Resources: l.Resources,
-			Claude: l.Stage != pipeline.Land && l.Builder != pipeline.BuilderQwen}
-	}
-	turnLeases, err := livePlanLeases(tx)
-	if err != nil {
-		return cs, err
-	}
-	for range turnLeases {
-		snap = append(snap, pipeline.LiveLease{Stage: pipeline.PlanTurnStage, Claude: true})
-	}
-	running, err := orchTurnWith(tx, OrchRunning)
-	if err != nil {
-		return cs, err
-	}
-	if running != nil {
-		snap = append(snap, pipeline.LiveLease{Stage: pipeline.OrchestrateStage, Claude: true})
-	}
-	reg, err := openRegression(tx)
-	if err != nil {
-		return cs, err
-	}
-	if reg != nil && reg.Status == RegRunning {
-		snap = append(snap, pipeline.LiveLease{Stage: pipeline.RegressionStage, Resources: reg.Resources(), Holds: reg.Overnight()})
 	}
 	waiting, err := waitingItems(tx)
 	if err != nil {
@@ -988,7 +1000,7 @@ func (s *Store) claimState(tx *sql.Tx, now time.Time) (claimState, error) {
 	if err != nil {
 		return cs, err
 	}
-	return claimState{ctl: ctl, waiting: waiting, deps: deps, live: snap, runners: runners, frozen: frozen,
+	return claimState{ctl: ctl, waiting: waiting, deps: deps, live: snap, runners: runners, frozen: frozen, pace: pace,
 		holds: pipeline.SlotHolds(ctl, pace, waiting, deps, snap, runners, frozen, now)}, nil
 }
 

@@ -224,6 +224,8 @@ type Expect struct {
 	// BoardOrchestrator: a regexp the board's Orchestrator panel must match ("" when the board
 	// has none: "^$").
 	BoardOrchestrator string `json:"board_orchestrator,omitempty"`
+	// Flow: the flow panel's numbers (GET /flow) and its page (/board/flow).
+	Flow *FlowMatch `json:"flow,omitempty"`
 	// BoardRunners: a regexp the board's runner notices (draining runners) must match, all of
 	// them together ("^$" when there are none).
 	BoardRunners string `json:"board_runners,omitempty"`

@@ -77,6 +77,7 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /plans/{id}/drop", user, s.dropPlan)
 	route("POST /plans/{id}/turns/{turn}/result", runner, s.planTurnResult)
 	route("GET /control", reads, s.getControl)
+	route("GET /flow", reads, s.flow)
 	route("GET /freezes", reads, s.listFreezes)
 	route("POST /unfreeze", user, s.unfreeze)
 	route("PUT /control", user, s.putControl)
@@ -370,6 +371,8 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		RunnerStages []string `json:"runner_stages"`
 		// Kinds: item, plan (plan turns), orchestrate, regression; empty is items only.
 		Kinds []string `json:"kinds"`
+		// Slots: how many runs the runner works at once, for the flow panel (0: not said).
+		Slots int `json:"slots"`
 		// Builders: the other builders the runner can run (qwen), for a paced claim's route.
 		Builders []string `json:"builders"`
 	}
@@ -387,6 +390,10 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kinds may be item, plan, orchestrate and regression, got " + strconv.Quote(k)})
 			return
 		}
+	}
+	if body.Slots < 0 || body.Slots > maxSlots {
+		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "slots must be 0 to " + strconv.Itoa(maxSlots)})
+		return
 	}
 	p := PrincipalFrom(r.Context())
 	var stages []pipeline.Stage
@@ -430,7 +437,7 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds, Builders: body.Builders})
+	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds, Builders: body.Builders, Slots: body.Slots})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -867,6 +874,23 @@ func (s *server) reopen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"item": it, "filed": filed})
+}
+
+// maxSlots bounds a runner's reported slots.
+const maxSlots = 64
+
+// flow is the flow panel's numbers (store.Flow) for ?window= (default 24h).
+func (s *server) flow(w http.ResponseWriter, r *http.Request) {
+	window := r.URL.Query().Get("window")
+	if window == "" {
+		window = store.DefaultFlowWindow
+	}
+	f, err := s.st.Flow(r.Context(), window)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
 }
 
 // listFreezes are the repos frozen while their main is red.

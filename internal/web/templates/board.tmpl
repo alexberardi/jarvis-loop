@@ -32,7 +32,7 @@
 </head>
 <body>
 <h1>Jarvis Loop</h1>
-<p class="sub">{{.Total}} items ·{{if .PlanCount}} {{.PlanCount}} open plans ·{{end}} {{stamp .Now}} · refreshes every 30 s (working now: every 5 s) · {{if .ShowClosed}}<a href="/board">hide closed</a>{{else}}<a href="/board?closed=1">show closed</a>{{end}}</p>
+<p class="sub">{{.Total}} items ·{{if .PlanCount}} {{.PlanCount}} open plans ·{{end}} {{stamp .Now}} · refreshes every 30 s (working now: every 5 s) · {{if .ShowClosed}}<a href="/board">hide closed</a>{{else}}<a href="/board?closed=1">show closed</a>{{end}} · <a href="/board/flow">flow</a></p>
 {{- if .SecondOpinion.Runs}}
 <p class="sub">Second opinion (Gemini): {{template "second-opinion" .SecondOpinion}}</p>
 {{- end}}

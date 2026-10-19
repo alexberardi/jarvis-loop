@@ -48,7 +48,7 @@ type boardPage struct {
 	cfg    BoardConfig
 }
 
-// NewBoard returns the handler for GET /board, GET /board/working, GET /board/live.js,
+// NewBoard returns the handler for GET /board, GET /board/working, GET /board/flow, GET /board/live.js,
 // GET /board/items/{id}, GET /board/items/{id}/evidence/{n}, GET /board/plans/{id},
 // GET /board/plans/{id}/{kind}/{v}, GET /board/regressions/{id}, its files, and the user's
 // POST /board/regressions and /board/regressions/tonight, and nothing else.
@@ -60,6 +60,7 @@ func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardCo
 	mux := http.NewServeMux()
 	mux.Handle("GET /board", p.auth(p.board))
 	mux.Handle("GET /board/working", p.auth(p.working))
+	mux.Handle("GET /board/flow", p.auth(p.flow))
 	mux.Handle("GET /board/live.js", p.auth(p.liveJS))
 	mux.Handle("GET /board/items/{id}", p.auth(p.item))
 	mux.Handle("GET /board/items/{id}/evidence/{n}", p.auth(p.evidence))
@@ -839,7 +840,7 @@ var templateFS embed.FS
 //go:embed templates/live.js
 var liveJS []byte
 
-var funcs = template.FuncMap{"join": strings.Join, "age": age, "size": size, "stamp": stamp, "tokens": pipeline.FormatTokens, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot,
+var funcs = template.FuncMap{"join": strings.Join, "age": age, "size": size, "stamp": stamp, "tokens": pipeline.FormatTokens, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot, "dur": dur, "mins": mins,
 	"clock": func(t *time.Time) string {
 		if t == nil {
 			return ""
@@ -856,6 +857,7 @@ var (
 	itemTmpl       = template.Must(template.New("item.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/item.tmpl", "templates/style.tmpl", "templates/working.tmpl"))
 	workingTmpl    = template.Must(template.New("working.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/working.tmpl"))
 	planTmpl       = template.Must(template.New("plan.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plan.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
+	flowTmpl       = template.Must(template.New("flow.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/flow.tmpl", "templates/style.tmpl"))
 	docTmpl        = template.Must(template.New("plandoc.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/plandoc.tmpl", "templates/style.tmpl", "templates/doc.tmpl"))
 	regressionTmpl = template.Must(template.New("regression.tmpl").Funcs(funcs).ParseFS(templateFS, "templates/regression.tmpl", "templates/style.tmpl"))
 )

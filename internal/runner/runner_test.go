@@ -481,6 +481,11 @@ func TestOnlyConfiguredStagesAreClaimed(t *testing.T) {
 	if g.runOnce() {
 		t.Fatal("a build runner claimed a triage item")
 	}
+	// Its claim still told loopd how many slots it works (the flow panel's idle capacity).
+	f, err := g.st.Flow(g.ctx, "24h")
+	if err != nil || len(f.Runners) != 1 || f.Runners[0].Slots != 1 {
+		t.Fatalf("flow runners %+v %v", f.Runners, err)
+	}
 }
 
 func TestGuardRefusalIsReported(t *testing.T) {

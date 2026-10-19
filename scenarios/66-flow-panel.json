@@ -1,0 +1,52 @@
+{
+  "name": "flow-panel",
+  "about": "The flow panel (GET /flow and /board/flow): while a waits for review, b (after a) waits on its dependencies and c, untriaged, is ready; a's review bounces once, then it is approved and merged. The 24h window then counts one done and one merged, two build passes and one review bounce with its reason, the runner's reported slot (and none for the hand runner, which does not send it), and nothing killed; b is ready once a is done.",
+  "stages": ["build", "review"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "add", "item": "b", "title": "Then the header", "after": ["a"]},
+    {"do": "add", "item": "c", "title": "Not triaged yet", "priority": "P4"},
+    {"do": "clock", "advance": "10m"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review", "b": "triage", "c": "triage"},
+     "flow": {"json": {
+       "waiting_total": "^3$",
+       "waiting.0.reason": "^\"ready\"$", "waiting.0.items": "^\\[{a},{c}\\]$",
+       "waiting.1.reason": "^\"dependencies\"$", "waiting.1.items": "^\\[{b}\\]$"
+     }}},
+    {"do": "script", "item": "a", "for": "review", "play": "bounce"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "clock", "advance": "5m"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "script", "item": "a", "for": "review", "play": "approve"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"}},
+    {"do": "land", "item": "a", "outcome": "merged"}
+  ],
+  "expect": {
+    "stage": {"a": "done", "b": "triage", "c": "triage"},
+    "flow": {
+      "json": {
+        "window": "^\"24h\"$",
+        "done": "^1$",
+        "merged": "^1$",
+        "to_merge.count": "^1$",
+        "stages.0.stage": "^\"triage\"$", "stages.0.time.count": "^1$",
+        "stages.1.stage": "^\"build\"$", "stages.1.time.count": "^2$", "stages.1.run.count": "^2$",
+        "stages.2.stage": "^\"review\"$", "stages.2.time.count": "^2$", "stages.2.run.count": "^2$",
+        "stages.3.stage": "^\"land\"$", "stages.3.time.count": "^1$",
+        "bounces.0.stage": "^\"review\"$", "bounces.0.count": "^1$",
+        "bounces.0.top.0.text": "^\"`feature\\.txt:1`: add a test for the empty case\\.\"$", "bounces.0.top.0.items": "^\\[{a}\\]$",
+        "waiting.0.reason": "^\"ready\"$", "waiting.0.items": "^\\[{b},{c}\\]$",
+        "runners.1.runner": "^\"sandbox\"$", "runners.1.slots": "^1$", "runners.0.runner": "^\"hand\"$", "runners.0.slots": "^0$",
+        "killed_runs": "^0$"
+      },
+      "page": "(?s)<strong>24h</strong>.*<div class=\"n\">1</div><div class=\"l\">done.*<tr><td>ready</td><td class=\"num\">2</td><td><a href=\"/board/items/{b}\">#{b}</a> <a href=\"/board/items/{c}\">#{c}</a> </td></tr>.*<tr><td>review</td><td class=\"num\">1</td><td>bounce 1 </td>"
+    }
+  }
+}

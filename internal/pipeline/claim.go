@@ -138,6 +138,9 @@ type ClaimRequest struct {
 	// Kinds is the work the runner takes: WorkItem, WorkPlan (plan turns), WorkOrchestrate.
 	// Empty: items only, so a runner that predates plans never gets a turn.
 	Kinds []string
+	// Slots is how many runs the runner works at once (0: unknown, a runner that predates it):
+	// loopd records it for the flow panel's idle capacity; the claim rules do not use it.
+	Slots int
 	// Builders are the other builders the runner can run (BuilderQwen when it has a qwen block):
 	// a paced claim may route a P3–P5 build to one (usage.go).
 	Builders []string `json:"builders,omitempty"`
@@ -210,7 +213,7 @@ func ChooseWorkPaced(c Control, pace Pace, items []Item, deps map[int64]Stage, l
 			return Work{Item: &it, RouteQwen: p.route(it)}, true
 		}
 	}
-	if c.Stopped || c.ActiveAgents <= 0 {
+	if loopBlocks(c) != "" {
 		return Work{}, false
 	}
 	if AgentLeases(live) >= c.ActiveAgents {
@@ -368,7 +371,7 @@ func choosePaced(c Control, items []Item, deps map[int64]Stage, live []LiveLease
 		return it, true
 	}
 	// 1. Control. Land runs no agent: it takes no agent slot, and gets one when all are busy.
-	if c.Stopped || c.ActiveAgents <= 0 {
+	if loopBlocks(c) != "" {
 		return Item{}, false
 	}
 	full := AgentLeases(live) >= c.ActiveAgents
@@ -389,19 +392,7 @@ func chooseFix(c Control, items []Item, deps map[int64]Stage, live []LiveLease, 
 }
 
 func choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req ClaimRequest, pick func(Item) bool, stageLimits bool) (Item, bool) {
-	claimed := map[int64]bool{}
-	inUse := map[string]int{}
-	for _, l := range live {
-		claimed[l.ItemID] = true
-		inUse[string(l.Stage)]++
-		for _, r := range l.Resources {
-			inUse[r]++
-		}
-	}
-	atLimit := func(key string) bool {
-		limit, ok := c.Limits[key]
-		return ok && inUse[key] >= limit
-	}
+	claimed, inUse := usage(live)
 
 	var best *Item
 	for i := range items {
@@ -423,16 +414,9 @@ func choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 		if len(req.OnlyResources) > 0 && !slices.ContainsFunc(it.Needs(), func(r string) bool { return slices.Contains(req.OnlyResources, r) }) {
 			continue
 		}
-		// Dependencies: every item it depends on is merged (qa or done).
-		if len(WaitingOn(*it, deps)) > 0 {
-			continue
-		}
-		// 3. Per-resource limits.
-		if slices.ContainsFunc(it.Needs(), atLimit) {
-			continue
-		}
-		// 4. Per-stage limits.
-		if stageLimits && atLimit(string(it.Stage)) {
+		// Dependencies: every item it depends on is merged (qa or done). 3. Per-resource limits
+		// (on what it needs). 4. Per-stage limits. (itemBlocks, which the flow panel's WaitReason shares.)
+		if itemBlocks(c, *it, deps, inUse, stageLimits) != "" {
 			continue
 		}
 		// 5. Review independence.
