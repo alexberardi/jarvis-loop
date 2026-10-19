@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -170,7 +171,9 @@ func (g Git) revParse(ctx context.Context, dir, ref string) string {
 // knows the runner made since (an OK'd or approved head, rec.Heads), as after a reviewed rebase
 // whose push waited on the user's Trust. publish then pushes it with a lease (Rewrites).
 func (g Git) AddWorktree(ctx context.Context, mirror, path, branch, base string, rec Recorded) (int, error) {
-	g.RemoveWorktree(ctx, mirror, path)
+	if err := g.clearLeftover(ctx, mirror, path); err != nil {
+		return 0, err
+	}
 	baseRef := "refs/remotes/origin/" + base
 	if !g.hasRef(ctx, mirror, baseRef) {
 		return 0, fmt.Errorf("the remote has no branch %s", base)
@@ -217,7 +220,9 @@ func (g Git) AddWorktree(ctx context.Context, mirror, path, branch, base string,
 // AddDetached makes a fresh worktree at rev, detached: triage's checkouts and review's PR head.
 // rev must already be in the mirror.
 func (g Git) AddDetached(ctx context.Context, mirror, path, rev string) error {
-	g.RemoveWorktree(ctx, mirror, path)
+	if err := g.clearLeftover(ctx, mirror, path); err != nil {
+		return err
+	}
 	if !g.hasRef(ctx, mirror, rev+"^{commit}") {
 		return fmt.Errorf("the mirror has no commit %s", rev)
 	}
@@ -244,11 +249,39 @@ func (g Git) isAncestor(ctx context.Context, dir, a, b string) bool {
 	return err == nil
 }
 
-// RemoveWorktree removes a worktree the runner made (and nothing else).
-func (g Git) RemoveWorktree(ctx context.Context, mirror, path string) {
+// RemoveWorktree removes a worktree the runner made (and nothing else). The error is the
+// directory's: git's own calls are best effort (the worktree may be pruned already).
+func (g Git) RemoveWorktree(ctx context.Context, mirror, path string) error {
 	_, _ = g.run(ctx, mirror, "worktree", "remove", "--force", path)
-	_ = os.RemoveAll(path)
+	err := removeTree(path)
 	_, _ = g.run(ctx, mirror, "worktree", "prune")
+	return err
+}
+
+// clearLeftover removes what an earlier run left at path, and says so plainly when it cannot
+// (rather than git's "already exists").
+func (g Git) clearLeftover(ctx context.Context, mirror, path string) error {
+	if err := g.RemoveWorktree(ctx, mirror, path); err != nil {
+		return fmt.Errorf("could not remove the leftover worktree %s: %w", path, err)
+	}
+	return nil
+}
+
+// removeTree removes path like os.RemoveAll, also when an agent left read-only directories in it
+// (Go's module cache is 0555, #276): it first makes every directory under path writable, without
+// following symlinks out of it.
+func removeTree(path string) error {
+	err := os.RemoveAll(path)
+	if err == nil {
+		return nil
+	}
+	_ = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			_ = os.Chmod(p, 0o700)
+		}
+		return nil
+	})
+	return os.RemoveAll(path)
 }
 
 // Facts computes HEAD, the pushed head of the branch and the changed paths, from git.

@@ -364,3 +364,84 @@ func TestAddWorktreeWritesNoConfig(t *testing.T) {
 		t.Errorf("AddWorktree changed the mirror's config:\n%s", after)
 	}
 }
+
+// plantReadOnly puts a Go module cache (read-only dirs and files, as `go` leaves it) under the
+// worktree's scratch, as an agent running Go with HOME there did on the dev box (#276).
+func plantReadOnly(t *testing.T, wt string) {
+	t.Helper()
+	ro := filepath.Join(wt, ".loop", "scratch", "home", "go", "pkg", "mod", "github.com", "coder", "websocket@v1.8.15")
+	if err := os.MkdirAll(ro, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(ro, "go.mod"), []byte("module x\n"), 0o444)
+	os.Chmod(ro, 0o555)
+	os.Chmod(filepath.Dir(ro), 0o555)
+	t.Cleanup(func() { os.Chmod(filepath.Dir(ro), 0o755); os.Chmod(ro, 0o755) })
+}
+
+// A leftover worktree holding read-only dirs must not stop the next AddWorktree (#276).
+func TestAddWorktreeOverReadOnlyLeftover(t *testing.T) {
+	r := newGitRig(t)
+	wt := filepath.Join(t.TempDir(), "217-build")
+	if _, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{}); err != nil {
+		t.Fatal(err)
+	}
+	plantReadOnly(t, wt)
+	if _, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{}); err != nil {
+		t.Fatalf("second AddWorktree: %v", err)
+	}
+}
+
+// The same for a leftover that git no longer knows as a worktree (pruned, only the dir is left).
+func TestAddDetachedOverReadOnlyLeftover(t *testing.T) {
+	r := newGitRig(t)
+	wt := filepath.Join(t.TempDir(), "217-review")
+	plantReadOnly(t, wt)
+	if err := r.g.AddDetached(r.ctx, r.mirror, wt, "refs/remotes/origin/main"); err != nil {
+		t.Fatalf("AddDetached: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRemoveWorktreeLeavesNothing(t *testing.T) {
+	r := newGitRig(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	if _, err := r.g.AddWorktree(r.ctx, r.mirror, wt, "loop/1-x", "main", Recorded{}); err != nil {
+		t.Fatal(err)
+	}
+	plantReadOnly(t, wt)
+	if err := r.g.RemoveWorktree(r.ctx, r.mirror, wt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(wt); !os.IsNotExist(err) {
+		t.Fatalf("worktree still there: %v", err)
+	}
+}
+
+// removeTree makes only directories inside path writable: a symlink in the tree is not followed.
+func TestRemoveTreeDoesNotFollowSymlinks(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(root, "outside")
+	os.MkdirAll(outside, 0o755)
+	os.WriteFile(filepath.Join(outside, "keep"), []byte("x"), 0o644)
+	os.Chmod(outside, 0o555)
+	t.Cleanup(func() { os.Chmod(outside, 0o755) })
+	tree := filepath.Join(root, "tree")
+	os.MkdirAll(tree, 0o755)
+	os.Symlink(outside, filepath.Join(tree, "link"))
+	if err := removeTree(tree); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(tree); !os.IsNotExist(err) {
+		t.Fatalf("tree still there: %v", err)
+	}
+	fi, err := os.Stat(outside)
+	if err != nil || fi.Mode().Perm() != 0o555 {
+		t.Fatalf("outside changed: %v %v", fi.Mode(), err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "keep")); err != nil {
+		t.Fatal(err)
+	}
+}
