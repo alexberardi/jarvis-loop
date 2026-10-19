@@ -93,7 +93,9 @@ const (
 // (docs/phases/06b-all-repos.md): no checkouts, and repos.md carries each repo's group, aliases,
 // description and last merged PR titles, so the agent can name the repo from that file alone.
 func (r *Runner) prepareTriage(ctx context.Context, ru *run, info *RunInfo) error {
-	os.RemoveAll(ru.wt)
+	if err := removeTree(ru.wt); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(ru.wt, 0o755); err != nil {
 		return err
 	}

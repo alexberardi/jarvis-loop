@@ -1788,13 +1788,19 @@ func (r *Runner) cleanup(ctx context.Context, ru *run, log *slog.Logger) {
 		for _, c := range ru.checkouts {
 			mirror := r.mirrorPath(c.Key)
 			unlock := r.lockMirror(mirror)
-			r.Git.RemoveWorktree(ctx, mirror, filepath.Join(ru.wt, c.Dir))
+			if err := r.Git.RemoveWorktree(ctx, mirror, filepath.Join(ru.wt, c.Dir)); err != nil {
+				log.Warn("remove worktree", "err", err)
+			}
 			unlock()
 		}
-		os.RemoveAll(ru.wt)
+		if err := removeTree(ru.wt); err != nil {
+			log.Warn("remove worktree", "err", err)
+		}
 	} else if ru.mirror != "" {
 		unlock := r.lockMirror(ru.mirror)
-		r.Git.RemoveWorktree(ctx, ru.mirror, ru.wt)
+		if err := r.Git.RemoveWorktree(ctx, ru.mirror, ru.wt); err != nil {
+			log.Warn("remove worktree", "err", err)
+		}
 		unlock()
 	}
 	log.Info("cleaned up", "worktree", ru.wt)

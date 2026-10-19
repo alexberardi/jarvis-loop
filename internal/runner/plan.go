@@ -210,7 +210,7 @@ func (r *Runner) preparePlan(ctx context.Context, ru *run) (string, error) {
 	out := filepath.Join(ru.wt, "out")
 	ctxDir := filepath.Join(ru.wt, ".loop", "context")
 	for _, d := range []string{out, ru.scratch, ctxDir} {
-		os.RemoveAll(d)
+		removeTree(d)
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return "", err
 		}
@@ -325,7 +325,7 @@ func (r *Runner) planCheckouts(ctx context.Context, ru *run, info *PlanTurnInfo)
 				unlock()
 			}
 		}
-		os.RemoveAll(path)
+		removeTree(path)
 	}
 	return nil
 }
