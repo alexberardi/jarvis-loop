@@ -1,0 +1,32 @@
+{
+  "name": "proof-command-env-error",
+  "about": "Proof commands, an environment failure (docs/decisions/2026-10-19-proof-setup.md, #282). The build's proof is one command whose tool is not installed on the runner (exit 127). Each proof pass reports it as an error, not a failure: the check stays pending (waits for, on the board) with 'could not run: …' as its evidence on the item page, and three passes in a row do not reopen the item: it stays in qa.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Chime volume"},
+    {"do": "command", "as": "approver", "text": "qa 1"},
+    {"do": "script", "item": "a", "proof": [{"kind": "command", "run": "no-such-tool-282 chime.wav"}]},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "qa"}},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "30m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "30m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "qa"},
+     "events": [{"item": "a", "kind": "proof_checked", "actor": "runner", "data": {"status": "^pending$", "changed": "^false$"}, "count": 3}],
+     "board": {"a": {"column": "QA", "card": "waits for: command: `no-such-tool-282 chime\\.wav`"}}}
+  ],
+  "expect": {
+    "stage": {"a": "qa"},
+    "no_events": [{"item": "a", "kind": "reopened"}, {"item": "a", "kind": "verified"}, {"item": "a", "kind": "refused"}]
+  }
+}

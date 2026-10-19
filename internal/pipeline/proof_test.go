@@ -137,6 +137,9 @@ func TestApplyProofChecked(t *testing.T) {
 		status  string
 		words   string
 		err     string
+		// the command check after this check, when set
+		cmdFails int
+		evidence string
 	}{
 		{name: "all automatic checks pass: verified", raw: usageCmd,
 			results: []CheckResult{{Check: 1, State: CheckPassed, Evidence: "exit 0"}}, usage: map[int]UsageSeen{0: {Count: 2, Last: 40}},
@@ -150,6 +153,12 @@ func TestApplyProofChecked(t *testing.T) {
 		{name: "a second failure in a row reopens", raw: usageCmd, fails: 1,
 			results: []CheckResult{{Check: 1, State: CheckFailed, Evidence: "exit 1: FAIL TestX\nmore"}}, usage: map[int]UsageSeen{0: {Count: 1}},
 			kind: "reopened", to: Done, status: CheckFailed, words: "Proof failed 2 times in a row: command: `scripts/check`: exit 1: FAIL TestX"},
+		{name: "an environment error after a failure: no reopen, fails and state left", raw: usageCmd, fails: 1,
+			results: []CheckResult{{Check: 1, State: CheckError, Evidence: "setup failed: exit 1"}}, usage: map[int]UsageSeen{0: {Count: 1}},
+			kind: "proof_checked", to: QA, status: CheckFailed, cmdFails: 1, evidence: "could not run: setup failed: exit 1"},
+		{name: "an environment error on a pending check: stays pending", raw: usageCmd,
+			results: []CheckResult{{Check: 1, State: CheckError, Evidence: "FAIL pkg [setup failed]"}}, usage: map[int]UsageSeen{0: {Count: 1}},
+			kind: "proof_checked", to: QA, status: CheckPending, evidence: "could not run: FAIL pkg [setup failed]"},
 		{name: "automatic passed, manual left: stays for the user", raw: `[{"kind":"command","run":"true"},{"kind":"manual","look":"the colours"}]`,
 			results: []CheckResult{{Check: 0, State: CheckPassed}},
 			kind:    "proof_checked", to: QA, status: CheckManual},
@@ -162,7 +171,7 @@ func TestApplyProofChecked(t *testing.T) {
 		{name: "a result for a usage check is refused", raw: usageCmd,
 			results: []CheckResult{{Check: 0, State: CheckPassed}}, err: "not a command check"},
 		{name: "an unknown state is refused", raw: usageCmd,
-			results: []CheckResult{{Check: 1, State: "flaky"}}, err: "passed or failed"},
+			results: []CheckResult{{Check: 1, State: "flaky"}}, err: "passed, failed or error"},
 		{name: "out of range", raw: usageCmd,
 			results: []CheckResult{{Check: 5, State: CheckPassed}}, err: "not a command check"},
 	} {
@@ -191,6 +200,12 @@ func TestApplyProofChecked(t *testing.T) {
 			}
 			if tr.Item.Proof.CheckedAt == nil || !tr.Item.Proof.CheckedAt.Equal(now) {
 				t.Fatal("the check time is recorded")
+			}
+			if c.evidence != "" {
+				cc := tr.Item.Proof.Checks[1]
+				if cc.Fails != c.cmdFails || cc.Evidence != c.evidence || cc.CheckedAt == nil {
+					t.Fatalf("command check %+v, want fails %d, evidence %q", cc, c.cmdFails, c.evidence)
+				}
 			}
 			if c.words != "" && tr.Data["words"] != c.words {
 				t.Fatalf("words %q, want %q", tr.Data["words"], c.words)
