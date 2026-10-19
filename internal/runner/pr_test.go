@@ -27,7 +27,8 @@ func TestGH(t *testing.T) {
 	gh, log := fakeGH(t, `case "$1 $2" in
 "pr list") echo '[{"number":12,"headRefName":"loop/1-xy"},{"number":5,"headRefName":"loop/1-x"}]';;
 "pr create") echo 'https://github.com/o/r/pull/42';;
-"pr edit") echo 'https://github.com/o/r/pull/5';;
+"api repos/o/r/pulls/5") ;;
+*) echo "unexpected gh $*" >&2; exit 1;;
 esac
 `)
 	if n, err := gh.Find(ctx, "o/r", "loop/1-x"); err != nil || n != 5 {
@@ -48,7 +49,9 @@ esac
 		"pr list --repo o/r --head loop/1-x --state open --json number,headRefName",
 		"pr list --repo o/r --head loop/2-y --state open --json number,headRefName",
 		"pr create --repo o/r --head loop/1-x --base main --title Fix it; `rm -rf /` --body-file /run/body.md",
-		"pr edit 5 --repo o/r --title Fix it; `rm -rf /` --body-file /run/body.md",
+		// REST, not gh pr edit: older gh's pr edit asks GraphQL for classic project cards, which
+		// GitHub now refuses (#274).
+		"api repos/o/r/pulls/5 --method PATCH -f title=Fix it; `rm -rf /` -F body=@/run/body.md --silent",
 	}
 	if got := strings.Split(strings.TrimSpace(string(b)), "\n"); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("gh argv:\n%s", b)
@@ -67,6 +70,10 @@ esac
 	}
 	if _, err := gh.Find(ctx, "o/r", "loop/1-x"); err == nil || !strings.Contains(err.Error(), "Bad credentials") {
 		t.Fatalf("find: %v", err)
+	}
+	if err := gh.Edit(ctx, 5, PRSpec{Slug: "o/r", Title: "t", BodyFile: "b"}); err == nil ||
+		!strings.Contains(err.Error(), "gh api repos/o/r/pulls/5") || !strings.Contains(err.Error(), "Bad credentials") {
+		t.Fatalf("edit: %v", err)
 	}
 }
 
@@ -127,7 +134,7 @@ func TestGHReadsAndComment(t *testing.T) {
             {"author":{"login":"bob"},"body":"","state":"CHANGES_REQUESTED","submittedAt":"2026-10-15T12:03:00Z"}]}';;
 "api --method GET repos/a/b/pulls/7/comments?per_page=100") echo '[{"user":{"login":"alex"},"body":"name it","path":"x.go","line":4,"created_at":"2026-10-15T12:02:00Z"}]';;
 "pr list --repo a/b --state merged --limit 30 --json number,title,mergedAt,files") echo '[{"number":3,"title":"Add x","mergedAt":"2026-10-14T10:00:00Z","files":[{"path":"a.go"},{"path":"b.go"}]}]';;
-"pr view 7 --repo a/b --json number,title,body,headRefName,headRefOid,baseRefName,state") echo '{"number":7,"title":"T","body":"B","headRefName":"loop/1-x","headRefOid":"abc","baseRefName":"main","state":"OPEN"}';;
+"pr view 7 --repo a/b --json number,title,body,headRefName,headRefOid,baseRefName,state,author") echo '{"number":7,"title":"T","body":"B","headRefName":"loop/1-x","headRefOid":"abc","baseRefName":"main","state":"OPEN","author":{"login":"a"}}';;
 "pr comment 7 --repo a/b --body-file /run/review.md") ;;
 *) echo "unexpected: $*" >&2; exit 1;;
 esac
@@ -145,7 +152,7 @@ esac
 		t.Fatalf("merged %+v %v", m, err)
 	}
 	v, err := gh.View(ctx, "a/b", 7)
-	if err != nil || v.HeadRefOid != "abc" || v.Body != "B" {
+	if err != nil || v.HeadRefOid != "abc" || v.Body != "B" || v.Author.Login != "a" {
 		t.Fatalf("view %+v %v", v, err)
 	}
 	if err := gh.Comment(ctx, "a/b", 7, "/run/review.md"); err != nil {

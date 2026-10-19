@@ -334,6 +334,8 @@ type item struct {
 		Diffstat string   `json:"diffstat"`
 		By       string   `json:"by"`
 		Used     bool     `json:"used"`
+		// CarriedFrom: the OK was for this head and carried to HeadSHA (the same trusted diff).
+		CarriedFrom string `json:"carried_from"`
 	} `json:"trust"`
 }
 
@@ -574,6 +576,9 @@ func cmdShow(c *client, pos []string, _ map[string][]string) error {
 			fmt.Fprintf(w, "trust:    %s OK'd %s; a verify ran it (another commit needs another OK)\n", t.By, t.HeadSHA)
 		default:
 			fmt.Fprintf(w, "trust:    %s OK'd %s; the next verify of it runs the change\n", t.By, t.HeadSHA)
+		}
+		if t.CarriedFrom != "" {
+			fmt.Fprintf(w, "          (carried from %s: the trusted files' diff is unchanged)\n", t.CarriedFrom)
 		}
 		for _, l := range strings.Split(t.Diffstat, "\n") {
 			if l = strings.TrimSpace(l); l != "" {

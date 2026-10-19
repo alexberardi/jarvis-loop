@@ -28,6 +28,35 @@ func (s *server) queueRegression(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, reg)
 }
 
+// scheduleRegression schedules the overnight run (docs/decisions/2026-10-19-overnight-regression.md).
+func (s *server) scheduleRegression(w http.ResponseWriter, r *http.Request) {
+	reg, err := s.st.ScheduleRegression(r.Context(), PrincipalFrom(r.Context()).Actor(), "api")
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, reg)
+}
+
+func (s *server) cancelScheduledRegression(w http.ResponseWriter, r *http.Request) {
+	reg, err := s.st.CancelScheduledRegression(r.Context(), PrincipalFrom(r.Context()).Actor(), "api")
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, reg)
+}
+
+// scheduledRegression is the scheduled run ({"regression": null} when there is none).
+func (s *server) scheduledRegression(w http.ResponseWriter, r *http.Request) {
+	reg, err := s.st.ScheduledRegression(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"regression": reg})
+}
+
 func (s *server) listRegressions(w http.ResponseWriter, r *http.Request) {
 	rs, err := s.st.Regressions(r.Context(), 50)
 	if err != nil {

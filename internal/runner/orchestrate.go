@@ -481,7 +481,7 @@ func (r *Runner) prepareOrch(ctx context.Context, ru *run, refused string) (stri
 	out := filepath.Join(ru.wt, "out")
 	ctxDir := filepath.Join(ru.wt, ".loop", "context")
 	for _, d := range []string{out, ru.scratch, ctxDir} {
-		os.RemoveAll(d)
+		removeTree(d)
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return "", err
 		}

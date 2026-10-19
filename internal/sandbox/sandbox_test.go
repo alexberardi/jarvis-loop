@@ -61,6 +61,7 @@ func TestScenarios(t *testing.T) {
 	bin := testBinaries(t)
 	for _, sc := range scs {
 		t.Run(sc.Name, func(t *testing.T) {
+			t.Parallel() // each scenario has its own dir and ports; one after another, -race ran past CI's 12 m
 			dir := tempDir(t)
 			if keep := os.Getenv("SANDBOX_KEEP"); keep != "" { // keep the run's record for a look
 				dir = filepath.Join(keep, sc.Name)

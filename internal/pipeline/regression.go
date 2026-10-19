@@ -36,8 +36,12 @@ var Suites = []string{SuiteWeb, SuiteMobile, SuiteAll}
 const RegressionMaxRun = 3 * time.Hour
 
 // SuiteResources are the resources a suite needs from the runner (and the limits it counts
-// against): the mobile flows need the emulator.
+// against): the mobile flows need the emulator, the overnight run the voice lane's resources too.
 func SuiteResources(suite string) []string {
+	if suite == SuiteOvernight {
+		// The voice lane runs the real model's voice turn (the GPU) and the voice stack.
+		return []string{"emulator", "gpu", "voice"}
+	}
 	if suite == SuiteMobile || suite == SuiteAll {
 		return []string{"emulator"}
 	}

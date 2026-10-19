@@ -3,7 +3,11 @@ package slack
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
+
+	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 
 	"github.com/alexberardi/jarvis-loop/internal/store"
 )
@@ -23,14 +27,126 @@ func (b *Bot) regressionLink(id int64, path, text string) string {
 	return fmt.Sprintf("<%s/board/regressions/%d%s|%s>", b.c.LinkBase, id, path, text)
 }
 
-// regressionReport posts a finished run's message.
+// regressionReport posts a finished run's message. An overnight run's waits for the morning
+// (its report_at): the tick posts it (morningReports).
 func (b *Bot) regressionReport(ctx context.Context, e store.Event) {
+	if _, ok := e.Data["report_at"]; ok {
+		b.morningReports(ctx)
+		return
+	}
 	r, err := b.c.Store.GetRegression(ctx, idOf(e.Data["regression"]))
 	if err != nil {
 		b.c.Log.Error("slack: load regression", "regression", e.Data["regression"], "err", err.Error())
 		return
 	}
-	b.post(ctx, "regression report", b.regressionMessage(r))
+	b.postRegression(ctx, r, e)
+}
+
+func (b *Bot) postRegression(ctx context.Context, r store.Regression, e store.Event) error {
+	m := b.regressionMessage(r)
+	if line := regressionQALine(e); line != "" {
+		m.Text += "\n" + line
+		m.Blocks = append(m.Blocks, section(line))
+	}
+	_, err := b.post(ctx, "regression report", m)
+	return err
+}
+
+// morningReports posts the overnight runs' reports that are due (the morning, or at once for one
+// that ended in the day), each once; one Slack refuses is tried again on the next tick.
+func (b *Bot) morningReports(ctx context.Context) {
+	due, err := b.c.Store.DueRegressionReports(ctx)
+	if err != nil {
+		b.c.Log.Error("slack: due regression reports", "err", err.Error())
+		return
+	}
+	for _, d := range due {
+		if b.postRegression(ctx, d.Run, store.Event{Kind: store.KindRegDone, Data: d.Done}) != nil {
+			continue
+		}
+		if err := b.c.Store.MarkRegressionReported(ctx, d.Run.ID); err != nil {
+			b.c.Log.Error("slack: record regression report", "regression", d.Run.ID, "err", err.Error())
+		}
+	}
+}
+
+// clockText is t on the bot's clock, as the messages say it ("01:00 on Tue Oct 20").
+func (b *Bot) clockText(t time.Time) string {
+	return t.In(b.c.Location).Format("15:04 on Mon Jan 2")
+}
+
+// laneLine is an overnight run's totals per lane, in pipeline.Lanes' order (the lanes it ran).
+func laneLine(tests []store.RegressionTest) string {
+	type tally struct{ passed, failed, flaky, skipped int }
+	by := map[string]*tally{}
+	var order []string
+	for _, l := range pipeline.Lanes {
+		by[l] = &tally{}
+	}
+	for _, t := range tests {
+		c, ok := by[t.Suite]
+		if !ok {
+			c = &tally{}
+			by[t.Suite] = c
+			order = append(order, t.Suite)
+		}
+		switch {
+		case t.Status == "passed":
+			c.passed++
+		case t.Status == "skipped":
+			c.skipped++
+		case t.Status == store.TestFlaky:
+			c.flaky++
+		default:
+			c.failed++
+		}
+	}
+	var parts []string
+	for _, l := range append(slices.Clone(pipeline.Lanes), order...) {
+		c := by[l]
+		if *c == (tally{}) {
+			continue
+		}
+		p := fmt.Sprintf("%s %d passed", l, c.passed)
+		for _, x := range []struct {
+			n    int
+			word string
+		}{{c.failed, "failed"}, {c.flaky, "flaky"}, {c.skipped, "skipped"}} {
+			if x.n > 0 {
+				p += fmt.Sprintf(", %d %s", x.n, x.word)
+			}
+		}
+		parts = append(parts, p)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// duration is a run's length as the report says it: "2h 14m", "38m".
+func duration(d time.Duration) string {
+	d = d.Round(time.Minute)
+	if d >= time.Hour {
+		return fmt.Sprintf("%dh %02dm", int(d/time.Hour), int(d%time.Hour/time.Minute))
+	}
+	return fmt.Sprintf("%dm", int(d/time.Minute))
+}
+
+// regressionQALine is what the run decided in the QA column (#195): the items in qa whose e2e
+// checks it passed (verified) or failed (reopened); each item's thread has its own line.
+func regressionQALine(e store.Event) string {
+	var parts []string
+	for _, k := range []struct{ key, verb string }{{"verified", "verified"}, {"reopened", "reopened"}} {
+		var refs []string
+		for _, id := range idsOf(e.Data[k.key]) {
+			refs = append(refs, fmt.Sprintf("#%d", id))
+		}
+		if len(refs) > 0 {
+			parts = append(parts, k.verb+" "+strings.Join(refs, ", "))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "QA from this run's E2E checks: " + strings.Join(parts, "; ") + "."
 }
 
 // regressionMessage is a finished run's report, from the store (an update after 'File it' builds
@@ -41,6 +157,14 @@ func (b *Bot) regressionMessage(r store.Regression) Message {
 	head := fmt.Sprintf("*Regression R%d (%s) %s*", r.ID, r.Suite, verdict)
 	if r.Status != store.RegError {
 		head += fmt.Sprintf(": %d passed, %d failed, %d skipped", r.Passed, r.Failed, r.Skipped)
+		if r.Overnight() {
+			head = fmt.Sprintf("*Overnight regression R%d %s*: %d passed, %d failed, %d flaky, %d skipped", r.ID, verdict, r.Passed, r.Failed, r.Flaky, r.Skipped)
+		}
+	} else if r.Overnight() {
+		head = fmt.Sprintf("*Overnight regression R%d %s*", r.ID, verdict)
+	}
+	if d := r.Duration(); r.Overnight() && d > 0 {
+		head += " in " + duration(d)
 	}
 	if r.ServerHead != "" {
 		head += fmt.Sprintf(" · jarvis-server `%s`", short(r.ServerHead))
@@ -52,6 +176,11 @@ func (b *Bot) regressionMessage(r store.Regression) Message {
 		head += " · " + l
 	} else {
 		head += fmt.Sprintf(" · full report: /board/regressions/%d on loopd", r.ID)
+	}
+	if r.Overnight() {
+		if lanes := laneLine(r.Tests); lanes != "" {
+			head += "\n" + lanes
+		}
 	}
 	if r.Error != "" {
 		head += "\n" + Escape(Clip(r.Error, 1000, "…"))
@@ -76,11 +205,17 @@ func (b *Bot) regressionMessage(r store.Regression) Message {
 		if t.Error != "" {
 			line += "\n```" + Escape(Clip(strings.TrimSpace(t.Error), 600, "…")) + "```"
 		}
-		if t.Screenshot != 0 {
-			if l := b.regressionLink(r.ID, fmt.Sprintf("/files/%d", t.Screenshot), "screenshot"); l != "" {
+		for _, f := range []struct {
+			n    int
+			what string
+		}{{t.Screenshot, "screenshot"}, {t.Recording, "recording"}} {
+			if f.n == 0 {
+				continue
+			}
+			if l := b.regressionLink(r.ID, fmt.Sprintf("/files/%d", f.n), f.what); l != "" {
 				line += "\n" + l
 			} else {
-				line += "\n(screenshot on the board)"
+				line += "\n(" + f.what + " on the board)"
 			}
 		}
 		blk := section(line)
@@ -91,5 +226,32 @@ func (b *Bot) regressionMessage(r store.Regression) Message {
 		}
 		blocks = append(blocks, blk)
 	}
+	if fl := flakyLine(r.Tests); fl != "" {
+		blocks = append(blocks, section(fl))
+	}
 	return Message{Channel: ChannelLoop, Text: text, Blocks: blocks}
+}
+
+// flakyLine lists the flaky tests (failed, then passed on the rerun) apart from the failures, at
+// most MaxReportFailures; "" when there are none.
+func flakyLine(tests []store.RegressionTest) string {
+	var names []string
+	n := 0
+	for _, t := range tests {
+		if t.Status != store.TestFlaky {
+			continue
+		}
+		n++
+		if len(names) < MaxReportFailures {
+			names = append(names, Escape(t.Suite+": "+Clip(t.Title, 200, "…")))
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	line := "*Flaky* (failed, then passed on the rerun): " + strings.Join(names, "; ")
+	if n > len(names) {
+		line += fmt.Sprintf("; and %d more in the full report", n-len(names))
+	}
+	return line + "."
 }

@@ -32,7 +32,9 @@ rule in [2026-10-15-all-repos.md](2026-10-15-all-repos.md); each point is enforc
   OK stays valid for its sha and resubmitting the same head needs no second OK (#98: twice the user
   had to OK an unchanged diff again after a runner fault or an answered question). Any other head,
   including a later commit on the same branch, is refused again and needs a new OK; the OK never
-  covers more than the one commit the user saw.
+  covers more than the one commit the user saw. *(Since 2026-10-19, #277: unless that head's
+  trusted files' diff is byte-identical to the one the user OK'd; the OK then carries to it. See
+  [2026-10-19-trust-carries-an-unchanged-diff.md](2026-10-19-trust-carries-an-unchanged-diff.md).)*
 - **The build after the OK runs no agent** (*since 2026-10-18*, #203). At the refusal the runner
   keeps the build's result (`.loop/result.json` and its evidence) in its work root
   (`trusted/<item>/`), beside the commits it keeps in its mirror. The build claim after the OK, when
