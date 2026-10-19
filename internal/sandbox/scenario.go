@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -166,6 +167,16 @@ type Step struct {
 	Body   map[string]any `json:"body,omitempty"`
 	Where  string         `json:"where,omitempty"`
 
+	// Regression runs (docs/decisions/2026-10-18-regression-trigger.md). e2e: the demo repo's
+	// main gets the stand-in scripts/e2e, playing Outcome (fail, pass, no_report). regression:
+	// Via "slack" (default) is As's top-level mention of the loop bot in #loop with Text (default
+	// "regression"); Via "board" presses the board's Run regression button with Suite, signed in
+	// As "user" or "board", and the answer must be Status (default 303). runner Claims
+	// "regression": the claim must take the queued run. press with Message "loop": the latest
+	// top-level message in #loop with the button.
+	Suite  string `json:"suite,omitempty"`
+	Status int    `json:"status,omitempty"`
+
 	Expect
 }
 
@@ -206,6 +217,8 @@ type Expect struct {
 	// BoardRunners: a regexp the board's runner notices (draining runners) must match, all of
 	// them together ("^$" when there are none).
 	BoardRunners string `json:"board_runners,omitempty"`
+	// BoardRegression: run id ("1") -> a regexp its report page on the board must match.
+	BoardRegression map[string]string `json:"board_regression,omitempty"`
 	// Plans: alias -> the plan as loopd has it; DependsOn: item alias -> the aliases of the items
 	// it depends on, exactly.
 	Plans     map[string]PlanMatch `json:"plans,omitempty"`
@@ -551,6 +564,8 @@ func (p *player) step(st Step) error {
 			got = fmt.Sprintf("a turn of P%d", c.Plan)
 		case c.Orch != 0:
 			got = fmt.Sprintf("orchestrate turn %d", c.Orch)
+		case c.Reg != 0:
+			got = fmt.Sprintf("regression R%d", c.Reg)
 		}
 		switch st.Claims {
 		case "":
@@ -561,6 +576,10 @@ func (p *player) step(st Step) error {
 		case "orchestrator":
 			if c.Orch == 0 {
 				return fmt.Errorf("the runner claimed %s, want an orchestrate turn", got)
+			}
+		case "regression":
+			if c.Reg == 0 {
+				return fmt.Errorf("the runner claimed %s, want a regression run", got)
 			}
 		default:
 			if id, ok := p.plans[st.Claims]; ok {
@@ -768,6 +787,35 @@ func (p *player) step(st Step) error {
 		return err
 	case "press", "choose":
 		return p.press(st)
+	case "e2e":
+		return s.InstallE2E(st.Outcome)
+	case "regression":
+		switch st.Via {
+		case "", "slack":
+			user, err := userID(st.As)
+			if err != nil {
+				return err
+			}
+			text := st.Text
+			if text == "" {
+				text = "regression"
+			}
+			return s.RegressionSlack(user, "<@"+slackfake.BotUser+"> "+text)
+		case "board":
+			code, err := s.RegressionBoard(st.As, st.Suite)
+			if err != nil {
+				return err
+			}
+			want := st.Status
+			if want == 0 {
+				want = http.StatusSeeOther
+			}
+			if code != want {
+				return fmt.Errorf("the board's Run regression answered %d, want %d", code, want)
+			}
+			return nil
+		}
+		return fmt.Errorf("regression via %q: use slack or board", st.Via)
 	case "submit":
 		// As submits the modal their last press opened (the Rebuild form), with Text as its note
 		// when set (else the note it opened with).
@@ -1180,7 +1228,7 @@ func (p *player) press(st Step) error {
 					continue
 				}
 			}
-			loop := st.Message == "loop" && m.Channel == slack.ChannelLoop && m.ThreadTS == "" && m.TS != p.s.ControlTS()
+			loop := st.Message == "loop" && m.Channel == slack.ChannelLoop && (m.ThreadTS == "" || m.ThreadTS == m.TS) && m.TS != p.s.ControlTS()
 			if st.Message == "control" && m.TS == p.s.ControlTS() || loop || thread != "" && (m.TS == thread || m.ThreadTS == thread) {
 				target = m
 				return nil

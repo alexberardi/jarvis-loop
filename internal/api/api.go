@@ -97,6 +97,14 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /orchestrator/items/{id}/approval", orch, s.orchAskApproval)
 	route("GET /orchestrator/snapshot", reads, s.orchSnapshot)
 	route("POST /orchestrate/turns/{turn}/result", runner, s.orchTurnResult)
+	// Regression runs (regression.go).
+	route("POST /regressions", user, s.queueRegression)
+	route("GET /regressions", reads, s.listRegressions)
+	route("GET /regressions/{id}", reads, s.getRegression)
+	route("GET /regressions/{id}/files/{n}", reads, s.downloadRegressionFile)
+	route("POST /regressions/{id}/files", runner, s.uploadRegressionFile)
+	route("POST /regressions/{id}/result", runner, s.regressionResult)
+	route("POST /regressions/{id}/tests/{n}/file", user, s.fileRegressionTest)
 	return mux
 }
 
@@ -152,6 +160,7 @@ var statusByCode = map[string]int{
 	store.CodeNotApprover:         http.StatusForbidden,
 	store.CodeUsed:                http.StatusConflict,
 	store.CodeNotFrozen:           http.StatusConflict,
+	store.CodeRegressionOpen:      http.StatusConflict,
 	pipeline.CodeLimit:            http.StatusConflict,
 	pipeline.CodeTooSoon:          http.StatusTooManyRequests,
 	CodeForbidden:                 http.StatusForbidden,
@@ -337,15 +346,15 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		// RunnerStages: the work stages the runner takes in all its lanes (the held slots count
 		// only its work in them); empty: it did not say.
 		RunnerStages []string `json:"runner_stages"`
-		// Kinds: item, plan (plan turns), orchestrate; empty is items only.
+		// Kinds: item, plan (plan turns), orchestrate, regression; empty is items only.
 		Kinds []string `json:"kinds"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	for _, k := range body.Kinds {
-		if k != pipeline.WorkItem && k != pipeline.WorkPlan && k != pipeline.WorkOrchestrate {
-			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kinds may be item, plan and orchestrate, got " + strconv.Quote(k)})
+		if !validKind(k) {
+			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kinds may be item, plan, orchestrate and regression, got " + strconv.Quote(k)})
 			return
 		}
 	}
@@ -406,6 +415,10 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 	}
 	if c.Kind == pipeline.WorkOrchestrate {
 		writeJSON(w, http.StatusOK, map[string]any{"kind": c.Kind, "stage": c.Stage, "orchestrate": c.Orch, "lease": c.Lease})
+		return
+	}
+	if c.Kind == pipeline.WorkRegression {
+		writeJSON(w, http.StatusOK, map[string]any{"kind": c.Kind, "stage": c.Stage, "regression": c.Reg, "lease": c.Lease})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -596,18 +609,24 @@ func (s *server) downloadEvidence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
+	w.Header().Set("X-Evidence-SHA256", ev.SHA256)
+	serveFile(w, r, ev.Name, ev.ContentType, ev.At, f)
+}
+
+// serveFile serves an uploaded file: an image or plain text inline, anything else as a download,
+// in a sandbox either way.
+func serveFile(w http.ResponseWriter, r *http.Request, name, contentType string, at time.Time, f io.ReadSeeker) {
 	h := w.Header()
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Content-Security-Policy", "sandbox; default-src 'none'")
-	h.Set("X-Evidence-SHA256", ev.SHA256)
-	if slices.Contains(inlineTypes, ev.ContentType) {
-		h.Set("Content-Type", ev.ContentType)
-		h.Set("Content-Disposition", `inline; filename="`+ev.Name+`"`)
+	if slices.Contains(inlineTypes, contentType) {
+		h.Set("Content-Type", contentType)
+		h.Set("Content-Disposition", `inline; filename="`+name+`"`)
 	} else {
 		h.Set("Content-Type", "application/octet-stream")
-		h.Set("Content-Disposition", `attachment; filename="`+ev.Name+`"`)
+		h.Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	}
-	http.ServeContent(w, r, "", ev.At, f)
+	http.ServeContent(w, r, "", at, f)
 }
 
 // ---- user calls ----

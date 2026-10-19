@@ -348,7 +348,7 @@ func TestEscalationsAreBatched(t *testing.T) {
 // #loop-digest.
 func TestOrchestratorRepliesAndAgentsPing(t *testing.T) {
 	e := newOrchEnv(t)
-	if _, err := e.st.OrchReply(e.ctx, orchActor, "D0DM1", "1.1", "#35 waits on #34 <!channel>"); err != nil {
+	if _, err := e.st.OrchReply(e.ctx, orchActor, "D0DM1", "1.1", "#35 waits on #34 <!channel>", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.st.OrchAgentsDown(e.ctx, orchActor, 1, "every run fails on the git lock"); err != nil {
