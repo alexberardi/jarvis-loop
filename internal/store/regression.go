@@ -25,7 +25,10 @@ import (
 
 // Run statuses.
 const (
-	RegQueued  = "queued"
+	// RegScheduled: the overnight run waits for its set time and a quiet queue (overnight.go).
+	RegScheduled = "scheduled"
+	RegCancelled = "cancelled"
+	RegQueued    = "queued"
 	RegRunning = "running"
 	RegPassed  = "passed"
 	RegFailed  = "failed" // a test failed, or a suite did not run
@@ -39,6 +42,9 @@ const (
 	KindRegDone    = "regression_done"
 	KindRegExpired = "regression_expired"
 	KindRegStopped = "regression_stopped"
+	// The overnight run: scheduled (for tonight, by the approver or the nightly setting), cancelled.
+	KindRegScheduled = "regression_scheduled"
+	KindRegCancelled = "regression_cancelled"
 )
 
 // CodeRegressionOpen refuses a second run while one is queued or running.
@@ -66,6 +72,14 @@ type Regression struct {
 	Passed      int        `json:"passed"`
 	Failed      int        `json:"failed"`
 	Skipped     int        `json:"skipped"`
+	// Flaky are the tests that failed and passed on the overnight run's rerun.
+	Flaky int `json:"flaky"`
+	// NotBefore is a scheduled run's set time; QuietSince since when the queue was quiet (nil:
+	// it is not); ReportAt when its report goes to #loop, ReportedAt when it went.
+	NotBefore   *time.Time `json:"not_before,omitempty"`
+	QuietSince  *time.Time `json:"quiet_since,omitempty"`
+	ReportAt    *time.Time `json:"report_at,omitempty"`
+	ReportedAt  *time.Time `json:"reported_at,omitempty"`
 	ClaimedAt   *time.Time `json:"claimed_at,omitempty"`
 	FinishedAt  *time.Time `json:"finished_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
@@ -80,6 +94,17 @@ type Regression struct {
 // Resources are what its suite needs (pipeline.SuiteResources).
 func (r Regression) Resources() []string { return pipeline.SuiteResources(r.Suite) }
 
+// Overnight says it is the full overnight run (it holds the claims while it runs).
+func (r Regression) Overnight() bool { return r.Suite == pipeline.SuiteOvernight }
+
+// Duration is how long a finished run took, from its claim (0 when it did not run).
+func (r Regression) Duration() time.Duration {
+	if r.ClaimedAt == nil || r.FinishedAt == nil {
+		return 0
+	}
+	return r.FinishedAt.Sub(*r.ClaimedAt)
+}
+
 // RegressionTest is one test of a finished run.
 type RegressionTest struct {
 	N      int    `json:"n"`
@@ -90,15 +115,23 @@ type RegressionTest struct {
 	Status string `json:"status"`
 	Error  string `json:"error,omitempty"`
 	MS     int64  `json:"ms"`
-	// Screenshot is the regression file n of its screenshot (0: none).
+	// Screenshot is the regression file n of its screenshot (0: none), Recording of its
+	// recording (a voice case's reply, a screen recording).
 	Screenshot int    `json:"screenshot,omitempty"`
+	Recording  int    `json:"recording,omitempty"`
 	Repo       string `json:"repo,omitempty"`
 	// ItemID is the open item 'File it' made for this test (by any run), 0 when none.
 	ItemID int64 `json:"item_id,omitempty"`
 }
 
-// Failed says the test failed (scripts/e2e's failed, timedOut and interrupted).
-func (t RegressionTest) Failed() bool { return t.Status != "passed" && t.Status != "skipped" }
+// Failed says the test failed (scripts/e2e's failed, timedOut and interrupted; not flaky, which
+// passed on its rerun).
+func (t RegressionTest) Failed() bool {
+	return t.Status != "passed" && t.Status != "skipped" && t.Status != TestFlaky
+}
+
+// TestFlaky is the status of a test that failed, then passed on the overnight run's rerun.
+const TestFlaky = "flaky"
 
 // Key is what 'File it' deduplicates on.
 func (t RegressionTest) Key() string { return t.Suite + ": " + t.Title }
@@ -134,23 +167,28 @@ type RegressionReportTest struct {
 	Error      string `json:"error"`
 	MS         int64  `json:"ms"`
 	Screenshot string `json:"screenshot"`
+	Recording  string `json:"recording"`
 	Repo       string `json:"repo"`
 }
 
 const regCols = `id, suite, status, requested_by, via, runner, agent, lease_id, claimed_at, expires_at, note, activity,
-	error, e2e_run, server_head, mobile_head, passed, failed, skipped, finished_at, created_at, updated_at`
+	error, e2e_run, server_head, mobile_head, passed, failed, skipped, finished_at, created_at, updated_at,
+	not_before, quiet_since, report_at, reported_at, flaky`
 
 func scanRegression(row scanner) (Regression, error) {
 	var (
 		r                                   Regression
 		act                                 string
 		claimed, expires, finished, cr, upd int64
+		notBefore, quiet, reportAt, reported int64
 	)
 	err := row.Scan(&r.ID, &r.Suite, &r.Status, &r.RequestedBy, &r.Via, &r.Runner, &r.Agent, &r.lease.ID, &claimed, &expires,
-		&r.lease.Note, &act, &r.Error, &r.E2ERun, &r.ServerHead, &r.MobileHead, &r.Passed, &r.Failed, &r.Skipped, &finished, &cr, &upd)
+		&r.lease.Note, &act, &r.Error, &r.E2ERun, &r.ServerHead, &r.MobileHead, &r.Passed, &r.Failed, &r.Skipped, &finished, &cr, &upd,
+		&notBefore, &quiet, &reportAt, &reported, &r.Flaky)
 	if err != nil {
 		return r, err
 	}
+	r.NotBefore, r.QuietSince, r.ReportAt, r.ReportedAt = nanosPtr(notBefore), nanosPtr(quiet), nanosPtr(reportAt), nanosPtr(reported)
 	r.CreatedAt, r.UpdatedAt = fromNanos(cr), fromNanos(upd)
 	if claimed != 0 {
 		c := fromNanos(claimed)
@@ -166,6 +204,23 @@ func scanRegression(row scanner) (Regression, error) {
 	return r, nil
 }
 
+// nanosPtr is a stored time, nil for 0.
+func nanosPtr(n int64) *time.Time {
+	if n == 0 {
+		return nil
+	}
+	t := fromNanos(n)
+	return &t
+}
+
+// ptrNanos is a time to store, 0 for nil.
+func ptrNanos(t *time.Time) int64 {
+	if t == nil {
+		return 0
+	}
+	return t.UnixNano()
+}
+
 func saveRegression(tx *sql.Tx, r Regression) error {
 	var claimed, expires, finished int64
 	if r.ClaimedAt != nil {
@@ -178,9 +233,11 @@ func saveRegression(tx *sql.Tx, r Regression) error {
 		finished = r.FinishedAt.UnixNano()
 	}
 	_, err := tx.Exec(`UPDATE regressions SET status=?, runner=?, agent=?, lease_id=?, claimed_at=?, expires_at=?, note=?, activity=?,
-		error=?, e2e_run=?, server_head=?, mobile_head=?, passed=?, failed=?, skipped=?, finished_at=?, updated_at=? WHERE id = ?`,
+		error=?, e2e_run=?, server_head=?, mobile_head=?, passed=?, failed=?, skipped=?, finished_at=?, updated_at=?,
+		not_before=?, quiet_since=?, report_at=?, reported_at=?, flaky=? WHERE id = ?`,
 		r.Status, r.Runner, r.Agent, r.lease.ID, claimed, expires, r.lease.Note, encodedActivity(r.lease.Activity),
-		r.Error, r.E2ERun, r.ServerHead, r.MobileHead, r.Passed, r.Failed, r.Skipped, finished, r.UpdatedAt.UnixNano(), r.ID)
+		r.Error, r.E2ERun, r.ServerHead, r.MobileHead, r.Passed, r.Failed, r.Skipped, finished, r.UpdatedAt.UnixNano(),
+		ptrNanos(r.NotBefore), ptrNanos(r.QuietSince), ptrNanos(r.ReportAt), ptrNanos(r.ReportedAt), r.Flaky, r.ID)
 	return err
 }
 
@@ -293,19 +350,24 @@ func (s *Store) sweepReg(tx *sql.Tx, now time.Time) error {
 	}
 	data := regEventData(*r)
 	data["lease"], data["runner"], data["agent"], data["note"] = r.lease.ID, r.Runner, r.Agent, r.lease.Note
-	switch pipeline.JudgeLease(r.lease.ClaimedAt, r.lease.ExpiresAt, now, pipeline.RegressionMaxRun) {
+	maxRun := pipeline.RegressionMaxRunFor(r.Suite)
+	switch pipeline.JudgeLease(r.lease.ClaimedAt, r.lease.ExpiresAt, now, maxRun) {
 	case pipeline.LeaseExpired:
 		if err := s.requeueReg(tx, *r); err != nil {
 			return err
 		}
 		return s.event(tx, Event{Actor: "loopd", Kind: KindRegExpired, Data: data})
 	case pipeline.LeaseOvertime:
-		r.Status, r.Error, r.UpdatedAt, r.FinishedAt = RegError, fmt.Sprintf("the run went past %s", pipeline.RegressionMaxRun), now, &now
+		r.Status, r.Error, r.UpdatedAt, r.FinishedAt = RegError, fmt.Sprintf("the run went past %s", maxRun), now, &now
 		r.lease.ID = ""
+		s.setReportAt(r, now)
 		if err := saveRegression(tx, *r); err != nil {
 			return err
 		}
 		data["status"], data["error"] = r.Status, r.Error
+		if r.ReportAt != nil {
+			data["report_at"] = r.ReportAt.Format(time.RFC3339)
+		}
 		return s.event(tx, Event{Actor: "loopd", Kind: KindRegDone, Data: data})
 	}
 	return nil
@@ -463,7 +525,7 @@ func (s *Store) RegressionResult(ctx context.Context, runnerName string, id int6
 			byName[f.Name] = f.N
 		}
 		now := s.clock.Now()
-		r.Passed, r.Failed, r.Skipped = 0, 0, 0
+		r.Passed, r.Failed, r.Skipped, r.Flaky = 0, 0, 0, 0
 		saved := make([]RegressionTest, 0, len(rep.Tests))
 		for i, t := range rep.Tests {
 			if strings.TrimSpace(t.Title) == "" || strings.TrimSpace(t.Status) == "" {
@@ -474,16 +536,21 @@ func (s *Store) RegressionResult(ctx context.Context, runnerName string, id int6
 			if t.Screenshot != "" {
 				rt.Screenshot = byName[SanitizeName(t.Screenshot)]
 			}
+			if t.Recording != "" {
+				rt.Recording = byName[SanitizeName(t.Recording)]
+			}
 			switch {
 			case rt.Status == "passed":
 				r.Passed++
 			case rt.Status == "skipped":
 				r.Skipped++
+			case rt.Status == TestFlaky:
+				r.Flaky++
 			default:
 				r.Failed++
 			}
-			if _, err := tx.Exec(`INSERT INTO regression_tests (run_id, n, suite, title, file, line, status, error, ms, screenshot, repo)
-				VALUES (?,?,?,?,?,?,?,?,?,?,?)`, id, rt.N, rt.Suite, rt.Title, rt.File, rt.Line, rt.Status, rt.Error, rt.MS, rt.Screenshot, rt.Repo); err != nil {
+			if _, err := tx.Exec(`INSERT INTO regression_tests (run_id, n, suite, title, file, line, status, error, ms, screenshot, recording, repo)
+				VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, id, rt.N, rt.Suite, rt.Title, rt.File, rt.Line, rt.Status, rt.Error, rt.MS, rt.Screenshot, rt.Recording, rt.Repo); err != nil {
 				return err
 			}
 			saved = append(saved, rt)
@@ -502,6 +569,7 @@ func (s *Store) RegressionResult(ctx context.Context, runnerName string, id int6
 			r.Status = RegPassed
 		}
 		r.UpdatedAt, r.FinishedAt = now, &now
+		s.setReportAt(&r, now)
 		leaseID := r.lease.ID
 		r.lease = Lease{}
 		if err := saveRegression(tx, r); err != nil {
@@ -510,6 +578,12 @@ func (s *Store) RegressionResult(ctx context.Context, runnerName string, id int6
 		out = r
 		data := regEventData(r)
 		data["lease"], data["status"], data["passed"], data["failed"], data["skipped"] = leaseID, r.Status, r.Passed, r.Failed, r.Skipped
+		if r.Flaky > 0 {
+			data["flaky"] = r.Flaky
+		}
+		if r.ReportAt != nil {
+			data["report_at"] = r.ReportAt.Format(time.RFC3339)
+		}
 		if r.Error != "" {
 			data["error"] = r.Error
 		}
@@ -643,7 +717,7 @@ func regressionFiles(q querier, id int64) ([]RegressionFile, error) {
 }
 
 func regressionTests(q querier, id int64) ([]RegressionTest, error) {
-	rows, err := q.Query(`SELECT t.n, t.suite, t.title, t.file, t.line, t.status, t.error, t.ms, t.screenshot, t.repo,
+	rows, err := q.Query(`SELECT t.n, t.suite, t.title, t.file, t.line, t.status, t.error, t.ms, t.screenshot, t.recording, t.repo,
 		COALESCE((SELECT ri.item_id FROM regression_items ri JOIN items i ON i.id = ri.item_id
 			WHERE ri.test = t.suite || ': ' || t.title AND i.stage NOT IN ('done', 'closed') ORDER BY ri.item_id DESC LIMIT 1), 0)
 		FROM regression_tests t WHERE t.run_id = ? ORDER BY t.n`, id)
@@ -654,7 +728,7 @@ func regressionTests(q querier, id int64) ([]RegressionTest, error) {
 	out := []RegressionTest{}
 	for rows.Next() {
 		var t RegressionTest
-		if err := rows.Scan(&t.N, &t.Suite, &t.Title, &t.File, &t.Line, &t.Status, &t.Error, &t.MS, &t.Screenshot, &t.Repo, &t.ItemID); err != nil {
+		if err := rows.Scan(&t.N, &t.Suite, &t.Title, &t.File, &t.Line, &t.Status, &t.Error, &t.MS, &t.Screenshot, &t.Recording, &t.Repo, &t.ItemID); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
