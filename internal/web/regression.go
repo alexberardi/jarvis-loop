@@ -26,18 +26,22 @@ type regressionSection struct {
 	Suites []string
 	// Open is the queued or running run (no second one starts meanwhile).
 	Open *regRow
+	// Scheduled is the overnight run scheduled for tonight (the toggle cancels it); Nightly, the
+	// control's every-night setting.
+	Scheduled *regRow
+	Nightly   bool
 }
 
 // Show says the panel has something to show.
-func (s regressionSection) Show() bool { return s.CanRun || len(s.Runs) > 0 }
+func (s regressionSection) Show() bool { return s.CanRun || len(s.Runs) > 0 || s.Scheduled != nil }
 
 type regRow struct {
 	store.Regression
 	Ago int64
 }
 
-func regressionView(rs []store.Regression, canRun bool, now time.Time) regressionSection {
-	v := regressionSection{CanRun: canRun, Suites: pipeline.Suites}
+func regressionView(rs []store.Regression, sched *store.Regression, nightly, canRun bool, now time.Time) regressionSection {
+	v := regressionSection{CanRun: canRun, Suites: pipeline.Suites, Nightly: nightly}
 	for _, r := range rs {
 		row := regRow{Regression: r, Ago: max(int64(now.Sub(r.CreatedAt)/time.Second), 0)}
 		v.Runs = append(v.Runs, row)
@@ -45,7 +49,51 @@ func regressionView(rs []store.Regression, canRun bool, now time.Time) regressio
 			v.Open = &row
 		}
 	}
+	if sched != nil {
+		v.Scheduled = &regRow{Regression: *sched}
+	}
 	return v
+}
+
+// tonight is the board's "Tonight" toggle (on=1 schedules the overnight run, on=0 cancels the
+// scheduled one): the user's token only, as "Run regression".
+func (p *boardPage) tonight(w http.ResponseWriter, r *http.Request) {
+	pr := p.principal(r)
+	if pr.Kind != api.KindUser {
+		http.Error(w, "only the user's token may schedule a regression run", http.StatusForbidden)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	var err error
+	switch r.PostForm.Get("on") {
+	case "1":
+		_, err = p.st.ScheduleRegression(r.Context(), pr.Actor(), "board")
+	case "0":
+		_, err = p.st.CancelScheduledRegression(r.Context(), pr.Actor(), "board")
+	default:
+		http.Error(w, "on must be 1 or 0", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		if pe := (*pipeline.Error)(nil); errors.As(err, &pe) {
+			status := http.StatusBadRequest
+			switch pe.Code {
+			case store.CodeRegressionOpen:
+				status = http.StatusConflict
+			case store.CodeNotFound:
+				status = http.StatusNotFound
+			}
+			http.Error(w, pe.Message, status)
+			return
+		}
+		p.fail(w, err)
+		return
+	}
+	http.Redirect(w, r, "/board", http.StatusSeeOther)
 }
 
 // principal is who the board's cookie signs in (auth has checked it).
@@ -89,8 +137,10 @@ func (p *boardPage) runRegression(w http.ResponseWriter, r *http.Request) {
 type regressionPage struct {
 	Run      store.Regression
 	Failures []store.RegressionTest
-	Files    []store.RegressionFile
-	Now      time.Time
+	// Flaky are the tests that failed, then passed on the overnight run's rerun.
+	Flaky []store.RegressionTest
+	Files []store.RegressionFile
+	Now   time.Time
 }
 
 func (p *boardPage) regression(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +158,9 @@ func (p *boardPage) regression(w http.ResponseWriter, r *http.Request) {
 	for _, t := range reg.Tests {
 		if t.Failed() {
 			v.Failures = append(v.Failures, t)
+		}
+		if t.Status == store.TestFlaky {
+			v.Flaky = append(v.Flaky, t)
 		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

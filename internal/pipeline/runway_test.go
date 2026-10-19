@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -112,29 +113,77 @@ func TestUserAway(t *testing.T) {
 }
 
 func TestRunwayWarnState(t *testing.T) {
+	t0 := time.Date(2026, 10, 18, 14, 58, 0, 0, time.UTC)
 	plenty := Runway{Hours: 8}
-	dry := Runway{Hours: 1, Unblockers: []Unblocker{{ItemID: 1, Action: UnblockApprove, Frees: 3}}}
+	approve1 := Unblocker{ItemID: 1, Action: UnblockApprove, Frees: 3}
+	dry := Runway{Hours: 1.5, Unblockers: []Unblocker{approve1}}
 	nothing := Runway{Hours: 1}
+	warned := RunwayWarned{Warned: true, Hours: 1.5, Unblockers: []string{"1:approve"}}
 	cases := []struct {
-		name         string
-		r            Runway
-		threshold    int
-		away, warned bool
-		send, keep   bool
+		name      string
+		r         Runway
+		threshold int
+		away      bool
+		last      RunwayWarned
+		send      bool
+		next      RunwayWarned
 	}{
-		{"low, away, first time", dry, 3, true, false, true, true},
-		{"low, away, warned already", dry, 3, true, true, false, true},
-		{"low, user here", dry, 3, false, false, false, false},
-		{"low, user here, warned", dry, 3, false, true, false, true},
-		{"recovered clears", plenty, 3, true, true, false, false},
-		{"nothing to unblock", nothing, 3, true, false, false, false},
-		{"off", dry, 0, true, false, false, false},
+		{"low, away, first time", dry, 3, true, RunwayWarned{}, true, warned},
+		{"low, away, warned already", dry, 3, true, warned, false, warned},
+		{"low, user here", dry, 3, false, RunwayWarned{}, false, RunwayWarned{}},
+		{"low, user here, warned", dry, 3, false, warned, false, warned},
+		{"nothing to unblock", nothing, 3, true, RunwayWarned{}, false, RunwayWarned{}},
+		{"off clears", dry, 0, true, warned, false, RunwayWarned{}},
+		{"recovered: the spell stays open", Runway{Hours: 8, Unblockers: []Unblocker{approve1}}, 3, true, warned, false,
+			RunwayWarned{Warned: true, Hours: 1.5, Unblockers: []string{"1:approve"}, OKSince: t0}},
+		{"recovered, the unblocker done: forgotten", plenty, 3, true, warned, false,
+			RunwayWarned{Warned: true, Hours: 1.5, OKSince: t0}},
+		{"recovered for RunwayAwayAfter clears", plenty, 3, true,
+			RunwayWarned{Warned: true, Hours: 1.5, Unblockers: []string{"1:approve"}, OKSince: t0.Add(-RunwayAwayAfter)},
+			false, RunwayWarned{}},
+		{"low again after a blip: same warning, not sent", dry, 3, true,
+			RunwayWarned{Warned: true, Hours: 1.5, Unblockers: []string{"1:approve"}, OKSince: t0.Add(-time.Minute)},
+			false, warned},
+		{"a new low is sent", Runway{Hours: 0.5, Unblockers: []Unblocker{approve1}}, 3, true, warned, true,
+			RunwayWarned{Warned: true, Hours: 0.5, Unblockers: []string{"1:approve"}}},
+		{"less than RunwayLowStep lower is not a new low", Runway{Hours: 0.6, Unblockers: []Unblocker{approve1}}, 3, true, warned, false, warned},
+		{"higher but still low keeps the last low", Runway{Hours: 2.5, Unblockers: []Unblocker{approve1}}, 3, true, warned, false, warned},
+		{"a new unblocker is sent", Runway{Hours: 1.5, Unblockers: []Unblocker{approve1, {ItemID: 2, Action: UnblockAnswer, Frees: 1}}}, 3, true, warned, true,
+			RunwayWarned{Warned: true, Hours: 1.5, Unblockers: []string{"1:approve", "2:answer"}}},
+		{"a new unblocker waits for the user to be away", Runway{Hours: 1.5, Unblockers: []Unblocker{approve1, {ItemID: 2, Action: UnblockAnswer, Frees: 1}}}, 3, false, warned, false, warned},
+		{"reordered unblockers are not news", Runway{Hours: 1.5, Unblockers: []Unblocker{{ItemID: 2, Action: UnblockAnswer, Frees: 4}, approve1}}, 3, true,
+			RunwayWarned{Warned: true, Hours: 1.5, Unblockers: []string{"1:approve", "2:answer"}}, false,
+			RunwayWarned{Warned: true, Hours: 1.5, Unblockers: []string{"1:approve", "2:answer"}}},
+		{"an unblocker done is forgotten", Runway{Hours: 1.5, Unblockers: []Unblocker{approve1}}, 3, true,
+			RunwayWarned{Warned: true, Hours: 1.5, Unblockers: []string{"1:approve", "2:answer"}}, false, warned},
+		{"same item, other action is news", Runway{Hours: 1.5, Unblockers: []Unblocker{{ItemID: 1, Action: UnblockTrust, Frees: 3}}}, 3, true, warned, true,
+			RunwayWarned{Warned: true, Hours: 1.5, Unblockers: []string{"1:trust"}}},
 	}
 	for _, c := range cases {
-		send, keep := RunwayWarn(c.r, c.threshold, c.away, c.warned)
-		if send != c.send || keep != c.keep {
-			t.Errorf("%s: RunwayWarn = %v, %v; want %v, %v", c.name, send, keep, c.send, c.keep)
+		send, next := RunwayWarn(c.r, c.threshold, c.away, c.last, t0)
+		if send != c.send || !reflect.DeepEqual(next, c.next) {
+			t.Errorf("%s: RunwayWarn = %v, %+v; want %v, %+v", c.name, send, next, c.send, c.next)
 		}
+	}
+}
+
+// #227: the warning fired twice two minutes apart with the same content. A one-tick blip at the
+// threshold between two low ticks must not re-send it.
+func TestRunwayWarnOnePerRealChange(t *testing.T) {
+	now := time.Date(2026, 10, 18, 14, 58, 51, 0, time.UTC)
+	ub := []Unblocker{{ItemID: 7, Action: UnblockAnswer, Frees: 2}}
+	var last RunwayWarned
+	sends := 0
+	for _, h := range []float64{1.5, 3.2, 1.5, 1.5, 3.4, 1.5} {
+		var send bool
+		send, last = RunwayWarn(Runway{Hours: h, Unblockers: ub}, 3, true, last, now)
+		if send {
+			sends++
+		}
+		now = now.Add(time.Minute)
+	}
+	if sends != 1 {
+		t.Fatalf("low, blip, low: %d warnings, want 1", sends)
 	}
 }
 

@@ -18,8 +18,11 @@ import (
 // works on main) asks loopd for the qa items whose proof is due a check, runs each one's command
 // checks fenced, as verify steps run, in a checkout of the repo's main, and reports how they went
 // (proof_checked). loopd evaluates the usage checks itself and decides: verified, reopened, or
-// still waiting. A check the runner cannot run (no fence, no checkout) is left out of the report
-// and stays pending: the runner's trouble is not the change's.
+// still waiting. Before the command, the repo's Prepare and Setup commands run in the checkout, as
+// before a build. A check the runner cannot run (no fence, no checkout) is left out of the report
+// and stays pending: the runner's trouble is not the change's. One whose setup failed, or whose
+// output shows it never got to test the change (envFailure), is reported as pipeline.CheckError:
+// loopd records it on the item and never counts it toward a reopen.
 
 // ProofCommandTimeout bounds one command check.
 const ProofCommandTimeout = 10 * time.Minute
@@ -105,6 +108,24 @@ func (r *Runner) proofCommand(ctx context.Context, key string, repo RepoConfig, 
 		r.Git.RemoveWorktree(context.WithoutCancel(ctx), mirror, cwd)
 		unlock()
 	}()
+	// The repo's Prepare and Setup commands, as before a build or a regression run: without them
+	// a command that needs what they fetch fails before it tests anything (#282).
+	setupErr := func() error {
+		for _, c := range repo.Prepare {
+			if out, err := r.shell(ctx, cwd, c, SetupTimeout); err != nil {
+				return fmt.Errorf("prepare %q: %v: %s", c, err, clip(tail(out, 5), 500))
+			}
+		}
+		return r.runSetup(ctx, repo.Setup, cwd, dir)
+	}()
+	if ctx.Err() != nil {
+		return res, ctx.Err()
+	}
+	if setupErr != nil {
+		res.State, res.Evidence = pipeline.CheckError, clip(setupErr.Error(), 1400)
+		r.Log.Warn("proof: command check could not run", "item", it.ID, "check", n, "err", setupErr)
+		return res, nil
+	}
 	logPath := filepath.Join(dir, "output.log")
 	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
@@ -170,6 +191,8 @@ func (r *Runner) proofCommand(ctx context.Context, key string, repo RepoConfig, 
 	case timedOut:
 		status = "timed out after " + duration(int(ProofCommandTimeout.Seconds()))
 		res.State = pipeline.CheckFailed
+	case code != 0 && envFailure(code, string(b)):
+		res.State = pipeline.CheckError
 	case code != 0:
 		res.State = pipeline.CheckFailed
 	}
@@ -177,8 +200,19 @@ func (r *Runner) proofCommand(ctx context.Context, key string, repo RepoConfig, 
 		status += ": " + last
 	}
 	res.Evidence = clip(status+"\n"+out, 1400)
+	if res.State == pipeline.CheckError {
+		r.Log.Warn("proof: command check could not run", "item", it.ID, "check", n, "status", status)
+	}
 	r.Log.Info("proof command ended", "item", it.ID, "check", n, "state", res.State, "status", status)
 	return res, nil
+}
+
+// envFailure tells whether a failed command never got to test the change: go's "[setup failed]"
+// (a package whose embedded or fetched files are missing) or exit 127 (a tool not installed). A
+// "[build failed]" is not one: the merged change may have broken the build
+// (docs/decisions/2026-10-19-proof-setup.md).
+func envFailure(code int, out string) bool {
+	return code == 127 || strings.Contains(out, "[setup failed]")
 }
 
 func lastLine(s string) string {

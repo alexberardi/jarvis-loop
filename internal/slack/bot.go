@@ -162,12 +162,13 @@ func (b *Bot) Drain(ctx context.Context) {
 	}
 }
 
-// Tick applies reply approvals whose window has passed and posts the digest and the standup when
-// one is due.
+// Tick applies reply approvals whose window has passed and posts the digest, the standup and an
+// overnight regression's morning report when one is due.
 func (b *Bot) Tick(ctx context.Context) {
 	b.applyDue(ctx)
 	b.digest(ctx)
 	b.standup(ctx)
+	b.morningReports(ctx)
 }
 
 // ---- Slack calls with bounded retries ----
@@ -432,20 +433,34 @@ func itemRefs(ids []int64) string {
 	return strings.Join(out, ", ")
 }
 
-// landWaiting is what a land run has been waiting on for a while (its land_waiting event, while
-// that is the item's latest), for the parent's stage line: ", waiting for CI (check) since 14:05
-// UTC".
+// landWaiting is what a land run has been waiting on for a while (its land_waiting event, or the
+// ci_pending that put it back in the land queue, while that is the item's latest), for the
+// parent's stage line: ", waiting for CI (check) since 14:05 UTC".
 func landWaiting(d store.Detail) string {
 	if d.Item.Stage != pipeline.Land || len(d.Events) == 0 {
 		return ""
 	}
 	e := d.Events[len(d.Events)-1]
-	if e.Kind != "land_waiting" {
+	requeued := false // nobody holds it: the ci_pending's not-before is when it is checked next
+	if e.Kind == "claimed" && e.Data["ci_pending"] == true && len(d.Events) > 1 {
+		e = d.Events[len(d.Events)-2] // land again after ci_pending: still that wait
+	} else {
+		requeued = true
+	}
+	var out string
+	switch {
+	case e.Kind == "land_waiting":
+		out = ", waiting for " + Escape(Clip(str(e.Data, "waiting_for"), 120, ""))
+	case e.Kind == "advanced" && pipeline.Outcome(e.Outcome) == pipeline.CIPending:
+		out = ", waiting for " + Escape(Clip(str(e.Data, "wait"), 120, ""))
+	default:
 		return ""
 	}
-	out := ", waiting for " + Escape(Clip(str(e.Data, "waiting_for"), 120, ""))
 	if t, err := time.Parse(time.RFC3339, str(e.Data, "since")); err == nil {
 		out += " since " + t.UTC().Format("15:04") + " UTC"
+	}
+	if t, err := time.Parse(time.RFC3339, str(e.Data, "not_before")); err == nil && requeued {
+		out += ", checking again at " + t.UTC().Format("15:04") + " UTC"
 	}
 	return out
 }
@@ -490,6 +505,30 @@ func listOf(d map[string]any, k string) []string {
 func str(d map[string]any, k string) string {
 	s, _ := d[k].(string)
 	return s
+}
+
+// secondOpinionLine is a second_opinion event in the thread: counts only (the findings are in
+// the PR comment).
+func secondOpinionLine(d map[string]any) string {
+	n := func(k string) int { f, _ := d[k].(float64); return int(f) }
+	if str(d, "status") == "unavailable" {
+		return fmt.Sprintf("Second opinion (Gemini) unavailable (%s); the review stands.", Escape(str(d, "reason")))
+	}
+	if n("findings") == 0 {
+		return "Second opinion (Gemini): no findings."
+	}
+	text := fmt.Sprintf("Second opinion (Gemini): %d findings (%d high)", n("findings"), n("high"))
+	switch {
+	case str(d, "status") == "unjudged":
+		return text + "; not judged (" + Escape(str(d, "reason")) + "); the review stands."
+	case d["bounced"] == true:
+		return text + fmt.Sprintf(", Claude agreed with %d (%d high); sent back to build.", n("agreed"), n("agreed_high"))
+	case d["repeat"] == true:
+		return text + fmt.Sprintf(", Claude agreed with %d (%d high); this head was sent back once already, so it stands.", n("agreed"), n("agreed_high"))
+	case d["blocking"] == true:
+		return text + fmt.Sprintf(", Claude agreed with %d (%d high); the review stands.", n("agreed"), n("agreed_high"))
+	}
+	return text + fmt.Sprintf(", Claude agreed with %d (%d high); advisory, recorded only.", n("agreed"), n("agreed_high"))
 }
 
 // describe is the thread reply for an event: one or two lines, or the question and held
@@ -589,6 +628,9 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	var text string
 	switch e.Kind {
 	case "claimed":
+		if e.Data["ci_pending"] == true {
+			return Message{}, false // land again after ci_pending: the parent's stage line says it
+		}
 		text = fmt.Sprintf("Claimed for %s.", e.From)
 		if str(e.Data, "routed") == pipeline.BuilderQwen {
 			text = fmt.Sprintf("Claimed for %s, with qwen this run (%s).", e.From, f("pace", 200))
@@ -619,6 +661,9 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		text = fmt.Sprintf("Approved by %s for `%s`: '%s' → land.", by, short(str(e.Data, "head_sha")), f("words", 300))
 	case "trusted":
 		text = fmt.Sprintf("Trusted files OK'd by %s for `%s`: verify runs that commit once → build.", by, short(str(e.Data, "head_sha")))
+	case pipeline.KindTrustCarried:
+		text = fmt.Sprintf("Trusted files' diff unchanged since `%s`: the OK %s gave carries to `%s`, so verify ran it without asking again.",
+			short(str(e.Data, "from")), who(str(e.Data, "by")), short(str(e.Data, "to")))
 	case "held":
 		text = fmt.Sprintf("Kept holding (%s).", by)
 	case "rebuild":
@@ -681,6 +726,8 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		} else {
 			text = "Builder: qwen → claude for the rest of this item (second strike)."
 		}
+	case store.KindSecondOpinion:
+		text = secondOpinionLine(e.Data)
 	case "low_cache_hit":
 		text = fmt.Sprintf("Low prompt-cache hit ratio on this run (%s over %s turns).", Escape(str(e.Data, "cache_hit_ratio")), Escape(str(e.Data, "num_turns")))
 	case "approval_cancelled":
@@ -754,6 +801,8 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 			text = "Back to build: " + f("reason", 400)
 		case pipeline.BackToReview:
 			text = "Back to review: " + f("notes", 400)
+		case pipeline.CIPending:
+			return Message{}, false // still pending CI does not post; the parent's stage line says it
 		default:
 			text = fmt.Sprintf("%s → %s.", Escape(e.Outcome), e.To)
 		}
@@ -789,6 +838,10 @@ func (b *Bot) orchestratorLine(ctx context.Context, e store.Event) string {
 		what = "saw this again"
 	case "proof_set":
 		what = "wrote its proof (the proof sweep): " + b.field(strings.Join(listOf(e.Data, "checks"), "; "), 600, e.ItemID)
+		if e.Data["replaced"] != nil {
+			what = "rewrote its proof with checks the loop can run (it was " + b.field(strings.Join(listOf(e.Data, "replaced"), "; "), 300, e.ItemID) +
+				"): " + b.field(strings.Join(listOf(e.Data, "checks"), "; "), 600, e.ItemID)
+		}
 	case "refused":
 		return fmt.Sprintf("Orchestrator: tried to %s; refused: %s", Escape(str(e.Data, "action")), f("message", 300))
 	default:
@@ -1217,6 +1270,10 @@ func (b *Bot) onMention(ctx context.Context, m slackEvent) {
 		}
 	}
 	text := incoming(m.Text)
+	if on, ok := pipeline.ParseRegressionTonight(text); ok {
+		b.regressionTonight(ctx, m, on)
+		return
+	}
 	if suite, ok := pipeline.ParseRegression(text); ok {
 		b.regressionMention(ctx, m, suite)
 		return

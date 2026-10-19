@@ -98,6 +98,7 @@ func TestApplyPlanApprove(t *testing.T) {
 		{"unknown sha", atBrief, DocBrief, strings.Repeat("a", 64), briefs, CodeSHAMismatch, "approve v3 instead", ""},
 		{"no sha", atBrief, DocBrief, "", briefs, CodeMissingField, "sha256", ""},
 		{"no brief yet", atBrief, DocBrief, "abc", nil, CodeWrongStage, "no brief yet", ""},
+		{"a critique is not approved", atBlueprint, DocCritique, "abc", []PlanDoc{doc(DocCritique, 1, "c")}, CodeInvalidField, "kind must be brief or blueprint", ""},
 		{"blueprint at brief", atBrief, DocBlueprint, "abc", nil, CodeWrongStage, "plan P7 is at brief, not blueprint", ""},
 		{"brief at blueprint", atBlueprint, DocBrief, briefs[2].SHA256, briefs, CodeWrongStage, "plan P7 is at blueprint", ""},
 		{"unknown kind", atBrief, "memo", "abc", nil, CodeInvalidField, "kind", ""},
@@ -316,6 +317,11 @@ func TestApplyTurnResult(t *testing.T) {
 		{"back to brief", blue, eng, nil, TurnResult{Reply: "x", BackToBrief: "far bigger than it looks"}, "", nil, PlanBrief, false},
 		{"back to brief and ready", blue, eng, nil, TurnResult{Reply: "x", BackToBrief: "why", Ready: true}, "both ready and back_to_brief", nil, PlanBlueprint, false},
 		{"stage moved on: reply only", blue, product, nil, TurnResult{Reply: "x", Brief: "late", Ready: true}, "", nil, PlanBlueprint, false},
+		{"blueprint and its critique", blue, eng, nil, TurnResult{Reply: "x", Blueprint: blueprint3, Critique: "# Gemini's critique", Ready: true}, "", []int{1, 1}, PlanBlueprint, true},
+		{"a new critique of the same blueprint", blue, eng, map[string]PlanDoc{DocBlueprint: doc(DocBlueprint, 1, blueprint3), DocCritique: doc(DocCritique, 1, "old")},
+			TurnResult{Reply: "x", Blueprint: blueprint3, Critique: "new", Ready: true}, "", []int{2}, PlanBlueprint, true},
+		{"product writes a critique", brief, product, nil, TurnResult{Reply: "x", Critique: "c"}, "only engineering writes the critique", nil, PlanBrief, false},
+		{"stage moved on: no critique", Plan{ID: 7, Stage: PlanSplit}, eng, nil, TurnResult{Reply: "x", Critique: "c"}, "", nil, PlanSplit, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

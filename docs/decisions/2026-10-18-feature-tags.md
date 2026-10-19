@@ -8,7 +8,7 @@ grouped by feature. This decision is piece 1.
 
 ## Decision
 
-- **`items.feature`** (migration 0026, `''` for none), `pipeline.Item.Feature` (`feature` in JSON,
+- **`items.feature`** (migration 0032, `''` for none), `pipeline.Item.Feature` (`feature` in JSON,
   omitted when empty).
 - **One spelling:** `pipeline.FeatureSlug` lowercases a name and joins its runs of letters and
   digits with `-` ("Smallest Blocks" is `smallest-blocks`), at most 48 characters. A name the user

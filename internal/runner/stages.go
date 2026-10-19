@@ -93,7 +93,9 @@ const (
 // (docs/phases/06b-all-repos.md): no checkouts, and repos.md carries each repo's group, aliases,
 // description and last merged PR titles, so the agent can name the repo from that file alone.
 func (r *Runner) prepareTriage(ctx context.Context, ru *run, info *RunInfo) error {
-	os.RemoveAll(ru.wt)
+	if err := removeTree(ru.wt); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(ru.wt, 0o755); err != nil {
 		return err
 	}
@@ -283,12 +285,21 @@ func (r *Runner) prepareReview(ctx context.Context, ru *run, info *RunInfo) erro
 		info.ContextErrs = append(info.ContextErrs, fmt.Sprintf("PR #%d from GitHub: %v", it.PR, err))
 	} else {
 		var b strings.Builder
+		title, body := oneLine(v.Title), strings.TrimSpace(v.Body)
+		if !ru.cfg.Trusted(ru.repo.Slug, v.Author.Login) {
+			title = "(left out)"
+			by := v.Author.Login
+			if by == "" {
+				by = "an unknown author"
+			}
+			body = fmt.Sprintf("Left out: the PR was opened by %s, not a trusted author.", by)
+		}
 		fmt.Fprintf(&b, "# PR #%d: %s\n\n- Branch `%s` into `%s`, %s\n- Reviewed commit: `%s` (the head loopd recorded)\n",
-			it.PR, oneLine(v.Title), v.HeadRefName, v.BaseRefName, strings.ToLower(v.State), it.HeadSHA)
+			it.PR, title, v.HeadRefName, v.BaseRefName, strings.ToLower(v.State), it.HeadSHA)
 		if v.HeadRefOid != "" && v.HeadRefOid != it.HeadSHA {
 			fmt.Fprintf(&b, "- Note: the PR's head on GitHub is now `%s`; review `%s` anyway.\n", v.HeadRefOid, it.HeadSHA)
 		}
-		fmt.Fprintf(&b, "\n## Body\n\n%s\n", strings.TrimSpace(v.Body))
+		fmt.Fprintf(&b, "\n## Body\n\n%s\n", body)
 		writeContext(ru, info, ".loop/context/pr.md", "the PR: title, body, head", b.String())
 	}
 	writeContext(ru, info, ".loop/context/diff.patch", fmt.Sprintf("git diff origin/%s...%s", ru.repo.Base, short7(it.HeadSHA)), diff)
@@ -468,8 +479,19 @@ func (r *Runner) reviewContext(ctx context.Context, ru *run, info *RunInfo, note
 		info.ContextErrs = append(info.ContextErrs, fmt.Sprintf("PR #%d's comments: %v", ru.item.PR, err))
 		return
 	}
+	// Anyone can comment on a public repo: only trusted authors' text reaches the agent.
+	var kept []PRComment
+	for _, c := range cs {
+		if ru.cfg.Trusted(ru.repo.Slug, c.Author) {
+			kept = append(kept, c)
+		}
+	}
+	cs, dropped := kept, len(cs)-len(kept)
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Comments on PR #%d (oldest first)\n", ru.item.PR)
+	if dropped > 0 {
+		fmt.Fprintf(&b, "\n%d comments from other authors left out.\n", dropped)
+	}
 	if len(cs) == 0 {
 		b.WriteString("\nNone.\n")
 	}
@@ -596,6 +618,18 @@ func (r *Runner) reportReview(ctx context.Context, ru *run, out outcome, raw []b
 		return
 	}
 	fields := map[string]string{"pr_comment": "posted"}
+	if v.Outcome == "approved" && ru.cfg.Gemini != nil {
+		so := r.secondOpinion(ctx, ru, v)
+		if so.stopped {
+			return // the lease ended: the item is reviewed again
+		}
+		fields["second_opinion"] = so.Status
+		if so.Bounced {
+			fields["second_opinion"], fields["notes"] = "bounce", SecondOpinionNotes(so)
+			r.advance(ctx, ru, "bounce", r.metrics(ru, out, fields), nil)
+			return
+		}
+	}
 	if v.Outcome == "approved" {
 		fields["summary"], fields["head_sha"] = clip(v.Summary, 2000), it.HeadSHA
 		if v.NeedsReview {

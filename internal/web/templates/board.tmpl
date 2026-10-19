@@ -32,7 +32,10 @@
 </head>
 <body>
 <h1>Jarvis Loop</h1>
-<p class="sub">{{.Total}} items ·{{if .PlanCount}} {{.PlanCount}} open plans ·{{end}} {{stamp .Now}} · refreshes every 30 s (working now: every 5 s) · {{if .ShowClosed}}<a href="/board">hide closed</a>{{else}}<a href="/board?closed=1">show closed</a>{{end}}</p>
+<p class="sub">{{.Total}} items ·{{if .PlanCount}} {{.PlanCount}} open plans ·{{end}} {{stamp .Now}} · refreshes every 30 s (working now: every 5 s) · {{if .ShowClosed}}<a href="/board">hide closed</a>{{else}}<a href="/board?closed=1">show closed</a>{{end}} · <a href="/board/flow">flow</a></p>
+{{- if .SecondOpinion.Runs}}
+<p class="sub">Second opinion (Gemini): {{template "second-opinion" .SecondOpinion}}</p>
+{{- end}}
 {{- with .Runway}}
 <p class="sub runway">{{if .Low}}<strong>Runway low:</strong>{{else}}Runway:{{end}} about {{printf "%.1f" .Hours}} agent-hours of work without you ({{.Runnable}} runnable){{with .Unblockers}} · frees the most:{{range $i, $u := .}}{{if $i}},{{end}} {{$u.Action}} <a href="/items/{{$u.ItemID}}">#{{$u.ItemID}}</a> → {{$u.Frees}}{{end}}{{end}}</p>
 {{- end}}
@@ -142,11 +145,24 @@
 <button type="submit">Run regression</button>
 </form>
 {{- end}}
+<form method="post" action="/board/regressions/tonight">
+{{- if .Scheduled}}
+<input type="hidden" name="on" value="0"><button type="submit">Cancel tonight's run</button>
+{{- else}}
+<input type="hidden" name="on" value="1"><button type="submit">Run overnight tonight</button>
+{{- end}}
+</form>
+{{- end}}
+{{- with .Scheduled}}
+<p class="note">Overnight R{{.ID}} scheduled: from {{clock .NotBefore}}, once the queue has been quiet for 10 minutes; it holds new work while it runs, and its report comes in the morning.</p>
+{{- end}}
+{{- if .Nightly}}
+<p class="note">Every night: on (the control's regression_nightly).</p>
 {{- end}}
 {{- if .Runs}}
 <ul>
 {{- range .Runs}}
-<li><a href="/board/regressions/{{.ID}}">R{{.ID}}</a> {{.Suite}} <span class="label">{{.Status}}</span>{{if or (eq .Status "passed") (eq .Status "failed")}} {{.Passed}} passed, {{.Failed}} failed, {{.Skipped}} skipped{{end}}{{with .Error}} <span class="reason">{{.}}</span>{{end}} <span class="why">· {{age .Ago}} ago</span></li>
+<li><a href="/board/regressions/{{.ID}}">R{{.ID}}</a> {{.Suite}} <span class="label">{{.Status}}</span>{{if or (eq .Status "passed") (eq .Status "failed")}} {{.Passed}} passed, {{.Failed}} failed,{{if .Flaky}} {{.Flaky}} flaky,{{end}} {{.Skipped}} skipped{{end}}{{with .Error}} <span class="reason">{{.}}</span>{{end}} <span class="why">· {{age .Ago}} ago</span></li>
 {{- end}}
 </ul>
 {{- end}}
@@ -187,6 +203,7 @@
 {{- if .Builder}}<span class="label">builder: {{.Builder}}</span>{{end}}
 {{- if and .Unservable (not .ClaimedBy)}}<span class="label">{{unservable .Unservable}}</span>{{end}}
 {{- range .Waits}}<span class="label">waiting on {{.}}</span>{{end}}
+{{- with .SecondOpinion}}<span class="label" title="Gemini's findings; Claude agreed with {{.Agreed}} of {{.Judged}} judged">Gemini {{.Findings}} · {{.Agreed}} agreed</span>{{end}}
 </div>
 {{- if .Reason}}
 <div class="reason">{{.Reason}}</div>

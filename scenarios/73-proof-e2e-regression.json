@@ -1,0 +1,52 @@
+{
+  "name": "proof-e2e-regression",
+  "about": "E2E results decide e2e checks (#195, docs/decisions/2026-10-18-qa-proofs.md). Two app items reach qa with e2e proofs naming specs as e2e/coverage.json does: a's covers the inbox, b's the login page (and a manual look). They wait for a regression run (no proof pass runs them). The approver's 'regression web' runs the stand-in suite: the inbox spec passes, the login spec fails with its screenshot. a is verified by the loop with the report's link; b is reopened at once as a new P2 item with the assertion, the report's link and the screenshot as evidence, and the run's report says which items it decided and shows the reopened item in place of File it.",
+  "stages": ["build", "review", "land", "regression"],
+  "steps": [
+    {"do": "e2e", "outcome": "fail"},
+    {"do": "add", "item": "a", "title": "Inbox detail delete"},
+    {"do": "add", "item": "b", "title": "Login error text"},
+    {"do": "command", "as": "approver", "text": "qa 1"},
+    {"do": "command", "as": "approver", "text": "qa 2"},
+    {"do": "script", "item": "a", "proof": [{"kind": "e2e", "tests": ["e2e/web/tests/inbox.spec.ts"]}]},
+    {"do": "script", "item": "b", "proof": [
+      {"kind": "e2e", "tests": ["e2e/web/tests/login.spec.ts"]},
+      {"kind": "manual", "look": "the login page's error text on a phone"}]},
+    {"do": "triage", "item": "a"},
+    {"do": "triage", "item": "b"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "b", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "qa", "b": "qa"},
+     "messages": [{"thread": "a", "from": "bot", "text": "(?s)#1 Inbox detail delete: Merged — the loop checks it itself: e2e: e2e/web/tests/inbox\\.spec\\.ts \\(waits for the next regression run\\)\\..*reopened if a command fails twice in a row or a regression run fails one of its E2E tests; Verified and Reopen still work by hand\\."}],
+     "board": {"a": {"column": "QA", "card": "waiting for a proof</span>[\\s\\S]*waits for: e2e: e2e/web/tests/inbox\\.spec\\.ts"}}},
+    {"do": "clock", "advance": "1m"},
+    {"do": "regression", "as": "approver", "text": "regression web"},
+    {"do": "runner", "claims": "regression"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "done", "b": "done"},
+     "events": [
+       {"item": "a", "kind": "verified", "actor": "loop (proof)", "data": {"words": "^Proof passed: e2e: e2e/web/tests/inbox\\.spec\\.ts \\(passed\\)\\. Regression R1: /board/regressions/1$"}},
+       {"item": "b", "kind": "reopened", "actor": "loop (proof)", "data": {"words": "^E2E failed in regression R1: web: login\\.spec\\.ts › a wrong password is refused \\(tests/login\\.spec\\.ts\\): Error: expect\\(locator\\)\\.toHaveText\\(expected\\)\\. Report: /board/regressions/1$"}},
+       {"kind": "regression_done", "data": {"verified": "1", "reopened": "2"}},
+       {"kind": "evidence", "actor": "loop (proof)", "count": 1, "data": {"name": "^2-test-failed-1\\.png$"}}],
+     "messages": [
+       {"channel": "loop", "from": "bot", "text": "(?s)^\\*Regression R1 \\(web\\) :red_circle: failed.*Filed as #3\\..*QA from this run's E2E checks: verified #1; reopened #2\\.$"}]}
+  ],
+  "expect": {
+    "stage": {"a": "done", "b": "done"},
+    "no_events": [{"item": "a", "kind": "verified", "actor": "approver"}, {"kind": "created", "actor": "approver"}]
+  }
+}

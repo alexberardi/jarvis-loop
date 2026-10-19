@@ -323,6 +323,12 @@ func (b *Bot) readyMessage(d store.PlanDetail, t pipeline.PlanTurn, reply string
 	}
 	label := fmt.Sprintf("Approve %s v%d", kind, doc.Version)
 	text := reply + "\n\n" + fmt.Sprintf("Ready for your approval: %s (`%s`).", b.docLink(d.Plan.ID, kind, doc.Version), short(doc.SHA256))
+	// Gemini's critique of this blueprint, when the turn wrote one (docs/decisions/2026-10-19-gemini-plan-critique.md).
+	for _, ev := range d.Events {
+		if ev.Kind == "plan_doc" && str(ev.Data, "kind") == pipeline.DocCritique && eventInt(ev.Data, "turn") == t.ID {
+			text += "\nGemini's critique and the answers: " + b.docLink(d.Plan.ID, pipeline.DocCritique, int(eventInt(ev.Data, "version"))) + "."
+		}
+	}
 	value := fmt.Sprintf("P%d:%s:%d:%s", d.Plan.ID, kind, doc.Version, doc.SHA256)
 	return Message{Text: fmt.Sprintf("%s v%d of P%d is ready for your approval", kind, doc.Version, d.Plan.ID), Blocks: []map[string]any{
 		section(text),

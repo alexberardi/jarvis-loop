@@ -3,6 +3,7 @@ package pipeline
 import (
 	"cmp"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -152,18 +153,77 @@ func UserAway(lastAction, now time.Time, loc *time.Location) bool {
 	return lastAction.IsZero() || now.Sub(lastAction) >= RunwayAwayAfter || now.In(loc).Hour() >= RunwayNightHour
 }
 
-// RunwayWarn decides the dry-spell warning: send one when the runway is below threshold hours (0:
-// off), the user is away, there is something they can unblock and none was sent in this dry spell
-// (warned); warned stays set (keep) until the runway is back at the threshold.
-func RunwayWarn(r Runway, threshold int, away, warned bool) (send, keep bool) {
-	if threshold <= 0 || r.Hours >= float64(threshold) {
-		return false, false
+// RunwayLowStep is how far (agent-hours) below the last warning the runway must fall to be a new
+// low worth another warning.
+const RunwayLowStep = 1.0
+
+// RunwayWarned is what the warnings of the current dry spell said (#227), kept between ticks:
+// zero when there is no dry spell.
+type RunwayWarned struct {
+	// Warned: a warning went out in this dry spell.
+	Warned bool `json:"warned,omitempty"`
+	// Hours is the lowest runway a warning of this spell reported.
+	Hours float64 `json:"hours,omitempty"`
+	// Unblockers is what the warnings named and is still waiting, as "item:action", sorted.
+	Unblockers []string `json:"unblockers,omitempty"`
+	// OKSince is when the runway got back to the threshold, zero while it is below; the spell ends
+	// once it has stayed there for RunwayAwayAfter.
+	OKSince time.Time `json:"ok_since,omitzero"`
+}
+
+func unblockerKeys(us []Unblocker) []string {
+	var keys []string
+	for _, u := range us {
+		keys = append(keys, strconv.FormatInt(u.ItemID, 10)+":"+u.Action)
 	}
-	if warned {
-		return false, true
+	slices.Sort(keys)
+	return slices.Compact(keys)
+}
+
+// RunwayWarn decides the dry-spell warning: one per real change, not one per tick (#227). It
+// sends when the runway is below threshold hours (0: off), the user is away and there is something
+// they can unblock, and either no warning went out in this dry spell, the runway is a new low
+// (RunwayLowStep below the last warning's), or an unblocker is one no warning of the spell named
+// (by item and action; their order is not news). The spell (next) outlives a blip: it ends only
+// once the runway has stayed at the threshold for RunwayAwayAfter, or the warning is turned off.
+// An unblocker that is no longer waiting is forgotten, so it is news if it comes back. The caller passes
+// the unblockers the warning would name, and does not call it while the loop is paused.
+func RunwayWarn(r Runway, threshold int, away bool, last RunwayWarned, now time.Time) (send bool, next RunwayWarned) {
+	if threshold <= 0 || !last.Warned && r.Hours >= float64(threshold) {
+		return false, RunwayWarned{}
 	}
-	if !away || len(r.Unblockers) == 0 {
-		return false, false
+	keys := unblockerKeys(r.Unblockers)
+	var fresh []string
+	if last.Warned {
+		var kept []string
+		for _, k := range keys {
+			if slices.Contains(last.Unblockers, k) {
+				kept = append(kept, k)
+			} else {
+				fresh = append(fresh, k)
+			}
+		}
+		last.Unblockers = kept
 	}
-	return true, true
+	if r.Hours >= float64(threshold) {
+		if last.OKSince.IsZero() {
+			last.OKSince = now
+		}
+		if now.Sub(last.OKSince) >= RunwayAwayAfter {
+			return false, RunwayWarned{}
+		}
+		return false, last
+	}
+	last.OKSince = time.Time{}
+	if !last.Warned {
+		if !away || len(keys) == 0 {
+			return false, RunwayWarned{}
+		}
+		return true, RunwayWarned{Warned: true, Hours: r.Hours, Unblockers: keys}
+	}
+	newLow := r.Hours <= last.Hours-RunwayLowStep+1e-9
+	if !away || len(keys) == 0 || !newLow && len(fresh) == 0 {
+		return false, last
+	}
+	return true, RunwayWarned{Warned: true, Hours: min(r.Hours, last.Hours), Unblockers: keys}
 }

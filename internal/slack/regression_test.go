@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 	"github.com/alexberardi/jarvis-loop/internal/store"
@@ -182,5 +183,111 @@ func TestRegressionReportCapsTheFailures(t *testing.T) {
 	}
 	if !strings.Contains(fmt.Sprint(blocks[MaxReportFailures]), fmt.Sprintf("page %d › loads", MaxReportFailures-1)) {
 		t.Fatalf("block %d: %v", MaxReportFailures, blocks[MaxReportFailures])
+	}
+}
+
+// A run that decided e2e checks says so under its report (#195).
+func TestRegressionReportQALine(t *testing.T) {
+	if got := regressionQALine(store.Event{Data: map[string]any{"verified": []any{float64(4), float64(9)}, "reopened": []any{float64(5)}}}); got != "QA from this run's E2E checks: verified #4, #9; reopened #5." {
+		t.Fatalf("line %q", got)
+	}
+	if got := regressionQALine(store.Event{Data: map[string]any{}}); got != "" {
+		t.Fatalf("no item decided: %q", got)
+	}
+}
+
+// 'regression tonight' schedules the overnight run (the approver's only), 'regression tonight
+// off' cancels it; its report waits for 08:30 and then lists the lanes, the failures with their
+// recordings, the flaky tests apart and the duration.
+func TestRegressionTonight(t *testing.T) {
+	e := newBotEnv(t)
+	e.b.c.LinkBase = "http://loopd.lan:7781"
+	e.mention(other, ChannelLoop, "<@U0BOT> regression tonight")
+	if r, _ := e.st.ScheduledRegression(e.ctx); r != nil {
+		t.Fatalf("someone else scheduled %+v", r)
+	}
+	e.calls()
+	e.mention(Approver, ChannelLoop, "<@U0BOT> regression tonight")
+	e.mention(Approver, ChannelLoop, "<@U0BOT> regression tonight")
+	eph := only(t, e.calls(), "chat.postEphemeral")
+	if len(eph) != 2 || !strings.Contains(allText(eph[0]), "Regression R1 (overnight) scheduled: it starts at 01:00 on Thu Oct 15 or once the queue has been quiet for 10 minutes, whichever is later") ||
+		!strings.Contains(allText(eph[1]), "already scheduled for 01:00 on Thu Oct 15") {
+		t.Fatalf("acks %+v", eph)
+	}
+	e.mention(Approver, ChannelLoop, "<@U0BOT> regression tonight off")
+	if r, _ := e.st.ScheduledRegression(e.ctx); r != nil {
+		t.Fatalf("still scheduled %+v", r)
+	}
+	if eph := only(t, e.calls(), "chat.postEphemeral"); len(eph) != 1 || !strings.Contains(allText(eph[0]), "Regression R1 (overnight) cancelled.") {
+		t.Fatalf("cancel ack %+v", eph)
+	}
+	if rows, _ := e.st.ListItems(e.ctx, "", ""); len(rows) != 0 {
+		t.Fatalf("the command added an item: %+v", rows)
+	}
+
+	// Scheduled again; the queue is quiet all evening: claimed at 01:10, done at 03:24.
+	e.mention(Approver, ChannelLoop, "<@U0BOT> regression tonight")
+	req := pipeline.ClaimRequest{Runner: "devbox", Agent: "a", Capabilities: []string{"emulator", "gpu", "voice"}, Kinds: []string{pipeline.WorkRegression}}
+	e.clk.Advance(17 * time.Hour)
+	e.st.Claim(e.ctx, "devbox", req)
+	e.clk.Advance(10 * time.Minute)
+	c, err := e.st.Claim(e.ctx, "devbox", req)
+	if err != nil || c == nil || c.Reg == nil {
+		t.Fatalf("claim at 01:10: %+v %v", c, err)
+	}
+	for _, f := range []string{"3-shot.png", "4-reply.wav"} {
+		if _, err := e.st.AddRegressionFile(e.ctx, "devbox", c.Reg.ID, f, strings.NewReader("RIFF")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 134 {
+		e.clk.Advance(time.Minute)
+		if _, err := e.st.Heartbeat(e.ctx, "devbox", c.Lease.ID, "e2e"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.st.RegressionResult(e.ctx, "devbox", c.Reg.ID, store.RegressionReport{ServerHead: "0123456789abcdef", MobileHead: "fedcba9876543210", Tests: []store.RegressionReportTest{
+		{Suite: "web", Title: "inbox › deletes", Status: "passed"},
+		{Suite: "web", Title: "login › wrong password", Status: "failed", Error: "expected \"Wrong password\"", Screenshot: "3-shot.png"},
+		{Suite: "mobile", Title: "Sign in", Status: "passed"},
+		{Suite: "mobile", Title: "Biometric login", Status: "skipped"},
+		{Suite: "pipeline", Title: "timer correction", Status: "passed"},
+		{Suite: "voice", Title: "lights", Status: "failed", Error: "no reply heard", Recording: "4-reply.wav"},
+		{Suite: "voice", Title: "wake + timer", Status: store.TestFlaky, Error: "first run: the wake word was missed"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	e.b.Tick(e.ctx)
+	if posts := only(t, e.calls(), "chat.postMessage"); len(posts) != 0 {
+		t.Fatalf("posted at night: %+v", posts)
+	}
+	// 08:30: one report.
+	e.clk.Advance(5*time.Hour + 6*time.Minute)
+	e.b.Tick(e.ctx)
+	e.b.Tick(e.ctx)
+	var reports []call
+	for _, p := range only(t, e.calls(), "chat.postMessage") {
+		if strings.Contains(allText(p), "Overnight regression") {
+			reports = append(reports, p)
+		}
+	}
+	if len(reports) != 1 {
+		t.Fatalf("morning reports %+v", reports)
+	}
+	txt := allText(reports[0])
+	for _, want := range []string{
+		"*Overnight regression R2 :red_circle: failed*: 3 passed, 2 failed, 1 flaky, 1 skipped in 2h 14m",
+		"jarvis-server `0123456` · jarvis-node-mobile `fedcba9`",
+		"web 1 passed, 1 failed · mobile 1 passed, 1 skipped · pipeline 1 passed · voice 0 passed, 1 failed, 1 flaky",
+		"*voice: lights*", "no reply heard", "<http://loopd.lan:7781/board/regressions/2/files/2|recording>",
+		"<http://loopd.lan:7781/board/regressions/2/files/1|screenshot>", `"value":"R2:2"`, `"value":"R2:6"`,
+		"*Flaky* (failed, then passed on the rerun): voice: wake + timer.",
+	} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("report lacks %q:\n%s", want, txt)
+		}
+	}
+	if strings.Contains(txt, `"value":"R2:7"`) {
+		t.Errorf("a flaky test has a File it button:\n%s", txt)
 	}
 }

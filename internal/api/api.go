@@ -78,6 +78,7 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /plans/{id}/drop", user, s.dropPlan)
 	route("POST /plans/{id}/turns/{turn}/result", runner, s.planTurnResult)
 	route("GET /control", reads, s.getControl)
+	route("GET /flow", reads, s.flow)
 	route("GET /freezes", reads, s.listFreezes)
 	route("POST /unfreeze", user, s.unfreeze)
 	route("PUT /control", user, s.putControl)
@@ -103,6 +104,9 @@ func (s *server) routes() *http.ServeMux {
 	// Regression runs (regression.go).
 	route("POST /regressions", user, s.queueRegression)
 	route("GET /regressions", reads, s.listRegressions)
+	route("POST /regressions/scheduled", user, s.scheduleRegression)
+	route("DELETE /regressions/scheduled", user, s.cancelScheduledRegression)
+	route("GET /regressions/scheduled", reads, s.scheduledRegression)
 	route("GET /regressions/{id}", reads, s.getRegression)
 	route("GET /regressions/{id}/files/{n}", reads, s.downloadRegressionFile)
 	route("POST /regressions/{id}/files", runner, s.uploadRegressionFile)
@@ -368,6 +372,8 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		RunnerStages []string `json:"runner_stages"`
 		// Kinds: item, plan (plan turns), orchestrate, regression; empty is items only.
 		Kinds []string `json:"kinds"`
+		// Slots: how many runs the runner works at once, for the flow panel (0: not said).
+		Slots int `json:"slots"`
 		// Builders: the other builders the runner can run (qwen), for a paced claim's route.
 		Builders []string `json:"builders"`
 	}
@@ -385,6 +391,10 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kinds may be item, plan, orchestrate and regression, got " + strconv.Quote(k)})
 			return
 		}
+	}
+	if body.Slots < 0 || body.Slots > maxSlots {
+		s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "slots must be 0 to " + strconv.Itoa(maxSlots)})
+		return
 	}
 	p := PrincipalFrom(r.Context())
 	var stages []pipeline.Stage
@@ -428,7 +438,7 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds, Builders: body.Builders})
+	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds, Builders: body.Builders, Slots: body.Slots})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -516,8 +526,10 @@ func (s *server) advance(w http.ResponseWriter, r *http.Request) {
 // RunnerEventKinds are the events a runner may record on an item it holds the lease on, besides
 // stage moves: what happened inside a run that the user should see in the item's history
 // (land_waiting: the land script has waited on CI or GitHub's mergeability for a while;
-// builder_fallback: a qwen item built with claude on a runner with no qwen config).
-var RunnerEventKinds = []string{"guard_refused", "low_cache_hit", "land_waiting", "builder_fallback"}
+// builder_fallback: a qwen item built with claude on a runner with no qwen config;
+// branch_rewritten: the runner pushed a reviewed rebase over the PR's recorded head, with a lease;
+// second_opinion: Gemini's findings on an approved review and Claude's verdicts, as counts).
+var RunnerEventKinds = []string{"guard_refused", "low_cache_hit", "land_waiting", "builder_fallback", "branch_rewritten", "second_opinion"}
 
 // KindMainCI is main's CI on an item's merge commit: recorded after the merge (the lease has
 // ended), only by the runner that merged it (store.MainCI).
@@ -883,6 +895,23 @@ func (s *server) reopen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"item": it, "filed": filed})
+}
+
+// maxSlots bounds a runner's reported slots.
+const maxSlots = 64
+
+// flow is the flow panel's numbers (store.Flow) for ?window= (default 24h).
+func (s *server) flow(w http.ResponseWriter, r *http.Request) {
+	window := r.URL.Query().Get("window")
+	if window == "" {
+		window = store.DefaultFlowWindow
+	}
+	f, err := s.st.Flow(r.Context(), window)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
 }
 
 // listFreezes are the repos frozen while their main is red.

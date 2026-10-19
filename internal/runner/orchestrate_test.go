@@ -128,6 +128,27 @@ func TestClaimKinds(t *testing.T) {
 	}
 }
 
+// A claim says both how many slots the runner works (the flow panel) and its other builders (a
+// paced claim's route to qwen).
+func TestClaimForSendsSlotsAndBuilders(t *testing.T) {
+	var got struct {
+		Slots    int      `json:"slots"`
+		Builders []string `json:"builders"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, Token: runnerToken}
+	if _, err := c.ClaimFor(context.Background(), "a", &Config{Slots: 3, Qwen: &QwenConfig{}}, []string{StageBuild}); err != nil {
+		t.Fatal(err)
+	}
+	if got.Slots != 3 || !slices.Equal(got.Builders, []string{pipeline.BuilderQwen}) {
+		t.Fatalf("claim body slots %d builders %v, want 3 [qwen]", got.Slots, got.Builders)
+	}
+}
+
 func orchRig(t *testing.T, scenario string) *rig {
 	g := newRig(t, scenario)
 	g.r.Cfg.Stages = []string{StageOrchestrate, StageBuild}

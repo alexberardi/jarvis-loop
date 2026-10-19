@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -219,6 +220,52 @@ func TestProofSweep(t *testing.T) {
 	}
 	if _, err := s.OrchProof(ctx, "orchestrator:loop", bare.ID, json.RawMessage(`[{"kind":"what"}]`), "bad"); code(err) == "" {
 		t.Fatalf("a bad proof: %v", err)
+	}
+}
+
+// The retroactive re-ask (#195): an item in qa whose proof the sweep wrote with only manual checks,
+// before E2E results could pass one, is asked once more (proof_e2e), and its proof may be replaced.
+func TestProofSweepAsksAgainForE2E(t *testing.T) {
+	s, clk := open(t)
+	ctx := context.Background()
+	bare := toMerged(t, s, runner, nil, map[string]string{"needs_qa": "true"})
+	built := proofQA(t, s, `[{"kind":"manual","look":"x"}]`)
+	if err := s.OrchTick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.OrchProof(ctx, "orchestrator:loop", bare.ID, json.RawMessage(`[{"kind":"manual","look":"the schedules screen"}]`), "no test"); err != nil {
+		t.Fatal(err)
+	}
+	cl := claimKinds(t, s, "o", pipeline.WorkOrchestrate)
+	finish(t, s, cl, "sess-1")
+	// The migration marks the items in qa then (build's proofs and automatic ones stay).
+	body, err := os.ReadFile("migrations/0027_proof_e2e.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.w.Exec(string(body)); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(time.Minute)
+	if err := s.OrchTick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	q := queuedTriggers(t, s)
+	if len(q) != 1 || q[0].Reason != pipeline.TriggerProofE2E || q[0].ItemID != bare.ID {
+		t.Fatalf("queued %+v (built #%d is the build's)", q, built.ID)
+	}
+	got, err := s.OrchProof(ctx, "orchestrator:loop", bare.ID, json.RawMessage(`[{"kind":"e2e","tests":[".maestro/schedules.yaml"]}]`), "coverage.json: RoutinesStackNavigator/ScheduleList")
+	if err != nil || got.Proof.Checks[0].Kind != pipeline.ProofE2E {
+		t.Fatalf("replace: %+v %v", got.Proof, err)
+	}
+	cl = claimKinds(t, s, "o", pipeline.WorkOrchestrate)
+	finish(t, s, cl, "sess-2")
+	clk.Advance(time.Minute)
+	if err := s.OrchTick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if q := queuedTriggers(t, s); len(q) != 0 {
+		t.Fatalf("asked again: %+v", q)
 	}
 }
 

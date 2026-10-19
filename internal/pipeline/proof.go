@@ -27,7 +27,8 @@ const (
 	ProofCommand = "command"
 	// ProofPi is a command for the test Pi; it waits until the loop has a pi device.
 	ProofPi = "pi"
-	// ProofE2E names tests of the E2E suite; it waits until the loop runs that suite.
+	// ProofE2E names tests of the E2E suite (spec or flow paths, as e2e/coverage.json lists them, or
+	// "suite: title"); the next regression run that ran them decides it (ApplyE2EResults).
 	ProofE2E = "e2e"
 	// ProofManual is what only the user can judge, with what to look at.
 	ProofManual = "manual"
@@ -41,11 +42,17 @@ const (
 	CheckPending = "pending" // an automatic check not passed yet
 	CheckPassed  = "passed"
 	CheckFailed  = "failed"  // a command check that failed on its last run
-	CheckWaiting = "waiting" // pi and e2e: nothing runs them yet
+	CheckWaiting = "waiting" // pi (nothing runs it yet) and e2e (until a regression run has its tests)
 	CheckManual  = "manual"  // the user's
 	// ProofNone is the status of an item without a proof: the user checks it, as before proofs.
 	ProofNone = "none"
 )
+
+// CheckError is a runner's result (never a check's state) for a command check it could not run
+// for its environment's sake: the repo's setup failed, or the command's own output shows it never
+// got to test the change (docs/decisions/2026-10-19-proof-setup.md). It is recorded on the check
+// as its evidence and leaves its state and fails as they were: it never counts toward a reopen.
+const CheckError = "error"
 
 // Who wrote a proof.
 const (
@@ -302,7 +309,10 @@ func (c ProofCheck) String() string {
 	case ProofPi:
 		return "pi: `" + c.Run + "` (waits for the test Pi)"
 	case ProofE2E:
-		return "e2e: " + strings.Join(c.Tests, ", ") + " (waits for the E2E suite)"
+		if c.State == CheckWaiting {
+			return "e2e: " + strings.Join(c.Tests, ", ") + " (waits for the next regression run)"
+		}
+		return "e2e: " + strings.Join(c.Tests, ", ")
 	case ProofManual:
 		return "look at " + c.Look
 	}
@@ -374,8 +384,10 @@ func ApplyProofChecked(it Item, results []CheckResult, usage map[int]UsageSeen, 
 		case CheckFailed:
 			c.State = CheckFailed
 			c.Fails++
+		case CheckError:
+			c.Evidence = clipRunes("could not run: "+c.Evidence, maxProofEvidence)
 		default:
-			return Transition{}, errf(CodeInvalidField, "result for check %d: state must be passed or failed", r.Check)
+			return Transition{}, errf(CodeInvalidField, "result for check %d: state must be passed, failed or error", r.Check)
 		}
 	}
 	for i, u := range usage {
@@ -413,17 +425,152 @@ func ApplyProofChecked(it Item, results []CheckResult, usage map[int]UsageSeen, 
 	return Transition{Item: it, From: QA, To: QA, Kind: "proof_checked", Data: data}, nil
 }
 
-// ApplySetProof is a proof written for an item that has none (the sweep's): only in qa.
+// E2ETest is one test of a finished regression run, as an e2e check reads it: Name is
+// "suite: title", File the spec or flow (relative to its suite's dir, as report.json has it), N its
+// number in the run and Screenshot the run's file n of its screenshot (0: none).
+type E2ETest struct {
+	N          int
+	Name       string
+	File       string
+	Status     string
+	Error      string
+	Screenshot int
+}
+
+// E2ERun is a finished regression run's tests.
+type E2ERun struct {
+	ID    int64
+	Tests []E2ETest
+}
+
+// E2EMatches says whether a check's test name names t: its "suite: title", or its file, where
+// the name may carry the path from the repo's root (e2e/coverage.json's e2e/web/tests/x.spec.ts
+// is the web suite's tests/x.spec.ts).
+func E2EMatches(name string, t E2ETest) bool {
+	if name == t.Name {
+		return true
+	}
+	return t.File != "" && (name == t.File || strings.HasSuffix(name, "/"+t.File))
+}
+
+// ApplyE2EResults applies a finished regression run to an item's e2e checks still waiting: a
+// check whose every test name the run ran (skipped tests do not count) passes when all of those
+// passed, and fails when one failed. A test the run did not include (its suite did not run, or a
+// filter) leaves the check waiting for the next run. decided is false when the run decides none of
+// its checks (nothing to record). A failure reopens the item at once (the suite retries a test
+// itself; a run is not repeated every 30 minutes as a command is), with the failing test's
+// assertion as the words and its screenshot in data (the caller attaches it to the new item);
+// every automatic check passed and nothing left for the user → verified; otherwise proof_checked.
+// The caller checks the run started after the item's merge (or deploy).
+func ApplyE2EResults(it Item, run E2ERun, now time.Time) (tr Transition, decided bool, err error) {
+	if it.Stage != QA || it.Proof == nil {
+		return Transition{}, false, errf(CodeWrongStage, "item is %s and has no proof to check", it.Stage)
+	}
+	if it.AwaitingDeploy {
+		return Transition{}, false, errf(CodeWrongStage, "item waits for a deploy; its proof is checked after")
+	}
+	p := *it.Proof
+	p.Checks = slices.Clone(p.Checks)
+	before := p.Status()
+	at := now
+	report := fmt.Sprintf("/board/regressions/%d", run.ID)
+	var failed *E2ETest
+	for i := range p.Checks {
+		c := &p.Checks[i]
+		if c.Kind != ProofE2E || c.State != CheckWaiting {
+			continue
+		}
+		passed := 0
+		var bad *E2ETest
+		all := true
+		for _, name := range c.Tests {
+			n := 0
+			for j := range run.Tests {
+				t := &run.Tests[j]
+				if t.Status == "skipped" || !E2EMatches(name, *t) {
+					continue
+				}
+				n++
+				// Flaky: it failed, then passed on the overnight run's rerun; not a failure.
+				if t.Status == "passed" || t.Status == "flaky" {
+					passed++
+				} else if bad == nil {
+					bad = t
+				}
+			}
+			all = all && n > 0
+		}
+		switch {
+		case bad != nil:
+			c.State = CheckFailed
+			c.Evidence = clipRunes(fmt.Sprintf("regression R%d failed: %s (%s): %s (%s)", run.ID, bad.Name, bad.File, firstLine(bad.Error), report), maxProofEvidence)
+		case all:
+			c.State = CheckPassed
+			c.Evidence = fmt.Sprintf("regression R%d passed: %d test(s) (%s)", run.ID, passed, report)
+		default:
+			continue
+		}
+		c.CheckedAt = &at
+		decided = true
+		if bad != nil && failed == nil {
+			failed = bad
+		}
+	}
+	if !decided {
+		return Transition{}, false, nil
+	}
+	it.Proof = &p
+	after := p.Status()
+	data := map[string]any{"status": after, "by": p.By, "checks": proofSummary(p), "regression": run.ID}
+	if failed != nil {
+		words := fmt.Sprintf("E2E failed in regression R%d: %s (%s): %s. Report: %s", run.ID, failed.Name, failed.File, firstLine(failed.Error), report)
+		it.Stage, it.AwaitingDeploy = Done, false
+		data["words"], data["test"], data["test_n"] = words, failed.Name, failed.N
+		if failed.Screenshot != 0 {
+			data["screenshot"] = failed.Screenshot
+		}
+		return Transition{Item: it, From: QA, To: Done, Kind: "reopened", Data: data}, true, nil
+	}
+	if after == CheckPassed {
+		words := "Proof passed: " + strings.Join(proofSummary(p), "; ") + fmt.Sprintf(". Regression R%d: %s", run.ID, report)
+		it.Stage, it.AwaitingDeploy = Done, false
+		data["words"] = words
+		return Transition{Item: it, From: QA, To: Done, Kind: "verified", Data: data}, true, nil
+	}
+	data["changed"] = after != before
+	return Transition{Item: it, From: QA, To: QA, Kind: "proof_checked", Data: data}, true, nil
+}
+
+// ApplySetProof is a proof written for an item that has none (the sweep's): only in qa. It may
+// also replace a proof the sweep wrote with only manual checks (Replaceable): written before E2E
+// results could pass a check (#195), it may now have tests that cover the change.
 func ApplySetProof(it Item, p *Proof) (Transition, error) {
 	if it.Stage != QA {
 		return Transition{}, errf(CodeWrongStage, "item is %s, not qa", it.Stage)
 	}
+	data := map[string]any{"by": p.By, "status": p.Status(), "checks": proofSummary(*p)}
 	if it.Proof != nil {
-		return Transition{}, errf(CodeWrongStage, "item already has a proof (by %s)", it.Proof.By)
+		if !it.Proof.Replaceable() {
+			return Transition{}, errf(CodeWrongStage, "item already has a proof (by %s)", it.Proof.By)
+		}
+		data["replaced"] = proofSummary(*it.Proof)
 	}
 	it.Proof = p
-	return Transition{Item: it, From: QA, To: QA, Kind: "proof_set",
-		Data: map[string]any{"by": p.By, "status": p.Status(), "checks": proofSummary(*p)}}, nil
+	return Transition{Item: it, From: QA, To: QA, Kind: "proof_set", Data: data}, nil
+}
+
+// Replaceable says the sweep wrote the proof and it has only manual checks: the sweep may write
+// it again with checks the loop can run.
+func (p *Proof) Replaceable() bool {
+	if p == nil || p.By != ProofBySweep {
+		return false
+	}
+	for _, c := range p.Checks {
+		if c.Kind != ProofManual {
+			return false
+		}
+	}
+	return true
 }
 
 // proofSummary is each check with its state.

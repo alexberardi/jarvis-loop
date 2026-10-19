@@ -59,7 +59,11 @@ unsure, stop and ask (outcome `question`) instead of guessing.
    (`node_modules`, `.venv`) are already in the worktree.
    State a **proof** in it (`proof`, contract below): how the loop can tell, once merged, that the
    change works in real use (a loopd event, a command on main, the test Pi, E2E tests), and what
-   only the user can judge. An item that waits in qa is verified or reopened by it.
+   only the user can judge. An item that waits in qa is verified or reopened by it. For an app
+   change (jarvis-server's `web/admin/`, jarvis-node-mobile), read jarvis-server's
+   `e2e/coverage.json`: the specs and flows of the routes and screens you changed go in one `e2e`
+   check, with the paths as coverage.json writes them (the next regression run decides it); a change
+   that touches no covered page or screen gets a `manual` check whose `look` says why.
 
 ## Run everything in the foreground
 
@@ -114,4 +118,4 @@ Commit your work on the item's branch (the runner pushes it and opens the PR; yo
 
 `ready_for_pr` means everything is committed: the runner refuses a worktree with uncommitted changes, and reports git's own HEAD and changed files. It adds a Verification footer (the evidence files, the run's numbers, your proof) to your `pr_body`. Set `needs_review` to true when the change touches something the user should look at before it merges. No other fields.
 
-`proof` (optional, at most 10 checks) is how the loop can tell, once merged, that the change works; an item that waits in qa is checked with it. Kinds: `usage` (`event`: a loopd event kind seen since the merge, with optional `actor` and `match` lists on its data fields: `{"kind": "usage", "event": "claimed", "actor": ["runner:mbp"]}`); `command` (`run`: one shell line the runner runs fenced in a checkout of main, exit 0 passes); `pi` (`run`, for the test Pi; it waits until the loop has one); `e2e` (`tests`: E2E suite test names; they wait until it runs); `manual` (`look`: one line, what only the user can judge). Every automatic check passing verifies the item without the user; a command failing twice in a row reopens it. So make each check really show the change works, and use `manual` only for looks, feel or a product call.
+`proof` (optional, at most 10 checks) is how the loop can tell, once merged, that the change works; an item that waits in qa is checked with it. Kinds: `usage` (`event`: a loopd event kind seen since the merge, with optional `actor` and `match` lists on its data fields: `{"kind": "usage", "event": "claimed", "actor": ["runner:mbp"]}`); `command` (`run`: one shell line the runner runs fenced in a checkout of main, exit 0 passes); `pi` (`run`, for the test Pi; it waits until the loop has one); `e2e` (`tests`: E2E specs or flows, as jarvis-server's e2e/coverage.json lists them for the pages and screens an app change touches; the next regression run that runs them decides it); `manual` (`look`: one line, what only the user can judge). Every automatic check passing verifies the item without the user; a command failing twice in a row, or an E2E test failing, reopens it. So make each check really show the change works, and use `manual` only for looks, feel or a product call.
