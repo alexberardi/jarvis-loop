@@ -65,6 +65,11 @@ type Config struct {
 	UserEmulator string `json:"user_emulator"`
 	// AllowedDomains extends the sandbox's network allowlist.
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	// TrustedAuthors are the GitHub logins (besides each repo's owner, always trusted) whose PR
+	// comments, reviews and PR bodies reach an agent; anyone else's are left out, since anyone can
+	// comment on a public repo (docs/decisions/2026-10-19-trusted-comment-authors.md). A GitHub
+	// App or bot posts as "name[bot]". Matched case-insensitively.
+	TrustedAuthors []string `json:"trusted_authors,omitempty"`
 	// VerifyPR checks the PR on GitHub (gh pr view) against git before reporting. Default true.
 	VerifyPR *bool `json:"verify_pr,omitempty"`
 	// LandCIWait is how long a land run waits for CI (or GitHub's mergeability) on the PR's head
@@ -660,4 +665,17 @@ func uniq(in []string) []string {
 		}
 	}
 	return out
+}
+
+// Trusted reports whether a GitHub login's text may reach an agent working on repo slug: the
+// repo's owner and the TrustedAuthors are; anyone else (and an empty login) is not.
+func (c *Config) Trusted(slug, login string) bool {
+	if login == "" {
+		return false
+	}
+	owner, _, _ := strings.Cut(slug, "/")
+	if strings.EqualFold(login, owner) {
+		return true
+	}
+	return slices.ContainsFunc(c.TrustedAuthors, func(a string) bool { return strings.EqualFold(a, login) })
 }

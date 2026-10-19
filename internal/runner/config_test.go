@@ -189,3 +189,15 @@ func TestRepoByBareName(t *testing.T) {
 		t.Errorf("slug: %q %v", key, ok)
 	}
 }
+
+func TestTrusted(t *testing.T) {
+	c := &Config{TrustedAuthors: []string{"loop-bot[bot]"}}
+	for _, tc := range []struct {
+		login string
+		want  bool
+	}{{"alexberardi", true}, {"AlexBerardi", true}, {"Loop-Bot[bot]", true}, {"stranger", false}, {"", false}, {"alexberardi-fork", false}} {
+		if got := c.Trusted("alexberardi/jarvis-server", tc.login); got != tc.want {
+			t.Errorf("Trusted(%q) = %v", tc.login, got)
+		}
+	}
+}

@@ -131,7 +131,7 @@ bounce) with nothing pushed. A change to a file the runner trusts (`deny_write`)
 until the approver OKs that exact commit (Trust button or `loop trust`); verify then runs it (the OK holds for that commit until verify reaches a verdict on it: the PR, or a real regression;
 a later head whose trusted files' diff against the merge base is byte-identical carries the OK)
 and land holds the PR. Details: `docs/decisions/2026-10-15-all-repos.md`,
-`docs/decisions/2026-10-16-trusted-files.md`, `docs/decisions/2026-10-19-trust-carries-an-unchanged-diff.md`. While a build or review agent works,
+`docs/decisions/2026-10-16-trusted-files.md`, `docs/decisions/2026-10-19-trust-carries-an-unchanged-diff.md`. GitHub text reaches an agent only from **trusted authors** (the repo's owner and the runner's `trusted_authors`): other people's PR comments are counted, never quoted, and a PR a stranger opened has its title and body left out (`docs/decisions/2026-10-19-trusted-comment-authors.md`). While a build or review agent works,
 a repo with a `harness` lets it use the harness through the runner too: `loop-harness up | run | down`
 asks the runner, through a spool in the agent's own worktree (checked by the run's token and its guard), to run the command in the
 same fence, next to a keeper fence that holds the running sandbox until the agent ends. Details:

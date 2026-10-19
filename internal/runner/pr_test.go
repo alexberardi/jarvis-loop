@@ -134,7 +134,7 @@ func TestGHReadsAndComment(t *testing.T) {
             {"author":{"login":"bob"},"body":"","state":"CHANGES_REQUESTED","submittedAt":"2026-10-15T12:03:00Z"}]}';;
 "api --method GET repos/a/b/pulls/7/comments?per_page=100") echo '[{"user":{"login":"alex"},"body":"name it","path":"x.go","line":4,"created_at":"2026-10-15T12:02:00Z"}]';;
 "pr list --repo a/b --state merged --limit 30 --json number,title,mergedAt,files") echo '[{"number":3,"title":"Add x","mergedAt":"2026-10-14T10:00:00Z","files":[{"path":"a.go"},{"path":"b.go"}]}]';;
-"pr view 7 --repo a/b --json number,title,body,headRefName,headRefOid,baseRefName,state") echo '{"number":7,"title":"T","body":"B","headRefName":"loop/1-x","headRefOid":"abc","baseRefName":"main","state":"OPEN"}';;
+"pr view 7 --repo a/b --json number,title,body,headRefName,headRefOid,baseRefName,state,author") echo '{"number":7,"title":"T","body":"B","headRefName":"loop/1-x","headRefOid":"abc","baseRefName":"main","state":"OPEN","author":{"login":"a"}}';;
 "pr comment 7 --repo a/b --body-file /run/review.md") ;;
 *) echo "unexpected: $*" >&2; exit 1;;
 esac
@@ -152,7 +152,7 @@ esac
 		t.Fatalf("merged %+v %v", m, err)
 	}
 	v, err := gh.View(ctx, "a/b", 7)
-	if err != nil || v.HeadRefOid != "abc" || v.Body != "B" {
+	if err != nil || v.HeadRefOid != "abc" || v.Body != "B" || v.Author.Login != "a" {
 		t.Fatalf("view %+v %v", v, err)
 	}
 	if err := gh.Comment(ctx, "a/b", 7, "/run/review.md"); err != nil {
