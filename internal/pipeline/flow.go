@@ -20,6 +20,10 @@ const (
 	WaitStopped  = "stopped"
 	WaitNoSlot   = "no free slot"
 	WaitFrozen   = "frozen repo"
+	// WaitPaced, WaitPaused: claude is near a usage limit (PaceFor) and the claim leaves it to a
+	// later run (ChooseWorkPaced): slow takes only P1, size S and triage; paused takes nothing.
+	WaitPaced  = "usage paced"
+	WaitPaused = "usage paused"
 	// WaitReady: nothing holds it; it goes to the next runner that asks for its stage.
 	WaitReady = "ready"
 )
@@ -79,9 +83,11 @@ func itemBlocks(c Control, it Item, deps map[int64]Stage, inUse map[string]int, 
 // no runner) come before its repo's (frozen) and the loop's (stopped, no free slot): once those
 // free up it would still wait for them. The limits come next: they change with every run. Last,
 // the free slots all held for work it does not need is no free slot, as ChooseWork applies them.
-// Land takes no agent slot, so neither busy nor held slots hold it back. A frozen repo's fix waits only for a stop or 0 active agents and the resource limits, as
-// chooseFix takes it.
-func WaitReason(c Control, it Item, deps map[int64]Stage, live []LiveLease, unservable []string, frozen Frozen, holds []SlotHold) string {
+// Land takes no agent slot, so neither busy nor held slots hold it back. A frozen repo's fix waits only for a stop or 0 active agents, claude's pace and the resource limits, as
+// chooseFix takes it. pace is claude's pace as the claim applies it (ChooseWorkPaced) and
+// builders the other builders some runner offers (RunnerBuilders): a build qwen may take is not
+// paced. The pace comes after the free slots (a slot frees sooner) and before the limits.
+func WaitReason(c Control, pace Pace, it Item, deps map[int64]Stage, live []LiveLease, unservable []string, frozen Frozen, holds []SlotHold, builders []string) string {
 	switch it.Stage {
 	case NeedsYou:
 		return WaitNeedsYou
@@ -111,6 +117,12 @@ func WaitReason(c Control, it Item, deps map[int64]Stage, live []LiveLease, unse
 	if !fix && !land && AgentLeases(live) >= c.ActiveAgents {
 		return WaitNoSlot
 	}
+	if !newPacing(pace, live, builders).eligible(it) {
+		if pace.Level == PacePaused {
+			return WaitPaused
+		}
+		return WaitPaced
+	}
 	if r := itemBlocks(c, it, deps, inUse, !fix); r != "" {
 		return r
 	}
@@ -118,6 +130,21 @@ func WaitReason(c Control, it Item, deps map[int64]Stage, live []LiveLease, unse
 		return WaitNoSlot
 	}
 	return WaitReady
+}
+
+// RunnerBuilders is the other builders the runners seen within RunnerSeenWindow of now offer.
+func RunnerBuilders(runners []RunnerSeen, now time.Time) []string {
+	var out []string
+	for _, r := range runners {
+		if now.Sub(r.LastSeen) <= RunnerSeenWindow {
+			for _, b := range r.Builders {
+				if !slices.Contains(out, b) {
+					out = append(out, b)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // Dist is a set of durations as the flow panel shows them: how many, the median and the 90th

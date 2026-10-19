@@ -347,3 +347,42 @@ func BenchmarkFlow7d(b *testing.B) {
 		}
 	}
 }
+
+// Under claude's usage pace the panel says which items wait on it, with the claim's own pace, and
+// a P4 size-M build stops waiting once a runner says it has qwen (runners.builders).
+func TestFlowUsagePaced(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	if _, err := s.SetControl(ctx, user, ControlPatch{Budgets: map[string]pipeline.Budget{"claude": {Per5h: 10000}}}); err != nil {
+		t.Fatal(err)
+	}
+	big, small, low := add(t, s, "P2 M", "P2"), add(t, s, "P2 S", "P2"), add(t, s, "P4 M", "P4")
+	sizeM := claudeRun(3000)
+	sizeM["size"] = "M"
+	triageWith(t, s, big, sizeM)
+	triageWith(t, s, small, claudeRun(3000))
+	triageWith(t, s, low, sizeM) // 9000 of 10000: slow
+	waits := func() map[string][]int64 {
+		t.Helper()
+		f, err := s.Flow(ctx, "6h")
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string][]int64{}
+		for _, w := range f.Waiting {
+			out[w.Reason] = w.Items
+		}
+		return out
+	}
+	want := map[string][]int64{pipeline.WaitPaced: {big.ID, low.ID}, pipeline.WaitReady: {small.ID}}
+	if got := waits(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("slow, no qwen runner: %v, want %v", got, want)
+	}
+	if c := claimReq(t, s, pipeline.ClaimRequest{Builders: []string{pipeline.BuilderQwen}, Stages: []pipeline.Stage{pipeline.Triage}}); c != nil {
+		t.Fatalf("triage claim %+v, want none", c)
+	}
+	want = map[string][]int64{pipeline.WaitPaced: {big.ID}, pipeline.WaitReady: {small.ID, low.ID}}
+	if got := waits(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("slow, a qwen runner: %v, want %v", got, want)
+	}
+}

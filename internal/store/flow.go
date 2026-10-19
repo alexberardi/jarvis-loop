@@ -190,7 +190,7 @@ func (s *Store) Flow(ctx context.Context, window string) (Flow, error) {
 			return Flow{}, err
 		}
 	}
-	if err := f.waiting(tx, cs); err != nil {
+	if err := f.waiting(tx, cs, now); err != nil {
 		return Flow{}, err
 	}
 	return f, nil
@@ -501,8 +501,9 @@ func (f *Flow) features(tx *sql.Tx, since, _ int64) error {
 	return nil
 }
 
-// waiting classifies every open item that waits right now, with the claim's own snapshot (cs).
-func (f *Flow) waiting(tx *sql.Tx, cs claimState) error {
+// waiting classifies every open item that waits right now, with the claim's own snapshot (cs:
+// its pace too) and the builders the runners seen by now offer.
+func (f *Flow) waiting(tx *sql.Tx, cs claimState, now time.Time) error {
 	items := slices.Clone(cs.waiting)
 	rows, err := tx.Query(`SELECT ` + itemCols + ` FROM items WHERE stage IN ('needs_you', 'held', 'qa')`)
 	if err != nil {
@@ -529,9 +530,10 @@ func (f *Flow) waiting(tx *sql.Tx, cs claimState) error {
 		return err
 	}
 	slices.SortFunc(items, func(a, b pipeline.Item) int { return int(a.ID - b.ID) })
+	builders := pipeline.RunnerBuilders(cs.runners, now)
 	by := map[string]*FlowWait{}
 	for _, it := range items {
-		why := pipeline.WaitReason(cs.ctl, it, deps, cs.live, flagged[it.ID], cs.frozen, cs.holds)
+		why := pipeline.WaitReason(cs.ctl, cs.pace, it, deps, cs.live, flagged[it.ID], cs.frozen, cs.holds, builders)
 		if why == "" {
 			continue
 		}

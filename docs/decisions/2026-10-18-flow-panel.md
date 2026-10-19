@@ -68,10 +68,20 @@ panel (`/board/flow`, linked from the board's header) and the API the same numbe
 - **Land** (#209, #210): land runs no agent, so a land item waits on none of its resources' limits
   (`itemBlocks` uses `Needs`) and never for a busy or held agent slot; only its stage's limit, a
   stop or 0 active agents hold it back.
+- **Usage pace** (#199, `ChooseWorkPaced`): when claude is near a usage limit (`PaceFor`), an item
+  claude may not take now waits `usage paced` (slow: only P1, size S, triage, within the pace's
+  runs) or `usage paused` (claude takes nothing). The panel uses the claim's own pace
+  (`claimState.pace`, `paceNow`) and the builders the runners seen lately offer
+  (`pipeline.RunnerBuilders`, from the new `runners.builders` column): a P3–P5 size S or M build
+  that a runner with qwen would take is not paced. The pace comes after a busy agent slot (a slot
+  frees sooner) and before the limits; a frozen repo's fix is paced like any item, and land and
+  qwen builds never are. `TestWaitReasonAgreesWithChoose` runs against `ChooseWorkPaced` under the
+  normal, slow and paused paces, with and without a qwen runner.
 
 ## Speed
 
-Migration 0025 adds `leases(ended_at)` and `plan_leases(ended_at)`; `events(at)` comes from the
+Migration 0029 adds `leases(ended_at)` and `plan_leases(ended_at)` (and the `runners.slots` and
+`runners.builders` columns); `events(at)` comes from the
 runway migration (#205, `0023_runway.sql`), so this one does not create it again. Every window query
 starts from one of the three (`TestFlowQueriesUseIndexes` checks the query plans), and the per-item
 pass pairing reads only the items with a stage change in the window, by the existing

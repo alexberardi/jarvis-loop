@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"slices"
 	"testing"
 	"time"
 )
@@ -20,6 +21,7 @@ func TestWaitReason(t *testing.T) {
 	in := func(it Item, repo string) Item { it.Repo = repo; return it }
 	frozen := Frozen{"o/r": 5}
 	macHold := []SlotHold{{Resource: "macos", Runner: "mac", ItemID: 2}}
+	normal := Pace{Level: PaceNormal, Agents: ctl.ActiveAgents}
 
 	cases := []struct {
 		name       string
@@ -97,10 +99,67 @@ func TestWaitReason(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := WaitReason(c.ctl, c.it, c.deps, c.live, c.unservable, c.frozen, c.holds); got != c.want {
+			if got := WaitReason(c.ctl, normal, c.it, c.deps, c.live, c.unservable, c.frozen, c.holds, nil); got != c.want {
 				t.Fatalf("WaitReason = %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// Under claude's usage pace (ChooseWorkPaced) an item claude may not take now waits on it, unless
+// a runner with qwen would take the build instead.
+func TestWaitReasonPaced(t *testing.T) {
+	ctl := DefaultControl()
+	slow := Pace{Level: PaceSlow, Agents: 2}
+	paused := Pace{Level: PacePaused}
+	sized := func(it Item, size string) Item { it.Size = size; return it }
+	qwen := []string{BuilderQwen}
+	twoClaude := []LiveLease{{ItemID: 8, Stage: Build, Claude: true}, {ItemID: 9, Stage: Review, Claude: true}}
+	cases := []struct {
+		name     string
+		pace     Pace
+		it       Item
+		live     []LiveLease
+		frozen   Frozen
+		builders []string
+		want     string
+	}{
+		{"a P3 size-M build under a slow pace", slow, sized(waiting(1, Build, "P3", 0), "M"), nil, nil, nil, WaitPaced},
+		{"the same build with a qwen runner", slow, sized(waiting(1, Build, "P3", 0), "M"), nil, nil, qwen, WaitReady},
+		{"a P1 build under a slow pace", slow, sized(waiting(1, Build, "P1", 0), "L"), nil, nil, nil, WaitReady},
+		{"a size-S review under a slow pace", slow, sized(waiting(1, Review, "P3", 0), "S"), nil, nil, nil, WaitReady},
+		{"triage under a slow pace", slow, waiting(1, Triage, "P3", 0), nil, nil, nil, WaitReady},
+		{"a size-L P3 build is not routed", slow, sized(waiting(1, Build, "P3", 0), "L"), nil, nil, qwen, WaitPaced},
+		{"a P1 build once the slow pace's runs are taken", slow, sized(waiting(1, Build, "P1", 0), "S"), twoClaude, nil, nil, WaitPaced},
+		{"a P1 build under a pause", paused, sized(waiting(1, Build, "P1", 0), "S"), nil, nil, nil, WaitPaused},
+		{"a qwen build under a pause", paused, sized(Item{ID: 1, Stage: Build, Priority: "P3", Builder: BuilderQwen, CreatedAt: t0}, "M"), nil, nil, nil, WaitReady},
+		{"a routed build under a pause", paused, sized(waiting(1, Build, "P3", 0), "S"), nil, nil, qwen, WaitReady},
+		{"land under a pause", paused, waiting(1, Land, "P3", 0), nil, nil, nil, WaitReady},
+		{"a frozen repo's fix under a pause", paused, Item{ID: 5, Stage: Build, Priority: "P1", Repo: "o/r", CreatedAt: t0}, nil, Frozen{"o/r": 5}, nil, WaitPaused},
+		{"no free slot comes before the pace", Pace{Level: PaceSlow, Agents: 1}, sized(waiting(1, Build, "P3", 0), "M"),
+			[]LiveLease{{ItemID: 6, Stage: Build, Claude: true}, {ItemID: 7, Stage: Build}, {ItemID: 8, Stage: Build}, {ItemID: 9, Stage: Build}}, nil, nil, WaitNoSlot},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := WaitReason(ctl, c.pace, c.it, nil, c.live, nil, c.frozen, nil, c.builders); got != c.want {
+				t.Fatalf("WaitReason = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRunnerBuilders(t *testing.T) {
+	now := t0
+	runners := []RunnerSeen{
+		{Name: "a", Builders: []string{BuilderQwen}, LastSeen: now.Add(-RunnerSeenWindow - time.Second)},
+		{Name: "b", LastSeen: now},
+	}
+	if got := RunnerBuilders(runners, now); len(got) != 0 {
+		t.Fatalf("a quiet runner's builders count: %v", got)
+	}
+	runners[0].LastSeen = now
+	if got := RunnerBuilders(runners, now); len(got) != 1 || got[0] != BuilderQwen {
+		t.Fatalf("RunnerBuilders = %v, want [qwen]", got)
 	}
 }
 
@@ -127,14 +186,34 @@ func TestWaitReasonAgreesWithChoose(t *testing.T) {
 	three.ActiveAgents = 3 // one free slot, which macHold holds
 	macHold := []SlotHold{{Resource: "macos", Runner: "mac", ItemID: 13}}
 	items = append(items, waiting(13, Build, "P2", 0, "macos"), waiting(14, Land, "P2", 0, "voice"))
+	// Under a pace (ChooseWorkPaced): P3 builds qwen may take or not, a size-S one, a qwen build.
+	items = append(items,
+		Item{ID: 15, Stage: Build, Priority: "P3", Size: "M", CreatedAt: t0},
+		Item{ID: 16, Stage: Build, Priority: "P3", Size: "L", CreatedAt: t0},
+		Item{ID: 17, Stage: Review, Priority: "P4", Size: "S", CreatedAt: t0},
+		Item{ID: 18, Stage: Build, Priority: "P3", Size: "M", Builder: BuilderQwen, CreatedAt: t0})
+	paces := []Pace{{Level: PaceNormal, Agents: 4}, {Level: PaceSlow, Agents: 2}, {Level: PaceSlow, Agents: 1}, {Level: PacePaused}}
 	for _, ctl := range []Control{DefaultControl(), full, three} {
 		for _, holds := range [][]SlotHold{nil, macHold} {
-			for _, it := range items {
-				w, _ := ChooseWork(ctl, []Item{it}, deps, live, nil, nil, nil, holds, req, frozen)
-				chosen := w.Item != nil
-				why := WaitReason(ctl, it, deps, live, nil, frozen, holds)
-				if chosen != (why == WaitReady) {
-					t.Errorf("%d agents, %d held, item %d: ChooseWork %v, WaitReason %q", ctl.ActiveAgents, len(holds), it.ID, chosen, why)
+			for _, pace := range paces {
+				for _, builders := range [][]string{nil, {BuilderQwen}} {
+					for _, claude := range []bool{false, true} {
+						lv := slices.Clone(live)
+						for i := range lv {
+							lv[i].Claude = claude
+						}
+						r := req
+						r.Builders = builders
+						for _, it := range items {
+							w, _ := ChooseWorkPaced(ctl, pace, []Item{it}, deps, lv, nil, nil, nil, holds, r, frozen)
+							chosen := w.Item != nil
+							why := WaitReason(ctl, pace, it, deps, lv, nil, frozen, holds, builders)
+							if chosen != (why == WaitReady) {
+								t.Errorf("%d agents, %d held, pace %d/%d, builders %v, claude %v, item %d: ChooseWork %v, WaitReason %q",
+									ctl.ActiveAgents, len(holds), pace.Level, pace.Agents, builders, claude, it.ID, chosen, why)
+							}
+						}
+					}
 				}
 			}
 		}
