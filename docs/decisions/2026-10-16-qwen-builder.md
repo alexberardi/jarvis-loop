@@ -36,6 +36,10 @@ background slot (Qwen3.8-27B, 128k context, one request at a time) instead of `c
 
 ## The strike rule
 
+**Superseded 2026-10-19** ([2026-10-19-qwen-routing.md](2026-10-19-qwen-routing.md)): one review
+bounce of a qwen PR turns the item to claude; two failed qwen builds (a failed run, verify, red
+CI, overtime) do too. The text below is the rule as first built.
+
 The ask says both "one strike: bounced or failed verify once → claude" and, in its scenario list,
 "qwen build → review bounce → resumed session → approve; a second bounce → claude". They disagree;
 a resumed qwen session after a bounce only makes sense if the first bounce keeps qwen. **Built as
@@ -82,7 +86,7 @@ fallbacks. The board card shows the builder and follows the flip.
     covered**: an OpenCode build could commit a `.claude/settings.json`, which a later claude run
     on the same branch (after a fallback) would load as project settings. The review sees it in
     the diff; nothing refuses it.
-- **One request at a time** on jarvisd's background slot is not enforced by the runner: a runner
+- **One request at a time** (closed 2026-10-19: the `qwen` limit, default 1, across runners) on jarvisd's background slot is not enforced by the runner: a runner
   with `slots` > 1 could start two qwen builds. Keep qwen on a runner with one slot, or let
   jarvisd queue.
 - The real OpenCode against the real jarvisd is not exercised by the tests: they use the fake
