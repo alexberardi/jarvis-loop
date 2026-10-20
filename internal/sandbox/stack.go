@@ -677,12 +677,15 @@ func (s *Stack) WaitRuns(timeout time.Duration) error {
 }
 
 // Advance moves the fake clock by d in steps of at most 30 s, letting the runner re-arm its
-// timers (heartbeats every 60 s, the time cap) between steps, as the wall clock would.
+// timers (heartbeats every 60 s, the time cap) between steps, as the wall clock would. It settles
+// before the first step too: a run still on its way to a timer (a land run between reading CI and
+// arming its poll) would otherwise arm it after the move and sleep past the scenario's end.
 func (s *Stack) Advance(d time.Duration) error {
 	if s.Clock == nil {
 		return errors.New("this sandbox runs on the real clock")
 	}
 	const step = 30 * time.Second
+	s.settleTimers()
 	for d > 0 {
 		n := min(d, step)
 		s.Clock.Advance(n)
