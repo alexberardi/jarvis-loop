@@ -1,6 +1,7 @@
 {
   "name": "qwen-bounce-resume",
-  "about": "The qwen builder (docs/decisions/2026-10-16-qwen-builder.md): an item whose plan piece names builder qwen builds with OpenCode (the fake claude called as `opencode run`), not claude: its config points at the runner's own proxy on loopback, which adds the app headers the fake jarvisd slot wants (the agent's side holds no key). loopd keeps the run's OpenCode session; review bounces once (the first strike) and the next build resumes that session with -s, still qwen; review approves; land merges. The card still shows builder: qwen.",
+  "about": "The qwen builder (docs/decisions/2026-10-16-qwen-builder.md, the strike rule since docs/decisions/2026-10-19-qwen-routing.md): an item whose plan piece names builder qwen builds with OpenCode (the fake claude called as `opencode run`), not claude: its config points at the runner's own proxy on loopback, which adds the app headers the fake jarvisd slot wants (the agent's side holds no key). loopd keeps the run's OpenCode session. Review bounces qwen's PR once: loopd turns the item's builder to claude at once (event builder_fallback, reason review_bounce, one line in the thread) and drops the session; the next build is claude -p (no opencode, no -s), review approves, land merges. The card shows builder: claude.",
+  "qwen": true,
   "steps": [
     {
       "do": "plan",
@@ -114,11 +115,30 @@
           "kind": "advanced",
           "outcome": "bounce",
           "data": {
+            "bounce_count": "^1$",
+            "built_by": "^qwen$"
+          },
+          "count": 1
+        },
+        {
+          "item": "a",
+          "kind": "builder_fallback",
+          "actor": "runner",
+          "data": {
+            "from": "^qwen$",
+            "to": "^claude$",
+            "reason": "^review_bounce$",
             "bounce_count": "^1$"
           },
           "count": 1
         }
-      ]
+      ],
+      "board": {
+        "a": {
+          "column": "Build",
+          "card": "<span class=\"label\">builder: claude</span>"
+        }
+      }
     },
     {
       "do": "script",
@@ -144,7 +164,19 @@
           "stage": "build",
           "run": 2,
           "file": "argv.json",
-          "text": "\"-s\",\"ses_fake_"
+          "no_text": "^\\[\"run\",|\"-s\""
+        }
+      ],
+      "events": [
+        {
+          "item": "a",
+          "kind": "advanced",
+          "outcome": "pr_opened",
+          "actor": "runner",
+          "data": {
+            "builder": "^claude$"
+          },
+          "count": 1
         }
       ]
     },
@@ -179,26 +211,31 @@
         "outcome": "pr_opened",
         "actor": "runner",
         "data": {
-          "builder": "^qwen$",
-          "session_id": "^ses_fake_"
+          "builder": "^qwen$"
         },
-        "count": 2
+        "count": 1
       },
       {
         "item": "a",
         "kind": "builder_fallback",
-        "count": 0
+        "count": 1
       }
     ],
     "board": {
       "a": {
         "column": "Done",
-        "card": "<span class=\"label\">builder: qwen</span>"
+        "card": "<span class=\"label\">builder: claude</span>"
       }
     },
     "agent_runs": {
       "build": 2,
       "review": 2
-    }
+    },
+    "messages": [
+      {
+        "thread": "a",
+        "text": "^Builder: qwen → claude for the rest of this item \\(review bounced qwen's PR\\)\\.$"
+      }
+    ]
   }
 }

@@ -1,6 +1,7 @@
 {
   "name": "usage-pacing",
-  "about": "Pacing before a limit, never mid-run (docs/decisions/2026-10-18-usage-awareness.md): with a 5h budget of 60k (burn: weighted tokens), one claude build takes the window to 89%. Claims slow down: #loop-digest says so, a P4 size M build goes to qwen for its run (the sandbox runner has a qwen block), and the P2 size M build and the P5 size M review wait. Once the window is over, claude claims are back to normal and the P2 builds with claude.",
+  "about": "Pacing before a limit, never mid-run (docs/decisions/2026-10-18-usage-awareness.md): with a 5h budget of 60k (burn: weighted tokens), one claude build (its builder set to claude: qwen would take it otherwise) takes the window to 89%. Claims slow down: #loop-digest says so, a P4 size M build goes to qwen for its run (the sandbox runner has a qwen block), and the P2 size M build and the P5 size M review wait. Once the window is over, claude claims are back to normal and the P2 builds with claude.",
+  "qwen": true,
   "steps": [
     {
       "do": "control",
@@ -20,6 +21,11 @@
       "do": "triage",
       "item": "a",
       "size": "M"
+    },
+    {
+      "do": "builder",
+      "item": "a",
+      "builder": "claude"
     },
     {
       "do": "runner",
