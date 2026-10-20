@@ -102,6 +102,11 @@ func TestPaceLift(t *testing.T) {
 	if p := PaceFor(lifted, Budget{}, old); p.Level != PaceNormal || !p.Lifted {
 		t.Fatalf("hit before the lift: %+v, want lifted", p)
 	}
+	// A lift set while a hit's pause still runs does not cut that pause short.
+	old.PausedUntil, old.PauseWindow = usageNow.Add(time.Hour), Window5h
+	if p := PaceFor(lifted, Budget{}, old); p.Level != PacePaused || !p.Hit {
+		t.Fatalf("lifted during a hit's pause: %+v, want paused", p)
+	}
 
 	// "reset": until the next limit hit, however long.
 	reset := Control{ActiveAgents: 4, PaceNormalSet: set}
