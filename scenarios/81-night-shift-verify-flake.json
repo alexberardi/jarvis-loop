@@ -1,0 +1,64 @@
+{
+  "name": "night-shift-verify-flake",
+  "about": "The night shift (docs/decisions/2026-10-20-night-shift.md). The control is auto; the approver's '@orchestrator night' turns it on until 08:00, answered by loopd without a turn. An item's verify fails twice and it goes to the user; the orchestrator escalates with class verify_flake. Its message says when the night shift acts; at 14 minutes nothing has happened; at its next minute's sweep after 15, loopd sends the item back to build with notes to re-run verify, posts 'Night shift: <action> — <reason>' with the undo in the thread, and the 09:00 standup lists it at the top. The rebuild's verify fails again; a second verify_flake on the same head stays with the user. '@orchestrator morning' turns it off.",
+  "stages": ["build"],
+  "steps": [
+    {"do": "clock", "advance": "1m"},
+    {"do": "control", "night_shift": "auto"},
+    {"do": "tell_orchestrator", "as": "approver", "where": "loop", "text": "night"},
+    {"do": "expect",
+     "messages": [{"from": "orchestrator", "text": "^Night shift on until 08:00: I act on low-risk escalations after 15 minutes"}],
+     "events": [{"kind": "orchestrator.night_override", "data": {"override": "^night$", "on": "^true$"}, "count": 1}],
+     "no_events": [{"kind": "orchestrator.message"}]},
+
+    {"do": "add", "item": "a", "via": "slack", "title": "Pairing code larger", "text": "[mobile] show the pairing code larger"},
+    {"do": "triage", "item": "a"},
+    {"do": "verify", "outcome": "fail"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}},
+
+    {"do": "orchestrator", "item": "a", "action": "POST /orchestrator/escalations",
+     "body": {"item_id": "{id}", "text": "verify failed on scenario 12, which this PR cannot reach", "recommendation": "re-run verify",
+              "reason": "the PR only touches the pairing screen; scenario 12 is the timer flow", "class": "verify_flake"}},
+    {"do": "clock", "advance": "2m"},
+    {"do": "expect", "messages": [{"thread": "a", "from": "orchestrator",
+      "text": "\\*Recommend:\\* re-run verify .*\\nNight shift: I act on this recommendation at \\d\\d:\\d\\d unless you answer first\\.",
+      "buttons": ["Accept", "Other…"]}]},
+    {"do": "clock", "advance": "12m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "needs_you"}, "no_events": [{"item": "a", "kind": "orchestrator.night_action"}]},
+    {"do": "clock", "advance": "2m"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect",
+     "events": [
+       {"item": "a", "kind": "rebuild", "actor": "orchestrator:night-shift", "data": {"night_shift": "^verify_flake$", "notes": "^Night shift: re-run verify"}, "count": 1},
+       {"item": "a", "kind": "orchestrator.night_action", "data": {"class": "^verify_flake$", "undo": "^loop rebuild 1 "}, "count": 1}],
+     "messages": [{"thread": "a", "from": "bot",
+       "text": "^Night shift: sent it back to build to re-run verify → build — the PR only touches the pairing screen; scenario 12 is the timer flow\\nUndo: `loop rebuild 1 --notes \"…\" \\(your notes replace mine\\)`$"}]},
+
+    {"do": "expect", "stage": {"a": "needs_you"}},
+    {"do": "orchestrator", "item": "a", "action": "POST /orchestrator/escalations",
+     "body": {"item_id": "{id}", "text": "verify failed on scenario 12 again", "recommendation": "re-run verify",
+              "reason": "same as before", "class": "verify_flake"}},
+    {"do": "clock", "advance": "16m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "events": [{"item": "a", "kind": "orchestrator.night_stayed", "data": {"why": "once per head"}, "count": 1}],
+     "messages": [{"thread": "a", "from": "bot", "text": "^Night shift: left this one for you — verify was already re-run once on this head"}]},
+
+    {"do": "tell_orchestrator", "as": "approver", "where": "loop", "text": "morning"},
+    {"do": "expect", "messages": [{"from": "orchestrator", "text": "^Night shift off until 23:00: everything waits for you\\."}]},
+
+    {"do": "clock", "advance": "24h"},
+    {"do": "expect",
+     "messages": [{"channel": "digest", "from": "orchestrator",
+                   "text": "^\\*Standup\\* · Fri Oct 16 \\(New York\\) · since Thu 09:00\\n\\n\\*Night shift \\(1\\)\\* · what I did while you were away, and how to undo it\\n• #1 sent it back to build to re-run verify → build — the PR only touches the pairing screen; scenario 12 is the timer flow · undo: `loop rebuild 1 --notes \"…\" \\(your notes replace mine\\)`\\n"}]}
+  ],
+  "expect": {
+    "events": [{"item": "a", "kind": "orchestrator.night_action", "count": 1}]
+  }
+}

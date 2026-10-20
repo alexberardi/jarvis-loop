@@ -132,6 +132,8 @@ type Step struct {
 	OrchTurnsPerDay *int `json:"orchestrator_turns_per_day,omitempty"`
 	// Budgets are usage budgets per provider (docs/decisions/2026-10-18-usage-awareness.md).
 	Budgets map[string]pipeline.Budget `json:"budgets,omitempty"`
+	// NightShift is the night shift's mode: off, on or auto (docs/decisions/2026-10-20-night-shift.md).
+	NightShift string `json:"night_shift,omitempty"`
 	// Size is the size triage gives (default S).
 	Size string `json:"size,omitempty"`
 
@@ -907,6 +909,9 @@ func (p *player) step(st Step) error {
 		if st.Budgets != nil {
 			patch["budgets"] = st.Budgets
 		}
+		if st.NightShift != "" {
+			patch["night_shift"] = st.NightShift
+		}
 		return s.user.do("PUT", "/control", patch, nil)
 	case "unfreeze":
 		slug := RepoSlug
@@ -1040,6 +1045,16 @@ func (p *player) tellOrchestrator(st Step) (string, error) {
 		msgs, err := p.s.Store.OrchMessages(p.ctx, 0, 0)
 		if err != nil {
 			return err
+		}
+		// The approver's "night" / "morning" is loopd's own, without a turn.
+		over, err := p.s.Store.EventsBetween(p.ctx, time.Time{}, time.Now().AddDate(100, 0, 0))
+		if err != nil {
+			return err
+		}
+		for _, e := range over {
+			if e.Kind == store.KindOrchNightOverride {
+				msgs = append(msgs, e)
+			}
 		}
 		for _, m := range msgs {
 			if m.Data["channel"] == channel && m.Data["ts"] == ts {

@@ -62,11 +62,7 @@ type NightState struct {
 }
 
 func (s *Store) nightState(set pipeline.NightSetting, now time.Time) NightState {
-	st := NightState{NightSetting: set, On: set.On(now, s.orchLoc())}
-	if set.Mode == pipeline.NightAuto {
-		st.Until = pipeline.NextNightEdge(now, s.orchLoc())
-	}
-	return st
+	return NightState{NightSetting: set, On: set.On(now, s.orchLoc()), Until: set.Until(now, s.orchLoc())}
 }
 
 // NightShift is the night shift's state now.
@@ -80,7 +76,8 @@ func (s *Store) NightShift(ctx context.Context) (NightState, error) {
 
 // SetNightOverride records the user's "night" or "morning": in auto mode it turns the night shift
 // on or off until the next 23:00 or 08:00. Off and on modes are not changed by it.
-func (s *Store) SetNightOverride(ctx context.Context, actor, override string) (NightState, error) {
+// channel and ts name the message that said it ("" when none).
+func (s *Store) SetNightOverride(ctx context.Context, actor, override, channel, ts string) (NightState, error) {
 	var out NightState
 	if override != pipeline.OverrideNight && override != pipeline.OverrideMorning {
 		return out, errf(pipeline.CodeInvalidField, "override must be %s or %s", pipeline.OverrideNight, pipeline.OverrideMorning)
@@ -96,6 +93,9 @@ func (s *Store) SetNightOverride(ctx context.Context, actor, override string) (N
 		}
 		out = s.nightState(set, now)
 		data := map[string]any{"override": override, "mode": set.Mode, "on": out.On}
+		if ts != "" {
+			data["channel"], data["ts"] = channel, ts
+		}
 		if !out.Until.IsZero() {
 			data["until"] = out.Until
 		}
@@ -130,36 +130,9 @@ func (s *Store) nightSweep(tx *sql.Tx, now time.Time) error {
 		return err
 	}
 	for _, esc := range escs {
-		it, err := loadItem(tx, esc.ItemID)
+		it, c, err := nightCase(tx, esc)
 		if err != nil {
 			return err
-		}
-		evs, err := itemEvents(tx, esc.ItemID)
-		if err != nil {
-			return err
-		}
-		c := pipeline.NightCase{Item: it, Esc: pipeline.NightEscalation{
-			Class: str(esc.Data, "class"), Recommendation: str(esc.Data, "recommendation"), Deferred: str(esc.Data, "deferred"),
-			At: esc.At, Approval: esc.Data["approval"] == true, Night: esc.Data["night"] == true}}
-		if last, ok := lastNeedsYou(evs); ok {
-			c.NeedsYouOutcome = pipeline.Outcome(last.Outcome)
-			c.NewQuestion = last.ID > esc.ID
-		}
-		for _, e := range evs {
-			if e.ID > esc.ID && isUserActor(e.Actor) && e.Kind != "refused" {
-				c.UserSince = true
-			}
-			if e.Kind == KindOrchNightAction {
-				c.Prior = append(c.Prior, pipeline.NightPrior{Class: str(e.Data, "class"), HeadSHA: str(e.Data, "head_sha"), At: e.At})
-			}
-		}
-		if !c.UserSince {
-			var n int
-			if err := tx.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = ? AND id > ? AND json_extract(data, '$.item_id') = ?
-				AND json_extract(data, '$.approver') = 1`, KindOrchMessage, esc.ID, esc.ItemID).Scan(&n); err != nil {
-				return err
-			}
-			c.UserSince = n > 0
 		}
 		verdict, why := pipeline.DecideNight(c, set, now, loc)
 		switch verdict {
@@ -175,6 +148,42 @@ func (s *Store) nightSweep(tx *sql.Tx, now time.Time) error {
 		}
 	}
 	return nil
+}
+
+// nightCase is an escalation and its item as pipeline.DecideNight sees them.
+func nightCase(tx *sql.Tx, esc Event) (pipeline.Item, pipeline.NightCase, error) {
+	it, err := loadItem(tx, esc.ItemID)
+	if err != nil {
+		return it, pipeline.NightCase{}, err
+	}
+	evs, err := itemEvents(tx, esc.ItemID)
+	if err != nil {
+		return it, pipeline.NightCase{}, err
+	}
+	c := pipeline.NightCase{Item: it, Esc: pipeline.NightEscalation{
+		Class: str(esc.Data, "class"), Recommendation: str(esc.Data, "recommendation"), Deferred: str(esc.Data, "deferred"),
+		At: esc.At, Approval: esc.Data["approval"] == true, Night: esc.Data["night"] == true}}
+	if last, ok := lastNeedsYou(evs); ok {
+		c.NeedsYouOutcome = pipeline.Outcome(last.Outcome)
+		c.NewQuestion = last.ID > esc.ID
+	}
+	for _, e := range evs {
+		if e.ID > esc.ID && isUserActor(e.Actor) && e.Kind != "refused" {
+			c.UserSince = true
+		}
+		if e.Kind == KindOrchNightAction {
+			c.Prior = append(c.Prior, pipeline.NightPrior{Class: str(e.Data, "class"), HeadSHA: str(e.Data, "head_sha"), At: e.At})
+		}
+	}
+	if !c.UserSince {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = ? AND id > ? AND json_extract(data, '$.item_id') = ?
+			AND json_extract(data, '$.approver') = 1`, KindOrchMessage, esc.ID, esc.ItemID).Scan(&n); err != nil {
+			return it, c, err
+		}
+		c.UserSince = n > 0
+	}
+	return it, c, nil
 }
 
 // isUserActor reports whether actor is a person's: the Slack user's, the CLI's or the board's.
@@ -199,7 +208,10 @@ func (s *Store) nightAct(tx *sql.Tx, esc Event, it pipeline.Item, e pipeline.Nig
 	switch e.Class {
 	case pipeline.ClassVerifyFlake:
 		tr, err = pipeline.ApplyRebuild(it, pipeline.NightVerifyNotes(reason), false)
-		action = fmt.Sprintf("sent it back to build to re-run verify on `%s`", shortHead(it.HeadSHA))
+		action = "sent it back to build to re-run verify"
+		if it.HeadSHA != "" {
+			action += fmt.Sprintf(" on `%s`", shortHead(it.HeadSHA))
+		}
 		undo = fmt.Sprintf("loop rebuild %d --notes \"…\" (your notes replace mine)", it.ID)
 	case pipeline.ClassBounceLimit:
 		tr, err = pipeline.ApplyRebuild(it, pipeline.NightBounceNotes(it.Question), false)

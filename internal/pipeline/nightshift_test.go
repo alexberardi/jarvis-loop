@@ -104,6 +104,30 @@ func TestNightSettingOn(t *testing.T) {
 	}
 }
 
+// Until is when the night shift next changes: a "night" in the day runs on through the auto hours to
+// 08:00; a "morning" before 08:00 runs on through the day to 23:00.
+func TestNightSettingUntil(t *testing.T) {
+	ny := newYork(t)
+	at := func(day, h, m int) time.Time { return time.Date(2026, 10, day, h, m, 0, 0, ny) }
+	cases := []struct {
+		name string
+		set  NightSetting
+		now  time.Time
+		want time.Time
+	}{
+		{"auto in the day", NightSetting{Mode: NightAuto}, at(20, 14, 0), at(20, 23, 0)},
+		{"auto at night", NightSetting{Mode: NightAuto}, at(20, 2, 0), at(20, 8, 0)},
+		{"night in the day", NightSetting{Mode: NightAuto, Override: OverrideNight, OverrideAt: at(20, 9, 1)}, at(20, 9, 1), at(21, 8, 0)},
+		{"morning at night", NightSetting{Mode: NightAuto, Override: OverrideMorning, OverrideAt: at(20, 7, 0)}, at(20, 7, 0), at(20, 23, 0)},
+		{"on", NightSetting{Mode: NightAlways}, at(20, 2, 0), time.Time{}},
+	}
+	for _, c := range cases {
+		if got := c.set.Until(c.now, ny); !got.Equal(c.want) {
+			t.Errorf("%s: until %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
 func TestCheckNightSetting(t *testing.T) {
 	cases := []struct {
 		mode string

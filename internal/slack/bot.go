@@ -614,6 +614,15 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	if line := b.freezeLine(ctx, e, id); line != "" {
 		return Message{Text: line}, true
 	}
+	switch {
+	case e.Kind == store.KindOrchNightAction:
+		// docs/decisions/2026-10-20-night-shift.md: what it did, why, and how to undo it.
+		return Message{Text: fmt.Sprintf("Night shift: %s — %s\nUndo: `%s`", f("action", 400), f("reason", 400), f("undo", 200))}, true
+	case e.Kind == store.KindOrchNightStayed:
+		return Message{Text: "Night shift: left this one for you — " + f("why", 300) + "."}, true
+	case str(e.Data, "night_shift") != "":
+		return Message{}, false // its night_action event says it, with the undo
+	}
 	if strings.HasPrefix(e.Actor, orchestratorPrefix) {
 		return Message{Text: b.orchestratorLine(ctx, e)}, true
 	}

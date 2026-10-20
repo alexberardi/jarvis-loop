@@ -277,6 +277,19 @@ func TestCLIBudgetAndUsage(t *testing.T) {
 	defer srv.Close()
 	c := cli{t: t, url: srv.URL}
 
+	// The night shift (docs/decisions/2026-10-20-night-shift.md); the clock is 08:00 New York.
+	if out := c.ok(userTok, "night"); out != "night shift: off, off now · classes off: none\n" {
+		t.Fatalf("night: %q", out)
+	}
+	if out := c.ok(userTok, "night", "auto", "--classes-off", "scope_choice,ticket_limit"); out != "night shift: auto, off now until 23:00 · classes off: scope_choice, ticket_limit\n" {
+		t.Fatalf("night auto: %q", out)
+	}
+	if out := c.ok(userTok, "night", "on", "--classes-off", "none"); out != "night shift: on, on now · classes off: none\n" {
+		t.Fatalf("night on: %q", out)
+	}
+	if code, _, _ := c.run(userTok, "night", "sometimes"); code != 2 {
+		t.Fatalf("night sometimes: %d", code)
+	}
 	if out := c.ok(userTok, "budget"); out != "claude budget: per 5h 100% of the last limit · per week 100% of the last limit · pacing from 85%\n" {
 		t.Fatalf("budget: %q", out)
 	}

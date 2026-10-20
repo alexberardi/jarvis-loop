@@ -52,8 +52,17 @@ type standupData struct {
 	Turns, Cap   int
 	Cost         float64
 	TokIn, TokOu int64
+	// Night is what the night shift did in the window, each with its undo
+	// (docs/decisions/2026-10-20-night-shift.md): at the top.
+	Night []nightLine
 	// Done is where the done items' verification stands (docs/decisions/2026-10-18-done-proofs.md).
 	Done store.DoneReport
+}
+
+// nightLine is one night shift action in the standup.
+type nightLine struct {
+	ID                   int64
+	Action, Reason, Undo string
 }
 
 // standupText is the standup's message text.
@@ -80,6 +89,17 @@ func standupText(d standupData, loc *time.Location) string {
 				sb.WriteString(" — " + Escape(Clip(oneLine(l.Note), 160, "")))
 			}
 			sb.WriteString("\n")
+		}
+	}
+	if len(d.Night) > 0 {
+		fmt.Fprintf(&sb, "\n*Night shift (%d)* · what I did while you were away, and how to undo it\n", len(d.Night))
+		for i, l := range d.Night {
+			if i == standupSectionMax {
+				fmt.Fprintf(&sb, "• … and %d more\n", len(d.Night)-i)
+				break
+			}
+			fmt.Fprintf(&sb, "• #%d %s — %s · undo: `%s`\n", l.ID, Escape(Clip(oneLine(l.Action), 200, "")),
+				Escape(Clip(oneLine(l.Reason), 160, "")), Escape(Clip(oneLine(l.Undo), 120, "")))
 		}
 	}
 	section("Merged yesterday", d.Merged)
@@ -210,6 +230,10 @@ func (b *Bot) standupData(ctx context.Context, at time.Time) (standupData, error
 			d.Cost += num(e.Data["total_cost_usd"])
 			d.TokIn += int64(num(e.Data["usage_input"]))
 			d.TokOu += int64(num(e.Data["usage_output"]))
+		case e.Kind == store.KindOrchNightAction:
+			d.Night = append(d.Night, nightLine{ID: e.ItemID, Action: str(e.Data, "action"), Reason: str(e.Data, "reason"), Undo: str(e.Data, "undo")})
+		case str(e.Data, "night_shift") != "":
+			// the night action's own transition: its line is in Night
 		case strings.HasPrefix(e.Actor, orchestratorPrefix) && e.Kind != "created":
 			action := strings.TrimPrefix(e.Kind, "orchestrator.")
 			if e.Kind == "refused" {

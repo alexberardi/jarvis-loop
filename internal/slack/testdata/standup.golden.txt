@@ -1,5 +1,9 @@
 *Standup* · Sun Oct 18 (New York) · since Sat 09:00
 
+*Night shift (2)* · what I did while you were away, and how to undo it
+• #21 sent it back to build to re-run verify on `abc1234` → build — scenario 12 regressed on the 9B model; the PR only touches docs/ · undo: `loop rebuild 21 --notes "…" (your notes replace mine)`
+• #22 answered with my recommendation (doc-only) and filed #23 (P3) for the rest → build — the narrower option · undo: `loop drop 23, then loop rebuild 22 --notes "…" with the scope you want`
+
 *Merged yesterday (1)*
 • #12 Round the kitchen timer
 

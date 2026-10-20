@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -394,8 +395,16 @@ func (s *Store) OrchEscalateNight(ctx context.Context, actor string, id int64, t
 			}
 			night := set.On(now, s.orchLoc()) && set.ClassOn(class)
 			data["night"] = night
-			if night && !approval {
-				data["act_at"] = now.Add(pipeline.NightGrace)
+			if night {
+				// act_at only when the night shift would act on it then (the message says so).
+				at := now.Add(pipeline.NightGrace)
+				_, c, err := nightCase(tx, Event{ID: math.MaxInt64, ItemID: id, At: now, Data: data})
+				if err != nil {
+					return err
+				}
+				if v, _ := pipeline.DecideNight(c, set, at, s.orchLoc()); v == pipeline.NightAct {
+					data["act_at"] = at
+				}
 			}
 		}
 		return s.recordEvent(tx, &out, Event{ItemID: id, Actor: actor, Kind: KindOrchEscalated, Data: data})

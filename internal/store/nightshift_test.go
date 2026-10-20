@@ -144,7 +144,10 @@ func TestNightVerifyFlake(t *testing.T) {
 	if _, err := s.Advance(context.Background(), runner, it.ID, pipeline.VerifyFailed, map[string]string{"reason": "scenario 12 failed"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	escalateNight(t, s, clk, it.ID, pipeline.ClassVerifyFlake, "re-run verify", "")
+	again := escalateNight(t, s, clk, it.ID, pipeline.ClassVerifyFlake, "re-run verify", "")
+	if again.Data["act_at"] != nil {
+		t.Fatalf("an escalation the night shift will not act on says when it acts: %+v", again.Data)
+	}
 	clk.Advance(pipeline.NightGrace)
 	tick(t, s)
 	tick(t, s)
@@ -393,7 +396,7 @@ func TestNightOverride(t *testing.T) {
 	if st, _ := s.NightShift(ctx); st.On {
 		t.Fatal("on at 08:00")
 	}
-	st, err := s.SetNightOverride(ctx, "slack:U0APPROVER", pipeline.OverrideNight)
+	st, err := s.SetNightOverride(ctx, "slack:U0APPROVER", pipeline.OverrideNight, "", "")
 	if err != nil || !st.On {
 		t.Fatalf("night: %+v %v", st, err)
 	}
@@ -402,13 +405,13 @@ func TestNightOverride(t *testing.T) {
 		t.Fatal("night ended early")
 	}
 	clk.Advance(9 * time.Hour) // 07:59 the next day: the auto night
-	if _, err := s.SetNightOverride(ctx, "slack:U0APPROVER", pipeline.OverrideMorning); err != nil {
+	if _, err := s.SetNightOverride(ctx, "slack:U0APPROVER", pipeline.OverrideMorning, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := s.NightShift(ctx); st.On {
 		t.Fatal("morning did not turn it off")
 	}
-	if _, err := s.SetNightOverride(ctx, "slack:U0APPROVER", "noon"); code(err) != pipeline.CodeInvalidField {
+	if _, err := s.SetNightOverride(ctx, "slack:U0APPROVER", "noon", "", ""); code(err) != pipeline.CodeInvalidField {
 		t.Fatalf("noon: %v", err)
 	}
 }

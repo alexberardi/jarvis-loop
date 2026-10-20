@@ -128,6 +128,20 @@ func (n NightSetting) On(now time.Time, loc *time.Location) bool {
 	return false
 }
 
+// Until is when, in auto mode, the night shift next turns on or off after now (an override that
+// reaches the auto hours runs on with them); zero in off and on modes.
+func (n NightSetting) Until(now time.Time, loc *time.Location) time.Time {
+	if n.Mode != NightAuto {
+		return time.Time{}
+	}
+	on := n.On(now, loc)
+	e := NextNightEdge(now, loc)
+	for i := 0; i < 3 && n.On(e, loc) == on; i++ {
+		e = NextNightEdge(e, loc)
+	}
+	return e
+}
+
 // ClassOn reports whether the user left class on.
 func (n NightSetting) ClassOn(class string) bool { return !slices.Contains(n.ClassesOff, class) }
 
@@ -313,7 +327,11 @@ func DecideNight(c NightCase, set NightSetting, now time.Time, loc *time.Locatio
 	for _, p := range c.Prior {
 		switch {
 		case e.Class == ClassVerifyFlake && p.Class == ClassVerifyFlake && p.HeadSHA == it.HeadSHA:
-			return NightStay, fmt.Sprintf("verify was already re-run once on this head (%s): once per head", shortSHA(it.HeadSHA))
+			head := "this head"
+			if it.HeadSHA != "" {
+				head += " (" + shortSHA(it.HeadSHA) + ")"
+			}
+			return NightStay, "verify was already re-run once on " + head + ": once per head"
 		case e.Class == ClassBounceLimit && p.Class == ClassBounceLimit && !p.At.Before(start):
 			return NightWait, "" // once per item per night: the next night may
 		}
