@@ -1,0 +1,58 @@
+{
+  "name": "qwen-routing",
+  "about": "#305 (docs/decisions/2026-10-19-qwen-routing.md): with claude's pace normal, a P3 size-S build with no builder set goes to qwen when the runner has a qwen block (the claim says routed qwen, with no pace). While it runs, a second P3 size-S build on the runner's other slot goes to claude: one qwen build at a time (the qwen limit, default 1). Once qwen is free, a P2 size-S item triage calls docs-only goes to qwen too. The item's builder stays unset (the runner here only builds; review is unchanged and claude's).",
+  "qwen": true,
+  "stages": ["build"],
+  "slots": 2,
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "wait_release"},
+    {"do": "runner", "claims": "a"},
+    {"do": "agent_running", "item": "a"},
+    {"do": "add", "item": "b", "title": "Tidy the digest footer"},
+    {"do": "triage", "item": "b"},
+    {"do": "runner", "claims": "b"},
+    {"do": "wait", "stage": {"b": "review"}, "leased": {"b": false}},
+    {"do": "expect",
+      "events": [
+        {"item": "a", "kind": "claimed", "data": {"routed": "^qwen$"}, "count": 1},
+        {"item": "b", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "data": {"builder": "^claude$"}, "count": 1}
+      ],
+      "no_events": [
+        {"item": "b", "kind": "claimed", "data": {"routed": "qwen"}},
+        {"item": "a", "kind": "claimed", "data": {"pace": "."}}
+      ]},
+    {"do": "release", "item": "a"},
+    {"do": "wait", "stage": {"a": "review"}, "leased": {"a": false}},
+    {"do": "expect",
+      "events": [
+        {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "data": {"builder": "^qwen$", "qwen_requests": "^1$"}, "count": 1}
+      ],
+      "run_files": [
+        {"item": "a", "stage": "build", "run": 1, "file": "argv.json", "text": "^\\[\"run\","},
+        {"item": "b", "stage": "build", "run": 1, "file": "argv.json", "no_text": "^\\[\"run\","}
+      ]},
+    {"do": "add", "item": "c", "title": "Fix a typo in the runner docs", "priority": "P2"},
+    {"do": "triage", "item": "c", "change_kind": "docs"},
+    {"do": "add", "item": "d", "title": "Fix a typo in the claim code", "priority": "P2"},
+    {"do": "triage", "item": "d", "change_kind": "code"},
+    {"do": "runner", "claims": "c"},
+    {"do": "wait", "stage": {"c": "review"}, "leased": {"c": false}},
+    {"do": "runner", "claims": "d"},
+    {"do": "wait", "stage": {"d": "review"}, "leased": {"d": false}}
+  ],
+  "expect": {
+    "events": [
+      {"item": "c", "kind": "claimed", "data": {"routed": "^qwen$"}, "count": 1},
+      {"item": "c", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "data": {"builder": "^qwen$"}, "count": 1},
+      {"item": "d", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "data": {"builder": "^claude$"}, "count": 1}
+    ],
+    "no_events": [
+      {"item": "d", "kind": "claimed", "data": {"routed": "qwen"}}
+    ],
+    "messages": [
+      {"thread": "a", "text": "^Claimed for build, with qwen this run\\.$"}
+    ]
+  }
+}

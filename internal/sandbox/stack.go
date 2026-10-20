@@ -98,6 +98,9 @@ type Options struct {
 	Slots int
 	// Capabilities are the runner's (default none).
 	Capabilities []string
+	// Qwen gives the runner a qwen block against a fake jarvisd: its builds with no builder set
+	// may then go to qwen (docs/decisions/2026-10-19-qwen-routing.md).
+	Qwen bool
 }
 
 // Stack is one sandboxed loop: loopd (store, API on a loopback port, Slack layer), a runner, a
@@ -376,11 +379,16 @@ func StartStack(opts Options) (st *Stack, err error) {
 		// overnight.
 		Regression: &runner.RegressionConfig{Repo: RepoKey, MobileRepo: MobileKey, PipelineCommand: "scripts/pipeline-scenarios"},
 	}
-	if s.qwen, err = startFakeQwen(); err != nil {
-		return nil, err
-	}
-	if cfg.Qwen, err = s.qwen.config(dir, opts.Bin.Claude); err != nil {
-		return nil, err
+	if opts.Qwen {
+		if s.qwen, err = startFakeQwen(); err != nil {
+			return nil, err
+		}
+		if cfg.Qwen, err = s.qwen.config(dir, opts.Bin.Claude); err != nil {
+			return nil, err
+		}
+		// The fake opencode runs in the verify fence: it writes its run state (agent_running,
+		// release) where the fake claude does.
+		cfg.VerifyWritable = append(cfg.VerifyWritable, s.scripts)
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	cfgPath := filepath.Join(dir, "runner.json")
@@ -669,12 +677,15 @@ func (s *Stack) WaitRuns(timeout time.Duration) error {
 }
 
 // Advance moves the fake clock by d in steps of at most 30 s, letting the runner re-arm its
-// timers (heartbeats every 60 s, the time cap) between steps, as the wall clock would.
+// timers (heartbeats every 60 s, the time cap) between steps, as the wall clock would. It settles
+// before the first step too: a run still on its way to a timer (a land run between reading CI and
+// arming its poll) would otherwise arm it after the move and sleep past the scenario's end.
 func (s *Stack) Advance(d time.Duration) error {
 	if s.Clock == nil {
 		return errors.New("this sandbox runs on the real clock")
 	}
 	const step = 30 * time.Second
+	s.settleTimers()
 	for d > 0 {
 		n := min(d, step)
 		s.Clock.Advance(n)

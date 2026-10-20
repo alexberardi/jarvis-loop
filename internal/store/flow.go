@@ -535,12 +535,12 @@ func (f *Flow) waiting(tx *sql.Tx, cs claimState, now time.Time) error {
 	paced := false // an item the pace itself takes is ready: the slow pace's fallback does not fire
 	for i, it := range items {
 		whys[i] = pipeline.WaitReason(cs.ctl, cs.pace, it, deps, cs.live, flagged[it.ID], cs.frozen, cs.holds, builders)
-		paced = paced || whys[i] == pipeline.WaitReady && pipeline.PaceTakes(cs.pace, cs.live, builders, it)
+		paced = paced || whys[i] == pipeline.WaitReady && pipeline.PaceTakes(cs.ctl, cs.pace, cs.live, builders, it)
 	}
 	by := map[string]*FlowWait{}
 	for i, it := range items {
 		why := whys[i]
-		if paced && why == pipeline.WaitReady && !pipeline.PaceTakes(cs.pace, cs.live, builders, it) {
+		if paced && why == pipeline.WaitReady && !pipeline.PaceTakes(cs.ctl, cs.pace, cs.live, builders, it) {
 			why = pipeline.WaitPaced
 		}
 		if why != "" && it.Deferred(now) {

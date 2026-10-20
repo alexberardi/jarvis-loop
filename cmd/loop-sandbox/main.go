@@ -247,7 +247,7 @@ func serveCmd(args []string, stderr io.Writer) error {
 		return err
 	}
 	defer logf.Close()
-	s, err := sandbox.StartStack(sandbox.Options{Dir: ld, Bin: bin, RealClock: true, Log: logf})
+	s, err := sandbox.StartStack(sandbox.Options{Dir: ld, Bin: bin, RealClock: true, Log: logf, Qwen: true})
 	if err != nil {
 		return err
 	}

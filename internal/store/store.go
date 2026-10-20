@@ -373,7 +373,8 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
 	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of, ci_red_sha, ci_main_fixed,
-	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust, proof, not_before, ci_pending_since, ci_pending_sha, verify, verify_reason, feature`
+	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust, proof, not_before, ci_pending_since, ci_pending_sha, verify, verify_reason, feature,
+	built_by, qwen_failures, change_kind`
 
 type scanner interface{ Scan(...any) error }
 
@@ -390,7 +391,8 @@ func scanItem(row scanner) (pipeline.Item, error) {
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
 		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf, &it.CIRedSHA, &it.CIMainFixed,
-		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust, &proof, &notBefore, &ciSince, &it.CIPendingSHA, &it.Verify, &it.VerifyReason, &it.Feature)
+		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust, &proof, &notBefore, &ciSince, &it.CIPendingSHA, &it.Verify, &it.VerifyReason, &it.Feature,
+		&it.BuiltBy, &it.QwenFailures, &it.ChangeKind)
 	if err != nil {
 		return it, err
 	}
@@ -504,11 +506,13 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
 		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, ci_main_fixed=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=?, trust=?, proof=?,
-		not_before=?, ci_pending_since=?, ci_pending_sha=?, verify=?, verify_reason=?, feature=? WHERE id=?`,
+		not_before=?, ci_pending_since=?, ci_pending_sha=?, verify=?, verify_reason=?, feature=?,
+		built_by=?, qwen_failures=?, change_kind=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
 		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, it.CIMainFixed, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, trust, proof,
-		toOptNanos(it.NotBefore), toOptNanos(it.CIPendingSince), it.CIPendingSHA, it.Verify, it.VerifyReason, it.Feature, it.ID)
+		toOptNanos(it.NotBefore), toOptNanos(it.CIPendingSince), it.CIPendingSHA, it.Verify, it.VerifyReason, it.Feature,
+		it.BuiltBy, it.QwenFailures, it.ChangeKind, it.ID)
 	return err
 }
 
@@ -948,8 +952,7 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		}
 		builder := it.Builder
 		if w.RouteQwen {
-			// This run only: the item's builder stays unset, so it builds with claude again once
-			// the pace is back to normal.
+			// This run only: the item's builder stays unset, so the next claim decides again.
 			it.Builder, builder = pipeline.BuilderQwen, pipeline.BuilderQwen
 		}
 		l := Lease{ID: id, ItemID: it.ID, Stage: it.Stage, Runner: runnerName, Agent: req.Agent,
@@ -962,7 +965,9 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		data := map[string]any{"runner": runnerName, "agent": req.Agent, "lease": l.ID}
 		if w.RouteQwen {
 			data["routed"] = pipeline.BuilderQwen
-			data["pace"] = pace.Describe(usageZone())
+			if pace.Level != pipeline.PaceNormal {
+				data["pace"] = pace.Describe(usageZone())
+			}
 		}
 		if it.Stage == pipeline.Land && it.CIPendingSHA != "" {
 			data["ci_pending"] = true // a land run again after ci_pending: Slack posts nothing for it
@@ -983,7 +988,7 @@ func liveSnapshot(tx *sql.Tx) ([]pipeline.LiveLease, error) {
 	snap := make([]pipeline.LiveLease, len(live))
 	for i, l := range live {
 		snap[i] = pipeline.LiveLease{ItemID: l.ItemID, Stage: l.Stage, Resources: l.Resources,
-			Claude: l.Stage != pipeline.Land && l.Builder != pipeline.BuilderQwen}
+			Claude: l.Stage != pipeline.Land && l.Builder != pipeline.BuilderQwen, Qwen: l.Builder == pipeline.BuilderQwen}
 	}
 	turnLeases, err := livePlanLeases(tx)
 	if err != nil {
@@ -1194,6 +1199,10 @@ func (s *Store) sweep(tx *sql.Tx) error {
 				return err
 			}
 			tr := pipeline.Overtime(it, l.Note, ctl.MaxRun())
+			var fell *pipeline.Note
+			if l.Stage == pipeline.Build && l.Builder == pipeline.BuilderQwen {
+				tr.Item, fell = pipeline.QwenFailed(tr.Item, "overtime")
+			}
 			tr.Item.UpdatedAt = now
 			if err := saveItem(tx, tr.Item); err != nil {
 				return err
@@ -1201,6 +1210,11 @@ func (s *Store) sweep(tx *sql.Tx) error {
 			tr.Data["lease"], tr.Data["runner"], tr.Data["agent"] = l.ID, l.Runner, l.Agent
 			if err := s.event(tx, transitionEvent(l.ItemID, "loopd", tr)); err != nil {
 				return err
+			}
+			if fell != nil {
+				if err := s.event(tx, Event{ItemID: l.ItemID, Actor: "loopd", Kind: fell.Kind, From: string(tr.To), To: string(tr.To), Data: fell.Data}); err != nil {
+					return err
+				}
 			}
 		}
 	}

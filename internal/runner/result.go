@@ -44,6 +44,11 @@ type Result struct {
 	Size      string   `json:"size,omitempty"`
 	Risk      string   `json:"risk,omitempty"`
 	Resources []string `json:"resources,omitempty"`
+	// ChangeKind (code, docs, test) and Builder (qwen, claude) are optional: a P2 size-S docs or
+	// test change may build with qwen, and triage may name the builder
+	// (docs/decisions/2026-10-19-qwen-routing.md). loopd checks the values.
+	ChangeKind string `json:"change_kind,omitempty"`
+	Builder    string `json:"builder,omitempty"`
 	// Notes are triage's notes for the build agent, or review's list for a bounce.
 	Notes string `json:"notes,omitempty"`
 	// Review is the review's text for the PR comment.
@@ -103,7 +108,7 @@ var StageOutcomes = map[string][]string{
 var outcomeFields = map[string][]string{
 	"question":         {"question"},
 	OutcomeReadyForPR:  {"pr_title", "pr_body", "head_sha", "summary", "not_verified", "evidence", "needs_review", "proof"},
-	"reproduced":       {"repo", "area", "size", "risk", "resources", "summary", "notes", "evidence", "not_verified", "needs_qa"},
+	"reproduced":       {"repo", "area", "size", "risk", "resources", "change_kind", "builder", "summary", "notes", "evidence", "not_verified", "needs_qa"},
 	OutcomeRouted:      {"repo", "why"},
 	"not_reproducible": {"summary", "notes", "evidence", "not_verified"},
 	"approved":         {"summary", "review", "head_sha", "evidence", "not_verified", "needs_review", "needs_qa"},

@@ -47,10 +47,12 @@ const usage = `usage: loop <command> [args]
   unlink <id> <after id>      stop it waiting for that item
   resources <id> <macos,voice,...|none>   after triage; applies from the next claim
   feature <id> <name|none>    put it in that feature, or in none
+  builder <id> <qwen|claude|auto>   who builds it, before its build starts (auto: routing decides)
   rebuild <id> "<notes>" | --notes TEXT   send a held or needs_you item back to build
   agents [<0-6>]
   stop | resume
-  usage                       claude's 5h window and week, the pace, the days, the costliest items
+  usage                       claude's 5h window and week, the pace, the days, the costliest items,
+                              qwen's builds (the claude spend they replaced, its first-review approvals)
   budget [claude] [--per-5h N] [--per-week N] [--pace-at PCT] [--warnings ignore|pace]
                               N: tokens (2M, 500k), a percent of what got us limited last time
                               (80%), or off; pacing starts at --pace-at percent (default 85);
@@ -237,6 +239,7 @@ var commands = map[string]command{
 	"unlink":    {2, 2, nil, cmdUnlink},
 	"resources": {2, 2, nil, cmdResources},
 	"feature":   {2, 2, nil, cmdFeature},
+	"builder":   {2, 2, nil, cmdBuilder},
 	"rebuild":   {1, 2, []string{"notes"}, cmdRebuild},
 	"agents":    {0, 1, nil, cmdAgents},
 	"usage":     {0, 0, nil, cmdUsage},
@@ -331,6 +334,7 @@ type item struct {
 	ReopenOf    int64     `json:"reopen_of"`
 	DependsOn   []int64   `json:"depends_on"`
 	Feature     string    `json:"feature"`
+	Builder     string    `json:"builder"`
 	CreatedAt   time.Time `json:"created_at"`
 	Approval    *struct {
 		By      string    `json:"by"`
@@ -562,6 +566,9 @@ func cmdShow(c *client, pos []string, _ map[string][]string) error {
 	fmt.Fprintf(w, "priority: %s   source: %s   repo: %s\n", it.Priority, it.Source, repo)
 	if it.Feature != "" {
 		fmt.Fprintf(w, "feature:  %s\n", it.Feature)
+	}
+	if it.Builder != "" {
+		fmt.Fprintf(w, "builder:  %s\n", it.Builder)
 	}
 	if it.Ask != "" {
 		fmt.Fprintf(w, "ask:      %s\n", it.Ask)
@@ -881,6 +888,23 @@ func cmdResources(c *client, pos []string, _ map[string][]string) error {
 	return nil
 }
 
+func cmdBuilder(c *client, pos []string, _ map[string][]string) error {
+	id, err := itemID(pos[0])
+	if err != nil {
+		return err
+	}
+	var it item
+	if _, err := c.json("POST", "/items/"+id+"/builder", map[string]any{"builder": pos[1]}, &it); err != nil {
+		return err
+	}
+	if it.Builder == "" {
+		fmt.Fprintf(c.out, "#%d has no builder set: routing decides\n", it.ID)
+	} else {
+		fmt.Fprintf(c.out, "#%d builds with %s\n", it.ID, it.Builder)
+	}
+	return nil
+}
+
 func cmdFeature(c *client, pos []string, _ map[string][]string) error {
 	id, err := itemID(pos[0])
 	if err != nil {
@@ -1098,6 +1122,7 @@ type usageReport struct {
 		Runs    int     `json:"runs"`
 	} `json:"items"`
 	Hits []pipeline.UsageHit `json:"hits"`
+	Qwen pipeline.QwenWeek   `json:"qwen"`
 }
 
 func cmdUsage(c *client, _ []string, _ map[string][]string) error {
@@ -1154,6 +1179,7 @@ func usageLines(u usageReport, loc *time.Location) []string {
 			out = append(out, fmt.Sprintf("  #%d %s  burn %s  $%.2f  %d runs", it.ItemID, it.Title, pipeline.FormatTokens(it.Burn), it.CostUSD, it.Runs))
 		}
 	}
+	out = append(out, u.Qwen.Line())
 	for i, h := range u.Hits {
 		if i == 0 {
 			out = append(out, "limits hit:")

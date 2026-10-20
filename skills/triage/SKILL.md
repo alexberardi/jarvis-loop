@@ -73,6 +73,11 @@ repos or none.
    CI check), else `normal`; loopd still computes the hold from the PR's paths later. Resources
    are what verifying it needs: `gpu` (the shared model), `voice` (speech), `emulator` (Android),
    `macos`; usually none.
+   `change_kind` is `docs` or `test` when the change touches only docs or only tests, else
+   `code`: a P2 size-S docs or test change may build with the Qwen builder, which saves Claude.
+   `builder` is optional: `claude` when the build needs judgment (a design call left open, several
+   areas, an unclear test), `qwen` when every step is mechanical; leave it out and loopd decides
+   by priority, size and `change_kind`.
 5. **Triage notes** (`notes`, markdown) for the build agent: what to change and where (files,
    functions), how to verify it (the test to write first, the harness scenario or shot), and what
    you could not check. Short and concrete: the build agent reads them first.

@@ -892,8 +892,9 @@ func TestTrustRoundTrip(t *testing.T) {
 	}
 }
 
-// A qwen item keeps its build session for the next build; its second strike sets the builder to
-// claude, clears the session and records builder_fallback.
+// A qwen item keeps its build session and its count of failed qwen builds; a review bounce of
+// qwen's PR sets the builder to claude, clears the session and records builder_fallback
+// (docs/decisions/2026-10-19-qwen-routing.md).
 func TestQwenBuilderFallback(t *testing.T) {
 	s, _ := open(t)
 	ctx := context.Background()
@@ -919,24 +920,31 @@ func TestQwenBuilderFallback(t *testing.T) {
 		return got
 	}
 	step("triager", pipeline.Reproduced, map[string]string{"area": "a", "size": "S", "risk": "normal", "resources": ""}, nil, true)
-	step("builder", pipeline.PROpened, map[string]string{"repo": "o/r", "pr": "7", "branch": "loop/1-x", "head_sha": shaA,
-		"builder": "qwen", "session_id": "ses_abc"}, []string{"M x.go"}, true)
-	step("reviewer", pipeline.Bounce, map[string]string{"notes": "fix it"}, nil, false)
+	// The first qwen build fails verify: still qwen, the session kept, one failure counted.
+	step("builder", pipeline.VerifyFailed, map[string]string{"reason": "verify failed", "builder": "qwen", "session_id": "ses_abc"}, nil, true)
 	d, err := s.GetItem(ctx, it.ID)
-	if err != nil || d.Item.Builder != "qwen" || d.Item.BuildSession != "ses_abc" || d.Item.Stage != pipeline.Build {
-		t.Fatalf("after the first strike: %+v %v", d.Item, err)
+	if err != nil || d.Item.Builder != "qwen" || d.Item.QwenFailures != 1 || d.Item.Stage != pipeline.Build {
+		t.Fatalf("after the failed verify: %+v %v", d.Item, err)
+	}
+	if _, err := s.w.Exec(`UPDATE items SET build_session = 'ses_abc' WHERE id = ?`, it.ID); err != nil {
+		t.Fatal(err)
 	}
 	// The build claim carries both to the runner.
 	c, err := s.Claim(ctx, runner, pipeline.ClaimRequest{Runner: runner, Agent: "builder"})
 	if err != nil || c == nil || c.Item.Builder != "qwen" || c.Item.BuildSession != "ses_abc" {
 		t.Fatalf("build claim: %+v %v", c, err)
 	}
-	if _, err := s.AddEvidence(ctx, runner, it.ID, "log", "verify.log", strings.NewReader("FAIL\n")); err != nil {
+	if _, err := s.AddEvidence(ctx, runner, it.ID, "log", "run.log", strings.NewReader("ok\n")); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.Advance(ctx, runner, it.ID, pipeline.VerifyFailed, map[string]string{"reason": "verify failed", "builder": "qwen", "session_id": "ses_abc"}, nil)
-	if err != nil || got.Builder != "claude" || got.BuildSession != "" || got.Stage != pipeline.NeedsYou {
-		t.Fatalf("second strike: %+v %v", got, err)
+	if _, err := s.Advance(ctx, runner, it.ID, pipeline.PROpened, map[string]string{"repo": "o/r", "pr": "7", "branch": "loop/1-x", "head_sha": shaA,
+		"builder": "qwen", "session_id": "ses_abc"}, []string{"M x.go"}); err != nil {
+		t.Fatal(err)
+	}
+	// Review bounces qwen's PR (the second bounce: to the user): claude builds the rest.
+	got := step("reviewer", pipeline.Bounce, map[string]string{"notes": "fix it"}, nil, false)
+	if got.Builder != "claude" || got.BuildSession != "" || got.Stage != pipeline.NeedsYou || got.BuiltBy != "qwen" {
+		t.Fatalf("review bounce: %+v", got)
 	}
 	d, _ = s.GetItem(ctx, it.ID)
 	if d.Item.Builder != "claude" || !hasEvent(d.Events, "builder_fallback") {

@@ -1238,7 +1238,9 @@ func TestBuilderFallbackLine(t *testing.T) {
 		data map[string]any
 		want string
 	}{
-		{map[string]any{"from": "qwen", "to": "claude", "bounce_count": 2}, "Builder: qwen → claude for the rest of this item (second strike)."},
+		{map[string]any{"from": "qwen", "to": "claude", "reason": "review_bounce"}, "Builder: qwen → claude for the rest of this item (review bounced qwen's PR)."},
+		{map[string]any{"from": "qwen", "to": "claude", "reason": "failed_twice"}, "Builder: qwen → claude for the rest of this item (qwen's build failed twice)."},
+		{map[string]any{"from": "qwen", "to": "claude", "bounce_count": 2}, "Builder: qwen → claude for the rest of this item."},
 		{map[string]any{"from": "qwen", "to": "claude", "this_run_only": true, "reason": "runner devbox has no qwen config"}, "No qwen builder on this runner: this build runs with claude."},
 	} {
 		ev := store.Event{ItemID: it.ID, Actor: "runner:devbox", Kind: "builder_fallback", From: "needs_you", To: "needs_you", Data: c.data}
@@ -1432,5 +1434,21 @@ func TestPaceMessages(t *testing.T) {
 	}
 	if _, ok := ev(map[string]any{"level": float64(0), "from_level": float64(0)}); ok {
 		t.Error("a normal pace after a normal one posted")
+	}
+}
+
+// builder_set (loop builder) is one line naming the builder and who set it.
+func TestBuilderSetLine(t *testing.T) {
+	e := newBotEnv(t)
+	it, err := e.st.AddItem(e.ctx, "user:alex", store.NewItem{Title: "x", Repo: "jarvis-server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for to, want := range map[string]string{"qwen": "Builder set to qwen by ", "": "Builder set to auto (routing decides) by "} {
+		ev := store.Event{ItemID: it.ID, Actor: "user:alex", Kind: "builder_set", From: "build", To: "build", Data: map[string]any{"from": "claude", "to": to}}
+		m, ok := e.b.describe(e.ctx, ev, store.Detail{Item: it})
+		if !ok || !strings.HasPrefix(m.Text, want) {
+			t.Errorf("got %q, want %q…", m.Text, want)
+		}
 	}
 }

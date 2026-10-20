@@ -859,9 +859,8 @@ func TestPROpenedOnTheCIRedHead(t *testing.T) {
 	}
 }
 
-// A qwen build's session is kept for the next build to resume; the second strike (a review
-// bounce, a verify failure or red CI, counted as bounces are) flips the builder to claude for
-// the rest, with a builder_fallback note (docs/decisions/2026-10-16-qwen-builder.md).
+// A qwen build's session is kept for the next build to resume; a claude run's is not. When the
+// builder falls back to claude: TestQwenFallback (qwen_test.go).
 func TestQwenBuilderStrikes(t *testing.T) {
 	qwen := func(s Stage) Item {
 		it := item(s)
@@ -882,45 +881,5 @@ func TestQwenBuilderStrikes(t *testing.T) {
 	tr2, _ := ApplyAdvance(it, prOpened(sha2, []string{"M internal/x.go"}, map[string]string{"builder": BuilderClaude, "session_id": "c1"}), t0)
 	if tr2.Item.BuildSession != "" {
 		t.Fatalf("a claude run's session was stored: %q", tr2.Item.BuildSession)
-	}
-
-	// First strike: back to build, still qwen, session kept for the resume.
-	rv := tr.Item
-	rv.Stage = Review
-	tr, err = ApplyAdvance(rv, Advance{Outcome: Bounce, Fields: map[string]string{"notes": "fix x"}, Agent: "r"}, t0)
-	wantCode(t, err, "")
-	if tr.Item.Stage != Build || tr.Item.Builder != BuilderQwen || tr.Item.BuildSession != "ses_1" || len(tr.Also) != 0 {
-		t.Fatalf("first strike: %+v also %v", tr.Item, tr.Also)
-	}
-
-	// Second strike (here a verify failure of the resumed session): claude from now on.
-	f := built("ses_1")
-	f["reason"] = "verify failed"
-	tr, err = ApplyAdvance(tr.Item, Advance{Outcome: VerifyFailed, Fields: f, Evidence: 1}, t0)
-	wantCode(t, err, "")
-	if tr.Item.Builder != BuilderClaude || tr.Item.BuildSession != "" || tr.Item.Stage != NeedsYou || tr.Item.ReturnStage != Build {
-		t.Fatalf("second strike: %+v", tr.Item)
-	}
-	if len(tr.Also) != 1 || tr.Also[0].Kind != "builder_fallback" || tr.Also[0].Data["from"] != BuilderQwen ||
-		tr.Also[0].Data["to"] != BuilderClaude || tr.Also[0].Data["bounce_count"] != 2 {
-		t.Fatalf("also: %+v", tr.Also)
-	}
-	if tr.Data["builder_fallback"] != true {
-		t.Fatalf("data: %v", tr.Data)
-	}
-
-	// A claude item's second bounce changes no builder.
-	cl := item(Review)
-	cl.Builder, cl.BounceCount = BuilderClaude, 1
-	tr, _ = ApplyAdvance(cl, Advance{Outcome: Bounce, Fields: map[string]string{"notes": "x"}, Agent: "r"}, t0)
-	if tr.Item.Builder != BuilderClaude || len(tr.Also) != 0 {
-		t.Fatalf("claude item: %+v %v", tr.Item, tr.Also)
-	}
-	// Red CI counts as a strike too.
-	ci := qwen(Land)
-	ci.BounceCount, ci.BuildSession = 1, "ses_9"
-	tr, _ = ApplyAdvance(ci, Advance{Outcome: BackToBuild, Agent: "lander", Fields: map[string]string{"reason": "CI failed", "ci_head_sha": sha1}}, t0)
-	if tr.Item.Builder != BuilderClaude || tr.Item.BuildSession != "" || len(tr.Also) != 1 {
-		t.Fatalf("CI strike: %+v %v", tr.Item, tr.Also)
 	}
 }

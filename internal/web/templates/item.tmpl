@@ -35,6 +35,10 @@ td.data { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 <dt>Repo</dt><dd>{{$.RepoName}}</dd>
 {{- end}}
 <dt>Priority</dt><dd>{{.Priority}}</dd>
+{{- if or .Builder $.BuilderForm}}
+<dt>Builder</dt><dd>{{if .Builder}}{{.Builder}}{{else}}auto{{end}}{{if $.BuilderForm}}
+<form method="post" action="/board/items/{{.ID}}/builder"><select name="builder">{{range $b := builders}}<option value="{{$b}}"{{if eq $b (or $.Item.Builder "auto")}} selected{{end}}>{{$b}}</option>{{end}}</select> <button type="submit">Set builder</button></form>{{end}}</dd>
+{{- end}}
 <dt>Age</dt><dd>{{age $.Age}}</dd>
 {{- if $.ClaimedBy}}
 <dt>Claimed by</dt><dd>{{$.ClaimedBy}}</dd>

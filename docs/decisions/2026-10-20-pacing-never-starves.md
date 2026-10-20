@@ -23,7 +23,7 @@ treated a warning as pacing whatever the budget said.
   the CLI's `allowed_warning` alone never slows claims; the budget's own `pace_at`, the budget and
   limit hits still do.
 - **`loop pace normal --until <time|reset>`**, and `loop pace auto` to end it. The lift is
-  stored in the control row (`pace_normal_set`, `pace_normal_until`, migration 0034). While it
+  stored in the control row (`pace_normal_set`, `pace_normal_until`, migration 0035). While it
   holds, the pace is normal: no slowing for warnings or the budget, and no pause at the budget either
   ("lift pacing outright"). A limit hit the CLI reports still pauses claims as before, **and ends
   the lift**: a fixed time ends at that time or at the next hit, whichever comes first, and `reset`
