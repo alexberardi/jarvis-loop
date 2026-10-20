@@ -35,8 +35,12 @@ func TestStandupBoundary(t *testing.T) {
 func TestStandupText(t *testing.T) {
 	ny, _ := time.LoadLocation("America/New_York")
 	d := standupData{
-		At:       time.Date(2026, 10, 18, 9, 0, 0, 0, ny),
-		Merged:   []standupLine{{ID: 12, Title: "Round the kitchen timer"}},
+		At:     time.Date(2026, 10, 18, 9, 0, 0, 0, ny),
+		Merged: []standupLine{{ID: 12, Title: "Round the kitchen timer"}},
+		Night: []nightLine{
+			{ID: 21, Action: "sent it back to build to re-run verify on `abc1234` → build", Reason: "scenario 12 regressed on the 9B model; the PR only touches docs/", Undo: `loop rebuild 21 --notes "…" (your notes replace mine)`},
+			{ID: 22, Action: "answered with my recommendation (doc-only) and filed #23 (P3) for the rest → build", Reason: "the narrower option", Undo: `loop drop 23, then loop rebuild 22 --notes "…" with the scope you want`},
+		},
 		InFlight: []standupLine{{ID: 14, Title: "Support Kasa plugs", Note: "build, working · 2h in stage"}},
 		Waiting:  []standupLine{{ID: 16, Title: "Kasa scenes", Note: "waiting on #17 → needs you"}},
 		NeedsU: []standupLine{
@@ -71,6 +75,12 @@ func TestStandupText(t *testing.T) {
 		t.Errorf("standup differs from %s; review and rerun with -update:\n%s", path, got)
 	}
 	empty := standupText(standupData{At: d.At, Did: map[string]int{}, Cap: 150}, ny)
+	if strings.Contains(empty, "Night shift") {
+		t.Errorf("a standup with no night actions has a Night shift section:\n%s", empty)
+	}
+	if i, j := strings.Index(got, "*Night shift (2)*"), strings.Index(got, "*Merged yesterday"); i < 0 || i > j {
+		t.Errorf("the night shift's section is not at the top:\n%s", got)
+	}
 	for _, w := range []string{"Nothing open, nothing merged.", "*What I did*\nNothing.", "0 turns (cap 150 a day)\n"} {
 		if !strings.Contains(empty, w) {
 			t.Errorf("an empty standup lacks %q:\n%s", w, empty)

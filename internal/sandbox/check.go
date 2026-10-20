@@ -648,7 +648,7 @@ func (p *player) mustNot() []string {
 		}
 	}
 	evs, _ := p.s.Events()
-	known := []string{"loopd", pipeline.ActorProof, actor("approver"), actor("runner"), actor("hand"), actor("user"), actor("orchestrator")}
+	known := []string{"loopd", pipeline.ActorProof, store.NightActor, actor("approver"), actor("runner"), actor("hand"), actor("user"), actor("orchestrator")}
 	for _, e := range evs {
 		if slices.Contains(known, e.Actor) {
 			continue

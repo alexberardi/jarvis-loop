@@ -670,6 +670,13 @@ func orchView(o store.OrchBoard, items []store.BoardItem) orchSection {
 		if e.Kind == "refused" {
 			r.Action, r.Text = "refused "+str(e.Data, "action"), str(e.Data, "message")
 		}
+		if e.Kind == store.KindOrchNightAction {
+			// docs/decisions/2026-10-20-night-shift.md: what it did and its undo.
+			r.Text = str(e.Data, "action") + " · undo: " + str(e.Data, "undo")
+		}
+		if e.Kind == store.KindOrchNightStayed {
+			r.Text = "left for you: " + str(e.Data, "why")
+		}
 		if via := str(e.Data, "via"); via != "" && via != e.Actor {
 			r.For = e.Actor
 		}

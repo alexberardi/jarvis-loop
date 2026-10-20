@@ -57,7 +57,7 @@ var orchFields = map[string]struct{ allowed, required []string }{
 	ActPriority:    {[]string{"item_id", "priority"}, []string{"item_id", "priority"}},
 	ActAdd:         {[]string{"title", "ask", "repo", "priority", "depends_on", "signature"}, []string{"title", "signature"}},
 	ActLink:        {[]string{"item_id", "after"}, []string{"item_id", "after"}},
-	ActEscalate:    {[]string{"item_id", "text", "recommendation"}, []string{"text"}},
+	ActEscalate:    {[]string{"item_id", "text", "recommendation", "class", "deferred"}, []string{"text"}},
 	ActAgents:      {[]string{"active_agents"}, []string{"active_agents"}},
 	ActNote:        {[]string{"text"}, []string{"text"}},
 	ActReply:       {[]string{"channel", "thread_ts", "text"}, []string{"channel", "text"}},
@@ -86,6 +86,10 @@ type OrchAction struct {
 	ActiveAgents   *int    `json:"active_agents,omitempty"`
 	Channel        string  `json:"channel,omitempty"`
 	ThreadTS       string  `json:"thread_ts,omitempty"`
+	// Class is an escalation's night class, Deferred a scope choice's deferred part
+	// (docs/decisions/2026-10-20-night-shift.md).
+	Class    string `json:"class,omitempty"`
+	Deferred string `json:"deferred,omitempty"`
 	// Checks is a proof action's checks, as a build states them (pipeline.ParseProof).
 	Checks json.RawMessage `json:"checks,omitempty"`
 }
@@ -187,6 +191,9 @@ func (a OrchAction) route() (path string, body map[string]any) {
 		return "/orchestrator/items", body
 	case ActEscalate:
 		body["item_id"], body["text"], body["recommendation"] = a.ItemID, a.Text, a.Recommendation
+		if a.Class != "" {
+			body["class"], body["deferred"] = a.Class, a.Deferred
+		}
 		return "/orchestrator/escalations", body
 	case ActAgents:
 		body["active_agents"] = a.ActiveAgents
@@ -247,6 +254,7 @@ Every turn, write ` + "`out/result.json`" + ` as your last step:
   {"action": "link", "item_id": 16, "after": 12, "reason": "…"},
   {"action": "add", "title": "…", "ask": "…", "repo": "owner/name", "priority": "P1", "depends_on": [], "signature": "the normalised failure", "reason": "…"},
   {"action": "escalate", "item_id": 17, "text": "what needs the user", "recommendation": "what you would do, and why", "reason": "…"},
+  {"action": "escalate", "item_id": 19, "text": "scope: the parser too, or docs only?", "recommendation": "docs only now", "class": "scope_choice", "deferred": "the parser change", "reason": "…"},
   {"action": "agents", "active_agents": 2, "reason": "every run fails the same way"},
   {"action": "note", "text": "what you are watching, tried, suspect", "reason": "…"},
   {"action": "proof", "item_id": 18, "checks": [{"kind": "usage", "event": "claimed", "actor": ["runner:mbp"]}, {"kind": "manual", "look": "…"}], "reason": "from the PR's test plan"},
@@ -257,7 +265,7 @@ Every turn, write ` + "`out/result.json`" + ` as your last step:
 
 Every action needs a reason (it is recorded with the action and shown to the user). Each takes only
 its own fields. ` + "`answer`" + `'s kind is one of history, harness, bounce, red_ci, loop. An empty list is
-a fine turn. A ` + "`reply`" + ` takes the channel and thread_ts its message trigger names. A result with an unknown action or field is refused once with the reason, and you are
+a fine turn. An ` + "`escalate`" + `'s optional class (verify_flake, bounce_limit, scope_choice; ` + "`deferred`" + ` only with scope_choice) lets the night shift act on your recommendation (the skill's "Night shift"). A ` + "`reply`" + ` takes the channel and thread_ts its message trigger names. A result with an unknown action or field is refused once with the reason, and you are
 asked again.
 `
 

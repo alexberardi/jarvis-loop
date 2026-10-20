@@ -515,3 +515,47 @@ func TestEscalationWithoutTheOrchestratorApp(t *testing.T) {
 		t.Fatal("with the orchestrator off, a reply mentioning anyone is still the answer")
 	}
 }
+
+// Only the approver's "night" turns the night shift on: anyone else's is an ordinary message to the
+// orchestrator, recorded for it and changing nothing.
+func TestNightWordIsTheApprovers(t *testing.T) {
+	e := newOrchEnv(t)
+	e.clk.Advance(2 * time.Hour) // 10:00 in New York: auto mode is off
+	auto := pipeline.NightAuto
+	if _, err := e.st.SetControl(e.ctx, "user:alex", store.ControlPatch{NightShift: &auto}); err != nil {
+		t.Fatal(err)
+	}
+	overrides := func() []store.Event {
+		t.Helper()
+		evs, err := e.st.EventsBetween(e.ctx, t0.Add(-time.Hour), e.clk.Now().Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []store.Event
+		for _, ev := range evs {
+			if ev.Kind == store.KindOrchNightOverride {
+				out = append(out, ev)
+			}
+		}
+		return out
+	}
+	e.toOrch("message", other, ChannelLoop, "", "<@"+orchUser+"> night")
+	st, err := e.st.NightShift(e.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.On || st.Override != "" || len(overrides()) != 0 {
+		t.Fatalf("a non-approver's night: %+v %+v", st, overrides())
+	}
+	msgs := e.messages()
+	if len(msgs) != 1 || msgs[0].Data["text"] != "night" || msgs[0].Data["approver"] != false {
+		t.Fatalf("not on the orchestrator's normal path: %+v", msgs)
+	}
+	e.toOrch("message", Approver, ChannelLoop, "", "<@"+orchUser+"> night")
+	if st, _ := e.st.NightShift(e.ctx); !st.On || st.Override != pipeline.OverrideNight || len(overrides()) != 1 {
+		t.Fatalf("the approver's night: %+v", st)
+	}
+	if n := len(e.messages()); n != 1 {
+		t.Fatalf("the approver's night went to a turn: %d messages", n)
+	}
+}

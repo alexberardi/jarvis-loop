@@ -251,6 +251,9 @@ func (o *Orchestrator) recommendation(ctx context.Context, e store.Event, mentio
 		}
 		accept = false
 	}
+	if at, err := time.Parse(time.RFC3339Nano, str(e.Data, "act_at")); err == nil && accept {
+		text += fmt.Sprintf("\nNight shift: I act on this recommendation at %s unless you answer first.", at.In(o.bot.c.Location).Format("15:04"))
+	}
 	blocks := []map[string]any{section(text)}
 	if accept {
 		value := strconv.FormatInt(e.ID, 10)
@@ -339,6 +342,9 @@ func (o *Orchestrator) onMessage(ctx context.Context, m slackEvent) {
 	}
 	loopChannel := m.Channel == ChannelLoop || m.Channel == ChannelDigest || m.Channel == ChannelPlan
 	if !(IsDM(m.Channel) || loopChannel && o.Mentions(m.Text)) {
+		return
+	}
+	if o.nightWord(ctx, m) {
 		return
 	}
 	msg := store.OrchestratorMessage{Channel: m.Channel, TS: m.TS, User: m.User, Text: incoming(m.Text), Approver: IsApprover(m.User)}
@@ -440,4 +446,41 @@ func (o *Orchestrator) settle(ctx context.Context, channel, ts, blockID string, 
 		out = append(out, b)
 	}
 	o.bot.update(ctx, "orchestrator settle", Message{Channel: channel, TS: ts, Text: text, Blocks: out})
+}
+
+// nightWord handles the approver's "@orchestrator night" or "morning" itself, without a turn: in
+// auto mode it turns the night shift on or off until the next 23:00 or 08:00
+// (docs/decisions/2026-10-20-night-shift.md). It reports whether the message was one.
+func (o *Orchestrator) nightWord(ctx context.Context, m slackEvent) bool {
+	word := strings.ToLower(strings.Trim(strings.TrimSpace(stripMentions(m.Text)), ".!"))
+	if (word != pipeline.OverrideNight && word != pipeline.OverrideMorning) || !IsApprover(m.User) {
+		return false
+	}
+	st, err := o.c.Store.SetNightOverride(ctx, actorPrefix+m.User, word, m.Channel, m.TS)
+	if err != nil {
+		o.c.Log.Error("slack: night shift override", "err", err.Error())
+		return true
+	}
+	var text string
+	switch {
+	case st.Mode != pipeline.NightAuto:
+		mode := st.Mode
+		if mode == "" {
+			mode = pipeline.NightOff
+		}
+		text = fmt.Sprintf("The night shift is %s, so %s changes nothing: `loop night auto` lets you switch it with night and morning.", mode, word)
+	case st.On:
+		text = fmt.Sprintf("Night shift on until %s: I act on low-risk escalations after 15 minutes, and list each in the standup with its undo.",
+			st.Until.In(o.bot.c.Location).Format("15:04"))
+	default:
+		text = fmt.Sprintf("Night shift off until %s: everything waits for you.", st.Until.In(o.bot.c.Location).Format("15:04"))
+	}
+	thread := m.ThreadTS
+	if thread == "" && !IsDM(m.Channel) {
+		thread = m.TS
+	}
+	if _, err := o.c.Store.OrchReply(ctx, "loopd", m.Channel, thread, text, "the user's "+word); err != nil {
+		o.c.Log.Error("slack: night shift reply", "err", err.Error())
+	}
+	return true
 }

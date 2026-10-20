@@ -144,6 +144,10 @@ func (s *server) orchEscalate(w http.ResponseWriter, r *http.Request) {
 		Text           string `json:"text"`
 		Recommendation string `json:"recommendation"`
 		Reason         string `json:"reason"`
+		// Class is the night class the night shift may act on (pipeline.EscalationClasses);
+		// Deferred is what a scope choice leaves for a P3 item.
+		Class    string `json:"class"`
+		Deferred string `json:"deferred"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -152,7 +156,7 @@ func (s *server) orchEscalate(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "item_id must be a positive number, or 0 for none")
 		return
 	}
-	ev, err := s.st.OrchEscalate(r.Context(), actor(r), body.ItemID, body.Text, body.Recommendation, body.Reason)
+	ev, err := s.st.OrchEscalateNight(r.Context(), actor(r), body.ItemID, body.Text, body.Recommendation, body.Reason, body.Class, body.Deferred)
 	if err != nil {
 		s.fail(w, err)
 		return

@@ -50,6 +50,9 @@ const usage = `usage: loop <command> [args]
   builder <id> <qwen|claude|auto>   who builds it, before its build starts (auto: routing decides)
   rebuild <id> "<notes>" | --notes TEXT   send a held or needs_you item back to build
   agents [<0-6>]
+  night [off|on|auto] [--classes-off verify_flake,...|none]
+                              the night shift: off, on, or auto (23:00-08:00 New York); the
+                              classes it may not act on
   stop | resume
   usage                       claude's 5h window and week, the pace, the days, the costliest items,
                               qwen's builds (the claude spend they replaced, its first-review approvals)
@@ -242,6 +245,7 @@ var commands = map[string]command{
 	"builder":   {2, 2, nil, cmdBuilder},
 	"rebuild":   {1, 2, []string{"notes"}, cmdRebuild},
 	"agents":    {0, 1, nil, cmdAgents},
+	"night":     {0, 1, []string{"classes-off"}, cmdNight},
 	"usage":     {0, 0, nil, cmdUsage},
 	"budget":    {0, 1, []string{"per-5h", "per-week", "pace-at", "warnings"}, cmdBudget},
 	"pace":      {1, 1, []string{"until"}, cmdPace},
@@ -967,6 +971,58 @@ func cmdAgents(c *client, pos []string, _ map[string][]string) error {
 		return usageError("agents takes a number from 0 to 6")
 	}
 	return c.setControl(map[string]any{"active_agents": n})
+}
+
+// cmdNight sets (or, with nothing, shows) the night shift's mode and the classes turned off
+// (docs/decisions/2026-10-20-night-shift.md).
+func cmdNight(c *client, pos []string, f map[string][]string) error {
+	patch := map[string]any{}
+	if len(pos) > 0 {
+		if !slices.Contains(pipeline.NightModes, pos[0]) {
+			return usageError("night takes off, on or auto")
+		}
+		patch["night_shift"] = pos[0]
+	}
+	if v, ok := f["classes-off"]; ok {
+		off := []string{}
+		if raw := v[len(v)-1]; raw != "none" && raw != "" {
+			for _, cl := range strings.Split(raw, ",") {
+				off = append(off, strings.TrimSpace(cl))
+			}
+		}
+		patch["night_classes_off"] = off
+	}
+	if len(patch) > 0 {
+		if _, err := c.json("PUT", "/control", patch, nil); err != nil {
+			return err
+		}
+	}
+	var n struct {
+		Mode       string    `json:"mode"`
+		ClassesOff []string  `json:"classes_off"`
+		On         bool      `json:"on"`
+		Until      time.Time `json:"until"`
+	}
+	if _, err := c.json("GET", "/night", nil, &n); err != nil {
+		return err
+	}
+	state := "off now"
+	if n.On {
+		state = "on now"
+	}
+	if !n.Until.IsZero() {
+		loc, err := time.LoadLocation("America/New_York")
+		if err != nil {
+			loc = time.UTC
+		}
+		state += " until " + n.Until.In(loc).Format("15:04")
+	}
+	off := "none"
+	if len(n.ClassesOff) > 0 {
+		off = strings.Join(n.ClassesOff, ", ")
+	}
+	fmt.Fprintf(c.out, "night shift: %s, %s · classes off: %s\n", n.Mode, state, off)
+	return nil
 }
 
 // cmdBudget sets (or, with no flags, shows) a provider's usage budget.
