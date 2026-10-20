@@ -1,0 +1,27 @@
+{
+  "name": "premerge-protected",
+  "about": "Item #349: review bounces a PR, then main vendors a skill under .claude/skills/ (read-only in the agent's sandbox, so the agent's own merge of main would abort). Before the rebuild the runner merges main into the branch itself, outside the sandbox; the build starts on that merge, the run's pr_opened fields carry the evidence line, and the PR is updated, not reopened.",
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "for": "review", "play": "bounce"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"}},
+    {"do": "push", "branch": "main", "file": ".claude/skills/design/SKILL.md", "text": "a vendored skill\n"},
+    {"do": "script", "item": "a", "for": "review", "play": "approve"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review"},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "count": 1,
+       "data": {"pre_merge": "^runner merged origin/main at [0-9a-f]{7}; protected paths taken from main$"}},
+      {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "count": 2}
+    ],
+    "prs": 1
+  }
+}

@@ -274,6 +274,8 @@ type RunStats struct {
 	Seconds   int
 	CostUSD   float64
 	HasResult bool
+	// PreMerge is the evidence line of the runner's merge of the base before the build ("": none).
+	PreMerge string
 }
 
 // PRBody is the agent's body plus the runner's Verification footer: the runner's own verify steps
@@ -316,6 +318,9 @@ func PRBody(agentBody string, item int64, evidence []EvidenceFile, labels map[st
 		for _, c := range proof.Checks {
 			fmt.Fprintf(&b, "- %s\n", oneLine(c.String()))
 		}
+	}
+	if st.PreMerge != "" {
+		fmt.Fprintf(&b, "\nBefore the build, the %s.\n", oneLine(st.PreMerge))
 	}
 	if st.HasResult {
 		fmt.Fprintf(&b, "\nRun: %d turns, prompt-cache hit %.0f%%, %s, about $%.2f (estimate).\n",
