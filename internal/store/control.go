@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"maps"
+	"slices"
 
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
@@ -17,12 +18,18 @@ func (s *Store) loadControl(q interface {
 }) (pipeline.Control, error) {
 	var c pipeline.Control
 	var stopped, nightly int
-	var limits, rules, budgets string
+	var limits, rules, budgets, classesOff string
 	err := q.QueryRow(`SELECT active_agents, stopped, max_run_minutes, limits, hold_rules, orchestrator_turns_per_day, runway_warn_hours, budgets,
-		regression_nightly, regression_at FROM control WHERE id = 1`).
-		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules, &c.OrchTurnsPerDay, &c.RunwayWarnHours, &budgets, &nightly, &c.RegressionAt)
+		regression_nightly, regression_at, night_shift, night_classes_off FROM control WHERE id = 1`).
+		Scan(&c.ActiveAgents, &stopped, &c.MaxRunMinutes, &limits, &rules, &c.OrchTurnsPerDay, &c.RunwayWarnHours, &budgets, &nightly, &c.RegressionAt,
+			&c.NightShift, &classesOff)
 	if err != nil {
 		return c, err
+	}
+	if classesOff != "" {
+		if err := json.Unmarshal([]byte(classesOff), &c.NightClassesOff); err != nil {
+			return c, err
+		}
 	}
 	c.Stopped, c.RegressionNightly = stopped != 0, nightly != 0
 	c.RegressionAt = c.RegressionTime()
@@ -78,9 +85,19 @@ func saveControl(tx *sql.Tx, c pipeline.Control, builtInRules bool) error {
 	if c.RegressionNightly {
 		nightly = 1
 	}
+	var classesOff []byte
+	if len(c.NightClassesOff) > 0 {
+		if classesOff, err = json.Marshal(c.NightClassesOff); err != nil {
+			return err
+		}
+	}
+	if c.NightShift == "" {
+		c.NightShift = pipeline.NightOff
+	}
 	_, err = tx.Exec(`UPDATE control SET active_agents=?, stopped=?, max_run_minutes=?, limits=?, hold_rules=?, orchestrator_turns_per_day=?, runway_warn_hours=?, budgets=?,
-		regression_nightly=?, regression_at=? WHERE id = 1`,
-		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules), c.OrchTurnsPerDay, c.RunwayWarnHours, string(budgets), nightly, c.RegressionAt)
+		regression_nightly=?, regression_at=?, night_shift=?, night_classes_off=? WHERE id = 1`,
+		c.ActiveAgents, stopped, c.MaxRunMinutes, string(limits), string(rules), c.OrchTurnsPerDay, c.RunwayWarnHours, string(budgets), nightly, c.RegressionAt,
+		c.NightShift, string(classesOff))
 	return err
 }
 
@@ -131,6 +148,10 @@ type ControlPatch struct {
 	// RegressionNightly schedules the overnight regression every night, at RegressionAt (HH:MM).
 	RegressionNightly *bool   `json:"regression_nightly"`
 	RegressionAt      *string `json:"regression_at"`
+	// NightShift is the night shift's mode: off, on or auto (docs/decisions/2026-10-20-night-shift.md).
+	NightShift *string `json:"night_shift"`
+	// NightClassesOff replaces the list of night classes turned off.
+	NightClassesOff *[]string `json:"night_classes_off"`
 }
 
 // SetControl applies a patch to the control row and records it.
@@ -166,6 +187,12 @@ func (s *Store) SetControl(ctx context.Context, actor string, p ControlPatch) (p
 		}
 		if p.RegressionAt != nil {
 			c.RegressionAt = *p.RegressionAt
+		}
+		if p.NightShift != nil {
+			c.NightShift = *p.NightShift
+		}
+		if p.NightClassesOff != nil {
+			c.NightClassesOff = slices.Compact(slices.Sorted(slices.Values(*p.NightClassesOff)))
 		}
 		for k, v := range p.Limits {
 			c.Limits[k] = v

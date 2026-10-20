@@ -518,6 +518,9 @@ func (s *Store) OrchTick(ctx context.Context) error {
 		if err := s.doneSweep(tx, now); err != nil {
 			return err
 		}
+		if err := s.nightSweep(tx, now); err != nil {
+			return err
+		}
 		var lastSweep, dueAt int64
 		if err := tx.QueryRow(`SELECT last_sweep, due_at FROM orch_state WHERE id = 1`).Scan(&lastSweep, &dueAt); err != nil {
 			return err

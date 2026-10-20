@@ -27,6 +27,10 @@ type Control struct {
 	// RegressionAt ("HH:MM" on the loop's clock; "": DefaultRegressionAt) or once the queue is quiet, whichever is later.
 	RegressionNightly bool   `json:"regression_nightly"`
 	RegressionAt      string `json:"regression_at"`
+	// NightShift is the night shift's mode (nightshift.go): off, on or auto ("": off).
+	NightShift string `json:"night_shift"`
+	// NightClassesOff are the night classes the user turned off.
+	NightClassesOff []string `json:"night_classes_off"`
 }
 
 // LimitKeys are the resources and stages that can carry a limit. Build has none: it is bounded
@@ -45,6 +49,7 @@ func DefaultControl() Control {
 		OrchTurnsPerDay: DefaultOrchTurnsPerDay,
 		RunwayWarnHours: DefaultRunwayWarnHours,
 		RegressionAt:    DefaultRegressionAt,
+		NightShift:      NightOff,
 	}
 }
 
@@ -74,6 +79,9 @@ func (c Control) Validate() error {
 		return errf(CodeInvalidField, "runway_warn_hours must be 0 to %d", MaxRunwayWarnHours)
 	}
 	if _, err := ParseClock(c.RegressionTime()); err != nil {
+		return err
+	}
+	if err := CheckNightSetting(c.NightShift, c.NightClassesOff); err != nil {
 		return err
 	}
 	for k, v := range c.Limits {

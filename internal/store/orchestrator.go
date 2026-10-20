@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -284,15 +285,24 @@ func (s *Store) OrchAdd(ctx context.Context, actor string, n NewItem, signature,
 			KindOrchAdded, orchPrefix+"%", s.clock.Now().Add(-24*time.Hour).UnixNano()).Scan(&added); err != nil {
 			return err
 		}
-		if added >= pipeline.OrchAddsPerDay {
-			return errf(pipeline.CodeLimit, "already %d items filed in the last 24 hours; recommend the next one to the user", added)
-		}
 		if n.Source == "" {
 			n.Source = "finding"
 		}
 		if n.Repo, err = s.ResolveRepo(n.Repo); err != nil {
 			return err
 		}
+		set, err := s.nightSetting(tx)
+		if err != nil {
+			return err
+		}
+		process := isProcessTicket(n.Repo)
+		if limit := pipeline.OrchAddCap(set, s.clock.Now(), s.orchLoc(), process); added >= limit {
+			if limit > pipeline.OrchAddsPerDay {
+				return errf(pipeline.CodeLimit, "already %d items filed in the last 24 hours (%d for process tickets at night); recommend the next one to the user", added, limit)
+			}
+			return errf(pipeline.CodeLimit, "already %d items filed in the last 24 hours; recommend the next one to the user", added)
+		}
+		nightCap := added >= pipeline.OrchAddsPerDay
 		if it, err = pipeline.NewItem(n.Title, n.Ask, n.Repo, n.Priority, n.Source, s.clock.Now()); err != nil {
 			return err
 		}
@@ -306,8 +316,17 @@ func (s *Store) OrchAdd(ctx context.Context, actor string, n NewItem, signature,
 		if err := checkDependencies(tx, it); err != nil {
 			return err
 		}
-		return s.event(tx, Event{ItemID: it.ID, Actor: actor, Kind: KindOrchAdded,
-			Data: map[string]any{"signature": sig, "raw_signature": signature, "reason": r}})
+		if err := s.event(tx, Event{ItemID: it.ID, Actor: actor, Kind: KindOrchAdded,
+			Data: map[string]any{"signature": sig, "raw_signature": signature, "reason": r}}); err != nil {
+			return err
+		}
+		if !nightCap {
+			return nil
+		}
+		// Past the day's cap on the night's: a night action, with its undo.
+		return s.event(tx, Event{ItemID: it.ID, Actor: NightActor, Kind: KindOrchNightAction, Data: map[string]any{
+			"class": pipeline.ClassTicketLimit, "reason": r, "undo": fmt.Sprintf("loop drop %d", it.ID),
+			"action": fmt.Sprintf("filed this process ticket past the day's cap (%d of %d at night)", added+1, pipeline.OrchAddsPerNight)}})
 	})
 	if err != nil {
 		return it, false, s.refuse(ctx, actor, 0, "add", err)
@@ -319,6 +338,13 @@ func (s *Store) OrchAdd(ctx context.Context, actor string, n NewItem, signature,
 // is what it needs, recommendation what it recommends. At most one per pipeline.OrchEscalateEvery,
 // except about an approval (an item held for one). id may be 0 (not about one item).
 func (s *Store) OrchEscalate(ctx context.Context, actor string, id int64, text, recommendation, reason string) (Event, error) {
+	return s.OrchEscalateNight(ctx, actor, id, text, recommendation, reason, "", "")
+}
+
+// OrchEscalateNight is OrchEscalate with a night class (pipeline.EscalationClasses; "": none) and,
+// for a scope choice, the part it defers: the night shift acts on the recommendation after
+// pipeline.NightGrace when the escalation is made while it is on (data.night, data.act_at).
+func (s *Store) OrchEscalateNight(ctx context.Context, actor string, id int64, text, recommendation, reason, class, deferred string) (Event, error) {
 	var out Event
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		r, err := pipeline.NeedReason(reason)
@@ -327,6 +353,12 @@ func (s *Store) OrchEscalate(ctx context.Context, actor string, id int64, text, 
 		}
 		if strings.TrimSpace(text) == "" {
 			return errf(pipeline.CodeMissingField, "text is required: what the user is asked")
+		}
+		if err := pipeline.CheckEscalationClass(class, recommendation, deferred); err != nil {
+			return err
+		}
+		if class != "" && id == 0 {
+			return errf(pipeline.CodeMissingField, "a night class needs item_id: the night shift acts on an item")
 		}
 		approval := false
 		if id != 0 {
@@ -350,8 +382,23 @@ func (s *Store) OrchEscalate(ctx context.Context, actor string, id int64, text, 
 				}
 			}
 		}
-		return s.recordEvent(tx, &out, Event{ItemID: id, Actor: actor, Kind: KindOrchEscalated, Data: map[string]any{
-			"text": strings.TrimSpace(text), "recommendation": strings.TrimSpace(recommendation), "reason": r, "approval": approval}})
+		data := map[string]any{"text": strings.TrimSpace(text), "recommendation": strings.TrimSpace(recommendation), "reason": r, "approval": approval}
+		if class != "" {
+			set, err := s.nightSetting(tx)
+			if err != nil {
+				return err
+			}
+			data["class"] = class
+			if d := strings.TrimSpace(deferred); d != "" {
+				data["deferred"] = d
+			}
+			night := set.On(now, s.orchLoc()) && set.ClassOn(class)
+			data["night"] = night
+			if night && !approval {
+				data["act_at"] = now.Add(pipeline.NightGrace)
+			}
+		}
+		return s.recordEvent(tx, &out, Event{ItemID: id, Actor: actor, Kind: KindOrchEscalated, Data: data})
 	})
 	if err != nil {
 		return out, s.refuse(ctx, actor, id, "escalate", err)
