@@ -109,7 +109,7 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 	}
 
 	var waitSince time.Time
-	noted, refusals := false, 0
+	noted, reran, refusals := false, false, 0
 	for {
 		f, err := r.landFacts(ctx, lr)
 		if ctx.Err() != nil {
@@ -143,6 +143,16 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 				return
 			}
 			if d.Outcome == "back_to_build" && d.Fields["ci_head_sha"] != "" {
+				if f.RerunCI && !reran {
+					// Once per run, whatever loopd took: a re-run that GitHub refused leaves the red standing.
+					reran = true
+					if r.rerunPRFailed(ctx, lr, f.PR) {
+						if !sleep("land: re-running the failed CI jobs once") {
+							return
+						}
+						continue
+					}
+				}
 				r.landCIFailure(ctx, lr, f.PR)
 				if sha := r.landMainFixed(ctx, lr, f.PR.HeadRefOid); sha != "" {
 					d.Fields["main_fixed_sha"] = sha
@@ -275,6 +285,7 @@ func (r *Runner) landFacts(ctx context.Context, lr *landRun) (LandFacts, error) 
 	if it.Approval != nil {
 		f.ApprovedHead = it.Approval.HeadSHA
 	}
+	f.RerunCI = rerunOwed(d.Events, pr.HeadRefOid)
 	// Hold: loopd's risk, or loopd's rules on the paths computed here. loopd checks again when
 	// the merge is reported, but by then it has happened; this check is the one that stops it.
 	f.Hold = it.Risk == pipeline.RiskHold
@@ -379,4 +390,46 @@ func roundDur(d time.Duration) string {
 		s = strings.TrimSuffix(s, "0m") // "3h", not "3h0m"
 	}
 	return s
+}
+
+// rerunOwed says whether the orchestrator's red_ci answer on head (rerun_ci, ApplyOrchAnswer)
+// still owes a re-run of the PR's failed jobs: no ci_rerun event on the head since it.
+func rerunOwed(evs []EventInfo, head string) bool {
+	owed := false
+	for _, e := range evs {
+		sha, _ := e.Data["head_sha"].(string)
+		switch {
+		case sha != head:
+		case e.Kind == "answered" && e.Data["rerun_ci"] == true:
+			owed = true
+		case e.Kind == "ci_rerun":
+			owed = false
+		}
+	}
+	return owed
+}
+
+// rerunPRFailed re-runs the failed jobs behind the PR's failed checks once, and records it
+// (ci_rerun) so that no later land run re-runs them again. It says whether GitHub took any re-run:
+// when it took none, the red stands and the item goes back to build.
+func (r *Runner) rerunPRFailed(ctx context.Context, lr *landRun, pr LandPR) bool {
+	var names []string
+	var ids []int64
+	for _, run := range ciRunsFromChecks(pr.Checks) {
+		if err := r.Land.RerunFailed(ctx, lr.repo.Slug, run.ID); err != nil {
+			lr.log.Warn("re-running the PR's failed jobs", "run", run.ID, "err", err)
+			continue
+		}
+		names, ids = append(names, run.Name), append(ids, run.ID)
+	}
+	data := map[string]any{"head_sha": pr.HeadRefOid, "jobs": strings.Join(names, ", "), "runs": ids}
+	if err := r.Client.Event(ctx, lr.item.ID, "ci_rerun", data); err != nil {
+		lr.log.Warn("ci_rerun event", "err", err)
+	}
+	if len(names) == 0 {
+		lr.log.Info("red CI: no failed job could be re-run", "head", short7(pr.HeadRefOid))
+		return false
+	}
+	lr.log.Info("red CI: re-running the failed jobs once", "jobs", names, "head", short7(pr.HeadRefOid))
+	return true
 }

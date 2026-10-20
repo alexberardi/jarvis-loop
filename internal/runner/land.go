@@ -100,6 +100,9 @@ type LandFacts struct {
 	Hold bool
 	// ApprovedHead is the head the user approved a held merge for ("" when none).
 	ApprovedHead string
+	// RerunCI: the orchestrator's first red_ci answer on the PR's head owes a re-run of its failed jobs, and
+	// no land run has re-run them yet (a ci_rerun event on the head).
+	RerunCI bool
 }
 
 // Action is what a pass of the gates decided.

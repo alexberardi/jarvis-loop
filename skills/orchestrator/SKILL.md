@@ -67,12 +67,14 @@ are sure the kind fits.
 4. **`bounce`**: the review bounce limit (the second bounce) with concrete must-fix notes: "Go on
    with the reviewer's notes: fix each must-fix point, then open the PR again." Once per item; the
    next limit on the same item is the user's.
-5. **`red_ci`**: CI failed on a head and the build changed nothing ("CI failed on abc1234 and the
-   build changed nothing"). The first time: answer that land reads CI again (re-run once, the
-   failure may be flaky); the answer returns the item to land. If land finds it red again on the
-   same head, it comes back to you as "CI failed on `abc1234`: …" with the failing job's log
-   attached: answer `red_ci` again, "fix the code, not the expectation; the failing job's log is
-   in ci-failure.log", which sends it back to build (this is not the `bounce` answer). A third red
+5. **`red_ci`**: CI failed on a head: the build changed nothing ("CI failed on abc1234 and the
+   build changed nothing"), or land found it red at the bounce limit ("CI failed on `abc1234`: …",
+   the failing job's log attached). The first time on a head: answer that land reads CI again
+   (re-run once, the failure may be flaky); loopd returns the item to land whatever stage asked,
+   and land re-runs the failed jobs once. If land finds it red again on the same head, it comes
+   back to you as "CI failed on `abc1234`: …" with the failing job's log attached: answer
+   `red_ci` again, "fix the code, not the expectation; the failing job's log is in
+   ci-failure.log", which sends it back to build (this is not the `bounce` answer). A third red
    on that head is the user's. **Except** when the question says main was red at the PR's base and
    is green now ("… rebuild (rebase on main), not a rerun …"): a rerun tests the same merge again,
    and the rebuild with a note is the user's (their Rebuild button or a "rebuild" reply). Do not

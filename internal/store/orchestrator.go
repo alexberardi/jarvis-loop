@@ -133,7 +133,7 @@ func (s *Store) OrchAnswer(ctx context.Context, actor string, id int64, kind, te
 		if err := pipeline.CheckOrchestratorAnswer(kind, text, it.HeadSHA, prior); err != nil {
 			return pipeline.Transition{}, err
 		}
-		tr, err := pipeline.ApplyAnswer(it, text)
+		tr, err := pipeline.ApplyOrchAnswer(it, kind, text, prior)
 		if err != nil {
 			return tr, err
 		}

@@ -86,6 +86,26 @@ func sameText(a, b string) bool {
 	return strings.EqualFold(strings.Join(strings.Fields(a), " "), strings.Join(strings.Fields(b), " "))
 }
 
+// ApplyOrchAnswer is the orchestrator's answer: the item returns to the stage that asked, as for
+// the user's (ApplyAnswer), except the first red_ci answer on a head to a "CI failed on <sha>"
+// question, which returns to land whatever stage asked, and marks the transition rerun_ci: land
+// re-runs the PR's failed jobs once (the failure may be flaky) before it reads CI again. Land's
+// red CI at the bounce limit asks with return stage build; a build there would get the rerun text
+// and change nothing. The second red_ci answer on the head goes where the question says (build
+// with the log). A question that recommends a rebuild (main fixed) gets no rerun: it would test
+// the same merge again (docs/decisions/2026-10-20-red-ci-answer-reruns-in-land.md).
+func ApplyOrchAnswer(it Item, kind, text string, prior []OrchAnswer) (Transition, error) {
+	rerun := kind == AnswerRedCI && strings.HasPrefix(it.Question, "CI failed on") && it.CIMainFixed == "" &&
+		!slices.ContainsFunc(prior, func(a OrchAnswer) bool { return a.Kind == AnswerRedCI && a.HeadSHA == it.HeadSHA })
+	tr, err := ApplyAnswer(it, text)
+	if err != nil || !rerun {
+		return tr, err
+	}
+	tr.Item.Stage, tr.To = Land, Land
+	tr.Data["rerun_ci"] = true
+	return tr, nil
+}
+
 // RetryWait is when a retry after the failures-th failure on the item's head may run (failed at
 // failedAt), or ask=true when that failure is the one to escalate instead.
 func RetryWait(failures int, failedAt time.Time) (notBefore time.Time, ask bool) {

@@ -448,3 +448,54 @@ func TestOrchestratorBoard(t *testing.T) {
 		t.Errorf("a day later, limit 1: %+v %v", got, err)
 	}
 }
+
+// #341: land's red CI at the bounce limit asks "CI failed on <sha>" with return stage build. The
+// orchestrator's first red_ci answer on that head returns the item to land (which re-runs the
+// failed jobs once); the second goes to build, as the question's return stage says.
+func TestOrchRedCIAnswerReturnsToLandFirst(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	it := addIn(t, s, "ci red", "alexberardi/jarvis-loop", "P2")
+	step := func(agent string, out pipeline.Outcome, f map[string]string, paths []string, ev bool) {
+		t.Helper()
+		c := claimed(t, s, agent)
+		if c == nil || c.Item.ID != it.ID {
+			t.Fatalf("claim for %s: %+v", out, c)
+		}
+		if ev {
+			evidence(t, s, it.ID)
+		}
+		if _, err := s.Advance(ctx, runner, it.ID, out, f, paths); err != nil {
+			t.Fatalf("%s: %v", out, err)
+		}
+	}
+	opened := map[string]string{"repo": it.Repo, "pr": "8", "branch": "loop/1-x", "head_sha": shaA}
+	step("triager", pipeline.Reproduced, triaged, nil, true)
+	step("builder", pipeline.PROpened, opened, []string{"M y.go"}, true)
+	step("reviewer", pipeline.Bounce, map[string]string{"notes": "fix the test"}, nil, false)
+	step("builder", pipeline.PROpened, opened, []string{"M y.go"}, true)
+	step("reviewer", pipeline.Approved, map[string]string{"summary": "ok", "head_sha": shaA}, nil, false)
+	step("lander", pipeline.BackToBuild, map[string]string{"reason": "CI failed on `0123456`: check", "ci_head_sha": shaA}, []string{"M y.go"}, false)
+	d, _ := s.GetItem(ctx, it.ID)
+	if d.Item.Stage != pipeline.NeedsYou || d.Item.ReturnStage != pipeline.Build {
+		t.Fatalf("after land's red CI: %s, return %s", d.Item.Stage, d.Item.ReturnStage)
+	}
+	got, err := s.OrchAnswer(ctx, orch, it.ID, pipeline.AnswerRedCI, "Land reads CI again: re-run it once.", "maybe flaky")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Stage != pipeline.Land {
+		t.Fatalf("first red_ci answer went to %s, want land", got.Stage)
+	}
+	if e := newest(t, s, it.ID); e.To != string(pipeline.Land) || e.Data["rerun_ci"] != true {
+		t.Fatalf("answer event: %+v", e)
+	}
+	step("lander", pipeline.BackToBuild, map[string]string{"reason": "CI failed on `0123456`: check", "ci_head_sha": shaA}, []string{"M y.go"}, false)
+	got, err = s.OrchAnswer(ctx, orch, it.ID, pipeline.AnswerRedCI, "Red again: fix the code.", "not flaky")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Stage != pipeline.Build {
+		t.Fatalf("second red_ci answer went to %s, want build", got.Stage)
+	}
+}

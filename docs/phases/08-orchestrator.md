@@ -95,8 +95,9 @@ is posted in the item's thread and listed at the top of the standup with its und
    failing every run (then it is a process issue, below, not a retry).
 4. Review bounce limit with concrete must-fix notes: "go on with the reviewer's notes", once per
    item.
-5. Same-head red CI: re-run the failed jobs once; if it fails again, send it back to build with the
-   log ("fix the code, not the expectation").
+5. Same-head red CI: re-run the failed jobs once (the first `red_ci` answer on a head returns the
+   item to land, which re-runs them); if it fails again, send it back to build with the log ("fix
+   the code, not the expectation"). [Decision](../decisions/2026-10-20-red-ci-answer-reruns-in-land.md).
 6. Questions about how the loop works (where evidence goes, what a stage does).
 
 Anything else is the user's: product or design choices, scope, a change on a hold list, a
