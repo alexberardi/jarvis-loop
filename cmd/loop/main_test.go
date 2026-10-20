@@ -298,6 +298,40 @@ func TestCLIBudgetAndUsage(t *testing.T) {
 			t.Errorf("usage lacks %q:\n%s", want, out)
 		}
 	}
+	// #316: the CLI's warnings can be ignored, and pacing lifted until a time or the next hit.
+	if out := c.ok(userTok, "budget", "--warnings", "ignore"); !strings.HasSuffix(out, "pacing from 90% · CLI warnings ignored\n") {
+		t.Fatalf("warnings ignore: %q", out)
+	}
+	if out := c.ok(userTok, "budget", "--warnings", "pace"); strings.Contains(out, "warnings") {
+		t.Fatalf("warnings pace: %q", out)
+	}
+	if code, _, errs := c.run(userTok, "budget", "--warnings", "never"); code != 2 || !strings.Contains(errs, "ignore or pace") {
+		t.Fatalf("bad warnings: %d %q", code, errs)
+	}
+	if out := c.ok(userTok, "pace", "normal", "--until", "reset"); !strings.Contains(out, "pace: normal (pacing lifted until the next limit hit)") {
+		t.Fatalf("pace normal reset: %q", out)
+	}
+	if out := c.ok(userTok, "usage"); !strings.Contains(out, "pace: normal (pacing lifted until the next limit hit)") {
+		t.Fatalf("usage while lifted:\n%s", out)
+	}
+	if out := c.ok(userTok, "pace", "normal", "--until", "2026-10-15T09:00:00Z"); !strings.Contains(out, "pacing lifted until") {
+		t.Fatalf("pace normal until: %q", out)
+	}
+	if out := c.ok(userTok, "pace", "normal", "--until", "6h"); !strings.Contains(out, "pacing lifted until") {
+		t.Fatalf("pace normal 6h: %q", out)
+	}
+	if out := c.ok(userTok, "pace", "auto"); out != "pace: normal\n" {
+		t.Fatalf("pace auto: %q", out)
+	}
+	if code, _, errs := c.run(userTok, "pace", "normal"); code != 2 || !strings.Contains(errs, "--until") {
+		t.Fatalf("pace normal without --until: %d %q", code, errs)
+	}
+	if code, _, errs := c.run(userTok, "pace", "normal", "--until", "2026-10-13T09:00:00Z"); code != 1 || !strings.Contains(errs, "future") {
+		t.Fatalf("pace normal in the past: %d %q", code, errs)
+	}
+	if code, _, _ := c.run(userTok, "pace", "fast"); code != 2 {
+		t.Fatalf("pace fast: %d", code)
+	}
 }
 
 func TestUsageLines(t *testing.T) {
@@ -545,5 +579,30 @@ func TestCLIFeature(t *testing.T) {
 	}
 	if code, _, errs := c.run(userTok, "feature", "2"); code != 2 || !strings.Contains(errs, "usage") {
 		t.Fatalf("no name: %d %q", code, errs)
+	}
+}
+
+func TestPaceUntil(t *testing.T) {
+	loc := time.FixedZone("EDT", -4*3600)
+	now := time.Date(2026, 10, 20, 7, 5, 0, 0, loc)
+	for in, want := range map[string]string{
+		"reset":                "reset",
+		"6h":                   "2026-10-20T17:05:00Z",
+		"09:00":                "2026-10-20T09:00:00-04:00",
+		"07:00":                "2026-10-21T07:00:00-04:00",
+		"2026-10-21T09:00":     "2026-10-21T09:00:00-04:00",
+		"2026-10-21 09:00":     "2026-10-21T09:00:00-04:00",
+		"2026-10-21T13:00:00Z": "2026-10-21T13:00:00Z",
+	} {
+		got, err := paceUntil(in, now, loc)
+		if in == "6h" {
+			want = now.Add(6 * time.Hour).Format(time.RFC3339)
+		}
+		if err != nil || got != want {
+			t.Errorf("paceUntil(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	if _, err := paceUntil("tomorrow", now, loc); err == nil {
+		t.Error("tomorrow: no error")
 	}
 }

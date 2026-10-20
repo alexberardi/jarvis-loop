@@ -51,9 +51,13 @@ const usage = `usage: loop <command> [args]
   agents [<0-6>]
   stop | resume
   usage                       claude's 5h window and week, the pace, the days, the costliest items
-  budget [claude] [--per-5h N] [--per-week N] [--pace-at PCT]
+  budget [claude] [--per-5h N] [--per-week N] [--pace-at PCT] [--warnings ignore|pace]
                               N: tokens (2M, 500k), a percent of what got us limited last time
-                              (80%), or off; pacing starts at --pace-at percent (default 85)
+                              (80%), or off; pacing starts at --pace-at percent (default 85);
+                              --warnings ignore: the CLI's allowed_warning alone never slows claims
+  pace normal --until <time|reset>   lift claude's pacing until a time (2026-10-21T09:00, 09:00,
+                              6h) or, with reset, the next limit hit; a limit hit still pauses
+  pace auto                   pacing back on (budgets and warnings)
   unfreeze <repo>             lift the freeze on a repo whose main went red (owner/name or bare name)
 
   for moving items by hand, as a runner:
@@ -236,7 +240,8 @@ var commands = map[string]command{
 	"rebuild":   {1, 2, []string{"notes"}, cmdRebuild},
 	"agents":    {0, 1, nil, cmdAgents},
 	"usage":     {0, 0, nil, cmdUsage},
-	"budget":    {0, 1, []string{"per-5h", "per-week", "pace-at"}, cmdBudget},
+	"budget":    {0, 1, []string{"per-5h", "per-week", "pace-at", "warnings"}, cmdBudget},
+	"pace":      {1, 1, []string{"until"}, cmdPace},
 	"unfreeze":  {1, 1, nil, cmdUnfreeze},
 	"stop":      {0, 0, nil, cmdStop(true)},
 	"resume":    {0, 0, nil, cmdStop(false)},
@@ -989,6 +994,16 @@ func cmdBudget(c *client, pos []string, f map[string][]string) error {
 		}
 		b.PaceAt = n
 	}
+	switch v := last(f, "warnings"); v {
+	case "":
+	case pipeline.WarningsIgnore, pipeline.WarningsPace:
+		b.Warnings = v
+		if v == pipeline.WarningsPace {
+			b.Warnings = "" // the default
+		}
+	default:
+		return usageError("--warnings takes ignore or pace")
+	}
 	if len(f) > 0 {
 		if _, err := c.json("PUT", "/control", map[string]any{"budgets": map[string]pipeline.Budget{provider: b}}, &ctl); err != nil {
 			return err
@@ -997,6 +1012,68 @@ func cmdBudget(c *client, pos []string, f map[string][]string) error {
 	}
 	fmt.Fprintf(c.out, "%s budget: %s\n", provider, pipeline.DescribeBudget(b))
 	return nil
+}
+
+// cmdPace lifts claude's pacing (pace normal --until <time|reset>) or puts it back on (pace auto),
+// then says the pace.
+func cmdPace(c *client, pos []string, f map[string][]string) error {
+	var until string
+	switch pos[0] {
+	case "normal":
+		v := last(f, "until")
+		if v == "" {
+			return usageError("pace normal needs --until <time|reset> (2026-10-21T09:00, 09:00, 6h, reset)")
+		}
+		t, err := paceUntil(v, time.Now(), time.Local)
+		if err != nil {
+			return err
+		}
+		until = t
+	case "auto":
+		if len(f) > 0 {
+			return usageError("pace auto takes no flags")
+		}
+	default:
+		return usageError("pace normal --until <time|reset> | pace auto")
+	}
+	if _, err := c.json("PUT", "/control", map[string]any{"pace_normal_until": until}, nil); err != nil {
+		return err
+	}
+	var u usageReport
+	if _, err := c.json("GET", "/usage", nil, &u); err != nil {
+		return err
+	}
+	fmt.Fprintln(c.out, "pace: "+u.Pace.Describe(time.Local))
+	return nil
+}
+
+// paceUntil reads --until: reset (the next limit hit), a duration (6h), a time of day (09:00, the
+// next one), a local date and time (2026-10-21T09:00 or "2026-10-21 09:00") or RFC 3339; it gives
+// what PUT /control's pace_normal_until takes.
+func paceUntil(v string, now time.Time, loc *time.Location) (string, error) {
+	if v == "reset" {
+		return v, nil
+	}
+	if d, err := time.ParseDuration(v); err == nil && d > 0 {
+		return now.Add(d).Format(time.RFC3339), nil
+	}
+	if t, err := time.Parse(time.RFC3339, v); err == nil {
+		return t.Format(time.RFC3339), nil
+	}
+	for _, layout := range []string{"2006-01-02T15:04", "2006-01-02 15:04"} {
+		if t, err := time.ParseInLocation(layout, v, loc); err == nil {
+			return t.Format(time.RFC3339), nil
+		}
+	}
+	if t, err := time.ParseInLocation("15:04", v, loc); err == nil {
+		n := now.In(loc)
+		at := time.Date(n.Year(), n.Month(), n.Day(), t.Hour(), t.Minute(), 0, 0, loc)
+		if !at.After(n) {
+			at = at.AddDate(0, 0, 1)
+		}
+		return at.Format(time.RFC3339), nil
+	}
+	return "", usageError("--until " + v + ": a time (2026-10-21T09:00, 09:00), a duration (6h) or reset")
 }
 
 // usageReport is the part of GET /usage the CLI prints.

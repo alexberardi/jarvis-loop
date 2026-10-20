@@ -997,6 +997,12 @@ func (b *Bot) paceMessage(ctx context.Context, e store.Event) (Message, bool) {
 			return Message{}, false
 		}
 		text = "Claude claims back to normal."
+		if e.Data["lifted"] == true {
+			text = "Claude claims back to normal: you lifted pacing until the next limit hit."
+			if u := at("until"); u != "" {
+				text = "Claude claims back to normal: you lifted pacing until " + u + "."
+			}
+		}
 	}
 	return Message{Channel: ChannelDigest, Text: text, Blocks: []map[string]any{section(text)}}, true
 }
