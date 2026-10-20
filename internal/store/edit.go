@@ -7,7 +7,7 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
-// The user's corrections to a filed item (loop edit, link, unlink, resources, feature): each is an event,
+// The user's corrections to a filed item (loop edit, link, unlink, resources, feature, builder): each is an event,
 // and a refusal is recorded as one too (human).
 
 // Edit fixes an item's title or ask before build starts (pipeline.ApplyEdit).
@@ -61,4 +61,16 @@ func (s *Store) SetFeature(ctx context.Context, actor string, id int64, feature 
 	return s.human(ctx, actor, id, "feature", func(it pipeline.Item) (pipeline.Transition, error) {
 		return pipeline.ApplyFeature(it, feature)
 	})
+}
+
+// SetBuilder sets who builds an item before its build starts, or clears it so routing decides
+// (pipeline.ApplyBuilder): refused while a run holds the item.
+func (s *Store) SetBuilder(ctx context.Context, actor string, id int64, builder string) (pipeline.Item, error) {
+	return s.humanTx(ctx, actor, id, "builder", func(tx *sql.Tx, it pipeline.Item) (pipeline.Transition, error) {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM leases WHERE item_id = ? AND ended_at IS NULL`, id).Scan(&n); err != nil {
+			return pipeline.Transition{}, err
+		}
+		return pipeline.ApplyBuilder(it, builder, n > 0)
+	}, nil)
 }

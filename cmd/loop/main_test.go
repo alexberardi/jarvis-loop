@@ -310,6 +310,7 @@ func TestUsageLines(t *testing.T) {
 		Budget:   pipeline.Budget{Per5hPct: 100, PerWeekPct: 100},
 		Forecast: &fc,
 		Hits:     []pipeline.UsageHit{{At: now.Add(-6 * time.Hour), Window: "5h", Burn: 10_000_000, ResetAt: now.Add(-5 * time.Hour)}},
+		Qwen:     pipeline.QwenWeek{Builds: 3, ReplacedUSD: 4.2, Reviewed: 2, FirstApproved: 2},
 	}
 	u.Items = append(u.Items, struct {
 		ItemID  int64   `json:"item_id"`
@@ -326,6 +327,7 @@ func TestUsageLines(t *testing.T) {
 		"budget: per 5h 100% of the last limit · per week 100% of the last limit · pacing from 85%",
 		"costliest items (7 days):",
 		"  #12 the big one  burn 3.1M  $4.10  5 runs",
+		"qwen builds (7 days): 3, about $4.20 of claude builds replaced (estimate: same-size claude builds) · first review approved 2 of 2 (100%)",
 		"limits hit:",
 		"  Sun 14:00 5h limit at burn 10.0M, reset Sun 15:00",
 	}, "\n")
@@ -545,5 +547,28 @@ func TestCLIFeature(t *testing.T) {
 	}
 	if code, _, errs := c.run(userTok, "feature", "2"); code != 2 || !strings.Contains(errs, "usage") {
 		t.Fatalf("no name: %d %q", code, errs)
+	}
+}
+
+func TestCLIBuilder(t *testing.T) {
+	c := testLoopd(t)
+	c.ok(userTok, "add", "a", "--repo", "jarvis-server")
+	if out := c.ok(userTok, "builder", "#1", "qwen"); out != "#1 builds with qwen\n" {
+		t.Fatalf("builder: %q", out)
+	}
+	if out := c.ok(userTok, "show", "1"); !strings.Contains(out, "builder:  qwen") {
+		t.Fatalf("show: %q", out)
+	}
+	if out := c.ok(userTok, "builder", "1", "auto"); out != "#1 has no builder set: routing decides\n" {
+		t.Fatalf("builder auto: %q", out)
+	}
+	if out := c.ok(userTok, "show", "1"); strings.Contains(out, "builder:") {
+		t.Fatalf("show without a builder: %q", out)
+	}
+	if code, _, errs := c.run(userTok, "builder", "1", "gpt"); code != 1 || !strings.Contains(errs, "qwen, claude or auto") {
+		t.Fatalf("bad builder: %d %q", code, errs)
+	}
+	if code, _, errs := c.run(userTok, "builder", "1"); code != 2 || !strings.Contains(errs, "usage") {
+		t.Fatalf("no builder: %d %q", code, errs)
 	}
 }

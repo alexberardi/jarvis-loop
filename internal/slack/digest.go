@@ -159,8 +159,8 @@ func (b *Bot) digestMessage(ctx context.Context, from, to time.Time, evs []store
 }
 
 // buildersLine compares the window's build runs by builder (docs/decisions/2026-10-16-qwen-builder.md):
-// runs, average wall time and Claude's cost per builder, and the qwen items that fell back to
-// claude for good. Empty when no build run reported its builder.
+// runs, average wall time and Claude's cost per builder, how many of qwen's PRs review bounced
+// (docs/decisions/2026-10-19-qwen-routing.md), and the qwen items that fell back to claude for good. Empty when no build run reported its builder.
 func buildersLine(evs []store.Event) string {
 	type tally struct {
 		runs int
@@ -168,10 +168,17 @@ func buildersLine(evs []store.Event) string {
 		cost float64
 	}
 	by := map[string]*tally{}
-	fell := 0
+	fell, reviewed, bounced := 0, 0, 0
 	for _, e := range evs {
 		if e.Kind == "builder_fallback" && e.Data["this_run_only"] == nil {
 			fell++
+		}
+		if e.Kind == "advanced" && e.From == string(pipeline.Review) && str(e.Data, "built_by") == pipeline.BuilderQwen &&
+			(e.Outcome == string(pipeline.Approved) || e.Outcome == string(pipeline.Bounce)) {
+			reviewed++
+			if e.Outcome == string(pipeline.Bounce) {
+				bounced++
+			}
 		}
 		name := str(e.Data, "builder")
 		if e.From != string(pipeline.Build) || name == "" {
@@ -208,6 +215,9 @@ func buildersLine(evs []store.Event) string {
 			p += fmt.Sprintf(", $%.2f", t.cost)
 		}
 		parts = append(parts, p)
+	}
+	if reviewed > 0 {
+		parts = append(parts, fmt.Sprintf("qwen's PRs bounced at review %d of %d", bounced, reviewed))
 	}
 	if fell > 0 {
 		parts = append(parts, fmt.Sprintf("%d fell back to claude", fell))

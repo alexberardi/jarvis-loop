@@ -1,6 +1,7 @@
 {
   "name": "qwen-fallback",
-  "about": "The qwen builder's second strike (docs/decisions/2026-10-16-qwen-builder.md): a qwen item bounced at review twice goes to the user as any item does, and loopd flips its builder to claude for the rest (event builder_fallback, the card shows builder: claude). After the user's answer the build runs claude -p (no -s, no opencode), reports builder claude, and the item goes on. The thread says the needs-you once, then one line for the switch.",
+  "about": "The qwen builder's failures (docs/decisions/2026-10-19-qwen-routing.md): a qwen item's first build fails the runner's verify (the stand-in node-mobile's \"mobile shots\"): it goes back to build counting a bounce and one failed qwen build, and the next build resumes the qwen session with -s. That one fails verify too: the second bounce sends the item to the user as any item's, and loopd turns its builder to claude for the rest (event builder_fallback, reason failed_twice; the card shows builder: claude). After the user's answer, with verify passing, the build runs claude -p (no -s, no opencode), reports builder claude, and the item goes on. The thread says the needs-you once, then one line for the switch.",
+  "qwen": true,
   "steps": [
     {
       "do": "plan",
@@ -26,7 +27,7 @@
       "plan": "p",
       "text": "Blueprint ready.",
       "ready": true,
-      "blueprint": "# Blueprint\n\nApproach: one table.\n\n## Pieces\n\n### 1. Pantry table\n- repo: sandbox/demo\n- size: S\n- builder: qwen\n\nThe table and its migration.\n"
+      "blueprint": "# Blueprint\n\nApproach: one table.\n\n## Pieces\n\n### 1. Pantry table\n- repo: sandbox/jarvis-node-mobile\n- size: S\n- builder: qwen\n\nThe table and its migration.\n"
     },
     {
       "do": "plan_approve",
@@ -46,24 +47,8 @@
       "item": "a"
     },
     {
-      "do": "script",
-      "item": "a",
-      "for": "review",
-      "play": "bounce"
-    },
-    {
-      "do": "runner",
-      "claims": "a"
-    },
-    {
-      "do": "runner_idle"
-    },
-    {
-      "do": "runner",
-      "claims": "a"
-    },
-    {
-      "do": "runner_idle"
+      "do": "verify",
+      "outcome": "fail"
     },
     {
       "do": "runner",
@@ -75,15 +60,25 @@
     {
       "do": "expect",
       "stage": {
-        "a": "review"
+        "a": "build"
       },
-      "run_files": [
+      "events": [
         {
           "item": "a",
-          "stage": "build",
-          "run": 2,
-          "file": "argv.json",
-          "text": "\"-s\",\"ses_fake_"
+          "kind": "advanced",
+          "outcome": "verify_failed",
+          "actor": "runner",
+          "data": {
+            "builder": "^qwen$",
+            "bounce_count": "^1$"
+          },
+          "count": 1
+        }
+      ],
+      "no_events": [
+        {
+          "item": "a",
+          "kind": "builder_fallback"
         }
       ]
     },
@@ -99,6 +94,15 @@
       "stage": {
         "a": "needs_you"
       },
+      "run_files": [
+        {
+          "item": "a",
+          "stage": "build",
+          "run": 2,
+          "file": "argv.json",
+          "text": "\"-s\",\"ses_fake_"
+        }
+      ],
       "events": [
         {
           "item": "a",
@@ -107,7 +111,9 @@
           "data": {
             "from": "^qwen$",
             "to": "^claude$",
-            "bounce_count": "^2$"
+            "reason": "^failed_twice$",
+            "qwen_failures": "^2$",
+            "outcome": "^verify_failed$"
           },
           "count": 1
         }
@@ -118,6 +124,10 @@
           "card": "<span class=\"label\">builder: claude</span>"
         }
       }
+    },
+    {
+      "do": "verify",
+      "outcome": "pass"
     },
     {
       "do": "reply",
@@ -187,7 +197,7 @@
       {
         "item": "a",
         "kind": "advanced",
-        "outcome": "pr_opened",
+        "outcome": "verify_failed",
         "actor": "runner",
         "data": {
           "builder": "^qwen$"
@@ -202,7 +212,7 @@
     ],
     "agent_runs": {
       "build": 3,
-      "review": 3
+      "review": 1
     },
     "messages": [
       {
@@ -211,7 +221,7 @@
       },
       {
         "thread": "a",
-        "text": "^Builder: qwen → claude for the rest of this item \\(second strike\\)\\.$"
+        "text": "^Builder: qwen → claude for the rest of this item \\(qwen's build failed twice\\)\\.$"
       },
       {
         "thread": "a",

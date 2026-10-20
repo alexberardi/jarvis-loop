@@ -1163,3 +1163,30 @@ func TestFeature(t *testing.T) {
 	e.refused(runnerTok, "POST", path, map[string]any{"feature": "x"}, 403, "forbidden")
 	e.refused(userTok, "POST", "/items/42/feature", map[string]any{"feature": "x"}, 404, "not_found")
 }
+
+// loop builder: who builds an item, set by the user before its build starts
+// (docs/decisions/2026-10-19-qwen-routing.md).
+func TestBuilder(t *testing.T) {
+	e := newEnv(t)
+	var it struct {
+		ID      int64
+		Builder string
+	}
+	e.do(userTok, "POST", "/items", map[string]any{"title": "a", "repo": "jarvis-server"}, 201, &it)
+	path := fmt.Sprintf("/items/%d/builder", it.ID)
+	e.do(userTok, "POST", path, map[string]any{"builder": "qwen"}, 200, &it)
+	if it.Builder != "qwen" {
+		t.Fatalf("builder %q", it.Builder)
+	}
+	if ev := e.get(it.ID).Events; ev[len(ev)-1].Kind != "builder_set" {
+		t.Fatalf("no builder_set event: %+v", ev)
+	}
+	var auto struct{ Builder string }
+	e.do(userTok, "POST", path, map[string]any{"builder": "auto"}, 200, &auto)
+	if auto.Builder != "" {
+		t.Fatalf("auto: builder %q", auto.Builder)
+	}
+	e.refused(userTok, "POST", path, map[string]any{"builder": "gpt"}, 400, "invalid_field")
+	e.refused(runnerTok, "POST", path, map[string]any{"builder": "qwen"}, 403, "forbidden")
+	e.refused(userTok, "POST", "/items/42/builder", map[string]any{"builder": "qwen"}, 404, "not_found")
+}
