@@ -1,0 +1,177 @@
+{
+  "name": "held-merge",
+  "about": "A held docs PR turns conflicting with main while it waits for the approver. The runner's held watch merges main in as land would (docs-only conflict, both sides kept), pushes it and sends the new head to review instead of to build: no build agent runs. Review approves, land holds the new head, and once the approver approves it the PR merges at once.",
+  "stages": [
+    "build",
+    "review",
+    "land"
+  ],
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Document the digest"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "good",
+      "file": "docs/digest.md"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "for": "review",
+      "play": "approve_hold"
+    },
+    {
+      "do": "ci",
+      "main": {
+        "ci": "pass"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "ci",
+      "item": "a",
+      "checks": {
+        "check": "pass"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "held"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "none"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "push",
+      "branch": "main",
+      "file": "docs/digest.md",
+      "text": "main's own notes on the digest\n"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "land"
+      },
+      "events": [
+        {
+          "item": "a",
+          "kind": "held_merge",
+          "actor": "runner"
+        }
+      ]
+    },
+    {
+      "do": "ci",
+      "item": "a",
+      "checks": {
+        "check": "pass"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "held"
+      }
+    },
+    {
+      "do": "press",
+      "item": "a",
+      "as": "approver",
+      "button": "approve"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "done"
+    },
+    "agent_runs": {
+      "build": 1,
+      "review": 2,
+      "land": 0
+    },
+    "pr": {
+      "a": {
+        "state": "MERGED",
+        "merge_calls": 1
+      }
+    },
+    "events": [
+      {
+        "item": "a",
+        "kind": "held_merge",
+        "actor": "runner",
+        "data": {
+          "notes": "^PR #101 conflicted with main while it was held; the runner merged main into the branch \\(conflicts only in docs/ \\(docs/digest\\.md\\), both sides kept by git's union merge\\)"
+        },
+        "count": 1
+      }
+    ],
+    "no_events": [
+      {
+        "item": "a",
+        "kind": "rebuild"
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "text": "^Back to review: PR #101 conflicted with main while it was held; the runner merged main into the branch"
+      }
+    ]
+  }
+}

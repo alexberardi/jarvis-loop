@@ -439,6 +439,13 @@ func (c *Client) Rebuild(ctx context.Context, id int64, notes string) error {
 	return err
 }
 
+// HeldMerge reports the runner's merge of the base into a held item's PR: the new head goes to
+// review (POST /items/{id}/held-merge).
+func (c *Client) HeldMerge(ctx context.Context, id int64, head, notes string) error {
+	_, err := c.json(ctx, "POST", fmt.Sprintf("/items/%d/held-merge", id), map[string]string{"head_sha": head, "notes": notes}, nil)
+	return err
+}
+
 // DownloadEvidence saves evidence file n of an item to dst (at most MaxEvidenceBytes).
 func (c *Client) DownloadEvidence(ctx context.Context, id int64, n int, dst string) error {
 	resp, err := c.send(ctx, "GET", fmt.Sprintf("/items/%d/evidence/%d", id, n), "", nil)

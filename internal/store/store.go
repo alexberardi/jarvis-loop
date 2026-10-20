@@ -770,7 +770,15 @@ func (s *Store) Rebuild(ctx context.Context, actor string, id int64, notes strin
 		if strings.HasPrefix(actor, "runner:") && it.Stage != pipeline.Held {
 			return pipeline.Transition{}, &pipeline.Error{Code: pipeline.CodeWrongStage, Message: fmt.Sprintf("item is %s, not held", it.Stage)}
 		}
-		return pipeline.ApplyRebuild(it, notes)
+		return pipeline.ApplyRebuild(it, notes, strings.HasPrefix(actor, "runner:"))
+	})
+}
+
+// HeldMerge records a runner's merge of the base into a held item's PR (pipeline.ApplyHeldMerge):
+// the new head goes to review. Runners only, like their conflict rebuild; it holds no lease.
+func (s *Store) HeldMerge(ctx context.Context, actor string, id int64, head, notes string) (pipeline.Item, error) {
+	return s.human(ctx, actor, id, "held_merge", func(it pipeline.Item) (pipeline.Transition, error) {
+		return pipeline.ApplyHeldMerge(it, head, notes)
 	})
 }
 
