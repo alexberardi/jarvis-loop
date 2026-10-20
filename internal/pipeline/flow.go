@@ -46,6 +46,9 @@ func usage(live []LiveLease) (claimed map[int64]bool, inUse map[string]int) {
 		for _, r := range l.Resources {
 			inUse[r]++
 		}
+		if l.Qwen {
+			inUse[LimitQwen]++
+		}
 	}
 	return claimed, inUse
 }
@@ -72,6 +75,10 @@ func itemBlocks(c Control, it Item, deps map[int64]Stage, inUse map[string]int, 
 	keys := slices.Clone(it.Needs())
 	if stageLimits {
 		keys = append(keys, string(it.Stage))
+	}
+	if it.Stage == Build && it.Builder == BuilderQwen {
+		// A routed build that finds qwen full builds with claude instead (newPacing).
+		keys = append(keys, LimitQwen)
 	}
 	for _, key := range keys {
 		if limit, ok := c.Limits[key]; ok && inUse[key] >= limit {
@@ -133,7 +140,7 @@ func WaitReason(c Control, pace Pace, it Item, deps map[int64]Stage, live []Live
 	if !fix && !land && AgentLeases(live) >= c.ActiveAgents {
 		return WaitNoSlot
 	}
-	if !newPacing(pace, live, builders).eligible(it) {
+	if !newPacing(c, pace, live, builders).eligible(it) {
 		if pace.Level == PacePaused {
 			return WaitPaused
 		}

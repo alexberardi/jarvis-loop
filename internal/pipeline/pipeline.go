@@ -185,10 +185,17 @@ type Item struct {
 	// PlanID and PlanPiece link an item filed from a plan to its piece (docs/phases/07-planning.md).
 	PlanID    int64 `json:"plan_id,omitempty"`
 	PlanPiece int   `json:"plan_piece,omitempty"`
-	// Builder is who builds it (BuilderQwen, BuilderClaude; "": not from a plan, claude): the
-	// plan's piece says, and a qwen item's second strike flips it to claude for the rest
-	// (docs/decisions/2026-10-16-qwen-builder.md).
+	// Builder is who builds it (BuilderQwen, BuilderClaude; "": none set, so routing decides):
+	// the plan's piece, triage or loop builder says, and a qwen build's review bounce or second
+	// failure flips it to claude (docs/decisions/2026-10-19-qwen-routing.md).
 	Builder string `json:"builder,omitempty"`
+	// BuiltBy is the builder of the PR's head (the build run that opened or updated it).
+	BuiltBy string `json:"built_by,omitempty"`
+	// QwenFailures counts the item's failed qwen builds (QwenFailed).
+	QwenFailures int `json:"qwen_failures,omitempty"`
+	// ChangeKind is what triage says the change touches (ChangeDocs, ChangeTest, ChangeCode; "":
+	// not said, code).
+	ChangeKind string `json:"change_kind,omitempty"`
 	// Feature groups the item with others that make up one feature ("": none): set at filing
 	// (loop add --feature), from the plan's title for a plan's pieces, or by loop feature
 	// (docs/decisions/2026-10-18-feature-tags.md).
@@ -312,13 +319,27 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		data["agent"] = a.Agent
 	}
 	tr := Transition{From: from, Outcome: a.Outcome, Kind: "advanced", Data: data}
+	if from == Review && it.BuiltBy != "" {
+		// Who built the head the review judged: the digest's and usage's qwen review numbers.
+		data["built_by"] = it.BuiltBy
+	}
 	// A qwen build's OpenCode session, which the item's next build resumes.
 	if from == Build && it.Builder == BuilderQwen && strings.TrimSpace(a.Fields["builder"]) == BuilderQwen {
 		if sess := strings.TrimSpace(a.Fields["session_id"]); sess != "" {
 			it.BuildSession = sess
 		}
 	}
-	builder := it.Builder
+	// The run's builder, as the runner reports it (none: the run never started an agent).
+	runBuilder := ""
+	if from == Build {
+		runBuilder = strings.TrimSpace(a.Fields["builder"])
+	}
+	qwenFailed := func(outcome Outcome) {
+		var n *Note
+		if it, n = QwenFailed(it, string(outcome)); n != nil {
+			tr.Also = append(tr.Also, *n)
+		}
+	}
 	needPaths := func() ([]ChangedPath, error) {
 		if len(a.ChangedPaths) == 0 {
 			return nil, errf(CodeMissingField, "changed_paths is required for %s", a.Outcome)
@@ -396,7 +417,19 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 			it.Repo = repo
 			data["repo"] = repo
 		}
-		it.Area, it.Size, it.Resources = area, size, res
+		kind, err := f.optionalOneOf("change_kind", ChangeKinds)
+		if err != nil {
+			return Transition{}, err
+		}
+		builder, err := ParseBuilder(a.Fields["builder"])
+		if err != nil {
+			return Transition{}, err
+		}
+		it.Area, it.Size, it.Resources, it.ChangeKind = area, size, res, kind
+		if builder != "" && it.Builder == "" {
+			// Triage's call, unless a plan's piece already named one.
+			it.Builder = builder
+		}
 		qa, err := f.needsQA()
 		if err != nil {
 			return Transition{}, err
@@ -484,7 +517,7 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		raiseRisk(&it, holdReasons(paths, extra...))
 		voidApproval(&it, data, sha)
 		it.Repo, it.PR, it.Branch, it.HeadSHA = repo, pr, branch, sha
-		it.BuilderAgent = a.Agent
+		it.BuilderAgent, it.BuiltBy = a.Agent, runBuilder
 		if it.CIRedSHA != "" && it.CIRedSHA == sha {
 			// Another review and land would see the same red CI: the user decides. An answer
 			// returns to land, which reads CI again (a rerun may have passed).
@@ -524,6 +557,11 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 			return Transition{}, err
 		}
 		it = bounce(it, data, notes)
+		if it.BuiltBy == BuilderQwen && it.Builder != BuilderClaude {
+			var n Note
+			it, n = qwenFallback(it, FallbackReviewBounce, string(a.Outcome))
+			tr.Also = append(tr.Also, n)
+		}
 	case VerifyFailed:
 		// The runner's verify failed on the build's commit: nothing was pushed; the next build run
 		// gets the log. It counts like a review bounce.
@@ -535,6 +573,9 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 			return Transition{}, err
 		}
 		it = bounce(it, data, reason)
+		if runBuilder == BuilderQwen {
+			qwenFailed(a.Outcome)
+		}
 	case Merged:
 		sha, err := f.sha("merge_sha")
 		if err != nil {
@@ -625,6 +666,9 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 				}
 			}
 			it = bounce(it, data, reason)
+			if it.BuiltBy == BuilderQwen {
+				qwenFailed(a.Outcome)
+			}
 			break
 		}
 		it.Stage = Build
@@ -657,15 +701,16 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if err != nil {
 			return Transition{}, err
 		}
+		// A failed qwen agent run; not the runner's own failure before one started, nor verify's
+		// refusal of a trusted-file change.
+		if runBuilder == BuilderQwen && a.Fields[FieldTrustSHA] == "" {
+			qwenFailed(a.Outcome)
+		}
 		it = toNeedsYou(it, from, msg)
 	case CIPending:
 		if err := applyCIPending(&it, f, data, now); err != nil {
 			return Transition{}, err
 		}
-	}
-	if builder == BuilderQwen && it.Builder == BuilderClaude {
-		tr.Also = append(tr.Also, Note{Kind: "builder_fallback", Data: map[string]any{
-			"from": BuilderQwen, "to": BuilderClaude, "bounce_count": it.BounceCount, "outcome": string(a.Outcome)}})
 	}
 	it.UpdatedAt = now
 	tr.Item = it
@@ -687,19 +732,11 @@ func checkTriageRepo(it Item, repo string, repos []string) error {
 	return nil
 }
 
-// QwenStrikes is the bounce at which a qwen item's builder becomes claude for the rest: the first
-// strike's build resumes the qwen session, the second goes to claude.
-const QwenStrikes = 2
-
-// bounce sends an item back to build, or to the user at the second bounce (a review's or the
-// runner's verify, counted together). A qwen item's QwenStrikes-th bounce flips it to claude.
+// bounce sends an item back to build, or to the user at the second bounce (a review's, the
+// runner's verify or red CI, counted together).
 func bounce(it Item, data map[string]any, why string) Item {
 	it.BounceCount++
 	data["bounce_count"] = it.BounceCount
-	if it.Builder == BuilderQwen && it.BounceCount >= QwenStrikes {
-		it.Builder, it.BuildSession = BuilderClaude, ""
-		data["builder_fallback"] = true
-	}
 	if it.BounceCount >= 2 {
 		return toNeedsYou(it, Build, why)
 	}
@@ -928,6 +965,14 @@ func (f fields) oneOf(k string, allowed []string) (string, error) {
 		return "", errf(CodeInvalidField, "%s must be one of %s", k, strings.Join(allowed, ", "))
 	}
 	return v, nil
+}
+
+// optionalOneOf is oneOf for a field that may be left out ("" then).
+func (f fields) optionalOneOf(k string, allowed []string) (string, error) {
+	if strings.TrimSpace(f[k]) == "" {
+		return "", nil
+	}
+	return f.oneOf(k, allowed)
 }
 
 func (f fields) sha(k string) (string, error) {

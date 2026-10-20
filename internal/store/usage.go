@@ -233,6 +233,8 @@ type UsageReport struct {
 	// Items are this week's most expensive items (claude's burn).
 	Items []UsageItem         `json:"items"`
 	Hits  []pipeline.UsageHit `json:"hits"`
+	// Qwen is the Qwen builder's week (qwenWeek).
+	Qwen pipeline.QwenWeek `json:"qwen"`
 }
 
 // Usage reports the usage now: claude's windows and pace, the last 7 days, the week per stage and
@@ -315,7 +317,58 @@ func (s *Store) Usage(ctx context.Context) (UsageReport, error) {
 	for i := range rep.Items {
 		_ = s.r.QueryRow(`SELECT title FROM items WHERE id = ?`, rep.Items[i].ItemID).Scan(&rep.Items[i].Title)
 	}
+	week := slices.DeleteFunc(slices.Clone(runs), func(r pipeline.UsageRun) bool { return r.At.Before(now.Add(-pipeline.WeekLen)) })
+	if rep.Qwen, err = qwenWeek(s.r, week, now.Add(-pipeline.WeekLen)); err != nil {
+		return rep, err
+	}
 	return rep, nil
+}
+
+// qwenWeek is the Qwen builder's week from its runs (since since): its builds and the Claude spend
+// they replaced (pipeline.QwenReplaced, by the items' sizes), the first review of the items whose
+// first verdict came this week and judged a qwen build (the builder the last pr_opened before it
+// reported), and loopd's fallbacks to claude (docs/decisions/2026-10-19-qwen-routing.md).
+func qwenWeek(q querier, runs []pipeline.UsageRun, since time.Time) (pipeline.QwenWeek, error) {
+	var w pipeline.QwenWeek
+	sizes := map[int64]string{}
+	for _, r := range runs {
+		if _, ok := sizes[r.ItemID]; !ok && r.ItemID != 0 {
+			var size string
+			if err := q.QueryRow(`SELECT size FROM items WHERE id = ?`, r.ItemID).Scan(&size); err != nil && err != sql.ErrNoRows {
+				return w, err
+			}
+			sizes[r.ItemID] = size
+		}
+	}
+	w.Builds, w.ReplacedUSD, w.Unpriced = pipeline.QwenReplaced(runs, sizes)
+	rows, err := q.Query(`SELECT e.outcome, COALESCE((SELECT json_extract(p.data, '$.builder') FROM events p
+			WHERE p.item_id = e.item_id AND p.kind = 'advanced' AND p.outcome = 'pr_opened' AND p.id < e.id ORDER BY p.id DESC LIMIT 1), '')
+		FROM events e WHERE e.kind = 'advanced' AND e.from_stage = 'review' AND e.outcome IN ('approved', 'bounce') AND e.at >= ?
+		AND e.id = (SELECT MIN(f.id) FROM events f WHERE f.item_id = e.item_id AND f.kind = 'advanced' AND f.from_stage = 'review'
+			AND f.outcome IN ('approved', 'bounce'))`, since.UnixNano())
+	if err != nil {
+		return w, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var outcome, builder string
+		if err := rows.Scan(&outcome, &builder); err != nil {
+			return w, err
+		}
+		if builder != pipeline.BuilderQwen {
+			continue
+		}
+		w.Reviewed++
+		if outcome == string(pipeline.Approved) {
+			w.FirstApproved++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return w, err
+	}
+	err = q.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = ? AND at >= ? AND json_extract(data, '$.this_run_only') IS NULL`,
+		pipeline.KindBuilderFallback, since.UnixNano()).Scan(&w.Fallbacks)
+	return w, err
 }
 
 func sortedTotals(m map[[2]string]*UsageTotal, less func(a, b UsageTotal) bool) []UsageTotal {
