@@ -78,6 +78,16 @@ func TestOrchActionRoutes(t *testing.T) {
 	if path != "/orchestrator/items/7/approval" || body["reason"] != "you asked me to approve #7" {
 		t.Fatalf("ask_approval: %s %v", path, body)
 	}
+	// An escalation's night class and deferred part go along (docs/decisions/2026-10-20-night-shift.md).
+	acts, err := ValidateOrchResult([]byte(`{"actions": [{"action": "escalate", "item_id": 9, "text": "scope?", "recommendation": "docs only",
+		"class": "scope_choice", "deferred": "the parser", "reason": "r"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, body = acts[0].route()
+	if path != "/orchestrator/escalations" || body["class"] != "scope_choice" || body["deferred"] != "the parser" {
+		t.Fatalf("escalate: %s %v", path, body)
+	}
 }
 
 // A message trigger says who wrote it and where to reply: the channel and the thread.

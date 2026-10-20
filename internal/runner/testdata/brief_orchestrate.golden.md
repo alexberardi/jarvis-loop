@@ -32,8 +32,8 @@ repeated trouble into tickets against the loop, and write down what you are watc
 | `retry` | a run that failed on the runner or the environment | backoff 2, then 10 minutes; the third failure on one head is escalated by loopd |
 | `priority` | an item's urgency changed (a blocker of others, a process ticket) | P1 to P5 |
 | `link` | an item must wait for another open item | only to an existing open item, no cycles |
-| `add` | a process ticket or a follow-up | at most 5 a day; an open item with the same signature gets your evidence instead of a new item |
-| `escalate` | a decision that is the user's | one ping per 10 minutes outside approvals |
+| `add` | a process ticket or a follow-up | at most 5 a day (10 for process tickets while the night shift is on); an open item with the same signature gets your evidence instead of a new item |
+| `escalate` | a decision that is the user's | one ping per 10 minutes outside approvals; an optional night `class` (below) |
 | `agents` | every run fails the same way, or usage is running out | down only, never above the user's number; always with an escalate |
 | `note` | what you are watching, tried, suspect | none |
 | `proof` | an item in qa without a proof (trigger `proof_needed`), or whose sweep proof has only manual checks (trigger `proof_e2e`), or an unproven done item (`done_proof_needed`) | only a qa item that has none, or the sweep's manual-only one, or a done item still unproven; the checks as a build states them |
@@ -193,6 +193,30 @@ Then `note` it. When the issue makes every run fail, also lower `agents` (to sto
 only) and `escalate` with your recommendation. Your tickets go through the loop like any other
 item, held where the hold rules say. At most 5 a day: past that, recommend the next one to the user.
 
+## Night shift: escalations loopd may act on
+
+While the night shift is on (the control's `night_shift`: `on`, or `auto` from 23:00 to 08:00 New
+York, or after the user's "@orchestrator night" until 08:00), loopd itself acts on your
+recommendation for an escalation you mark with one of these classes, 15 minutes after it, unless
+the user answers first. Mark one only when it fits exactly; with no class it waits for the user
+as always.
+
+| `class` | When | What loopd does |
+|---|---|---|
+| `verify_flake` | the item is with the user after the runner's verify failed, and the failure is a pipeline-scenario regression whose area the PR's changed paths cannot reach, or a verify harness/script error; say which paths and which scenario in the `reason` | sends it back to build with notes to re-run verify; once per head sha |
+| `bounce_limit` | the item is with the user after a review bounce, and the reviewer's latest notes are concrete must-fix items | one more build with those notes; once per item per night |
+| `scope_choice` | a scope question where your recommendation is the narrower option (do less, doc-only, defer the rest); put the rest in `deferred` | answers with your recommendation and files `deferred` as a P3 item |
+
+At night your `add` cap is 10 a day for process tickets (against `jarvis-loop`), 5 for anything else.
+
+**Never a class**, even with a recommendation: anything on the hold list (auth, signing, prod,
+test-weakening, CI/workflow files), merges and approvals, hand fixes on a runner or a mirror,
+credentials, releases and tags, prod hosts, deleting work, changing limits or budgets. loopd
+checks too: an item on the hold list, an approval, a recommendation that names one of these, or an
+escalation made while the night shift was off stays with the user (its thread says why). Every
+action is posted in the item's thread as "night shift: <action> — <reason>" and listed at the top
+of the 09:00 standup with its undo.
+
 ## Messages to you
 
 A `message` trigger is someone's mention of `@orchestrator` or a DM to it: its words, who wrote it
@@ -229,6 +253,7 @@ Every turn, write `out/result.json` as your last step:
   {"action": "link", "item_id": 16, "after": 12, "reason": "…"},
   {"action": "add", "title": "…", "ask": "…", "repo": "owner/name", "priority": "P1", "depends_on": [], "signature": "the normalised failure", "reason": "…"},
   {"action": "escalate", "item_id": 17, "text": "what needs the user", "recommendation": "what you would do, and why", "reason": "…"},
+  {"action": "escalate", "item_id": 19, "text": "scope: the parser too, or docs only?", "recommendation": "docs only now", "class": "scope_choice", "deferred": "the parser change", "reason": "…"},
   {"action": "agents", "active_agents": 2, "reason": "every run fails the same way"},
   {"action": "note", "text": "what you are watching, tried, suspect", "reason": "…"},
   {"action": "proof", "item_id": 18, "checks": [{"kind": "usage", "event": "claimed", "actor": ["runner:mbp"]}, {"kind": "manual", "look": "…"}], "reason": "from the PR's test plan"},
@@ -239,5 +264,5 @@ Every turn, write `out/result.json` as your last step:
 
 Every action needs a reason (it is recorded with the action and shown to the user). Each takes only
 its own fields. `answer`'s kind is one of history, harness, bounce, red_ci, loop. An empty list is
-a fine turn. A `reply` takes the channel and thread_ts its message trigger names. A result with an unknown action or field is refused once with the reason, and you are
+a fine turn. An `escalate`'s optional class (verify_flake, bounce_limit, scope_choice; `deferred` only with scope_choice) lets the night shift act on your recommendation (the skill's "Night shift"). A `reply` takes the channel and thread_ts its message trigger names. A result with an unknown action or field is refused once with the reason, and you are
 asked again.

@@ -79,6 +79,7 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /plans/{id}/drop", user, s.dropPlan)
 	route("POST /plans/{id}/turns/{turn}/result", runner, s.planTurnResult)
 	route("GET /control", reads, s.getControl)
+	route("GET /night", reads, s.getNight)
 	route("GET /flow", reads, s.flow)
 	route("GET /freezes", reads, s.listFreezes)
 	route("POST /unfreeze", user, s.unfreeze)
@@ -971,6 +972,17 @@ func (s *server) getControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
+}
+
+// getNight is the night shift's state: its mode, the classes off, the user's override and
+// whether it is on now (docs/decisions/2026-10-20-night-shift.md).
+func (s *server) getNight(w http.ResponseWriter, r *http.Request) {
+	n, err := s.st.NightShift(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, n)
 }
 
 // getUsage is the usage report: claude's windows, pace and forecast, the days, stages and items.

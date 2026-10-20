@@ -356,3 +356,28 @@ func TestOrchestratorSlackRoutes(t *testing.T) {
 		t.Fatalf("trusted: %+v", d.Item)
 	}
 }
+
+// An escalation carries its night class and deferred part; the night shift's state reads at GET
+// /night, and the user sets its mode on the control row (docs/decisions/2026-10-20-night-shift.md).
+func TestOrchestratorNightClass(t *testing.T) {
+	e := newEnv(t)
+	b := e.addItem("b")
+	e.refused(orchTok, "POST", "/orchestrator/escalations", map[string]any{"item_id": b, "text": "scope", "recommendation": "doc-only",
+		"reason": "r", "class": "ticket_limit"}, 400, "invalid_field")
+	e.refused(userTok, "PUT", "/control", map[string]any{"night_shift": "sometimes"}, 400, "invalid_field")
+	e.do(userTok, "PUT", "/control", map[string]any{"night_shift": "auto", "night_classes_off": []string{"ticket_limit"}}, 200, nil)
+	e.do(orchTok, "POST", "/orchestrator/escalations", map[string]any{"item_id": b, "text": "scope", "recommendation": "doc-only",
+		"reason": "r", "class": "scope_choice", "deferred": "the code"}, 201, nil)
+	if _, _, data := e.newest(b); data["class"] != "scope_choice" || data["deferred"] != "the code" {
+		t.Fatalf("escalation %v", data)
+	}
+	var n struct {
+		Mode       string   `json:"mode"`
+		ClassesOff []string `json:"classes_off"`
+		On         *bool    `json:"on"`
+	}
+	e.do(orchTok, "GET", "/night", nil, 200, &n)
+	if n.Mode != "auto" || len(n.ClassesOff) != 1 || n.ClassesOff[0] != "ticket_limit" || n.On == nil {
+		t.Fatalf("night %+v", n)
+	}
+}

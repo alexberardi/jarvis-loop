@@ -107,10 +107,10 @@ func NextNightEdge(now time.Time, loc *time.Location) time.Time {
 // NightSetting is the night shift's control: the mode, the classes the user turned off, and the
 // user's last override of the auto hours.
 type NightSetting struct {
-	Mode       string
-	ClassesOff []string
-	Override   string
-	OverrideAt time.Time
+	Mode       string    `json:"mode"`
+	ClassesOff []string  `json:"classes_off"`
+	Override   string    `json:"override,omitempty"`
+	OverrideAt time.Time `json:"override_at,omitempty"`
 }
 
 // On reports whether the night shift is on at now. An override counts in auto mode until the next
