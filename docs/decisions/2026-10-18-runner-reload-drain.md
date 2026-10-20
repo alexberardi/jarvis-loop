@@ -24,8 +24,9 @@ lost. On 2026-10-17 a restart to add three repos killed about 45 agent-minutes (
   fewer slots never stop a run.
 - **Drain** (`loop-runner drain`, or SIGUSR1): the runner claims nothing new (not even land), tells
   loopd, and `Run` returns once the live runs end, the main-CI watches after a merge included
-  (up to `land_main_wait`); the process then exits **0** for the service manager to start the new
-  binary. Only SIGINT or SIGTERM stop runs, as before; a second signal of those during a drain
+  (up to `land_main_wait`); the process then exits **75** (EX_TEMPFAIL; 0 until 2026-10-19, see below) for the service
+  manager to start the new binary. While it waits it logs what on (the live runs by item and
+  stage, the background loops, the main-CI watches) every 30 s. Only SIGINT or SIGTERM stop runs, as before; a second signal of those during a drain
   still ends them.
 - **The board shows a draining runner** ("Runner devbox is draining since …: it claims nothing new
   and restarts once its runs end"), and the orchestrator's snapshot carries its `state`. The runner
@@ -43,16 +44,18 @@ lost. On 2026-10-17 a restart to add three repos killed about 45 agent-minutes (
   `ps` says it is a `loop-runner`, so a stale file never signals another program. A socket under
   the work root would be reachable by the agents, whose worktrees are there; signals are not (the
   agents' `kill` is refused). `systemctl --user kill -s HUP|USR1 loop-runner` works as well.
-- **Exit 0 after a drain** needs a service that restarts on success: `Restart=always` in the
-  systemd unit (`on-failure` would leave it stopped), `KeepAlive` true in the Mac's LaunchAgent
-  (already so).
+- **Exit 75 after a drain, not 0** (amended 2026-10-19, #284): the dev box's unit is
+  `Restart=on-failure`, which a clean exit leaves stopped. A non-zero status restarts under
+  `on-failure` and `always` alike, and under the Mac's LaunchAgent `KeepAlive`. The same day a drain
+  on the runner that works on main never ended: its proof loop ran on the run's context, not the
+  claims', so `Run` waited on it for good. Every background loop now stops with the claims.
 - **Not a hot binary swap**: drain then restart is enough, and needs no handing over of runs.
 
 ## Updating the runner
 
 ```sh
 go build -o ~/.local/bin/loop-runner ./cmd/loop-runner   # the new binary
-loop-runner drain                                         # live runs finish, then it exits 0
+loop-runner drain                                         # live runs finish, then it exits 75
 ```
 
 The service manager starts the new binary. A config change needs no restart: edit `runner.json`,

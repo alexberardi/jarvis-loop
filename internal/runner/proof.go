@@ -223,15 +223,15 @@ func lastLine(s string) string {
 	return clip(strings.TrimSpace(s), 200)
 }
 
-// checkProofsLoop runs CheckProofs every ProofEvery until ctx ends.
-func (r *Runner) checkProofsLoop(ctx context.Context) {
-	for ctx.Err() == nil {
+// checkProofsLoop runs CheckProofs (under ctx) every ProofEvery until loopCtx ends.
+func (r *Runner) checkProofsLoop(loopCtx, ctx context.Context) {
+	for loopCtx.Err() == nil {
 		if err := r.CheckProofs(ctx); err != nil && ctx.Err() == nil {
 			r.Log.Warn("check proofs", "err", err)
 		}
 		t := r.Clock.NewTimer(ProofEvery)
 		select {
-		case <-ctx.Done():
+		case <-loopCtx.Done():
 		case <-t.C():
 		}
 		t.Stop()

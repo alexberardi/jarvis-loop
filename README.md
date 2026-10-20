@@ -65,8 +65,9 @@ claude. Why and the gaps: [docs/decisions/2026-10-16-qwen-builder.md](docs/decis
 A config change needs no restart: `loop-runner reload` (SIGHUP) reads `runner.json` again for the
 next claim (repos, slots, stages, verify steps); live runs keep theirs, and a bad file is refused
 with a log line. To update the binary, `loop-runner drain` (SIGUSR1): it claims nothing new, the
-board shows it draining, and it exits 0 once its live runs end, so its service must restart on
-success (systemd `Restart=always`, launchd `KeepAlive`). loopd reads `--repos-file` again on
+board shows it draining (and logs what it still waits on every 30 s), and it exits 75 once its
+live runs end, so a service that restarts on failure (systemd `Restart=on-failure` or `always`,
+launchd `KeepAlive`) starts the new binary. loopd reads `--repos-file` again on
 SIGHUP. Why: [docs/decisions/2026-10-18-runner-reload-drain.md](docs/decisions/2026-10-18-runner-reload-drain.md).
 
 Harness (phase 4b, [docs/phases/04b-loop-harness.md](docs/phases/04b-loop-harness.md)):

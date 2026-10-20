@@ -214,6 +214,17 @@ func TestDrainLetsTheLiveRunFinish(t *testing.T) {
 		t.Fatal("Run ended with a run live")
 	case <-time.After(200 * time.Millisecond):
 	}
+	// The drain says what it waits on, then again every DrainLogEvery while it waits (#284).
+	name := fmt.Sprintf("#%d build", live)
+	waitLog(t, g, "draining: waiting for the live runs to end")
+	if !strings.Contains(g.logs.String(), name) {
+		t.Fatalf("the drain's log does not name the live run %q:\n%s", name, g.logs.String())
+	}
+	g.clk.Advance(DrainLogEvery)
+	waitLog(t, g, "draining: still waiting")
+	if line := lastLine(g.logs.String()); !strings.Contains(line, name) {
+		t.Fatalf("the periodic drain log does not name the live run %q: %s", name, line)
+	}
 	if err := os.WriteFile(filepath.Join(g.scripts, fmt.Sprintf("%d.release", live)), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -234,4 +245,43 @@ func TestDrainLetsTheLiveRunFinish(t *testing.T) {
 	if g.runOnce() {
 		t.Fatal("a drained runner claimed")
 	}
+}
+
+// The runner that works on main (Land set) runs the proof and held-watch loops too: a drain ends
+// them, so Run returns once nothing is live (#284: it idled for hours after a drain).
+func TestDrainEndsTheRunnerWithLand(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	g.r.Land = &fakeLand{}
+	ctx, cancel := context.WithCancel(g.ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- g.r.Run(ctx) }()
+	for i := 0; g.clk.Armed() == 0; i++ { // Run's loops are up and waiting
+		if i == 600 {
+			t.Fatalf("Run armed no timer; log:\n%s", g.logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := g.r.Drain(g.ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("Run did not end 10s after a drain with nothing live; log:\n%s", g.logs.String())
+	}
+}
+
+func waitLog(t *testing.T, g *rig, s string) {
+	t.Helper()
+	for i := 0; i < 600; i++ {
+		if strings.Contains(g.logs.String(), s) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("the log never said %q:\n%s", s, g.logs.String())
 }

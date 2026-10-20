@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -12,8 +13,10 @@ import (
 func (r *Runner) startMainWatch(ctx context.Context, lr *landRun, mergeSHA, prev string) {
 	r.watching.Add(1)
 	r.bg.Add(1)
+	done := r.waits.add(fmt.Sprintf("main CI of #%d", lr.item.ID), r.Clock.Now())
 	go func() {
 		defer r.bg.Done()
+		defer done()
 		defer r.watching.Add(-1)
 		r.watchMain(ctx, lr, mergeSHA, prev)
 	}()

@@ -76,6 +76,7 @@ type Runner struct {
 	reloaded chan struct{} // a Reload happened: Run re-sizes its lanes
 	drainC   chan struct{} // closed by Drain
 	draining atomic.Bool
+	waits    waitSet // what Run waits on, for the drain's log
 }
 
 // PRInfo is what GitHub says about a PR.
@@ -123,32 +124,27 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 	}()
 	var wg sync.WaitGroup
-	if r.Close != nil {
+	// loop runs one background loop, named in the drain's log while Run waits for it.
+	loop := func(name string, f func()) {
 		wg.Add(1)
+		done := r.waits.add(name, r.Clock.Now())
 		go func() {
 			defer wg.Done()
-			r.closeDroppedLoop(claimCtx)
+			defer done()
+			f()
 		}()
+	}
+	if r.Close != nil {
+		loop("close-dropped loop", func() { r.closeDroppedLoop(claimCtx) })
 	}
 	if r.Revision != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r.reportDeployedLoop(claimCtx)
-		}()
+		loop("deployed-report loop", func() { r.reportDeployedLoop(claimCtx) })
 	}
 	if r.Land != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r.heldWatchLoop(claimCtx)
-		}()
-		// The runner that works on main checks the qa items' proofs there.
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r.checkProofsLoop(ctx)
-		}()
+		loop("held-watch loop", func() { r.heldWatchLoop(claimCtx) })
+		// The runner that works on main checks the qa items' proofs there. A drain stops the
+		// loop (claimCtx); a check already running finishes (ctx), as a live run does (#284).
+		loop("proof loop", func() { r.checkProofsLoop(claimCtx, ctx) })
 	}
 	var mu sync.Mutex
 	running := map[string]bool{}
@@ -226,7 +222,10 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 	}
 	if r.Draining() {
-		r.Log.Info("draining: waiting for the live runs to end")
+		r.Log.Info("draining: waiting for the live runs to end", "on", strings.Join(r.waits.list(r.Clock.Now()), "; "))
+		stop := make(chan struct{})
+		defer close(stop)
+		go r.logDrainWaits(stop)
 	}
 	wg.Wait()
 	r.bg.Wait()
@@ -281,6 +280,7 @@ func (r *Runner) claimAndRunIn(claimCtx, ctx context.Context, stages []string) (
 	if err != nil || cl == nil {
 		return false, err
 	}
+	defer r.waits.add(fmt.Sprintf("#%d %s", cl.Item.ID, cl.Stage), r.Clock.Now())()
 	if cl.Stage == StageLand {
 		r.land(ctx, cl, agent) // a script, not an agent
 		return true, nil
