@@ -31,6 +31,19 @@ type Control struct {
 	NightShift string `json:"night_shift"`
 	// NightClassesOff are the night classes the user turned off.
 	NightClassesOff []string `json:"night_classes_off"`
+	// PaceNormalSet is when the user lifted claude's pacing (loop pace normal; zero: not lifted).
+	// The lift lasts until PaceNormalUntil (zero: no time) or the next limit hit, whichever comes
+	// first (PaceLifted).
+	PaceNormalSet   time.Time `json:"pace_normal_set"`
+	PaceNormalUntil time.Time `json:"pace_normal_until"`
+}
+
+// PaceLifted reports whether the user's lift of the pace holds at st.Now: set, before its time,
+// and no limit hit since it was set (a hit pauses as usual and ends the lift; the user lifts it
+// again after a free reset).
+func (c Control) PaceLifted(st UsageState) bool {
+	return !c.PaceNormalSet.IsZero() && (c.PaceNormalUntil.IsZero() || st.Now.Before(c.PaceNormalUntil)) &&
+		!st.LastHit.After(c.PaceNormalSet)
 }
 
 // LimitKeys are the resources and stages that can carry a limit. Build has none: it is bounded
@@ -83,6 +96,9 @@ func (c Control) Validate() error {
 	}
 	if err := CheckNightSetting(c.NightShift, c.NightClassesOff); err != nil {
 		return err
+	}
+	if !c.PaceNormalUntil.IsZero() && (c.PaceNormalSet.IsZero() || !c.PaceNormalUntil.After(c.PaceNormalSet)) {
+		return errf(CodeInvalidField, "pace normal: the until time must be in the future")
 	}
 	for k, v := range c.Limits {
 		if !slices.Contains(LimitKeys, k) {
@@ -207,7 +223,9 @@ func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease,
 
 // ChooseWorkPaced is ChooseWork under a claude pace (PaceFor). Slow: claude's runs at once are at
 // most pace.Agents (live counts the Claude leases), and claude takes only P1 and size S items,
-// triage (short, and an item has no size before it) and P1 plan turns; paused: claude takes nothing. Either way land, qwen builds and regression runs (no agent) go on.
+// triage (short, and an item has no size before it) and P1 plan turns, or, when no item passes
+// that, the first item in the usual order while fewer than max(1, pace.Agents/3) claude runs are
+// live (pacing slows, never starves: #316); paused: claude takes nothing. Either way land, qwen builds and regression runs (no agent) go on.
 // At any pace a build with no builder set that qwen may take (autoRoutable) goes to qwen this run
 // when the runner has it and the qwen limit has room (Work.RouteQwen); with no room it builds with
 // claude if claude's pace lets it, and waits otherwise. The active-agents number caps everything as before; a frozen repo's fix and
@@ -247,6 +265,11 @@ func ChooseWorkPaced(c Control, pace Pace, items []Item, deps map[int64]Stage, l
 			if it, ok := choosePaced(c, items, deps, live, held, frozen, p.eligible); ok {
 				return Work{Item: &it, RouteQwen: p.route(it)}, true
 			}
+			if p.starved {
+				if it, ok := choosePaced(c, items, deps, live, held, frozen, p.fallback); ok {
+					return Work{Item: &it, RouteQwen: p.route(it)}, true
+				}
+			}
 		}
 	}
 	// Land takes no slot, held or not.
@@ -262,6 +285,10 @@ type pacing struct {
 	pace            Pace
 	claudeOK        bool
 	eligible, route func(Item) bool
+	// fallback is eligible when nothing is (starved): a slow pace takes any claude item, at most
+	// max(1, pace.Agents/3) claude runs at once, so pacing slows claims but never starves them (#316).
+	fallback func(Item) bool
+	starved  bool
 }
 
 // newPacing is the pace of a claim from a runner with builders, live being the leases running.
@@ -282,6 +309,10 @@ func newPacing(c Control, pace Pace, live []LiveLease, builders []string) pacing
 			return true
 		}
 		return p.claudeOK && (pace.Level == PaceNormal || it.Priority == "P1" || it.Size == "S" || it.Stage == Triage)
+	}
+	p.starved = pace.Level == PaceSlow && p.claudeOK && claudeLive < max(1, pace.Agents/3)
+	p.fallback = func(it Item) bool {
+		return p.eligible(it) || p.starved
 	}
 	return p
 }
@@ -321,6 +352,9 @@ func chooseWork(c Control, p pacing, items []Item, deps map[int64]Stage, live []
 	okItem := false
 	if req.wants(WorkItem) {
 		it, okItem = choosePaced(c, items, deps, live, req, frozen, p.eligible)
+		if !okItem && p.starved {
+			it, okItem = choosePaced(c, items, deps, live, req, frozen, p.fallback)
+		}
 	}
 	var best *TurnCandidate
 	if req.wants(WorkPlan) && p.claudeOK {

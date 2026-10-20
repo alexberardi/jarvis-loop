@@ -21,7 +21,8 @@ const (
 	WaitNoSlot   = "no free slot"
 	WaitFrozen   = "frozen repo"
 	// WaitPaced, WaitPaused: claude is near a usage limit (PaceFor) and the claim leaves it to a
-	// later run (ChooseWorkPaced): slow takes only P1, size S and triage; paused takes nothing.
+	// later run (ChooseWorkPaced): slow takes only P1, size S and triage (or, when none is there,
+	// the first item while few claude runs are live); paused takes nothing.
 	WaitPaced  = "usage paced"
 	WaitPaused = "usage paused"
 	// WaitOvernight: an overnight regression runs (HoldsClaims) and the claim takes only land.
@@ -140,7 +141,7 @@ func WaitReason(c Control, pace Pace, it Item, deps map[int64]Stage, live []Live
 	if !fix && !land && AgentLeases(live) >= c.ActiveAgents {
 		return WaitNoSlot
 	}
-	if !newPacing(c, pace, live, builders).eligible(it) {
+	if !newPacing(c, pace, live, builders).fallback(it) {
 		if pace.Level == PacePaused {
 			return WaitPaused
 		}
@@ -190,4 +191,11 @@ func DistOf(ds []time.Duration) Dist {
 		return int64(s[max(i, 0)] / time.Second)
 	}
 	return Dist{Count: len(s), MedianSeconds: rank(0.5), P90Seconds: rank(0.9)}
+}
+
+// PaceTakes reports whether the pace takes it without the slow pace's fallback (ChooseWorkPaced):
+// while such an item is ready, the fallback does not fire and an item only it takes waits on the
+// pace.
+func PaceTakes(c Control, pace Pace, live []LiveLease, builders []string, it Item) bool {
+	return newPacing(c, pace, live, builders).eligible(it)
 }

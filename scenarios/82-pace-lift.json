@@ -1,0 +1,100 @@
+{
+  "name": "pace-lift",
+  "about": "The user lifts claude's pacing (#316, `loop pace normal --until reset`): with a 5h budget of 60k, one claude build takes the window to 89% and claims slow down. The user lifts pacing until the next limit hit: the orchestrator's notebook gets the user's call, the next claim runs at the normal pace and #loop-digest says why (budgets and the CLI's warnings no longer slow claims; a limit hit would still pause them and end the lift).",
+  "steps": [
+    {
+      "do": "control",
+      "budgets": {
+        "claude": {
+          "per_5h": 60000
+        }
+      }
+    },
+    {
+      "do": "add",
+      "item": "a",
+      "title": "First filler",
+      "priority": "P5"
+    },
+    {
+      "do": "triage",
+      "item": "a",
+      "size": "M"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "add",
+      "item": "b",
+      "title": "Blow through it",
+      "priority": "P2"
+    },
+    {
+      "do": "triage",
+      "item": "b",
+      "size": "M"
+    },
+    {
+      "do": "expect",
+      "messages": [
+        {
+          "channel": "digest",
+          "from": "bot",
+          "text": "^Pacing claude: the 5h window is at \\d+% of its budget"
+        }
+      ]
+    },
+    {
+      "do": "control",
+      "pace_normal_until": "reset"
+    },
+    {
+      "do": "runner",
+      "claims": "b"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "messages": [
+        {
+          "channel": "digest",
+          "from": "bot",
+          "text": "^Claude claims back to normal: you lifted pacing until the next limit hit\\.$"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "stage": {
+      "b": "review"
+    },
+    "events": [
+      {
+        "kind": "orchestrator.note",
+        "data": {
+          "text": "^The user lifted claude's pacing until the next limit hit"
+        }
+      },
+      {
+        "kind": "usage_pace",
+        "actor": "loopd",
+        "data": {
+          "about": "^normal \\(pacing lifted until the next limit hit\\)$"
+        }
+      }
+    ],
+    "no_messages": [
+      {
+        "channel": "digest",
+        "text": "Usage limit hit"
+      }
+    ]
+  }
+}

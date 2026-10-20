@@ -137,6 +137,9 @@ type Step struct {
 	Budgets map[string]pipeline.Budget `json:"budgets,omitempty"`
 	// NightShift is the night shift's mode: off, on or auto (docs/decisions/2026-10-20-night-shift.md).
 	NightShift string `json:"night_shift,omitempty"`
+	// PaceNormalUntil lifts claude's pacing (loop pace normal --until: a time, "reset" or "" to
+	// put it back on).
+	PaceNormalUntil *string `json:"pace_normal_until,omitempty"`
 	// Builder is a builder step's: qwen, claude or auto.
 	Builder string `json:"builder,omitempty"`
 	// Size is the size triage gives (default S), and ChangeKind its change_kind (default none).
@@ -928,6 +931,9 @@ func (p *player) step(st Step) error {
 		}
 		if st.NightShift != "" {
 			patch["night_shift"] = st.NightShift
+		}
+		if st.PaceNormalUntil != nil {
+			patch["pace_normal_until"] = *st.PaceNormalUntil
 		}
 		return s.user.do("PUT", "/control", patch, nil)
 	case "unfreeze":

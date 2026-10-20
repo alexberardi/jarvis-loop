@@ -1428,6 +1428,10 @@ func TestPaceMessages(t *testing.T) {
 	if txt, ok := ev(map[string]any{"level": float64(0), "from_level": float64(pipeline.PaceSlow)}); !ok || txt != "Claude claims back to normal." {
 		t.Errorf("normal: %q %v", txt, ok)
 	}
+	if txt, ok := ev(map[string]any{"level": float64(0), "from_level": float64(pipeline.PaceSlow), "lifted": true}); !ok ||
+		txt != "Claude claims back to normal: you lifted pacing until the next limit hit." {
+		t.Fatalf("lifted: %q", txt)
+	}
 	if _, ok := ev(map[string]any{"level": float64(0), "from_level": float64(0)}); ok {
 		t.Error("a normal pace after a normal one posted")
 	}

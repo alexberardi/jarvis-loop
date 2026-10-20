@@ -58,4 +58,4 @@ orchestrator's cap.
 
 - A board toggle for the mode: the CLI and the API (`PUT /control`) set it.
 - The orchestrator persona of the harness (`internal/fakeclaude`) does not choose classes; the
-  scenario (`82-night-shift-verify-flake`) posts the classed escalation as the orchestrator.
+  scenario (`83-night-shift-verify-flake`) posts the classed escalation as the orchestrator.

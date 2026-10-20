@@ -698,6 +698,18 @@ func TestEveryStageHasALane(t *testing.T) {
 	}
 }
 
+// #316: a lift of the pace shows in the usage panel, even before any usage.
+func TestBoardUsagePaceLifted(t *testing.T) {
+	v := usageView(store.UsageReport{Now: now, Pace: pipeline.Pace{Level: pipeline.PaceNormal, Agents: 4, Lifted: true, Until: now.Add(6 * time.Hour)}})
+	if !v.Show || !strings.HasPrefix(v.Pace, "normal (pacing lifted until ") {
+		t.Fatalf("lifted: show %v pace %q", v.Show, v.Pace)
+	}
+	v = usageView(store.UsageReport{Now: now, Pace: pipeline.Pace{Level: pipeline.PaceNormal, Agents: 4, Lifted: true}})
+	if v.Pace != "normal (pacing lifted until the next limit hit)" {
+		t.Fatalf("lifted to the next hit: %q", v.Pace)
+	}
+}
+
 // The item page's builder form (loop builder): for the user's token, before a build starts.
 func TestBoardItemBuilder(t *testing.T) {
 	srv, st := boardSetup(t)
