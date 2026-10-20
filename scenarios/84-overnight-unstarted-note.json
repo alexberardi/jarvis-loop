@@ -1,0 +1,22 @@
+{
+  "name": "overnight-unstarted-note",
+  "about": "An overnight run still not started at 07:00 gets a note in #loop saying why, once (#317). The approver schedules tonight's run; a runner that serves only regressions keeps polling, and #a waits in triage all night, so the queue is never quiet. At 07:00 #loop says the run has not started and why (what the queue is busy with); the store and Slack tests check it is posted once.",
+  "stages": ["regression"],
+  "capabilities": ["emulator", "gpu", "voice"],
+  "steps": [
+    {"do": "regression", "as": "approver", "text": "regression tonight"},
+    {"do": "add", "item": "a", "title": "Waits all night", "priority": "P3"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "16h"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "no_messages": [{"channel": "loop", "from": "bot", "text": "has not started"}]},
+    {"do": "clock", "advance": "6h"},
+    {"do": "expect",
+     "messages": [{"channel": "loop", "from": "bot", "text": "^\\*Overnight regression R1 has not started\\* \\(set for 01:00 on Fri Oct 16\\): the queue is busy: .+\\.$"}]}
+  ],
+  "expect": {
+    "stage": {"a": "triage"},
+    "events": [{"kind": "regression_scheduled", "count": 1}],
+    "no_events": [{"kind": "regression_claimed"}]
+  }
+}

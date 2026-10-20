@@ -121,8 +121,72 @@ func TestQueueBusy(t *testing.T) {
 		{"the queued orchestrate turn", nil, nil, nil, nil, true, nil, true},
 	}
 	for _, tc := range cases {
-		if got := QueueBusy(tc.items, tc.deps, tc.live, tc.turns, tc.orch, tc.frozen, devbox, t0); got != tc.want {
-			t.Errorf("%s: QueueBusy = %v, want %v", tc.name, got, tc.want)
+		if got := QueueBusy(DefaultControl(), Pace{}, tc.items, tc.deps, tc.live, tc.turns, tc.orch, tc.frozen, devbox, t0); (got != "") != tc.want {
+			t.Errorf("%s: QueueBusy = %q, want busy %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The claude pace counts (#317): what it holds back cannot be claimed, so it leaves the queue quiet
+// for the regression, whose lanes are no claude runs. A slow pace's starved fallback (#316) still
+// claims, so the queue stays busy then.
+func TestQueueBusyPaced(t *testing.T) {
+	ctl := DefaultControl()
+	devbox := []RunnerSeen{{Name: "devbox", Capabilities: []string{"emulator"}, LastSeen: t0}}
+	qwenBox := []RunnerSeen{{Name: "devbox", Capabilities: []string{"emulator"}, Builders: []string{BuilderQwen}, LastSeen: t0}}
+	paused := Pace{Level: PacePaused}
+	slow := Pace{Level: PaceSlow, Agents: 2}
+	p2 := Item{ID: 1, Title: "t", Stage: Build, Priority: "P2", Size: "M", CreatedAt: t0}
+	p1 := Item{ID: 2, Title: "t", Stage: Build, Priority: "P1", Size: "M", CreatedAt: t0}
+	land := LiveLease{ItemID: 7, Stage: Land}
+	claudeBuild := LiveLease{ItemID: 8, Stage: Build, Claude: true}
+	cases := []struct {
+		name    string
+		pace    Pace
+		items   []Item
+		live    []LiveLease
+		turns   []TurnCandidate
+		orch    bool
+		runners []RunnerSeen
+		want    bool
+	}{
+		{"paused: ready claude items are held back", paused, []Item{p2, p1}, nil, nil, false, devbox, false},
+		{"paused: a land lease is still no work", paused, []Item{p2}, []LiveLease{land}, nil, false, devbox, false},
+		{"paused: a qwen-routable build is claimable", paused, []Item{{ID: 3, Stage: Build, Priority: "P3", Size: "M", CreatedAt: t0}}, nil, nil, false, qwenBox, true},
+		{"paused: a plan turn waits", paused, nil, nil, []TurnCandidate{{TurnID: 1, Priority: "P1"}}, false, devbox, false},
+		{"paused: the orchestrate turn waits", paused, nil, nil, nil, true, devbox, false},
+		{"paused: a live claude run is busy", paused, nil, []LiveLease{claudeBuild}, nil, false, devbox, true},
+		{"slow: an eligible item waits for its claim", slow, []Item{p2, p1}, nil, nil, false, devbox, true},
+		{"slow: only ineligible items, the starved fallback claims", slow, []Item{p2}, nil, nil, false, devbox, true},
+		{"slow: a P2 plan turn is held back", slow, nil, nil, []TurnCandidate{{TurnID: 1, Priority: "P2"}}, false, devbox, false},
+		{"slow: a P1 plan turn is claimable", slow, nil, nil, []TurnCandidate{{TurnID: 1, Priority: "P1"}}, false, devbox, true},
+	}
+	for _, tc := range cases {
+		if got := QueueBusy(ctl, tc.pace, tc.items, map[int64]Stage{}, tc.live, tc.turns, tc.orch, nil, tc.runners, t0); (got != "") != tc.want {
+			t.Errorf("%s: QueueBusy = %q, want busy %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestQueueBusySaysWhy(t *testing.T) {
+	ctl := DefaultControl()
+	devbox := []RunnerSeen{{Name: "devbox", Capabilities: []string{"emulator"}, LastSeen: t0}}
+	for _, tc := range []struct {
+		name  string
+		items []Item
+		live  []LiveLease
+		turns []TurnCandidate
+		orch  bool
+		want  string
+	}{
+		{"a lease", nil, []LiveLease{{ItemID: 4, Stage: Build}}, nil, false, "the build of #4 runs"},
+		{"a plan turn runs", nil, []LiveLease{{Stage: PlanTurnStage}}, nil, false, "a plan turn runs"},
+		{"an item", []Item{waiting(5, Review, "P2", 0)}, nil, nil, false, "#5 waits in review"},
+		{"a turn", nil, nil, []TurnCandidate{{TurnID: 1, PlanID: 3, Priority: "P1"}}, false, "a turn of plan 3 is queued"},
+		{"orchestrate", nil, nil, nil, true, "the orchestrate turn is queued"},
+	} {
+		if got := QueueBusy(ctl, Pace{}, tc.items, map[int64]Stage{}, tc.live, tc.turns, tc.orch, nil, devbox, t0); got != tc.want {
+			t.Errorf("%s: QueueBusy = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }
