@@ -322,6 +322,9 @@ type run struct {
 	item Item
 	// trustUsed is the commit verify ran on the approver's trust OK (reported with the outcome).
 	trustUsed string
+	// carry is a review's delta from the head the user approved, when that is not the head
+	// reviewed (carry.go).
+	carry *ApprovalDelta
 	// trustCarried is the head verify carried the OK to (its trusted files' diff is the one the
 	// approver OK'd, digest trustDiffSHA), reported with the outcome for loopd to check.
 	trustCarried string

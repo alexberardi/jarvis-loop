@@ -18,7 +18,9 @@ covered by a test or a scenario:
   first, or another runner got there) is ignored. **First cut:** every conflict goes to build;
   land's own merge of a docs-only conflict (`landConflict`, which pushes and goes back to review)
   is not reused here, because it needs a land lease and the mirror lock for an item nobody claimed.
-  A docs-only conflict therefore costs a build run instead of none.
+  A docs-only conflict therefore costs a build run instead of none. *Superseded 2026-10-18:* the
+  runner now merges what git can (clean or docs only) and sends the new head to review
+  ([approval-carry](2026-10-18-approval-carry.md)).
 - **The note (Slack).** In a held thread, the approver's reply is a note when `IsHeldNote` says
   so. It is checked **before** `ClassifyReply`, so a change request wins over consent words in it:
   "ok, rebuild", "yes, but rebase first" and "merge it after adding a test" go back to build, not

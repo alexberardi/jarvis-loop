@@ -1,0 +1,195 @@
+{
+  "name": "approval-not-carried-hold-path",
+  "about": "An auth-path PR is approved while held; main then changes the same auth file. The build merges origin/main in and resolves the conflict inside its hunk only, but the conflict is in a file on the hold list: loopd drops the approval and land holds the new head for the approver. Nothing is merged.",
+  "stages": [
+    "build",
+    "review",
+    "land"
+  ],
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Shorten the session timeout"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "good",
+      "file": "internal/modules/auth/session.go"
+    },
+    {
+      "do": "ci",
+      "main": {
+        "ci": "pass"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "ci",
+      "item": "a",
+      "checks": {
+        "check": "pass"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "held"
+      }
+    },
+    {
+      "do": "press",
+      "item": "a",
+      "as": "approver",
+      "button": "approve"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "land"
+      },
+      "events": [
+        {
+          "item": "a",
+          "kind": "approved",
+          "actor": "approver"
+        }
+      ]
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "for": "review",
+      "play": "approve"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "merge_main",
+      "file": "internal/modules/auth/session.go"
+    },
+    {
+      "do": "push",
+      "branch": "main",
+      "file": "internal/modules/auth/session.go",
+      "text": "main's own version of the change\n"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "build"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "review"
+      }
+    },
+    {
+      "do": "ci",
+      "item": "a",
+      "checks": {
+        "check": "pass"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "land"
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "held"
+    },
+    "pr": {
+      "a": {
+        "state": "OPEN",
+        "merge_calls": 0
+      }
+    },
+    "events": [
+      {
+        "item": "a",
+        "kind": "approval_not_carried",
+        "actor": "runner",
+        "data": {
+          "reason": "^a conflict was resolved in a file on the hold list \\(auth: M internal/modules/auth/session\\.go\\)$"
+        },
+        "count": 1
+      }
+    ],
+    "no_events": [
+      {
+        "item": "a",
+        "kind": "approval_carried"
+      },
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "merged"
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "text": "^The approval of `[0-9a-f]{7}` does not carry to `[0-9a-f]{7}`: a conflict was resolved in a file on the hold list \\(auth: M internal/modules/auth/session\\.go\\)\\. The new head needs your approval\\.$"
+      }
+    ]
+  }
+}

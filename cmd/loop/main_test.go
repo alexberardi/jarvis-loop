@@ -502,6 +502,20 @@ func TestCLIRebuild(t *testing.T) {
 	}
 }
 
+func TestApprovalLineVoid(t *testing.T) {
+	var it item
+	if err := json.Unmarshal([]byte(`{"head_sha":"bbb","approval":{"by":"user:alex","words":"ok","head_sha":"aaa"}}`), &it); err != nil {
+		t.Fatal(err)
+	}
+	if got := approvalLine(it); !strings.Contains(got, `approval: user:alex for aaa: "ok" (void: the PR's head is now bbb)`) {
+		t.Fatalf("void approval: %q", got)
+	}
+	it.HeadSHA = "aaa"
+	if got := approvalLine(it); strings.Contains(got, "void") {
+		t.Fatalf("approval of the head: %q", got)
+	}
+}
+
 func TestCLIFeature(t *testing.T) {
 	c := testLoopd(t)
 	if out := c.ok(userTok, "add", "a", "--repo", "jarvis-server", "--feature", "Smallest Blocks"); !strings.Contains(out, "added #1 a (P3), feature smallest-blocks") {

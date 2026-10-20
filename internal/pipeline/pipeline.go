@@ -507,6 +507,10 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if err := reviewApproves(&it, a, f); err != nil {
 			return Transition{}, err
 		}
+		nr, _ := needsReview(f) // checked by reviewApproves
+		if n := carryApproval(&it, f, nr, func(p []ChangedPath) []HoldMatch { return MatchHoldRules(a.HoldRules, ruleRepo, p) }); n != nil {
+			tr.Also = append(tr.Also, *n)
+		}
 		qa, err := f.needsQA()
 		if err != nil {
 			return Transition{}, err
@@ -585,8 +589,12 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		if err != nil {
 			return Transition{}, err
 		}
-		// The held message must show the commit the user would approve.
+		// The held message must show the commit the user would approve: an approval of another
+		// one is dropped, not kept for review to carry (the user approves this head).
 		voidApproval(&it, data, head)
+		if it.Approval != nil && it.Approval.HeadSHA != head {
+			it.Approval = nil
+		}
 		it.HeadSHA = head
 		raiseRisk(&it, holdReasons(paths, "land: "+reason))
 		it.Stage = Held
@@ -727,9 +735,10 @@ func ApplyAnswer(it Item, text string) (Transition, error) {
 // ApplyRebuild sends a held or needs_you item back to build with notes for the builder: the
 // user's reply in the held thread that is not an approval, a rebuild reply or the Rebuild button
 // on a held or needs_you item, or the runner finding the held PR conflicting. The PR, branch and
-// hold stay; an approval is voided (the build makes a new head); a question is dropped (the notes
-// replace its answer). It is not a bounce.
-func ApplyRebuild(it Item, notes string) (Transition, error) {
+// hold stay; a question is dropped (the notes replace its answer). It is not a bounce. The user's
+// rebuild drops any approval (they asked for a change); the runner's conflict rebuild (conflict)
+// keeps one for review to carry if the build only merges the base (carryApproval).
+func ApplyRebuild(it Item, notes string, conflict bool) (Transition, error) {
 	if it.Stage != Held && it.Stage != NeedsYou {
 		return Transition{}, errf(CodeWrongStage, "item is %s, not held or needs_you", it.Stage)
 	}
@@ -741,7 +750,7 @@ func ApplyRebuild(it Item, notes string) (Transition, error) {
 		return Transition{}, errf(CodeMissingField, "notes are required: they tell the builder what to do")
 	}
 	data := map[string]any{"notes": notes}
-	if it.Approval != nil {
+	if it.Approval != nil && !conflict {
 		it.Approval = nil
 		data["approval_voided"] = true
 	}
