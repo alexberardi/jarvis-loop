@@ -553,7 +553,7 @@ type usageDay struct {
 
 func usageView(u store.UsageReport) usageSection {
 	st := u.Claude
-	v := usageSection{Show: len(u.Days) > 0 || len(u.Hits) > 0, Items: u.Items, Hits: u.Hits, Paced: u.Pace.Level != pipeline.PaceNormal,
+	v := usageSection{Show: len(u.Days) > 0 || len(u.Hits) > 0 || u.Pace.Lifted, Items: u.Items, Hits: u.Hits, Paced: u.Pace.Level != pipeline.PaceNormal,
 		Qwen: u.Qwen.Line()}
 	of := func(burn, limit int64) string {
 		if limit <= 0 {
