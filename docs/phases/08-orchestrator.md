@@ -77,6 +77,15 @@ reason (shown in the item's Slack thread as "Orchestrator: …" and on the board
 runner's config, the hold rules or a gate, deploy, touch prod, edit code. It may *recommend* any
 of these to the user.
 
+**Night shift** (2026-10-20, [decision](../decisions/2026-10-20-night-shift.md)): while the
+control's `night_shift` is on (`on`, or `auto` from 23:00 to 08:00 New York, or after the user's
+"@orchestrator night"), loopd acts on an escalation's recommendation after 15 minutes when the
+orchestrator marks it `verify_flake` (rebuild to re-run verify, once per head), `bounce_limit` (one
+more build with the review notes, once per item per night) or `scope_choice` (answer with it and
+file the deferred part as P3), and the ticket cap is 10 for process tickets. Never for anything on
+the hold list, approvals, merges, credentials, releases, prod, deleting work or limits. Each action
+is posted in the item's thread and listed at the top of the standup with its undo.
+
 ### Answers it may give
 
 1. A question the item's history already answers (the newest answer wins).
