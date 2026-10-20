@@ -185,3 +185,10 @@ func DistOf(ds []time.Duration) Dist {
 	}
 	return Dist{Count: len(s), MedianSeconds: rank(0.5), P90Seconds: rank(0.9)}
 }
+
+// PaceTakes reports whether the pace takes it without the slow pace's fallback (ChooseWorkPaced):
+// while such an item is ready, the fallback does not fire and an item only it takes waits on the
+// pace.
+func PaceTakes(pace Pace, live []LiveLease, builders []string, it Item) bool {
+	return newPacing(pace, live, builders).eligible(it)
+}

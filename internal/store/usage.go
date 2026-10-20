@@ -188,6 +188,9 @@ func (s *Store) pace(tx *sql.Tx, ctl pipeline.Control, now time.Time, extra map[
 	}
 	data := map[string]any{"provider": pipeline.ProviderClaude, "level": p.Level, "from_level": last.Level, "agents": p.Agents,
 		"active_agents": ctl.ActiveAgents, "window": p.Window, "percent": p.Percent, "hit": p.Hit, "about": p.Describe(usageZone())}
+	if p.Lifted {
+		data["lifted"] = true
+	}
 	if !p.Until.IsZero() {
 		data["until"] = p.Until.Format(time.RFC3339)
 	}

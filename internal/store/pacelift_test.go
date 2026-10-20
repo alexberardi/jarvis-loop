@@ -85,4 +85,3 @@ func TestPaceLiftLiftsAWarnedWindow(t *testing.T) {
 		}
 	}
 }
-
