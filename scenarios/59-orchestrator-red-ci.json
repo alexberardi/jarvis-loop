@@ -1,6 +1,6 @@
 {
   "name": "orchestrator-red-ci",
-  "about": "Recorded 2026-10-16: CI red on a head the build did not change (docs/phases/08-orchestrator.md, piece 4). The orchestrator (the persona play) first answers kind red_ci that land reads CI again (a re-run may pass). It is red again on the same head, so land sends it to the user at the bounce limit with the failing job's log attached; the orchestrator's second red_ci answer sends it back to build: fix the code, not the expectation, the log is in ci-failure.log. When the build changes nothing a third time, the orchestrator escalates with a recommendation.",
+  "about": "Recorded 2026-10-16: CI red on a head the build did not change (docs/phases/08-orchestrator.md, piece 4). The orchestrator (the persona play) first answers kind red_ci that land reads CI again (a re-run may pass), and land re-runs the failed job once (ci_rerun). It is red again on the same head, so land sends it to the user at the bounce limit with the failing job's log attached; the orchestrator's second red_ci answer sends it back to build: fix the code, not the expectation, the log is in ci-failure.log. When the build changes nothing a third time, the orchestrator escalates with a recommendation.",
   "stages": ["build", "review", "land", "orchestrate"],
   "steps": [
     {"do": "add", "item": "a", "title": "Fix the digest wording", "priority": "P2"},
@@ -26,9 +26,11 @@
                  "data": {"answer_kind": "^red_ci$", "answer": "^Land reads CI again: re-run it once", "head_sha": "^[0-9a-f]{40}$"}, "count": 1}]},
 
     {"do": "runner", "claims": "a"},
+    {"do": "clock", "advance": "30s"},
     {"do": "runner_idle"},
     {"do": "expect", "stage": {"a": "needs_you"}, "question": {"a": "^CI failed on `[0-9a-f]{7}`: check"},
-     "events": [{"item": "a", "kind": "advanced", "outcome": "back_to_build", "data": {"bounce_count": "^2$"}, "count": 1}],
+     "events": [{"item": "a", "kind": "ci_rerun", "actor": "runner", "data": {"jobs": "^check$", "head_sha": "^[0-9a-f]{40}$"}, "count": 1},
+                {"item": "a", "kind": "advanced", "outcome": "back_to_build", "data": {"bounce_count": "^2$"}, "count": 1}],
      "evidence": [{"item": "a", "name": "ci-failure.log", "count": 2}]},
 
     {"do": "runner", "claims": "orchestrator"},

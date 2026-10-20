@@ -1,0 +1,51 @@
+{
+  "name": "red-ci-rerun-at-bounce-limit",
+  "about": "#341: an item that already had a review bounce reaches the bounce limit on its first red CI in land, which asks \"CI failed on <sha>: check\" with return stage build. The orchestrator's first red_ci answer (the persona play) returns it to land, not build: land re-runs the failed job once (ci_rerun) and waits; the re-run passes, and land merges. No build run is spent on the rerun text.",
+  "stages": ["build", "review", "land", "orchestrate"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording", "priority": "P2"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "for": "orchestrate", "play": "persona"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "script", "item": "a", "for": "review", "play": "bounce"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "script", "item": "a", "for": "review", "play": "approve"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"}},
+
+    {"do": "ci", "item": "a", "checks": {"check": "fail", "lint": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}, "question": {"a": "^CI failed on `[0-9a-f]{7}`: check"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "back_to_build", "data": {"bounce_count": "^2$"}, "count": 1},
+                {"item": "a", "kind": "ci_rerun", "count": 0}]},
+
+    {"do": "runner", "claims": "orchestrator"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"},
+     "events": [{"item": "a", "kind": "answered", "actor": "orchestrator",
+                 "data": {"answer_kind": "^red_ci$", "answer": "^Land reads CI again: re-run it once", "rerun_ci": "^true$"}, "count": 1}]},
+
+    {"do": "runner", "claims": "a"},
+    {"do": "wait", "events": [{"item": "a", "kind": "ci_rerun", "actor": "runner", "count": 1}]},
+    {"do": "expect", "stage": {"a": "land"}, "leased": {"a": true}, "pr": {"a": {"state": "OPEN", "merge_calls": 0}}},
+    {"do": "ci", "item": "a", "checks": {"check": "pass", "lint": "pass"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "pr": {"a": {"state": "MERGED", "merge_calls": 1}},
+    "events": [
+      {"item": "a", "kind": "ci_rerun", "actor": "runner", "data": {"jobs": "^check$", "head_sha": "^[0-9a-f]{40}$"}, "count": 1},
+      {"item": "a", "kind": "answered", "actor": "orchestrator", "data": {"answer_kind": "^red_ci$"}, "count": 1}
+    ],
+    "agent_runs": {"build": 2, "orchestrate": 1}
+  }
+}
