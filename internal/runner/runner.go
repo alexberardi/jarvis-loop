@@ -1450,12 +1450,15 @@ func totalResult(ru *run, out outcome) *resultEvent {
 }
 
 func (r *Runner) saveWIP(ctx context.Context, ru *run, why string, log *slog.Logger) {
-	pushed, err := r.Git.SaveWIP(ctx, ru.wt, ru.branch, ru.repo.Base, fmt.Sprintf("WIP: loop item #%d (%s)", ru.item.ID, why))
+	s, err := r.Git.SaveWIP(ctx, ru.wt, ru.branch, ru.repo.Base, fmt.Sprintf("WIP: loop item #%d (%s)", ru.item.ID, why))
+	if s.DroppedMerge {
+		log.Warn("WIP: dropped the unresolved merge of the base (the next build's pre-merge redoes it)", "branch", ru.branch)
+	}
 	if err != nil {
 		log.Error("WIP push", "err", err)
 		return
 	}
-	log.Info("WIP saved", "pushed", pushed, "branch", ru.branch)
+	log.Info("WIP saved", "pushed", s.Pushed, "branch", ru.branch)
 }
 
 // report turns how the run ended into loopd calls.

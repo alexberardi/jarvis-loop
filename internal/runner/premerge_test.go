@@ -219,3 +219,56 @@ func TestPRBodyPreMerge(t *testing.T) {
 		t.Fatal("a footer without a pre-merge says one")
 	}
 }
+
+// A build that ends (stopped, time cap, crash) while the runner's merge is still in progress
+// saves its WIP without the merge: no conflict markers are committed, and the next build's
+// pre-merge starts it again.
+func TestSaveWIPDropsUnresolvedPreMerge(t *testing.T) {
+	r, wt := preMergeRig(t, map[string]string{".claude/skills/x/SKILL.md": "skill\n", "app.txt": "main\n"})
+	gitT(t, wt, "push", "-q", "origin", "HEAD:refs/heads/loop/1-x")
+	branchHead := gitT(t, wt, "rev-parse", "HEAD")
+	if p, err := r.g.PreMerge(r.ctx, wt, "main", "loop/1-x"); err != nil || p.Committed {
+		t.Fatalf("pre-merge %+v %v, want one in progress", p, err)
+	}
+	if _, err := r.g.SaveWIP(r.ctx, wt, "loop/1-x", "main", "WIP: stopped"); err != nil {
+		t.Fatal(err)
+	}
+	if r.g.hasRef(r.ctx, wt, "MERGE_HEAD") {
+		t.Fatal("the merge is still in progress")
+	}
+	pushed := gitT(t, r.remote, "rev-parse", "refs/heads/loop/1-x")
+	if s := gitT(t, r.remote, "show", pushed+":app.txt"); strings.Contains(s, "<<<<<<<") {
+		t.Fatalf("the pushed app.txt has conflict markers:\n%s", s)
+	}
+	if pushed != branchHead {
+		t.Fatalf("the pushed head is %s (parents %s), want the branch's %s", pushed, gitT(t, r.remote, "rev-list", "--parents", "-n1", pushed), branchHead)
+	}
+	gitT(t, r.mirror, "worktree", "remove", "--force", wt)
+	r.g.EnsureMirror(r.ctx, r.mirror, RepoConfig{Remote: r.remote, Base: "main"})
+	wt2 := filepath.Join(t.TempDir(), "wt")
+	if _, err := r.g.AddWorktree(r.ctx, r.mirror, wt2, "loop/1-x", "main", Recorded{}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := r.g.PreMerge(r.ctx, wt2, "main", "loop/1-x")
+	if err != nil || p.Committed || !slices.Equal(p.Conflicts, []string{"app.txt"}) {
+		t.Fatalf("the next build's pre-merge %+v %v, want app.txt left in progress", p, err)
+	}
+}
+
+// The agent resolved every conflict but did not commit: SaveWIP commits the merge.
+func TestSaveWIPKeepsResolvedPreMerge(t *testing.T) {
+	r, wt := preMergeRig(t, map[string]string{".claude/skills/x/SKILL.md": "skill\n", "app.txt": "main\n"})
+	if p, err := r.g.PreMerge(r.ctx, wt, "main", "loop/1-x"); err != nil || p.Committed {
+		t.Fatalf("pre-merge %+v %v, want one in progress", p, err)
+	}
+	os.WriteFile(filepath.Join(wt, "app.txt"), []byte("both\n"), 0o644)
+	gitT(t, wt, "add", "app.txt")
+	s, err := r.g.SaveWIP(r.ctx, wt, "loop/1-x", "main", "WIP: stopped")
+	if err != nil || !s.Pushed || s.DroppedMerge {
+		t.Fatalf("SaveWIP %+v %v, want the merge pushed", s, err)
+	}
+	pushed := gitT(t, r.remote, "rev-parse", "refs/heads/loop/1-x")
+	if gitT(t, r.remote, "rev-parse", pushed+"^2") != gitT(t, r.mirror, "rev-parse", "refs/remotes/origin/main") {
+		t.Fatal("the pushed head is not the merge of main")
+	}
+}
