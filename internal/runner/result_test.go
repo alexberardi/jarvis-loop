@@ -220,6 +220,7 @@ func TestValidateTriage(t *testing.T) {
 		{"has a repo: the same, dropped", repro(`"repo":"alexberardi/demo",`), "demo", "", ""},
 		{"has a repo: cannot change it", repro(`"repo":"jarvis-loop",`), "demo", "", "cannot change it"},
 		{"needs qa", repro(`"needs_qa":true,`), "demo", "", ""},
+		{"change kind and builder", repro(`"change_kind":"docs","builder":"qwen",`), "demo", "", ""},
 		{"gpu", strings.Replace(repro(``), `"resources":[]`, `"resources":["gpu","voice"]`, 1), "demo", "", ""},
 		{"unknown resource", strings.Replace(repro(``), `"resources":[]`, `"resources":["tpu"]`, 1), "demo", "", "unknown resource"},
 		{"bad size", strings.Replace(repro(``), `"size":"S"`, `"size":"XL"`, 1), "demo", "", "size must be"},

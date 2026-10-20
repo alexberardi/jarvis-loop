@@ -68,6 +68,11 @@ repos or none.
    CI check), else `normal`; loopd still computes the hold from the PR's paths later. Resources
    are what verifying it needs: `gpu` (the shared model), `voice` (speech), `emulator` (Android),
    `macos`; usually none.
+   `change_kind` is `docs` or `test` when the change touches only docs or only tests, else
+   `code`: a P2 size-S docs or test change may build with the Qwen builder, which saves Claude.
+   `builder` is optional: `claude` when the build needs judgment (a design call left open, several
+   areas, an unclear test), `qwen` when every step is mechanical; leave it out and loopd decides
+   by priority, size and `change_kind`.
 5. **Triage notes** (`notes`, markdown) for the build agent: what to change and where (files,
    functions), how to verify it (the test to write first, the harness scenario or shot), and what
    you could not check. Short and concrete: the build agent reads them first.
@@ -102,6 +107,7 @@ Write `.loop/result.json` as your last step, exactly one of:
 ```json
 {"outcome": "reproduced", "repo": "owner/name (only when the item has no repo)",
  "area": "a short area name", "size": "S | M | L", "risk": "normal | hold", "resources": ["gpu", "voice", "emulator", "macos"],
+ "change_kind": "code | docs | test", "builder": "qwen | claude (optional)",
  "summary": "one paragraph: what you found", "notes": "markdown: what to change, where, how to verify, what you could not check",
  "evidence": [{"file": "evidence/repro.log", "label": "the failing test on main"}],
  "needs_qa": false}
@@ -122,4 +128,4 @@ When the item has no repo yet (no checkouts this run), name it first:
 {"outcome": "routed", "repo": "owner/name", "why": "one line: why this repo"}
 ```
 
-`resources` lists only what verifying the change needs (often `[]`). The runner checks `repo` against the configured repos and uploads your `notes` (as `triage-notes.md`) and the files in `.loop/evidence/` with the item. After `routed`, the item is triaged again with that repo checked out. Set `needs_qa` to true when only the user can check the change once it is merged (on their phone or hardware): the item then waits in qa after it lands. No other fields.
+`resources` lists only what verifying the change needs (often `[]`). The runner checks `repo` against the configured repos and uploads your `notes` (as `triage-notes.md`) and the files in `.loop/evidence/` with the item. After `routed`, the item is triaged again with that repo checked out. Set `needs_qa` to true when only the user can check the change once it is merged (on their phone or hardware): the item then waits in qa after it lands. `change_kind` is `docs` or `test` when the change touches only docs or only tests, else `code` (left out: code). `builder` is optional: `claude` when the build needs judgment the Qwen builder lacks (a design call, many areas), `qwen` when every step is mechanical; left out, loopd decides by priority, size and change_kind. No other fields.

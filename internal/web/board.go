@@ -70,6 +70,7 @@ func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardCo
 	mux.Handle("GET /board/regressions/{id}/files/{n}", p.auth(p.regressionFile))
 	// The board's one write: the user's "Run regression" button. The cookie is SameSite=Strict,
 	// and the post is guarded against cross-origin requests too.
+	mux.Handle("POST /board/items/{id}/builder", http.NewCrossOriginProtection().Handler(p.auth(p.setBuilder)))
 	mux.Handle("POST /board/regressions", http.NewCrossOriginProtection().Handler(p.auth(p.runRegression)))
 	mux.Handle("POST /board/regressions/tonight", http.NewCrossOriginProtection().Handler(p.auth(p.tonight)))
 	return mux
@@ -278,11 +279,49 @@ func (p *boardPage) item(w http.ResponseWriter, r *http.Request) {
 		ws := workingView(work, now, id)
 		v.Working = &ws
 		w.Header().Set("Content-Security-Policy", liveCSP)
+	} else if p.principal(r).Kind == api.KindUser && pipeline.BuilderSettable(d.Item, false) {
+		v.BuilderForm = true
+		w.Header().Set("Content-Security-Policy", boardFormCSP)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := itemTmpl.Execute(w, v); err != nil {
 		p.log.Error("render item", "err", err)
 	}
+}
+
+// setBuilder is the item page's builder form (loop builder): the user's token only.
+func (p *boardPage) setBuilder(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	pr := p.principal(r)
+	if pr.Kind != api.KindUser {
+		http.Error(w, "only the user's token may set the builder", http.StatusForbidden)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	if _, err := p.st.SetBuilder(r.Context(), pr.Actor(), id, r.PostForm.Get("builder")); err != nil {
+		if pe := (*pipeline.Error)(nil); errors.As(err, &pe) {
+			status := http.StatusBadRequest
+			switch pe.Code {
+			case pipeline.CodeWrongStage:
+				status = http.StatusConflict
+			case store.CodeNotFound:
+				status = http.StatusNotFound
+			}
+			http.Error(w, pe.Message, status)
+			return
+		}
+		p.fail(w, err)
+		return
+	}
+	http.Redirect(w, r, "/board/items/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
 
 // working is the "Working now" section's inside, for live.js: every live lease, or one item's
@@ -407,6 +446,8 @@ type card struct {
 	Reason string
 	// SecondOpinion is its Gemini second opinions added up (nil: none).
 	SecondOpinion *store.SecondOpinionStats
+	// BuilderForm: the user's token sees the builder's form, the builder still being settable.
+	BuilderForm bool
 }
 
 // planCard is an open plan in the Planning column.
@@ -498,6 +539,8 @@ type usageSection struct {
 	Days               []usageDay
 	Items              []store.UsageItem
 	Hits               []pipeline.UsageHit
+	// Qwen is the Qwen builder's week in a line (pipeline.QwenWeek.Line).
+	Qwen string
 }
 
 type usageDay struct {
@@ -509,7 +552,8 @@ type usageDay struct {
 
 func usageView(u store.UsageReport) usageSection {
 	st := u.Claude
-	v := usageSection{Show: len(u.Days) > 0 || len(u.Hits) > 0, Items: u.Items, Hits: u.Hits, Paced: u.Pace.Level != pipeline.PaceNormal}
+	v := usageSection{Show: len(u.Days) > 0 || len(u.Hits) > 0, Items: u.Items, Hits: u.Hits, Paced: u.Pace.Level != pipeline.PaceNormal,
+		Qwen: u.Qwen.Line()}
 	of := func(burn, limit int64) string {
 		if limit <= 0 {
 			return pipeline.FormatTokens(burn) + " (no limit known yet)"
@@ -834,6 +878,8 @@ type itemData struct {
 	Working *workingSection
 	// SecondOpinion is its Gemini second opinions added up (nil: none).
 	SecondOpinion *store.SecondOpinionStats
+	// BuilderForm: the user's token sees the builder's form, the builder still being settable.
+	BuilderForm bool
 }
 
 // maxDataText caps an event's data on the page; the full record is in `loop show`.
@@ -891,7 +937,7 @@ var templateFS embed.FS
 //go:embed templates/live.js
 var liveJS []byte
 
-var funcs = template.FuncMap{"join": strings.Join, "age": age, "size": size, "stamp": stamp, "tokens": pipeline.FormatTokens, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot, "dur": dur, "mins": mins,
+var funcs = template.FuncMap{"join": strings.Join, "builders": func() []string { return []string{"auto", pipeline.BuilderQwen, pipeline.BuilderClaude} }, "age": age, "size": size, "stamp": stamp, "tokens": pipeline.FormatTokens, "turnLabel": turnLabel, "unservable": pipeline.UnservableRoot, "dur": dur, "mins": mins,
 	"clock": func(t *time.Time) string {
 		if t == nil {
 			return ""

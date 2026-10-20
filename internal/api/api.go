@@ -67,6 +67,7 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /items/{id}/unlink", user, s.unlink)
 	route("POST /items/{id}/resources", user, s.setResources)
 	route("POST /items/{id}/feature", user, s.setFeature)
+	route("POST /items/{id}/builder", user, s.setBuilder)
 	route("POST /items/{id}/qa", user, s.setQA)
 	route("POST /items/{id}/verified", user, s.verified)
 	route("POST /items/{id}/reopen", user, s.reopen)
@@ -856,6 +857,26 @@ func (s *server) setFeature(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, err := s.st.SetFeature(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Feature)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// setBuilder sets who builds an item before its build starts: qwen, claude or auto (store.SetBuilder).
+func (s *server) setBuilder(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Builder string `json:"builder"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.SetBuilder(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.Builder)
 	if err != nil {
 		s.fail(w, err)
 		return
