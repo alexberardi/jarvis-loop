@@ -20,6 +20,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -33,9 +34,28 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	err := run(os.Args[1:])
+	if err != nil && !errors.Is(err, errDrained) {
 		fmt.Fprintln(os.Stderr, "loop-runner:", err)
-		os.Exit(1)
+	}
+	os.Exit(exitCode(err))
+}
+
+// errDrained is run's end after a drain: the live runs ended and the runner wants restarting.
+var errDrained = errors.New("drained")
+
+// exitDrained is the exit status after a drain (EX_TEMPFAIL): not 0, so a service that restarts
+// only on failure (systemd Restart=on-failure, as the dev box's) starts the new binary too (#284).
+const exitDrained = 75
+
+func exitCode(err error) int {
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, errDrained):
+		return exitDrained
+	default:
+		return 1
 	}
 }
 
@@ -117,8 +137,9 @@ func run(args []string) error {
 	}
 	defer removePID(pid)
 	err = r.Run(ctx)
-	if r.Draining() && ctx.Err() == nil {
-		log.Info("drained: the live runs ended; exiting for the service manager to restart the runner")
+	if err == nil && r.Draining() && ctx.Err() == nil {
+		log.Info("drained: the live runs ended; exiting for the service manager to restart the runner", "status", exitDrained)
+		return errDrained
 	}
 	return err
 }

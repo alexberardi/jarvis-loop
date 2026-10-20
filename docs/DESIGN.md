@@ -142,7 +142,8 @@ same fence, next to a keeper fence that holds the running sandbox until the agen
 **Config and updates without lost work (2026-10-18):** SIGHUP (`loop-runner reload`) reloads the
 runner's config for the next claim while live runs keep theirs; a bad file is refused. A binary
 update drains first (`loop-runner drain`): no new claims, the board shows the runner draining, and it
-exits once its runs end for its service to restart it. loopd reloads `--repos-file` on SIGHUP.
+exits (status 75) once its runs end for its service to restart it, logging every 30 s what it
+still waits on. loopd reloads `--repos-file` on SIGHUP.
 Details: `docs/decisions/2026-10-18-runner-reload-drain.md`.
 
 **Cleanup** is the runner's, not the agent's: when a lease ends for any reason it removes that item's worktree, takes down its sandbox and stops its emulator. It never touches anything it did not start, so a stray process from another session is reported, not killed.

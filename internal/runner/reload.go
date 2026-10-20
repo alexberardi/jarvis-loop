@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -133,3 +134,59 @@ func (r *Runner) Drain(ctx context.Context) error {
 
 // Draining says whether Drain was called.
 func (r *Runner) Draining() bool { return r.draining.Load() }
+
+// DrainLogEvery is how often a draining Run logs what it still waits on.
+const DrainLogEvery = 30 * time.Second
+
+// waitSet names what Run waits on before it can return (the live runs, the background loops,
+// the main-CI watches) and since when, so a drain that does not end says why (#284).
+type waitSet struct {
+	mu sync.Mutex
+	m  map[string]time.Time
+	n  int
+}
+
+// add records a wait that began at; done ends it.
+func (w *waitSet) add(name string, at time.Time) (done func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.m == nil {
+		w.m = map[string]time.Time{}
+	}
+	w.n++
+	key := fmt.Sprintf("%s\x00%d", name, w.n) // two waits may share a name
+	w.m[key] = at
+	return func() {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		delete(w.m, key)
+	}
+}
+
+// list says each wait and how long it has lasted, the oldest first.
+func (w *waitSet) list(now time.Time) []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	keys := slices.Collect(maps.Keys(w.m))
+	slices.SortFunc(keys, func(a, b string) int { return w.m[a].Compare(w.m[b]) })
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		name, _, _ := strings.Cut(k, "\x00")
+		out = append(out, fmt.Sprintf("%s (%s)", name, now.Sub(w.m[k]).Round(time.Second)))
+	}
+	return out
+}
+
+// logDrainWaits logs what Run still waits on every DrainLogEvery until stop closes.
+func (r *Runner) logDrainWaits(stop <-chan struct{}) {
+	for {
+		t := r.Clock.NewTimer(DrainLogEvery)
+		select {
+		case <-stop:
+			t.Stop()
+			return
+		case <-t.C():
+		}
+		r.Log.Info("draining: still waiting", "on", strings.Join(r.waits.list(r.Clock.Now()), "; "))
+	}
+}
