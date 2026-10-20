@@ -415,3 +415,53 @@ func TestNightOverride(t *testing.T) {
 		t.Fatalf("noon: %v", err)
 	}
 }
+
+// An escalation is about the question it was raised on: when the item leaves needs_you without the
+// user (the orchestrator answers it) and comes back with a new verify failure on a new head, the old
+// verify_flake escalation is not acted on for the new question.
+func TestNightNewQuestion(t *testing.T) {
+	s, clk := open(t)
+	ctx := context.Background()
+	nightMode(t, s, pipeline.NightAlways)
+	it := toNeedsYou(t, s, pipeline.VerifyFailed)
+	esc := escalateNight(t, s, clk, it.ID, pipeline.ClassVerifyFlake, "re-run verify", "")
+	if esc.Data["act_at"] == nil {
+		t.Fatalf("escalation %+v", esc.Data)
+	}
+	if _, err := s.OrchAnswer(ctx, orch, it.ID, pipeline.AnswerHarness, "re-run the harness", "harness error"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.Claim(ctx, runner, pipeline.ClaimRequest{Runner: runner, Agent: "builder"})
+	if err != nil || c == nil || c.Item.ID != it.ID {
+		t.Fatalf("build claim %+v %v", c, err)
+	}
+	if _, err := s.AddEvidence(ctx, runner, it.ID, "log", "v.log", strings.NewReader("FAIL\n")); err != nil {
+		t.Fatal(err)
+	}
+	const shaB = "89abcdef0123456789abcdef0123456789abcdef"
+	if _, err := s.Advance(ctx, runner, it.ID, pipeline.VerifyFailed, map[string]string{"reason": "scenario 40 failed", "head_sha": shaB}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if st := stage(t, s, it.ID); st != pipeline.NeedsYou {
+		t.Fatalf("not back with the user: %s", st)
+	}
+	clk.Advance(pipeline.NightGrace)
+	tick(t, s)
+	tick(t, s)
+	if st := stage(t, s, it.ID); st != pipeline.NeedsYou {
+		t.Fatalf("the old escalation acted on the new question: %s", st)
+	}
+	if n := len(nightEvents(t, s, it.ID, KindOrchNightAction)); n != 0 {
+		t.Fatalf("%d night actions", n)
+	}
+	for _, rb := range nightEvents(t, s, it.ID, "rebuild") {
+		t.Fatalf("rebuild %+v", rb)
+	}
+}
+
+// The night ticket cap is 10, the item's number.
+func TestNightTicketCapIsTen(t *testing.T) {
+	if pipeline.OrchAddsPerNight != 10 || pipeline.OrchAddsPerDay != 5 {
+		t.Fatalf("caps: %d a night, %d a day", pipeline.OrchAddsPerNight, pipeline.OrchAddsPerDay)
+	}
+}
