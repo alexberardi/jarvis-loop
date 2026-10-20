@@ -132,6 +132,9 @@ type Step struct {
 	OrchTurnsPerDay *int `json:"orchestrator_turns_per_day,omitempty"`
 	// Budgets are usage budgets per provider (docs/decisions/2026-10-18-usage-awareness.md).
 	Budgets map[string]pipeline.Budget `json:"budgets,omitempty"`
+	// PaceNormalUntil lifts claude's pacing (loop pace normal --until: a time, "reset" or "" to
+	// put it back on).
+	PaceNormalUntil *string `json:"pace_normal_until,omitempty"`
 	// Size is the size triage gives (default S).
 	Size string `json:"size,omitempty"`
 
@@ -906,6 +909,9 @@ func (p *player) step(st Step) error {
 		}
 		if st.Budgets != nil {
 			patch["budgets"] = st.Budgets
+		}
+		if st.PaceNormalUntil != nil {
+			patch["pace_normal_until"] = *st.PaceNormalUntil
 		}
 		return s.user.do("PUT", "/control", patch, nil)
 	case "unfreeze":

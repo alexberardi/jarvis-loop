@@ -58,6 +58,11 @@ nothing paces until a limit has been hit once. Set with `loop budget claude --pe
 `pipeline.PaceFor` turns the usage into a pace; `ChooseWorkPaced` applies it to the claim. Running
 agents are never touched.
 
+Since 2026-10-20 ([pacing never starves](2026-10-20-pacing-never-starves.md)): a slow pace with no
+P1, size S or triage item ready still takes the first item while fewer than max(1, agents/3) claude
+runs are live; `loop budget claude --warnings ignore` turns the CLI's warning off; and
+`loop pace normal --until <time|reset>` lifts pacing until a time or the next limit hit.
+
 - **Normal** below `pace_at` of both budgets.
 - **Slow** from `pace_at` (or when a run in the open window got the CLI's `allowed_warning`): claude's
   runs at once are the active-agents number minus one at `pace_at`, minus one more each further
