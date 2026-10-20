@@ -84,10 +84,12 @@ a forbidden message), with a readable failure. The fake Slack's injection and re
 
 ## Scenario format (as built)
 
-A scenario file is `{"name", "about", ["stages"], ["slots"], ["extra_repo"], "steps": [...], "expect": {...}}`; `stages` are
+A scenario file is `{"name", "about", ["stages"], ["slots"], ["extra_repo"], ["qwen"], "steps": [...], "expect": {...}}`; `stages` are
 the stages the runner claims (default triage, build and review, as a real runner); `slots` its agent
 slots (default 1; 2 let one run go on while another starts); `extra_repo` puts a
-fourth repo (`sandbox/extra`) on the fake GitHub that loopd and the runner learn of only from a reload. Items are named by an
+fourth repo (`sandbox/extra`) on the fake GitHub that loopd and the runner learn of only from a reload; `qwen` gives the runner
+a qwen block against a fake jarvisd (OpenCode is the fake claude called as `run`), so its builds with no builder set may go to
+qwen (docs/decisions/2026-10-19-qwen-routing.md); without it every build is claude's. Items are named by an
 alias (`"a"`) given when added; ids are the stack's own. An item the loop filed itself (a red
 main's P1) is named by its id: `"#2"`. Unknown fields are refused, so a typo
 cannot silently check nothing. Steps (`"do"`):
@@ -95,7 +97,8 @@ cannot silently check nothing. Steps (`"do"`):
 | Step | Does |
 | --- | --- |
 | `add` `item`, `title`, [`priority`], [`via`: `cli`\|`slack`], [`text`], [`after`: aliases] | add an item (CLI: `POST /items` with repo `demo`; Slack: `/loop add <title>`, or `/loop add <text>` as typed, repo and priority words included); `after` makes it depend on those items (CLI: `depends_on`; Slack: `… after #1, #2`) |
-| `triage` / `review` `item`, [`resources`] | claim the stage by hand (a `hand` runner token, as `loop claim`/`loop advance`) and finish it: reproduced with evidence (`resources`: what it needs from a runner, e.g. `emulator`) / approved for the PR head |
+| `triage` / `review` `item`, [`resources`], [`size`], [`change_kind`] | claim the stage by hand (a `hand` runner token, as `loop claim`/`loop advance`) and finish it: reproduced with evidence (`resources`: what it needs from a runner, e.g. `emulator`; `size` default S; `change_kind` code, docs or test) / approved for the PR head |
+| `builder` `item`, `builder` | the user's `loop builder`: qwen, claude or auto |
 | `resources` `item`, `resources` | the user's `loop resources`: what the item needs from a runner becomes `resources` (comma-separated, `none` for none) |
 | `hand_claim` `item`, [`capabilities`] | the hand runner claims the item's build, offering `capabilities` (comma-separated, e.g. `macos`), and keeps the lease |
 | `land` `item`, `outcome` (`hold`\|`merged`\|`back_to_build`), [`reason`] | the land stage by hand, with the PR's changed paths (a scenario whose `stages` include `land` lets the runner's land script do it instead) |

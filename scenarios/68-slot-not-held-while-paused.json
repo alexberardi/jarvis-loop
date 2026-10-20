@@ -2,6 +2,7 @@
   "name": "slot-not-held-while-paused",
   "about": "#199 with #192 and #210: with active_agents 2 and one slot taken, the last slot is held for the Mac's macos build. Land takes no agent slot, so the reviewed item lands anyway, but a P4 size S build on the dev box waits for the held slot. Then claude's 5h budget is reached and claude claims pause: the Mac's build is claude's, so nothing is held for it, and the dev box's runner takes the P4 build with qwen. The Mac claims nothing until the window is over, then takes its build (docs/decisions/2026-10-18-usage-awareness.md, 'A held slot').",
   "stages": ["build", "review", "land"],
+  "qwen": true,
   "steps": [
     {"do": "add", "item": "a", "title": "Fix the digest wording"},
     {"do": "triage", "item": "a"},

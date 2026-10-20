@@ -1,6 +1,7 @@
 {
   "name": "usage-limit",
   "about": "The agent hits the plan's session limit: the item goes back to its queue and claude claims pause until the reset the CLI reported (the active agents stay the user's 4); #loop-digest tells the approver with the reset time. While paused a P3 build of size S goes to qwen for that run (the sandbox runner has a qwen block), and the P2 waits; at the reset claims resume on their own and the P2 builds with claude (docs/decisions/2026-10-18-usage-awareness.md).",
+  "qwen": true,
   "steps": [
     {
       "do": "add",

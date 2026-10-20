@@ -78,6 +78,18 @@ func (g *rig) setBuilder(id int64, builder string) {
 	}
 }
 
+func (g *rig) setSession(id int64, session string) {
+	g.t.Helper()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(filepath.Dir(g.remote), "..", "loopd", "loop.db")+"?_pragma=busy_timeout(10000)")
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE items SET build_session = ? WHERE id = ?`, session, id); err != nil {
+		g.t.Fatal(err)
+	}
+}
+
 // bounce is a review agent bouncing the item's PR.
 func (g *rig) bounce(id int64, notes string) {
 	g.t.Helper()
@@ -105,7 +117,7 @@ func runArgv(t *testing.T, g *rig, id int64, n int) []string {
 }
 
 // A qwen item builds with OpenCode in the fence, through the runner's proxy (which alone adds the
-// app credentials), to the same result contract; a bounce resumes the same session.
+// app credentials), to the same result contract; a kept session is resumed.
 func TestQwenBuildRunsOpenCode(t *testing.T) {
 	g, up := qwenRig(t, fakeclaude.Good)
 	id := g.toBuild("Add a feature")
@@ -159,8 +171,18 @@ func TestQwenBuildRunsOpenCode(t *testing.T) {
 		})
 	}
 
-	// A bounce: the next build resumes the session, still with OpenCode.
+	// A review bounce of qwen's PR: claude builds the rest (docs/decisions/2026-10-19-qwen-routing.md).
 	g.bounce(id, "feature.txt:1: add a test")
+	d = g.item(id)
+	fell := g.events(id, "builder_fallback")
+	if d.Item.Builder != pipeline.BuilderClaude || d.Item.BuildSession != "" || len(fell) != 1 || fell[0].Data["reason"] != pipeline.FallbackReviewBounce {
+		t.Fatalf("after the review bounce: %+v %v", d.Item, fell)
+	}
+
+	// An item whose qwen session was kept (a first failed qwen build keeps it): the next build
+	// resumes it, still with OpenCode.
+	g.setBuilder(id, pipeline.BuilderQwen)
+	g.setSession(id, sess)
 	if !g.runOnce() {
 		t.Fatal("nothing claimed after the bounce")
 	}
@@ -175,13 +197,6 @@ func TestQwenBuildRunsOpenCode(t *testing.T) {
 		t.Fatalf("resumed run data %v", ev.Data)
 	}
 	g.userUntouched()
-
-	// The second strike: the builder is claude for the rest.
-	g.bounce(id, "still no test")
-	d = g.item(id)
-	if d.Item.Builder != pipeline.BuilderClaude || d.Item.BuildSession != "" || len(g.events(id, "builder_fallback")) != 1 {
-		t.Fatalf("after the second strike: %+v", d.Item)
-	}
 }
 
 // Jarvisd refusing the credentials: the qwen run fails with OpenCode's error, to the user.

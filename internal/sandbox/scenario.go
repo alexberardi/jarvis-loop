@@ -41,8 +41,11 @@ type Scenario struct {
 	// Capabilities are the runner's (default none): the overnight regression needs emulator, gpu
 	// and voice.
 	Capabilities []string `json:"capabilities,omitempty"`
-	Steps        []Step   `json:"steps"`
-	Final        *Expect  `json:"expect,omitempty"`
+	// Qwen: the runner has a qwen block (a fake jarvisd, OpenCode as the fake claude), so its P3
+	// size-S builds go to qwen; without it every build is claude's.
+	Qwen  bool    `json:"qwen,omitempty"`
+	Steps []Step  `json:"steps"`
+	Final *Expect `json:"expect,omitempty"`
 }
 
 // Step is one thing that happens. Do says what; the other fields are its arguments. An "expect"
@@ -134,8 +137,11 @@ type Step struct {
 	Budgets map[string]pipeline.Budget `json:"budgets,omitempty"`
 	// NightShift is the night shift's mode: off, on or auto (docs/decisions/2026-10-20-night-shift.md).
 	NightShift string `json:"night_shift,omitempty"`
-	// Size is the size triage gives (default S).
-	Size string `json:"size,omitempty"`
+	// Builder is a builder step's: qwen, claude or auto.
+	Builder string `json:"builder,omitempty"`
+	// Size is the size triage gives (default S), and ChangeKind its change_kind (default none).
+	Size       string `json:"size,omitempty"`
+	ChangeKind string `json:"change_kind,omitempty"`
 
 	// plans (docs/phases/07-planning.md), driven through the API: Plan is a plan's alias. plan
 	// starts one (title, priority, text); plan_say is the user's message; plan_turn is a fake
@@ -507,7 +513,11 @@ func (p *player) step(st Step) error {
 		if st.Size != "" {
 			size = st.Size
 		}
-		return s.hand.Advance(p.ctx, r.id, "reproduced", map[string]string{"area": "sandbox", "size": size, "risk": "normal", "resources": st.Resources}, nil)
+		fields := map[string]string{"area": "sandbox", "size": size, "risk": "normal", "resources": st.Resources}
+		if st.ChangeKind != "" {
+			fields["change_kind"] = st.ChangeKind
+		}
+		return s.hand.Advance(p.ctx, r.id, "reproduced", fields, nil)
 	case "hand_claim":
 		var caps, only []string
 		if st.Capabilities != "" {
@@ -892,6 +902,13 @@ func (p *player) step(st Step) error {
 			return err
 		}
 		return s.user.do("POST", fmt.Sprintf("/items/%d/resources", r.id), map[string]any{"resources": strings.Split(st.Resources, ",")}, nil)
+	case "builder":
+		// The user's loop builder: who builds the item (qwen, claude, auto).
+		r, err := p.ref(st.Item)
+		if err != nil {
+			return err
+		}
+		return s.user.do("POST", fmt.Sprintf("/items/%d/builder", r.id), map[string]any{"builder": st.Builder}, nil)
 	case "control":
 		patch := map[string]any{}
 		if st.ActiveAgents != nil {

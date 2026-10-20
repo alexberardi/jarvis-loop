@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -544,6 +546,7 @@ func goldenUsage() store.UsageReport {
 		},
 		Items: []store.UsageItem{{ItemID: 12, Title: "Rework the <hold> list", Burn: 6_400_000, CostUSD: 9.1, Runs: 4}},
 		Hits:  []pipeline.UsageHit{{At: now.Add(-26 * time.Hour), Provider: "claude", Window: pipeline.Window5h, Burn: 10_000_000, ResetAt: now.Add(-24 * time.Hour)}},
+		Qwen:  pipeline.QwenWeek{Builds: 3, ReplacedUSD: 6.75, Reviewed: 3, FirstApproved: 2, Fallbacks: 1},
 	}
 }
 
@@ -565,6 +568,7 @@ func TestBoardUsageGolden(t *testing.T) {
 		"Week: 41.0M (no limit known yet) · rolling 7 days",
 		"claude 9.1M burn, $12.50, 14 runs · qwen 1.2M tokens, 3 runs", "claude 31.9M burn, $40.25, 1 run</li>",
 		"#12 Rework the &lt;hold&gt; list", "5h limit at 10.0M burn",
+		"<li>qwen builds (7 days): 3, about $6.75 of claude builds replaced (estimate: same-size claude builds) · first review approved 2 of 3 (66%) · 1 fell back to claude</li>",
 		`<details class="orch usage" open>`,
 	} {
 		if !strings.Contains(out, want) {
@@ -691,5 +695,43 @@ func TestEveryStageHasALane(t *testing.T) {
 				t.Errorf("stage %s (display %q) appears in no lane", s, d)
 			}
 		}
+	}
+}
+
+// The item page's builder form (loop builder): for the user's token, before a build starts.
+func TestBoardItemBuilder(t *testing.T) {
+	srv, st := boardSetup(t)
+	ctx := context.Background()
+	user := &http.Cookie{Name: "loop_board", Value: userTok}
+	board := &http.Cookie{Name: "loop_board", Value: boardTok}
+	it, err := st.AddItem(ctx, "user:alex", store.NewItem{Title: "a", Repo: "jarvis-server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := fmt.Sprintf("%s/board/items/%d", srv.URL, it.ID)
+	form := fmt.Sprintf(`<form method="post" action="/board/items/%d/builder">`, it.ID)
+	if _, page := get(t, path, board); strings.Contains(page, form) {
+		t.Fatal("the board token got the builder form")
+	}
+	resp, page := get(t, path, user)
+	if !strings.Contains(page, form) || !strings.Contains(page, `<option value="auto" selected>auto</option>`) ||
+		!strings.Contains(resp.Header.Get("Content-Security-Policy"), "form-action 'self'") {
+		t.Fatalf("no builder form for the user:\n%s", page)
+	}
+	if resp, _ := postForm(t, path+"/builder", board, url.Values{"builder": {"qwen"}}); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("board token post: %d", resp.StatusCode)
+	}
+	if resp, body := postForm(t, path+"/builder", user, url.Values{"builder": {"gpt"}}); resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "qwen, claude or auto") {
+		t.Fatalf("bad builder: %d %s", resp.StatusCode, body)
+	}
+	if resp, _ := postForm(t, path+"/builder", user, url.Values{"builder": {"qwen"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("user post: %d", resp.StatusCode)
+	}
+	d, _ := st.GetItem(ctx, it.ID)
+	if d.Item.Builder != "qwen" || d.Events[len(d.Events)-1].Actor != "user:alex" {
+		t.Fatalf("item builder %q, last event %+v", d.Item.Builder, d.Events[len(d.Events)-1])
+	}
+	if _, page := get(t, path, user); !strings.Contains(page, "<dt>Builder</dt><dd>qwen") || !strings.Contains(page, `<option value="qwen" selected>qwen</option>`) {
+		t.Fatalf("page after the post:\n%s", page)
 	}
 }

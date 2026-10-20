@@ -652,7 +652,10 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		}
 		text = fmt.Sprintf("Claimed for %s.", e.From)
 		if str(e.Data, "routed") == pipeline.BuilderQwen {
-			text = fmt.Sprintf("Claimed for %s, with qwen this run (%s).", e.From, f("pace", 200))
+			text = fmt.Sprintf("Claimed for %s, with qwen this run.", e.From)
+			if str(e.Data, "pace") != "" {
+				text = fmt.Sprintf("Claimed for %s, with qwen this run (%s).", e.From, f("pace", 200))
+			}
 		}
 	case "evidence":
 		// Never the contents or the file name: a count and a link-free pointer.
@@ -740,11 +743,22 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		// The rule and the tool only: the refused command or path can hold anything.
 		text = fmt.Sprintf("Guard refused a %s call (%s); details on loopd (`loop show %d`).", Escape(str(e.Data, "tool")), Escape(str(e.Data, "rule")), id)
 	case "builder_fallback":
-		if e.Data["this_run_only"] != nil {
+		switch {
+		case e.Data["this_run_only"] != nil:
 			text = "No qwen builder on this runner: this build runs with claude."
-		} else {
-			text = "Builder: qwen → claude for the rest of this item (second strike)."
+		case str(e.Data, "reason") == pipeline.FallbackReviewBounce:
+			text = "Builder: qwen → claude for the rest of this item (review bounced qwen's PR)."
+		case str(e.Data, "reason") == pipeline.FallbackFailedTwice:
+			text = "Builder: qwen → claude for the rest of this item (qwen's build failed twice)."
+		default:
+			text = "Builder: qwen → claude for the rest of this item."
 		}
+	case pipeline.KindBuilderSet:
+		to := str(e.Data, "to")
+		if to == "" {
+			to = "auto (routing decides)"
+		}
+		text = fmt.Sprintf("Builder set to %s by %s.", Escape(to), by)
 	case store.KindSecondOpinion:
 		text = secondOpinionLine(e.Data)
 	case "low_cache_hit":

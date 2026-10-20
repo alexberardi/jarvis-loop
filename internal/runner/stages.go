@@ -555,6 +555,12 @@ func (r *Runner) reportTriage(ctx context.Context, ru *run, out outcome, raw []b
 	if v.Outcome == "reproduced" {
 		fields["area"], fields["size"], fields["risk"] = v.Area, v.Size, v.Risk
 		fields["resources"] = strings.Join(v.Resources, ",")
+		if v.ChangeKind != "" {
+			fields["change_kind"] = v.ChangeKind
+		}
+		if v.Builder != "" {
+			fields["builder"] = v.Builder
+		}
 		if v.Repo != "" {
 			fields["repo"] = v.Repo
 		}

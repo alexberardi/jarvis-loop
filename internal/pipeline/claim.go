@@ -35,14 +35,14 @@ type Control struct {
 
 // LimitKeys are the resources and stages that can carry a limit. Build has none: it is bounded
 // only by the active-agents number.
-var LimitKeys = []string{"gpu", "voice", "emulator", "macos", "triage", "review", "land"}
+var LimitKeys = []string{"gpu", "voice", "emulator", "macos", "triage", "review", "land", LimitQwen}
 
 // DefaultControl is the control row of a new install.
 func DefaultControl() Control {
 	return Control{
 		ActiveAgents:  4,
 		MaxRunMinutes: 45,
-		Limits:        map[string]int{"gpu": 2, "voice": 1, "emulator": 1, "triage": 1, "review": 2, "land": 3},
+		Limits:        map[string]int{"gpu": 2, "voice": 1, "emulator": 1, "triage": 1, "review": 2, "land": 3, LimitQwen: 1},
 		HoldRules:     DefaultHoldRules(),
 		Budgets:       DefaultBudgets(),
 
@@ -125,6 +125,8 @@ type LiveLease struct {
 	Claude bool
 	// Holds: the lease holds every claim but land's (a running overnight regression, HoldsClaims).
 	Holds bool
+	// Qwen: a qwen build, which the qwen limit counts.
+	Qwen bool
 }
 
 // ClaimRequest is a runner asking for work.
@@ -150,7 +152,7 @@ type ClaimRequest struct {
 	// loopd records it for the flow panel's idle capacity; the claim rules do not use it.
 	Slots int
 	// Builders are the other builders the runner can run (BuilderQwen when it has a qwen block):
-	// a paced claim may route a P3–P5 build to one (usage.go).
+	// a build with no builder set may go to one (autoRoutable).
 	Builders []string `json:"builders,omitempty"`
 }
 
@@ -184,7 +186,7 @@ type Work struct {
 	Turn *TurnCandidate
 	Orch *OrchCandidate
 	Reg  *RegCandidate
-	// RouteQwen: build the item with qwen this run (a paced claim, ChooseWorkPaced).
+	// RouteQwen: build the item with qwen this run (autoRoutable, ChooseWorkPaced).
 	RouteQwen bool
 	// Held, with nothing to claim, is why: the slots left are held (SlotHolds).
 	Held string
@@ -205,9 +207,10 @@ func ChooseWork(c Control, items []Item, deps map[int64]Stage, live []LiveLease,
 
 // ChooseWorkPaced is ChooseWork under a claude pace (PaceFor). Slow: claude's runs at once are at
 // most pace.Agents (live counts the Claude leases), and claude takes only P1 and size S items,
-// triage (short, and an item has no size before it) and P1 plan turns; paused: claude takes nothing. Either way land, qwen builds and regression runs (no agent) go on, and a P3–P5
-// build of size S or M with no builder set goes to qwen this run when the runner has it
-// (Work.RouteQwen). The active-agents number caps everything as before; a frozen repo's fix and
+// triage (short, and an item has no size before it) and P1 plan turns; paused: claude takes nothing. Either way land, qwen builds and regression runs (no agent) go on.
+// At any pace a build with no builder set that qwen may take (autoRoutable) goes to qwen this run
+// when the runner has it and the qwen limit has room (Work.RouteQwen); with no room it builds with
+// claude if claude's pace lets it, and waits otherwise. The active-agents number caps everything as before; a frozen repo's fix and
 // the work of a held slot are paced like any item. While an overnight regression runs
 // (HoldsClaims), only land is claimed.
 func ChooseWorkPaced(c Control, pace Pace, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orch *OrchCandidate, reg *RegCandidate, holds []SlotHold, req ClaimRequest, frozen Frozen) (Work, bool) {
@@ -215,7 +218,7 @@ func ChooseWorkPaced(c Control, pace Pace, items []Item, deps map[int64]Stage, l
 		// The overnight run has the emulator, the sandbox ports and the CPU: only land goes on.
 		return chooseLand(c, items, deps, live, req, frozen)
 	}
-	p := newPacing(pace, live, req.Builders)
+	p := newPacing(c, pace, live, req.Builders)
 	if req.wants(WorkItem) {
 		if it, ok := chooseFix(c, items, deps, live, req, frozen, p.eligible); ok {
 			return Work{Item: &it, RouteQwen: p.route(it)}, true
@@ -262,7 +265,8 @@ type pacing struct {
 }
 
 // newPacing is the pace of a claim from a runner with builders, live being the leases running.
-func newPacing(pace Pace, live []LiveLease, builders []string) pacing {
+func newPacing(c Control, pace Pace, live []LiveLease, builders []string) pacing {
+	_, inUse := usage(live)
 	claudeLive := 0
 	for _, l := range live {
 		if l.Claude {
@@ -271,7 +275,7 @@ func newPacing(pace Pace, live []LiveLease, builders []string) pacing {
 	}
 	p := pacing{pace: pace, claudeOK: pace.Level == PaceNormal || pace.Level == PaceSlow && claudeLive < pace.Agents}
 	p.route = func(it Item) bool {
-		return pace.Level != PaceNormal && routable(it) && slices.Contains(builders, BuilderQwen)
+		return autoRoutable(it) && slices.Contains(builders, BuilderQwen) && qwenFree(c, inUse)
 	}
 	p.eligible = func(it Item) bool {
 		if !UsesClaude(it) || p.route(it) {
@@ -343,13 +347,6 @@ func chooseWork(c Control, p pacing, items []Item, deps map[int64]Stage, live []
 // unless the item's builder is qwen.
 func UsesClaude(it Item) bool {
 	return it.Stage != Land && !(it.Stage == Build && it.Builder == BuilderQwen)
-}
-
-// routable: a build a paced claim may send to qwen: P3–P5, size S or M (it fits Qwen's context and
-// pace), and no builder set (a plan's "builder: claude" or a qwen item's fallback to claude stays).
-func routable(it Item) bool {
-	return it.Stage == Build && it.Builder == "" && PriorityRank(it.Priority) >= 3 && PriorityRank(it.Priority) <= 5 &&
-		(it.Size == "S" || it.Size == "M")
 }
 
 func turnBefore(a, b TurnCandidate) bool {

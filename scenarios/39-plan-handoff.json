@@ -1,6 +1,7 @@
 {
   "name": "plan-handoff",
   "about": "Plans, the hand-off half of scenario 2 (docs/phases/07-planning.md), through the API: the brief and a blueprint with 3 pieces (2 and 3 depend on 1) are approved; in the same transaction loopd files 3 items (source plan, P2, plan_id, plan_piece, depends_on mapped to the new ids) and the plan goes to split. The items are posted to #loop as usual, 2 and 3 'waiting on #1'. The board shows the plan in Planning (your turn at brief, with the brief rendered on its page; split after the hand-off, its page listing the blueprint and the items) and a 'plan P1' badge on each item's card, the plan's title as its feature ('feature: pantry-list'), and the builder its piece named ('builder: qwen' on piece 1's, claude, the default, on the others). Only piece 1 is claimable: the runner claims it, it asks a question, and then the runner has nothing to do.",
+  "qwen": true,
   "steps": [
     {"do": "plan", "plan": "p", "title": "Pantry list", "priority": "P2", "text": "a pantry list"},
     {"do": "plan_turn", "plan": "p", "text": "Brief ready.", "brief": "# Pantry list\n\nA list of what is in the pantry.", "ready": true},
