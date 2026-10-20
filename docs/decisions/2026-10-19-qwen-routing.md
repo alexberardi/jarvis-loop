@@ -41,8 +41,9 @@ item's count of failed qwen builds over; a builder other than qwen drops the qwe
 an existing control row). It counts the live leases whose builder is qwen, across all runners.
 
 - An item whose builder is qwen waits while qwen is busy (the flow panel says `limit qwen:1`).
-- A build qwen would take with no builder set **builds with claude** when claude's pace is normal,
-  and waits when claude is paced (it is then one of the items claude may not take). Decided this
+- A build qwen would take with no builder set **builds with claude** when claude's pace is normal.
+  When claude is paced, a size-S one still builds with claude (claude may take size S then), and a
+  size-M one waits (it is then one of the items claude may not take). Decided this
   way so a single slow qwen build does not hold back a queue of small builds. The saving is still
   most of what qwen can do: at about 23 minutes a build, one at a time, qwen does at most about 2.5
   builds an hour.

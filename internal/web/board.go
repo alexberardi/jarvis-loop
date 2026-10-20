@@ -68,8 +68,9 @@ func NewBoard(st *store.Store, tokens *api.Tokens, log *slog.Logger, cfg BoardCo
 	mux.Handle("GET /board/plans/{id}/{kind}/{v}", p.auth(p.planDoc))
 	mux.Handle("GET /board/regressions/{id}", p.auth(p.regression))
 	mux.Handle("GET /board/regressions/{id}/files/{n}", p.auth(p.regressionFile))
-	// The board's one write: the user's "Run regression" button. The cookie is SameSite=Strict,
-	// and the post is guarded against cross-origin requests too.
+	// The board's writes: an item's builder (before build starts) and the user's "Run regression"
+	// buttons. The cookie is SameSite=Strict, and each post is guarded against cross-origin
+	// requests too.
 	mux.Handle("POST /board/items/{id}/builder", http.NewCrossOriginProtection().Handler(p.auth(p.setBuilder)))
 	mux.Handle("POST /board/regressions", http.NewCrossOriginProtection().Handler(p.auth(p.runRegression)))
 	mux.Handle("POST /board/regressions/tonight", http.NewCrossOriginProtection().Handler(p.auth(p.tonight)))

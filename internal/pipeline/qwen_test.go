@@ -159,7 +159,9 @@ func TestQwenFallback(t *testing.T) {
 		t.Fatalf("setup failure counted: %+v", tr.Item)
 	}
 	// Nor a trusted-file refusal: the change is the agent's, the refusal is verify's rule.
-	tr, _ = ApplyAdvance(q, Advance{Outcome: Failed, Fields: qwenRun(map[string]string{"error": "trusted", FieldTrustSHA: sha1})}, t0)
+	tr, err = ApplyAdvance(q, Advance{Outcome: Failed, Fields: qwenRun(map[string]string{"error": "trusted",
+		FieldTrustSHA: sha1, FieldTrustPaths: "tools/pipeline"})}, t0)
+	wantCode(t, err, "")
 	if tr.Item.QwenFailures != 0 {
 		t.Fatalf("trust refusal counted: %+v", tr.Item)
 	}

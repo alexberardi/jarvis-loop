@@ -108,7 +108,7 @@ A runner is a small daemon on a machine that can do the work. It polls `loopd` c
 | `gpu` (the shared live model) | 2 | the installed engine has one slot; the house comes first |
 | `voice` (CPU whisper) | 1 | about 2.4 s of CPU per utterance at 8 threads |
 | `emulator` | 1 | a headless emulator plus a release build is heavy |
-| `qwen` (qwen builds, across runners) | 1 | prod's background label, which the household's background jobs share; a build with no builder set that finds it busy builds with claude, or waits under a claude pace ([2026-10-19](decisions/2026-10-19-qwen-routing.md)) |
+| `qwen` (qwen builds, across runners) | 1 | prod's background label, which the household's background jobs share; a build with no builder set that finds it busy builds with claude, or, if size M, waits under a claude pace ([2026-10-19](decisions/2026-10-19-qwen-routing.md)) |
 
 A runner that takes only some resources (a Mac's `only_resources: [macos]`) gets the last free agent slot held for it while it has polled lately and one of its items can run now; otherwise the last slot goes to whoever asks ([2026-10-18](decisions/2026-10-18-slot-hold.md)).
 
