@@ -54,7 +54,16 @@ type Budget struct {
 	PerWeekPct int   `json:"per_week_pct,omitempty"`
 	// PaceAt is the percent of a budget at which pacing starts (0: DefaultPaceAt).
 	PaceAt int `json:"pace_at,omitempty"`
+	// Warnings is what the CLI's allowed_warning does: WarningsPace ("" too) slows claims for the
+	// window, WarningsIgnore leaves the pace to the budget and the limit hits.
+	Warnings string `json:"warnings,omitempty"`
 }
+
+// The Budget.Warnings values.
+const (
+	WarningsPace   = "pace"
+	WarningsIgnore = "ignore"
+)
 
 // DefaultBudgets: claude's budget is what got it limited last time, in both windows.
 func DefaultBudgets() map[string]Budget {
@@ -74,6 +83,9 @@ func (b Budget) Validate() error {
 	}
 	if b.PaceAt < 0 || b.PaceAt > 99 {
 		return errf(CodeInvalidField, "pace_at must be 1 to 99 (0: %d)", DefaultPaceAt)
+	}
+	if b.Warnings != "" && b.Warnings != WarningsPace && b.Warnings != WarningsIgnore {
+		return errf(CodeInvalidField, "warnings must be %s or %s", WarningsPace, WarningsIgnore)
 	}
 	return nil
 }
@@ -230,6 +242,9 @@ type UsageState struct {
 	PauseWindow string    `json:"pause_window,omitempty"`
 	// Warning: a run in the open window got the CLI's allowed_warning.
 	Warning bool `json:"warning,omitempty"`
+	// LastHit is when the latest limit hit came in (zero: none); it ends a lift of the pace
+	// (Control.PaceLifted).
+	LastHit time.Time `json:"last_hit"`
 }
 
 // ComputeUsage works out a provider's UsageState from its runs (oldest first; the store passes the
@@ -245,6 +260,9 @@ func ComputeUsage(provider string, b Budget, runs []UsageRun, hits []UsageHit, n
 		h := &hits[i]
 		if h.Provider != provider {
 			continue
+		}
+		if h.At.After(st.LastHit) {
+			st.LastHit = h.At
 		}
 		if h.Window == WindowWeek {
 			if lastWeek == nil || h.At.After(lastWeek.At) {
@@ -343,11 +361,15 @@ type Pace struct {
 	Percent int    `json:"percent"`
 	// Hit: the pause is a limit the CLI reported, not the budget.
 	Hit bool `json:"hit,omitempty"`
+	// Lifted: the user lifted pacing (loop pace normal), until Until (zero: the next limit hit).
+	Lifted bool `json:"lifted,omitempty"`
 }
 
-// PaceFor decides the pace: paused while a limit hit's reset is ahead or a window is at its budget;
-// slow from pace_at (default 85%) of a budget, or when the CLI warned, with one agent fewer at once
-// and one fewer again every further step to the budget (never below one); normal otherwise.
+// PaceFor decides the pace: paused while a limit hit's reset is ahead; normal while the user lifted
+// pacing (Control.PaceLifted); paused while a window is at its budget; slow from pace_at (default
+// 85%) of a budget, or when the CLI warned (unless the budget ignores its warnings), with one agent
+// fewer at once and one fewer again every further step to the budget (never below one); normal
+// otherwise.
 func PaceFor(c Control, b Budget, st UsageState) Pace {
 	p := Pace{Level: PaceNormal, Agents: c.ActiveAgents}
 	pct5, pctW := percentOf(st.Burn5h, st.Limit5h), percentOf(st.BurnWeek, st.LimitWeek)
@@ -357,6 +379,10 @@ func PaceFor(c Control, b Budget, st UsageState) Pace {
 	}
 	if st.PausedUntil.After(st.Now) {
 		p.Level, p.Agents, p.Until, p.Hit, p.Window = PacePaused, 0, st.PausedUntil, true, st.PauseWindow
+		return p
+	}
+	if c.PaceLifted(st) {
+		p.Lifted, p.Until = true, c.PaceNormalUntil
 		return p
 	}
 	if p.Percent >= 100 {
@@ -369,7 +395,7 @@ func PaceFor(c Control, b Budget, st UsageState) Pace {
 		return p
 	}
 	at := b.paceAt()
-	if p.Percent < at && !st.Warning {
+	if p.Percent < at && (!st.Warning || b.Warnings == WarningsIgnore) {
 		return p
 	}
 	n := c.ActiveAgents
@@ -431,6 +457,12 @@ func (p Pace) Describe(loc *time.Location) string {
 		}
 		return fmt.Sprintf("pacing: %s is at %d%% of its budget; %d at once", window, p.Percent, p.Agents)
 	}
+	if p.Lifted {
+		if p.Until.IsZero() {
+			return "normal (pacing lifted until the next limit hit)"
+		}
+		return "normal (pacing lifted until " + p.Until.In(loc).Format("Mon 15:04") + ")"
+	}
 	return "normal"
 }
 
@@ -475,5 +507,9 @@ func DescribeBudget(b Budget) string {
 		}
 		return "none"
 	}
-	return fmt.Sprintf("per 5h %s · per week %s · pacing from %d%%", one(b.Per5h, b.Per5hPct), one(b.PerWeek, b.PerWeekPct), b.paceAt())
+	s := fmt.Sprintf("per 5h %s · per week %s · pacing from %d%%", one(b.Per5h, b.Per5hPct), one(b.PerWeek, b.PerWeekPct), b.paceAt())
+	if b.Warnings == WarningsIgnore {
+		s += " · CLI warnings ignored"
+	}
+	return s
 }

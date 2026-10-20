@@ -124,12 +124,14 @@ func TestWaitReasonPaced(t *testing.T) {
 		builders []string
 		want     string
 	}{
-		{"a P3 size-M build under a slow pace", slow, sized(waiting(1, Build, "P3", 0), "M"), nil, nil, nil, WaitPaced},
+		{"a P3 size-M build under a slow pace", slow, sized(waiting(1, Build, "P3", 0), "M"), twoClaude[:1], nil, nil, WaitPaced},
+		// #316: with no claude run live, the slow pace's fallback takes it.
+		{"a P3 size-M build under a slow pace, nothing live", slow, sized(waiting(1, Build, "P3", 0), "M"), nil, nil, nil, WaitReady},
 		{"the same build with a qwen runner", slow, sized(waiting(1, Build, "P3", 0), "M"), nil, nil, qwen, WaitReady},
 		{"a P1 build under a slow pace", slow, sized(waiting(1, Build, "P1", 0), "L"), nil, nil, nil, WaitReady},
 		{"a size-S review under a slow pace", slow, sized(waiting(1, Review, "P3", 0), "S"), nil, nil, nil, WaitReady},
 		{"triage under a slow pace", slow, waiting(1, Triage, "P3", 0), nil, nil, nil, WaitReady},
-		{"a size-L P3 build is not routed", slow, sized(waiting(1, Build, "P3", 0), "L"), nil, nil, qwen, WaitPaced},
+		{"a size-L P3 build is not routed", slow, sized(waiting(1, Build, "P3", 0), "L"), twoClaude[:1], nil, qwen, WaitPaced},
 		{"a P1 build once the slow pace's runs are taken", slow, sized(waiting(1, Build, "P1", 0), "S"), twoClaude, nil, nil, WaitPaced},
 		{"a P1 build under a pause", paused, sized(waiting(1, Build, "P1", 0), "S"), nil, nil, nil, WaitPaused},
 		{"a qwen build under a pause", paused, sized(Item{ID: 1, Stage: Build, Priority: "P3", Builder: BuilderQwen, CreatedAt: t0}, "M"), nil, nil, nil, WaitReady},
