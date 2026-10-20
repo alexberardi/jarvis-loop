@@ -367,26 +367,48 @@ func (g Git) Facts(ctx context.Context, mirror, wt, base, branch string) (GitFac
 	return f, nil
 }
 
+// SavedWIP is what SaveWIP did: Pushed, whether something was pushed; DroppedMerge, whether it
+// aborted a merge with unresolved conflicts first (the next build's PreMerge starts it again).
+type SavedWIP struct {
+	Pushed, DroppedMerge bool
+}
+
 // SaveWIP commits whatever is in the worktree as WIP and pushes it to the item's branch only
-// (never forced). It reports whether something was pushed.
-func (g Git) SaveWIP(ctx context.Context, wt, branch, base, msg string) (bool, error) {
+// (never forced). A merge still in progress with unresolved conflicts (the runner's PreMerge the
+// agent did not finish) is aborted first, so no conflict markers are committed; one whose
+// conflicts are all resolved is committed as the merge.
+func (g Git) SaveWIP(ctx context.Context, wt, branch, base, msg string) (SavedWIP, error) {
+	var s SavedWIP
+	if g.hasRef(ctx, wt, "MERGE_HEAD") {
+		u, err := g.run(ctx, wt, "diff", "--name-only", "--diff-filter=U")
+		if err != nil {
+			return s, err
+		}
+		if u != "" {
+			if _, err := g.run(ctx, wt, "merge", "--abort"); err != nil {
+				return s, err
+			}
+			s.DroppedMerge = true
+		}
+	}
 	if _, err := g.run(ctx, wt, "add", "-A"); err != nil { // .loop/ is excluded in the mirror
-		return false, err
+		return s, err
 	}
 	if _, err := g.run(ctx, wt, "diff", "--cached", "--quiet"); err != nil {
 		if _, err := g.run(ctx, wt, "-c", "user.name=jarvis-loop", "-c", "user.email=jarvis-loop@localhost",
 			"commit", "-q", "--no-verify", "-m", msg); err != nil {
-			return false, err
+			return s, err
 		}
 	}
 	n, err := g.run(ctx, wt, "rev-list", "--count", "refs/remotes/origin/"+base+"..HEAD")
 	if err != nil || n == "0" {
-		return false, err
+		return s, err
 	}
 	if _, err := g.run(ctx, wt, "push", "-q", "origin", "HEAD:refs/heads/"+branch); err != nil {
-		return false, err
+		return s, err
 	}
-	return true, nil
+	s.Pushed = true
+	return s, nil
 }
 
 // PushBranch pushes the item's branch from the runner's mirror to its remote, with the runner's

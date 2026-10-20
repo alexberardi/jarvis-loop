@@ -372,6 +372,8 @@ type run struct {
 	prevSession *buildSession
 	resumedFrom *buildSession
 	startHead   string
+	// preMerge is the evidence line of the runner's merge of the base before the build ("": none).
+	preMerge string
 
 	reported int // refusals already sent
 	refusals int
@@ -772,6 +774,14 @@ func (r *Runner) prepareBuild(ctx context.Context, ru *run, info *RunInfo) error
 	}
 	ru.repoDir = ru.wt
 	info.Resumed = ahead
+	// The sandbox keeps .claude/ read-only for the agent, so a merge of a base that changed it
+	// is the runner's (premerge.go); before startHead, so a resume and the result see the merge.
+	if pm, err := r.Git.PreMerge(ctx, ru.wt, ru.repo.Base, ru.branch); err != nil {
+		log.Warn("could not merge the base before the build; the agent merges it", "err", err)
+	} else if pm.SHA != "" {
+		info.PreMerge, ru.preMerge = &pm, pm.Evidence(ru.repo.Base)
+		log.Info(ru.preMerge, "branch", ru.branch)
+	}
 	if ru.claudeBuild() {
 		ru.startHead, _ = r.Git.Head(ctx, ru.wt)
 	}
@@ -1359,6 +1369,9 @@ func (r *Runner) metrics(ru *run, out outcome, f map[string]string) map[string]s
 		f["qwen_tokens_input"] = strconv.FormatInt(out.stats.qwenInput+ru.first.qwenInput, 10)
 		f["qwen_tokens_output"] = strconv.FormatInt(out.stats.qwenOutput+ru.first.qwenOutput, 10)
 	}
+	if ru.preMerge != "" {
+		f["pre_merge"] = ru.preMerge
+	}
 	if out.stats.initMode != "" {
 		f["permission_mode"] = out.stats.initMode
 	}
@@ -1437,12 +1450,15 @@ func totalResult(ru *run, out outcome) *resultEvent {
 }
 
 func (r *Runner) saveWIP(ctx context.Context, ru *run, why string, log *slog.Logger) {
-	pushed, err := r.Git.SaveWIP(ctx, ru.wt, ru.branch, ru.repo.Base, fmt.Sprintf("WIP: loop item #%d (%s)", ru.item.ID, why))
+	s, err := r.Git.SaveWIP(ctx, ru.wt, ru.branch, ru.repo.Base, fmt.Sprintf("WIP: loop item #%d (%s)", ru.item.ID, why))
+	if s.DroppedMerge {
+		log.Warn("WIP: dropped the unresolved merge of the base (the next build's pre-merge redoes it)", "branch", ru.branch)
+	}
 	if err != nil {
 		log.Error("WIP push", "err", err)
 		return
 	}
-	log.Info("WIP saved", "pushed", pushed, "branch", ru.branch)
+	log.Info("WIP saved", "pushed", s.Pushed, "branch", ru.branch)
 }
 
 // report turns how the run ended into loopd calls.
@@ -1727,6 +1743,7 @@ func (r *Runner) runStats(ru *run, out outcome) RunStats {
 		st = RunStats{Turns: res.NumTurns, CacheHit: CacheHitRatio(u.Input, u.CacheCreation, u.CacheRead), Seconds: st.Seconds,
 			CostUSD: res.CostUSD, HasResult: true}
 	}
+	st.PreMerge = ru.preMerge
 	return st
 }
 

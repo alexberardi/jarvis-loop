@@ -125,6 +125,8 @@ type RunInfo struct {
 	PlanID    int64
 	PlanPiece int
 	PlanDocs  []string
+	// PreMerge is the runner's merge of the base into the branch before the build (nil: none).
+	PreMerge *PreMerge
 	// ContextErrs say what the runner could not fetch (the agent is told; the run goes on).
 	ContextErrs []string
 	// CILog is the failing CI log the runner fetched (triage of a red main's P1; build after land
@@ -297,6 +299,17 @@ func Brief(stage string, it Item, r RunInfo) string {
 			fmt.Fprintf(&b, "- Sent back to build by the user instead of an answer to its question. Do what `%s` asks.\n", r.HeldNotes)
 		case r.HeldNotes != "":
 			fmt.Fprintf(&b, "- Sent back from held; PR #%d is open on this branch. Do what `%s` asks (the user's note, or a conflict with `%s`) on the same branch; the runner updates that PR, and the user approves the new head.\n", it.PR, r.HeldNotes, r.Base)
+		}
+		if pm := r.PreMerge; pm != nil {
+			taken := ""
+			if len(pm.Taken) > 0 {
+				taken = fmt.Sprintf(", and took `%s`'s side of the conflicts under `.claude/` (%s)", r.Base, "`"+strings.Join(pm.Taken, "`, `")+"`")
+			}
+			if pm.Committed {
+				fmt.Fprintf(&b, "- **The runner merged `origin/%s`** (at `%s`) into this branch before you started (the sandbox keeps `.claude/` read-only for you, so your own merge would fail)%s. Do not merge `%s` again.\n", r.Base, short7(pm.SHA), taken, r.Base)
+			} else {
+				fmt.Fprintf(&b, "- **A merge of `origin/%s` (at `%s`) is in progress**: the runner started it (the sandbox keeps `.claude/` read-only for you)%s. Resolve only these conflicts: %s; `git add` them and `git commit --no-edit`. Do not abort the merge or start another, and leave `.claude/` as it is.\n", r.Base, short7(pm.SHA), taken, "`"+strings.Join(pm.Conflicts, "`, `")+"`")
+			}
 		}
 		if it.Trust != nil && it.Trust.allows(it.Trust.HeadSHA) {
 			// Only when the runner kept no result for the OK'd head (trusted.go): else no agent runs.
