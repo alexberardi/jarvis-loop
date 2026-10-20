@@ -53,6 +53,9 @@ type VerifyResult struct {
 	// Masked is the verify_mask path a failed step could not read ("" for none): the fence hid it,
 	// so the failure is the runner's config, not the change.
 	Masked string
+	// Retried is the first try's status when the step failed on its environment and ran again
+	// after a purge ("" when it ran once).
+	Retried string
 }
 
 // Passed reports whether the step passed (a skipped step passes).
@@ -62,6 +65,11 @@ func (v VerifyResult) Passed() bool {
 
 // Status is the step's result in a few words.
 func (v VerifyResult) Status() string {
+	if v.Retried != "" {
+		w := v
+		w.Retried = ""
+		return w.Status() + " on the second try (the first " + v.Retried + ")"
+	}
 	switch {
 	case v.Skipped != "":
 		return "skipped (" + v.Skipped + ")"
@@ -273,6 +281,21 @@ func (r *Runner) runVerify(ctx context.Context, ru *run, head string, changed []
 			}
 		}
 		res, err := r.verifyStep(ctx, ru, i+1, st, head, limit)
+		if err == nil && ru.repo.Harness != nil && verifyEnvFailure(res) {
+			// The sandbox did not come up (a home left over, a seeding error): purge and try once
+			// more before blaming the change (#327).
+			r.Log.Warn("verify failed on its environment; purging and retrying once", "item", ru.item.ID, "step", st.Name, "status", res.Status())
+			first := res.Status()
+			if !deadline.IsZero() {
+				if limit = deadline.Sub(r.Clock.Now()); limit <= 0 {
+					return out, fmt.Errorf("the run's time cap left no time to retry verify %q", st.Name)
+				}
+				capped = limit < st.Timeout()
+				limit = min(limit, st.Timeout())
+			}
+			res, err = r.verifyStep(ctx, ru, i+1, st, head, limit)
+			res.Retried = first
+		}
 		if err != nil {
 			return out, err
 		}
@@ -285,6 +308,81 @@ func (r *Runner) runVerify(ctx context.Context, ru *run, head string, changed []
 		}
 	}
 	return out, nil
+}
+
+// verifyEnvFailure tells whether a failed step never got to test the change: exit 3 (the
+// convention for "the harness did not come up", as in PipelineCommand) or envFailure.
+func verifyEnvFailure(v VerifyResult) bool {
+	return v.Skipped == "" && v.Err == "" && !v.TimedOut && v.Masked == "" &&
+		(v.ExitCode == 3 || v.ExitCode != 0 && envFailure(v.ExitCode, v.Log))
+}
+
+// verifyEnv is a verify step's (and its purge's) environment, with sandbox as LOOP_SANDBOX.
+func (r *Runner) verifyEnv(ru *run, head, evDir, sandbox string) []string {
+	return append(r.agentEnv(),
+		"LOOP_ITEM="+strconv.FormatInt(ru.item.ID, 10), "LOOP_HEAD="+head, "LOOP_WORKTREE="+ru.wt,
+		"LOOP_EVIDENCE_DIR="+evDir, "LOOP_SANDBOX="+sandbox, "LOOP_REPO="+ru.repo.Slug, "LOOP_BASE="+ru.repo.Base,
+		"LOOP_MIRROR="+ru.mirror)
+}
+
+// purgeSandboxes runs the repo's harness down, fenced in the worktree, for the build agent's
+// sandbox name and for verify's, one after the other, and waits for each: a home left by the
+// agent's harness or an earlier verify would otherwise make the step's up re-seed it and fail
+// (#327). A down that fails or times out is logged, not fatal (there may be nothing to take down).
+func (r *Runner) purgeSandboxes(ctx context.Context, ru *run, dir, head, evDir string, limit time.Duration) error {
+	h := ru.repo.Harness
+	if h == nil {
+		return nil
+	}
+	if t := h.Timeout(); limit <= 0 || t < limit {
+		limit = t
+	}
+	logf, err := os.OpenFile(filepath.Join(dir, "purge.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer logf.Close()
+	for _, name := range []string{ru.sandbox, ru.verifySandbox} {
+		fmt.Fprintf(logf, "[down %s]\n", name)
+		cmd, err := r.fence(ru.wt, h.Down, r.verifyEnv(ru, head, evDir, name), []string{dir})
+		if err != nil {
+			return fmt.Errorf("the harness down cannot run fenced: %w", err)
+		}
+		cmd.Stdout, cmd.Stderr = logf, logf
+		ownGroup(cmd)
+		if err := cmd.Start(); err != nil {
+			r.Log.Warn("verify: harness down could not start", "item", ru.item.ID, "sandbox", name, "err", err)
+			continue
+		}
+		pid := cmd.Process.Pid
+		exited := make(chan struct{})
+		var state *os.ProcessState
+		go func() {
+			state, _ = cmd.Process.Wait()
+			close(exited)
+		}()
+		w := r.keepAlive(ctx, ru, "verify: harness down "+name, "harness down", exited, limit)
+		if w != waitDone {
+			_ = signalGroup(pid, syscall.SIGTERM)
+			grace := r.Clock.NewTimer(r.killGrace())
+			select {
+			case <-exited:
+			case <-grace.C():
+			}
+			grace.Stop()
+		}
+		_ = signalGroup(pid, syscall.SIGKILL)
+		<-exited
+		switch {
+		case w == waitStopped:
+			return errVerifyStopped
+		case w == waitTimeout:
+			r.Log.Warn("verify: harness down timed out", "item", ru.item.ID, "sandbox", name, "after", limit)
+		case state != nil && state.ExitCode() != 0:
+			r.Log.Info("verify: harness down failed (nothing to take down?)", "item", ru.item.ID, "sandbox", name, "exit", state.ExitCode())
+		}
+	}
+	return nil
 }
 
 func anyMatch(globs []string, paths []pipeline.ChangedPath) bool {
@@ -331,15 +429,15 @@ func (r *Runner) verifyStep(ctx context.Context, ru *run, n int, st VerifyStep, 
 			unlock()
 		}()
 	}
+	if err := r.purgeSandboxes(ctx, ru, dir, head, evDir, limit); err != nil {
+		return res, err
+	}
 	logPath := filepath.Join(dir, "output.log")
 	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return res, err
 	}
-	cmd, err := r.fence(cwd, st.Run, append(r.agentEnv(),
-		"LOOP_ITEM="+strconv.FormatInt(ru.item.ID, 10), "LOOP_HEAD="+head, "LOOP_WORKTREE="+ru.wt,
-		"LOOP_EVIDENCE_DIR="+evDir, "LOOP_SANDBOX="+ru.sandbox, "LOOP_REPO="+ru.repo.Slug, "LOOP_BASE="+ru.repo.Base,
-		"LOOP_MIRROR="+ru.mirror), []string{dir})
+	cmd, err := r.fence(cwd, st.Run, r.verifyEnv(ru, head, evDir, ru.verifySandbox), []string{dir})
 	if err != nil {
 		logf.Close()
 		return res, fmt.Errorf("verify %q cannot run fenced: %w", st.Name, err)

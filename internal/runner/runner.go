@@ -346,8 +346,10 @@ type run struct {
 	dir       string // the run's own dir: settings, guard config, logs (never writable by the agent)
 	mirror    string
 	sandbox   string
-	settings  string
-	started   time.Time
+	// verifySandbox is the runner's verify's own sandbox name, apart from the agent's (#327).
+	verifySandbox string
+	settings      string
+	started       time.Time
 
 	// A plan turn's (plan.go): the plan and the turn (stage is the turn's persona), the session
 	// it resumes ("" for a new one) and its time cap (plan_turn_minutes).
@@ -435,6 +437,7 @@ func (r *Runner) newRun(cl *Claim, agent string) (*run, error) {
 		ru.settings = filepath.Join(ru.cfg.WorkRoot, "settings", Slug(ru.repoKey)+"-"+stage+".json")
 	}
 	ru.sandbox = fmt.Sprintf("loop-%d", it.ID)
+	ru.verifySandbox = ru.sandbox + "-verify"
 	return ru, nil
 }
 
