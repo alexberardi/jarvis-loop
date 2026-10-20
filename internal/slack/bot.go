@@ -163,12 +163,14 @@ func (b *Bot) Drain(ctx context.Context) {
 }
 
 // Tick applies reply approvals whose window has passed and posts the digest, the standup and an
-// overnight regression's morning report when one is due.
+// overnight regression's morning report when one is due, and a note when a scheduled overnight run
+// has still not started at 07:00.
 func (b *Bot) Tick(ctx context.Context) {
 	b.applyDue(ctx)
 	b.digest(ctx)
 	b.standup(ctx)
 	b.morningReports(ctx)
+	b.unstartedNote(ctx)
 }
 
 // ---- Slack calls with bounded retries ----

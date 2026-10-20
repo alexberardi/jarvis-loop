@@ -36,11 +36,13 @@ run; camera and biometrics stay manual. This piece is the overnight run.
   nothing an agent could start: no item waiting in triage, build or review whose dependencies are
   merged, that a frozen repo does not hold and some runner offers the resources for; no queued plan
   turn; no orchestrate turn that may start. Land is not "not quiet": it needs no emulator and
-  lands through the night (decision 2026-10-18-land-never-waits). The claude pace is not looked
-  at: work it holds back still waits, and the night is the queue's first. The quiet clock is the
+  lands through the night (decision 2026-10-18-land-never-waits). The claude pace counts (since
+  2026-10-20, [decision](2026-10-20-overnight-while-paced.md)): work it holds back cannot be
+  claimed, so it leaves the queue quiet. The quiet clock is the
   row's `quiet_since`, kept by every runner's claim (any runner, any kinds), and reset when the
   queue is busy. If the queue never goes quiet the run waits, into the day if need be; the toggle or
-  `regression tonight off` cancels it.
+  `regression tonight off` cancels it. A run still not started at 07:00 gets one note in `#loop`
+  saying why.
 - **The hold:** while an overnight run's lease is live (`LiveLease.Holds`), a claim gets only land:
   no item, plan turn or orchestrate turn, not even a frozen repo's fix (the run has the emulator,
   the sandbox ports and the CPU; the user is asleep). A manual run holds nothing, as before.

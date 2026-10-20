@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -269,5 +270,65 @@ func TestOvernightNightlyOncePerSetTime(t *testing.T) {
 	r3, _ := s.ScheduledRegression(ctx)
 	if r3 == nil || !r3.NotBefore.Equal(r2.NotBefore.Add(24*time.Hour)) {
 		t.Fatalf("after a late run (set %v), the next is %+v, want the very next night", r2.NotBefore, r3)
+	}
+}
+
+// A limit hit pauses claude: the build it holds back cannot be claimed, so the queue is quiet for
+// the overnight run, whose lanes are no claude runs (#317).
+func TestOvernightStartsWhilePaused(t *testing.T) {
+	s, clk := open(t)
+	ctx := context.Background()
+	r, err := s.ScheduleRegression(ctx, "slack:U1", "slack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hit, other := add(t, s, "hits the limit", "P2"), add(t, s, "waits", "P2")
+	triageWith(t, s, hit, claudeRun(4000))
+	triageWith(t, s, other, claudeRun(1000))
+	if c := claim(t, s, "agent-1"); c == nil || c.Item.ID != hit.ID {
+		t.Fatalf("build claim %+v", c)
+	}
+	f := claudeRun(3000)
+	f["error"], f["reset"], f["limit_window"] = "rate limit: rejected", t0.Add(toOne+6*time.Hour).Format(time.RFC3339), "5h"
+	if _, err := s.Advance(ctx, runner, hit.ID, pipeline.UsageLimit, f, nil); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(toOne)
+	if c := claimWith(t, s, pipeline.WorkItem, pipeline.WorkRegression); c != nil {
+		t.Fatalf("claimed at 01:00 while paused: %+v", c)
+	}
+	if got, _ := s.ScheduledRegression(ctx); got == nil || got.QuietSince == nil {
+		t.Fatalf("the paused queue is not quiet: %+v", got)
+	}
+	clk.Advance(pipeline.OvernightQuiet)
+	c := claimWith(t, s, pipeline.WorkItem, pipeline.WorkRegression)
+	if c == nil || c.Reg == nil || c.Reg.ID != r.ID {
+		t.Fatalf("not claimed at 01:10 with claude paused: %+v", c)
+	}
+}
+
+func TestOvernightUnstartedNote(t *testing.T) {
+	s, clk := open(t)
+	ctx := context.Background()
+	r, err := s.ScheduleRegression(ctx, "slack:U1", "slack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := add(t, s, "late work", "P3")
+	clk.Advance(toOne + 6*time.Hour - time.Minute)
+	if u, err := s.UnstartedOvernight(ctx); err != nil || u != nil {
+		t.Fatalf("a note at 06:59: %+v %v", u, err)
+	}
+	clk.Advance(time.Minute)
+	u, err := s.UnstartedOvernight(ctx)
+	want := fmt.Sprintf("the queue is busy: #%d waits in triage", it.ID)
+	if err != nil || u == nil || u.Run.ID != r.ID || u.Why != want {
+		t.Fatalf("at 07:00: %+v %v, want why %q", u, err, want)
+	}
+	if err := s.MarkUnstartedNoted(ctx, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := s.UnstartedOvernight(ctx); err != nil || u != nil {
+		t.Fatalf("a second note: %+v %v", u, err)
 	}
 }

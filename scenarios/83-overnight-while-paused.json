@@ -1,0 +1,31 @@
+{
+  "name": "overnight-while-paused",
+  "about": "The overnight run starts while claude's pace holds the queue back (#317). A small weekly budget (claude per_week 20k): one claude build takes the week past it, so claude claims pause for the rest of the week. The approver schedules tonight's run; #b, a P2 build, waits ready but held back by the pace, and #a waits in review. The work the pace holds back cannot be claimed, so the queue is quiet: at 01:00 the runner takes the overnight run (its lanes are no claude runs) and #b still waits. A second night with the pace paused is not needed: the 07:00 note is in overnight-unstarted-note.",
+  "stages": ["triage", "build", "review", "regression"],
+  "capabilities": ["emulator", "gpu", "voice"],
+  "steps": [
+    {"do": "e2e", "outcome": "overnight"},
+    {"do": "control", "budgets": {"claude": {"per_week": 20000}}},
+    {"do": "add", "item": "a", "title": "Spends the week", "priority": "P2"},
+    {"do": "add", "item": "b", "title": "Held back by the pace", "priority": "P2"},
+    {"do": "triage", "item": "a", "size": "M"},
+    {"do": "triage", "item": "b", "size": "M"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "regression", "as": "approver", "text": "regression tonight"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect",
+     "events": [{"kind": "usage_pace", "data": {"level": "^2$", "window": "^week$"}}]},
+    {"do": "clock", "advance": "15h50m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "10m"},
+    {"do": "runner", "claims": "regression"},
+    {"do": "runner_idle"},
+    {"do": "expect",
+     "events": [{"kind": "regression_claimed", "count": 1}, {"kind": "regression_done", "actor": "runner"}]}
+  ],
+  "expect": {
+    "stage": {"a": "review", "b": "build"},
+    "events": [{"kind": "regression_done", "count": 1}, {"kind": "regression_scheduled", "count": 1}]
+  }
+}

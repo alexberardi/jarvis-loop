@@ -291,3 +291,38 @@ func TestRegressionTonight(t *testing.T) {
 		t.Errorf("a flaky test has a File it button:\n%s", txt)
 	}
 }
+
+// An overnight run still not started at 07:00 gets a note in #loop saying why, once (#317).
+func TestRegressionUnstartedNote(t *testing.T) {
+	e := newBotEnv(t)
+	e.mention(Approver, ChannelLoop, "<@U0BOT> regression tonight")
+	it, err := e.st.AddItem(e.ctx, "slack:U1", store.NewItem{Title: "late work", Repo: "jarvis-server", Priority: "P3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.clk.Advance(17*time.Hour + 6*time.Hour - time.Minute)
+	notes := func() []call {
+		var out []call
+		for _, p := range only(t, e.calls(), "chat.postMessage") {
+			if strings.Contains(allText(p), "has not started") {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	e.b.Tick(e.ctx)
+	if posts := notes(); len(posts) != 0 {
+		t.Fatalf("a note at 06:59: %+v", posts)
+	}
+	e.clk.Advance(time.Minute)
+	e.b.Tick(e.ctx)
+	e.b.Tick(e.ctx)
+	posts := notes()
+	if len(posts) != 1 {
+		t.Fatalf("notes at 07:00: %+v", posts)
+	}
+	want := fmt.Sprintf("*Overnight regression R1 has not started* (set for 01:00 on Thu Oct 15): the queue is busy: #%d waits in triage.", it.ID)
+	if txt := allText(posts[0]); !strings.Contains(txt, want) {
+		t.Fatalf("note %s\nwant %q", txt, want)
+	}
+}

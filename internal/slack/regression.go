@@ -70,6 +70,26 @@ func (b *Bot) morningReports(ctx context.Context) {
 	}
 }
 
+// unstartedNote posts, once, why a scheduled overnight run has still not started at
+// pipeline.UnstartedNoteAt (#317); one Slack refuses is tried again on the next tick.
+func (b *Bot) unstartedNote(ctx context.Context) {
+	u, err := b.c.Store.UnstartedOvernight(ctx)
+	if err != nil {
+		b.c.Log.Error("slack: unstarted overnight run", "err", err.Error())
+		return
+	}
+	if u == nil {
+		return
+	}
+	text := fmt.Sprintf("*Overnight regression R%d has not started* (set for %s): %s.", u.Run.ID, b.clockText(*u.Run.NotBefore), u.Why)
+	if _, err := b.post(ctx, "unstarted regression", Message{Channel: ChannelLoop, Text: text, Blocks: []map[string]any{section(text)}}); err != nil {
+		return
+	}
+	if err := b.c.Store.MarkUnstartedNoted(ctx, u.Run.ID); err != nil {
+		b.c.Log.Error("slack: record unstarted note", "regression", u.Run.ID, "err", err.Error())
+	}
+}
+
 // clockText is t on the bot's clock, as the messages say it ("01:00 on Tue Oct 20").
 func (b *Bot) clockText(t time.Time) string {
 	return t.In(b.c.Location).Format("15:04 on Mon Jan 2")

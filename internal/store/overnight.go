@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
@@ -161,7 +163,7 @@ func (s *Store) overnight(tx *sql.Tx, cs claimState, turns []pipeline.TurnCandid
 	if err != nil {
 		return nil, err
 	}
-	busy := pipeline.QueueBusy(cs.waiting, cs.deps, cs.live, turns, orch != nil, cs.frozen, cs.runners, now)
+	busy := pipeline.QueueBusy(cs.ctl, cs.pace, cs.waiting, cs.deps, cs.live, turns, orch != nil, cs.frozen, cs.runners, now) != ""
 	switch {
 	case busy && sched.QuietSince != nil:
 		sched.QuietSince = nil
@@ -254,6 +256,76 @@ func (s *Store) DueRegressionReports(ctx context.Context) ([]DueReport, error) {
 func (s *Store) MarkRegressionReported(ctx context.Context, id int64) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.Exec(`UPDATE regressions SET reported_at = ? WHERE id = ? AND reported_at = 0`, s.clock.Now().UnixNano(), id)
+		return err
+	})
+}
+
+// UnstartedRun is a scheduled overnight run still not started at pipeline.UnstartedNoteAt after its
+// set time, and why it waits (#317).
+type UnstartedRun struct {
+	Run Regression
+	Why string
+}
+
+// UnstartedOvernight is the scheduled overnight run whose note is due and not yet posted
+// (MarkUnstartedNoted), or nil: its set time has passed and so has the next UnstartedNoteAt. Why
+// says what keeps it: the queue's work (pipeline.QueueBusy), claude's pace, another open run, or
+// a quiet queue no runner has polled since.
+func (s *Store) UnstartedOvernight(ctx context.Context) (*UnstartedRun, error) {
+	var out *UnstartedRun
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		sched, err := scheduledRegression(tx)
+		if err != nil || sched == nil || sched.NotBefore == nil {
+			return err
+		}
+		now := s.clock.Now()
+		if now.Before(*sched.NotBefore) || now.Before(pipeline.NextAt(*sched.NotBefore, s.orchLoc(), pipeline.UnstartedNoteAt)) {
+			return nil
+		}
+		var noted int64
+		if err := tx.QueryRow(`SELECT unstarted_noted_at FROM regressions WHERE id = ?`, sched.ID).Scan(&noted); err != nil || noted != 0 {
+			return err
+		}
+		cs, err := s.claimState(tx, now)
+		if err != nil {
+			return err
+		}
+		turns, err := turnCandidates(tx)
+		if err != nil {
+			return err
+		}
+		orch, err := s.orchCandidate(tx, cs.ctl)
+		if err != nil {
+			return err
+		}
+		open, err := openRegression(tx)
+		if err != nil {
+			return err
+		}
+		var why []string
+		switch busy := pipeline.QueueBusy(cs.ctl, cs.pace, cs.waiting, cs.deps, cs.live, turns, orch != nil, cs.frozen, cs.runners, now); {
+		case busy != "":
+			why = append(why, "the queue is busy: "+busy)
+		case open != nil:
+			why = append(why, fmt.Sprintf("R%d (%s) is still open", open.ID, open.Suite))
+		case sched.QuietSince != nil:
+			why = append(why, "the queue has been quiet since "+s.clockText(*sched.QuietSince)+"; it starts after "+pipeline.OvernightQuiet.String()+" of quiet")
+		default:
+			why = append(why, "the queue is quiet, but no runner has asked for work since it went quiet")
+		}
+		if cs.pace.Level != pipeline.PaceNormal {
+			why = append(why, "claude's pace: "+cs.pace.Describe(usageZone()))
+		}
+		out = &UnstartedRun{Run: *sched, Why: strings.Join(why, "; ")}
+		return nil
+	})
+	return out, err
+}
+
+// MarkUnstartedNoted records that the unstarted run's note was posted.
+func (s *Store) MarkUnstartedNoted(ctx context.Context, id int64) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE regressions SET unstarted_noted_at = ? WHERE id = ? AND unstarted_noted_at = 0`, s.clock.Now().UnixNano(), id)
 		return err
 	})
 }

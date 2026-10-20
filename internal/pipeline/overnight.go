@@ -34,6 +34,9 @@ const DefaultRegressionAt = "01:00"
 const (
 	MorningReportAt = "08:30"
 	EveningAt       = "20:00"
+	// UnstartedNoteAt: an overnight run still not started then (after its set time) gets a note in
+	// #loop saying why (#317).
+	UnstartedNoteAt = "07:00"
 )
 
 // RegressionMaxRunFor is the cap of a run of suite.
@@ -92,17 +95,34 @@ func HoldsClaims(live []LiveLease) bool {
 	return slices.ContainsFunc(live, func(l LiveLease) bool { return l.Holds })
 }
 
-// QueueBusy says the queue is not quiet: an agent lease is live (any but land, which needs no
-// emulator and keeps landing through the night, and a regression's own), or an agent could start
-// something: an item waiting in triage, build or review whose dependencies are merged, not held by
-// a frozen repo and that some runner offers the resources for; a queued plan turn; the queued
-// orchestrate turn (orchQueued). The claude pace is not looked at: work it holds back still waits.
-func QueueBusy(items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orchQueued bool, frozen Frozen, runners []RunnerSeen, now time.Time) bool {
-	if slices.ContainsFunc(live, func(l LiveLease) bool { return l.Stage != Land && l.Stage != RegressionStage }) {
-		return true
+// QueueBusy says why the queue is not quiet ("" when it is): an agent lease is live (any but land,
+// which needs no emulator and keeps landing through the night, and a regression's own), or an
+// agent could start something: an item waiting in triage, build or review whose dependencies are
+// merged, not held by a frozen repo, that some runner offers the resources for and that the claude
+// pace lets through (with a slow pace's starved fallback, as the board's paced label says); a queued
+// plan turn or the queued orchestrate turn (orchQueued) the pace lets through. Work the pace holds
+// back cannot be claimed, so it leaves the queue quiet for the overnight run, whose lanes are no
+// claude runs (#317).
+func QueueBusy(c Control, pace Pace, items []Item, deps map[int64]Stage, live []LiveLease, turns []TurnCandidate, orchQueued bool, frozen Frozen, runners []RunnerSeen, now time.Time) string {
+	for _, l := range live {
+		switch {
+		case l.Stage == Land || l.Stage == RegressionStage:
+		case l.ItemID != 0:
+			return fmt.Sprintf("the %s of #%d runs", l.Stage, l.ItemID)
+		case l.Stage == OrchestrateStage:
+			return "the orchestrate turn runs"
+		default:
+			return fmt.Sprintf("a %s turn runs", l.Stage)
+		}
 	}
-	if len(turns) > 0 || orchQueued {
-		return true
+	p := newPacing(c, pace, live, RunnerBuilders(runners, now))
+	for _, t := range turns {
+		if p.claudeOK && (pace.Level == PaceNormal || t.Priority == "P1") {
+			return fmt.Sprintf("a turn of plan %d is queued", t.PlanID)
+		}
+	}
+	if orchQueued && p.claudeOK {
+		return "the orchestrate turn is queued"
 	}
 	claimed := map[int64]bool{}
 	for _, l := range live {
@@ -112,12 +132,12 @@ func QueueBusy(items []Item, deps map[int64]Stage, live []LiveLease, turns []Tur
 		if it.Stage == Land || !it.Stage.IsWork() || claimed[it.ID] {
 			continue
 		}
-		if len(WaitingOn(it, deps)) > 0 || frozen.Blocks(it) || len(Unservable(it.Needs(), runners, now)) > 0 {
+		if len(WaitingOn(it, deps)) > 0 || frozen.Blocks(it) || len(Unservable(it.Needs(), runners, now)) > 0 || !p.fallback(it) {
 			continue
 		}
-		return true
+		return fmt.Sprintf("#%d waits in %s", it.ID, it.Stage)
 	}
-	return false
+	return ""
 }
 
 // OvernightReady says a scheduled run may start: its set time (notBefore) has come and the queue
