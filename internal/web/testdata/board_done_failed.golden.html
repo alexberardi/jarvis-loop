@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="refresh" content="30">
+<title>Jarvis Loop board</title>
+<style>
+:root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --card: #fff; --lane: #f5f5f4; --accent: #2563eb; --warn: #b45309; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --card: #292524; --lane: #231f1d; --accent: #60a5fa; --warn: #fbbf24; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+a { color: var(--accent); }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+.muted { color: var(--muted); }
+.reason { color: var(--warn); }
+</style>
+<style>
+.working { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 8px; margin-bottom: 16px; }
+.working > h2, .working > .note { grid-column: 1 / -1; }
+.working > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 0 0; }
+.working > .note { color: var(--muted); font-size: 13px; margin: 0; }
+.work { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; min-width: 0; }
+.work .meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.work .label { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.work .title { font-weight: 600; text-decoration: none; color: var(--fg); display: block; overflow-wrap: anywhere; }
+.work ul, .work ol { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; overflow-wrap: anywhere; }
+.work .todos .completed { color: var(--muted); text-decoration: line-through; }
+.work .todos .in_progress { font-weight: 600; }
+.work .calls li { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12px; }
+.work .said { margin: 6px 0 0; font-size: 13px; font-style: italic; overflow-wrap: anywhere; }
+</style>
+<style>
+.lanes { display: flex; gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 8px; align-items: flex-start; }
+.lane { flex: 0 0 min(85vw, 300px); scroll-snap-align: start; background: var(--lane); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.lane h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 4px 8px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+.card .title { font-weight: 600; text-decoration: none; color: var(--fg); display: block; }
+.meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.card .reason { font-size: 13px; margin-top: 4px; }
+.label { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.note { color: var(--muted); font-size: 13px; margin: 4px; }
+.runners { background: var(--lane); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; font-size: 14px; }
+.frozen { background: #b91c1c; color: #fff; border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; }
+.frozen a, .frozen code { color: #fff; }
+.orch { background: var(--lane); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
+.orch summary { font-weight: 600; cursor: pointer; }
+.orch h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 12px 0 4px; }
+.orch ul { margin: 0; padding-left: 18px; font-size: 14px; }
+.orch li { margin-bottom: 4px; }
+.orch .why { color: var(--muted); }
+.orch .notes > div { border-top: 1px solid var(--line); padding: 4px 0; font-size: 14px; }
+</style>
+</head>
+<body>
+<h1>Jarvis Loop</h1>
+<p class="sub">1 items · 2026-10-15 12:00 UTC · refreshes every 30 s (working now: every 5 s) · <a href="/board?closed=1">show closed</a> · <a href="/board/flow">flow</a></p>
+<section class="working" id="working" data-live="/board/working">
+<h2>Working now · 0</h2>
+<p class="note">Nothing running.</p>
+
+</section>
+<script src="/board/live.js" defer></script>
+
+<div class="lanes">
+<section class="lane">
+<h2>Planning · 0</h2>
+<p class="note">No open plans.</p>
+</section>
+<section class="lane">
+<h2>Triage · 0</h2>
+</section>
+<section class="lane">
+<h2>Build · 0</h2>
+</section>
+<section class="lane">
+<h2>Review · 0</h2>
+</section>
+<section class="lane">
+<h2>Needs you · 0</h2>
+</section>
+<section class="lane">
+<h2>Approval · 0</h2>
+</section>
+<section class="lane">
+<h2>QA · 0</h2>
+<p class="note">Nothing waits for a check.</p>
+</section>
+<section class="lane">
+<h2>Done · 1</h2>
+<p class="note">Verified: <a href="/board">all recent</a> · <a href="/board?verify=unproven">unproven 2</a> · <a href="/board?verify=verified">verified 1</a> · <strong>failed 1</strong> · <a href="/board?verify=needs-you">needs-you 1</a></p>
+<article class="card">
+<a class="title" href="/board/items/32">#32 Old and failed</a>
+<div class="meta"><span>jarvis-loop</span>
+<span>P2</span>
+<span>40d</span><span class="label">done · failed</span><a href="https://github.com/alexberardi/jarvis-loop/pull/32">PR #32</a>
+</div>
+<div class="reason">Proof of the merged change failed 2 times in a row: command: `go test ./x`: exit 1 (filed #40)</div>
+</article>
+</section>
+</div>
+</body>
+</html>

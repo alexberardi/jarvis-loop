@@ -47,6 +47,13 @@ func TestStandupText(t *testing.T) {
 		Did:      map[string]int{"retried": 2, "escalated": 1, "refused answer": 1, "note": 3},
 		DidLines: []string{"retried #14: git index.lock", "escalated #17: a product question", "refused answer #17: at most 2 answers per head"},
 		Turns:    12, Cap: 150, Cost: 1.234, TokIn: 1_250_000, TokOu: 40_400,
+		Done: store.DoneReport{Total: 134,
+			Counts: map[string]int{pipeline.DoneUnproven: 90, pipeline.DoneProving: 8, pipeline.DoneVerified: 30, pipeline.DoneFailed: 1, pipeline.DoneNeedsYou: 2, pipeline.DoneWaiting: 3},
+			Failed: []store.DoneReportItem{{ID: 61, Title: "Board QA column", Reopen: 140,
+				Reason: "Proof of the merged change failed 2 times in a row: command: `go test ./internal/web -run TestBoardQA`: exit 1 (filed #140)"}},
+			NeedsYou: []store.DoneReportItem{{ID: 19, Title: "Board colours", Looks: []string{"the board on a phone, dark mode"}},
+				{ID: 33, Title: "Kitchen timer voice", Looks: []string{"say \"timer 5 minutes\" in the kitchen", "the chime"}}},
+		},
 	}
 	got := standupText(d, ny)
 	path := filepath.Join("testdata", "standup.golden.txt")

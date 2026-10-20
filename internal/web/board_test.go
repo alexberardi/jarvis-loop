@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -632,6 +633,52 @@ func TestBoardRunwayLine(t *testing.T) {
 	if strings.Contains(got, "#8</a>") {
 		t.Error("board shows more than the top 3 unblockers")
 	}
+}
+
+// The Done column's Verified filter (docs/decisions/2026-10-18-done-proofs.md): each done card says
+// its verification status and why; the filter links count every done item, and a filter shows all
+// the done items in that status, however old (go test ./internal/web -run BoardVerify -update).
+func TestBoardVerifyFilter(t *testing.T) {
+	const day = 24 * time.Hour
+	done := func(id int64, title, verify, reason string, age time.Duration) store.BoardItem {
+		r := store.BoardRow{ID: id, Title: title, Priority: "P2", Stage: "done", Display: "done", Repo: "alexberardi/jarvis-loop", PR: int(id),
+			CreatedAt: now.Add(-age), AgeSeconds: int64(age / time.Second)}
+		return store.BoardItem{BoardRow: r,
+			UpdatedAt: now.Add(-age), Verify: verify, VerifyReason: reason}
+	}
+	items := []store.BoardItem{
+		done(30, "Fresh and unproven", pipeline.DoneUnproven, "", day),
+		done(31, "Proved by its usage", pipeline.DoneVerified, "Proof passed: usage: `claimed` (passed)", 2*day),
+		done(32, "Old and failed", pipeline.DoneFailed, "Proof of the merged change failed 2 times in a row: command: `go test ./x`: exit 1 (filed #40)", 40*day),
+		done(33, "Old and unproven", pipeline.DoneUnproven, "", 60*day),
+		done(34, "Colours", pipeline.DoneNeedsYou, "look at the board on a phone", 3*day),
+	}
+	all := boardViewVerify(items, nil, now, false, "", "")
+	col := all.Columns[len(all.Columns)-1]
+	if col.Name != "Done" || col.Count() != 3 {
+		t.Fatalf("unfiltered Done column: %+v", col)
+	}
+	if c := col.Cards[0]; c.Label != "done · unproven" {
+		t.Fatalf("card label %q", c.Label)
+	}
+	want := []verifyFilter{{"unproven", 2, false}, {"verified", 1, false}, {"failed", 1, false}, {"needs-you", 1, false}}
+	if !slices.Equal(col.Filters, want) {
+		t.Fatalf("filters %+v, want %+v", col.Filters, want)
+	}
+	v := boardViewVerify(items, nil, now, false, "", pipeline.DoneUnproven)
+	col = v.Columns[len(v.Columns)-1]
+	if col.Count() != 2 || col.Cards[0].ID != 30 || col.Cards[1].ID != 33 || !col.Filters[0].On {
+		t.Fatalf("unproven filter: %+v", col)
+	}
+	if bogus := boardViewVerify(items, nil, now, false, "", "nope"); bogus.Columns[len(bogus.Columns)-1].Count() != 3 {
+		t.Fatal("an unknown filter is no filter")
+	}
+	v = boardViewVerify(items, nil, now, false, "", pipeline.DoneFailed)
+	var b bytes.Buffer
+	if err := boardTmpl.Execute(&b, v); err != nil {
+		t.Fatal(err)
+	}
+	checkGolden(t, "board_done_failed.golden.html", b.Bytes())
 }
 
 // Every stage's items land in some lane, claimed or not: a stage no lane lists vanishes from the board.

@@ -191,6 +191,14 @@ func (s *Store) Close() error {
 	return errors.Join(s.w.Close(), errR)
 }
 
+// migrationProbes tell, for a migration that once shared its number with another, whether it
+// already ran (a count > 0), instead of its version: 0025_proofs (#194) and 0025_usage (#199) both
+// merged as 0025, so a database's version 25 may be either one.
+var migrationProbes = map[string]string{
+	"0025_proofs.sql": `SELECT COUNT(*) FROM pragma_table_info('items') WHERE name = 'proof'`,
+	"0026_usage.sql":  `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'usage_runs'`,
+}
+
 func (s *Store) migrate() error {
 	if _, err := s.w.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`); err != nil {
 		return err
@@ -217,13 +225,22 @@ func (s *Store) migrate() error {
 		}
 		err = s.tx(context.Background(), func(tx *sql.Tx) error {
 			var n int
-			if err := tx.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, v).Scan(&n); err != nil || n > 0 {
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, v).Scan(&n); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(string(body)); err != nil {
-				return fmt.Errorf("%s: %w", e.Name(), err)
+			applied := n > 0
+			if probe, ok := migrationProbes[e.Name()]; ok {
+				if err := tx.QueryRow(probe).Scan(&n); err != nil {
+					return err
+				}
+				applied = n > 0
 			}
-			_, err := tx.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, v, s.clock.Now().UnixNano())
+			if !applied {
+				if _, err := tx.Exec(string(body)); err != nil {
+					return fmt.Errorf("%s: %w", e.Name(), err)
+				}
+			}
+			_, err := tx.Exec(`INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)`, v, s.clock.Now().UnixNano())
 			return err
 		})
 		if err != nil {
@@ -356,7 +373,7 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
 	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of, ci_red_sha, ci_main_fixed,
-	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust, proof, not_before, ci_pending_since, ci_pending_sha, feature`
+	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust, proof, not_before, ci_pending_since, ci_pending_sha, verify, verify_reason, feature`
 
 type scanner interface{ Scan(...any) error }
 
@@ -373,7 +390,7 @@ func scanItem(row scanner) (pipeline.Item, error) {
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
 		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf, &it.CIRedSHA, &it.CIMainFixed,
-		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust, &proof, &notBefore, &ciSince, &it.CIPendingSHA, &it.Feature)
+		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust, &proof, &notBefore, &ciSince, &it.CIPendingSHA, &it.Verify, &it.VerifyReason, &it.Feature)
 	if err != nil {
 		return it, err
 	}
@@ -487,11 +504,11 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
 		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, ci_main_fixed=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=?, trust=?, proof=?,
-		not_before=?, ci_pending_since=?, ci_pending_sha=?, feature=? WHERE id=?`,
+		not_before=?, ci_pending_since=?, ci_pending_sha=?, verify=?, verify_reason=?, feature=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
 		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, it.CIMainFixed, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, trust, proof,
-		toOptNanos(it.NotBefore), toOptNanos(it.CIPendingSince), it.CIPendingSHA, it.Feature, it.ID)
+		toOptNanos(it.NotBefore), toOptNanos(it.CIPendingSince), it.CIPendingSHA, it.Verify, it.VerifyReason, it.Feature, it.ID)
 	return err
 }
 

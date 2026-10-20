@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strconv"
 
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
@@ -52,8 +53,14 @@ func (s *Store) reopenTx(tx *sql.Tx, actor string, it pipeline.Item, tr pipeline
 	if err != nil {
 		return old, filed, err
 	}
+	if tr.From == pipeline.Done {
+		n.Priority = pipeline.DoneProofReopenPriority // a done item's proof failed (doneproof.go)
+	}
 	if err := s.insertItem(tx, actor, &n); err != nil {
 		return old, filed, err
+	}
+	if tr.From == pipeline.Done {
+		tr.Item.VerifyReason += " (filed #" + strconv.FormatInt(n.ID, 10) + ")"
 	}
 	tr.Item.UpdatedAt = now
 	if err := saveItem(tx, tr.Item); err != nil {

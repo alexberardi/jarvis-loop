@@ -14,6 +14,13 @@
 • #18 Rotate the &lt;tokens&gt; — held for your approval: touches auth
 • #12 Round the kitchen timer — merged, waiting for your check
 
+*Done items* · 134 done: 90 unproven, 8 proving, 30 verified, 1 failed, 2 needs-you, 3 waiting
+Failed (1):
+• #61 Board QA column — fix: #140 · Proof of the merged change failed 2 times in a row: command: `go test ./internal/web -run TestBoardQA`: exit 1
+Your checks (2):
+• #19 Board colours — look at the board on a phone, dark mode
+• #33 Kitchen timer voice — look at say "timer 5 minutes" in the kitchen; the chime
+
 *What I did*
 escalated 1 · note 3 · refused answer 1 · retried 2
 • retried #14: git index.lock

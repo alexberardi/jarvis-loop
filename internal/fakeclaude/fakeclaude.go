@@ -172,8 +172,8 @@ const (
 	// Adjudication plays (the runner's Claude turn on Gemini's findings, stage adjudicate).
 	Agree    = "agree"    // agree with every finding
 	Disagree = "disagree" // disagree with every finding
-	// OrchProofs writes a proof for each item a proof_needed trigger names: the item's
-	// <id>-proof.json script's proof, else one manual check; for proof_e2e, only the script's.
+	// OrchProofs writes a proof for each item a proof_needed or done_proof_needed trigger names:
+	// the item's <id>-proof.json script's proof, else one manual check; for proof_e2e, only the script's.
 	OrchProofs = "proofs"
 )
 
@@ -1132,7 +1132,7 @@ func (f *fake) orchestrate(play, turn string, brief []byte, progress func(string
 	case OrchProofs:
 		if snap.Turn != nil {
 			for _, tr := range snap.Turn.Triggers {
-				if tr.Reason != "proof_needed" && tr.Reason != "proof_e2e" {
+				if tr.Reason != "proof_needed" && tr.Reason != "proof_e2e" && tr.Reason != "done_proof_needed" {
 					continue
 				}
 				checks := json.RawMessage(`[{"kind":"manual","look":"the change in use"}]`)

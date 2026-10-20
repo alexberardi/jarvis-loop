@@ -620,6 +620,16 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	if e.Kind == store.KindProofChecked {
 		return b.proofCheckedMessage(e, d)
 	}
+	switch e.Kind {
+	case pipeline.KindDoneProofChecked, pipeline.KindDoneVerified:
+		// A done item's proof (docs/decisions/2026-10-18-done-proofs.md): the standup's report
+		// counts these; an old thread hears only of a failure.
+		return Message{}, false
+	case pipeline.KindDoneFailed:
+		reopen, _ := e.Data["reopen_item"].(float64)
+		return Message{Text: fmt.Sprintf("%s. Filed %s (%s) to fix it; this one stays done.",
+			f("words", 600), b.refID(ctx, int64(reopen)), pipeline.DoneProofReopenPriority)}, true
+	}
 	by := who(e.Actor)
 	if via := str(e.Data, "via"); strings.HasPrefix(via, orchestratorPrefix) {
 		by += " via orchestrator"
@@ -848,7 +858,11 @@ func (b *Bot) orchestratorLine(ctx context.Context, e store.Event) string {
 	case store.KindOrchSeenAgain:
 		what = "saw this again"
 	case "proof_set":
-		what = "wrote its proof (the proof sweep): " + b.field(strings.Join(listOf(e.Data, "checks"), "; "), 600, e.ItemID)
+		sweep := "the proof sweep"
+		if str(e.Data, "verify") != "" {
+			sweep = "the done sweep"
+		}
+		what = "wrote its proof (" + sweep + "): " + b.field(strings.Join(listOf(e.Data, "checks"), "; "), 600, e.ItemID)
 		if e.Data["replaced"] != nil {
 			what = "rewrote its proof with checks the loop can run (it was " + b.field(strings.Join(listOf(e.Data, "replaced"), "; "), 300, e.ItemID) +
 				"): " + b.field(strings.Join(listOf(e.Data, "checks"), "; "), 600, e.ItemID)

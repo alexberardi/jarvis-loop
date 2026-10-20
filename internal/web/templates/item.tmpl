@@ -63,6 +63,10 @@ td.data { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 <h2>Summary</h2>
 <pre>{{.Summary}}</pre>
 {{- end}}
+{{- if .Verify}}
+<h2>Verified?</h2>
+<p><span class="label">{{.Verify}}</span>{{with .VerifyReason}} {{.}}{{end}}</p>
+{{- end}}
 {{- with .Proof}}
 <h2>Proof · by {{.By}}{{with .CheckedAt}} · checked {{stamp .UTC}}{{end}}</h2>
 <ul class="proof">

@@ -52,6 +52,8 @@ type standupData struct {
 	Turns, Cap   int
 	Cost         float64
 	TokIn, TokOu int64
+	// Done is where the done items' verification stands (docs/decisions/2026-10-18-done-proofs.md).
+	Done store.DoneReport
 }
 
 // standupText is the standup's message text.
@@ -87,6 +89,9 @@ func standupText(d standupData, loc *time.Location) string {
 	if len(d.Merged)+len(d.InFlight)+len(d.Waiting)+len(d.NeedsU) == 0 {
 		sb.WriteString("\nNothing open, nothing merged.\n")
 	}
+	if d.Done.Total > 0 {
+		doneSection(&sb, d.Done)
+	}
 	sb.WriteString("\n*What I did*\n")
 	if len(d.Did) == 0 {
 		sb.WriteString("Nothing.\n")
@@ -116,6 +121,34 @@ func standupText(d standupData, loc *time.Location) string {
 	}
 	sb.WriteString("\n")
 	return Clip(sb.String(), MaxChars, "loop status")
+}
+
+// doneSection is the done proofs' report: the counts per status, each failure with the item filed
+// for it, and the done items only the user can check, one line each on what to look at.
+func doneSection(sb *strings.Builder, r store.DoneReport) {
+	fmt.Fprintf(sb, "\n*Done items* · %s\n", r.Line())
+	list := func(name string, items []store.DoneReportItem, note func(store.DoneReportItem) string) {
+		if len(items) == 0 {
+			return
+		}
+		fmt.Fprintf(sb, "%s (%d):\n", name, len(items))
+		for i, it := range items {
+			if i == standupSectionMax {
+				fmt.Fprintf(sb, "• … and %d more\n", len(items)-i)
+				break
+			}
+			fmt.Fprintf(sb, "• #%d %s — %s\n", it.ID, Escape(Clip(strings.TrimSpace(it.Title), 100, "")), Escape(Clip(oneLine(note(it)), 200, "")))
+		}
+	}
+	list("Failed", r.Failed, func(it store.DoneReportItem) string {
+		if it.Reopen != 0 {
+			return fmt.Sprintf("fix: #%d · %s", it.Reopen, strings.TrimSuffix(it.Reason, fmt.Sprintf(" (filed #%d)", it.Reopen)))
+		}
+		return it.Reason
+	})
+	list("Your checks", r.NeedsYou, func(it store.DoneReportItem) string {
+		return "look at " + strings.Join(it.Looks, "; ")
+	})
 }
 
 func plural(n int) string {
@@ -259,6 +292,9 @@ func (b *Bot) standupData(ctx context.Context, at time.Time) (standupData, error
 	}
 	if ctl, err := b.c.Store.Control(ctx); err == nil {
 		d.Cap = ctl.OrchTurnsPerDay
+	}
+	if d.Done, err = b.c.Store.DoneReport(ctx); err != nil {
+		return d, err
 	}
 	return d, nil
 }

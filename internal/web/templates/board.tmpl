@@ -172,6 +172,9 @@
 {{- range .Columns}}
 <section class="lane">
 <h2>{{.Name}} · {{.Count}}</h2>
+{{- if .Filters}}
+<p class="note">Verified: {{if $.Verify}}<a href="/board">all recent</a>{{else}}<strong>all recent</strong>{{end}}{{range .Filters}} · {{if .On}}<strong>{{.Status}} {{.Count}}</strong>{{else}}<a href="/board?verify={{.Status}}">{{.Status}} {{.Count}}</a>{{end}}{{end}}</p>
+{{- end}}
 {{- if .Note}}
 <p class="note">{{.Note}}</p>
 {{- end}}
