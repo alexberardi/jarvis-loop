@@ -64,7 +64,7 @@ func TestVerifyPasses(t *testing.T) {
 	head := g.remoteHead(ItemBranchName(id, "Add a feature"))
 	env := g.read(filepath.Join(ev, "env.txt"))
 	for _, want := range []string{"LOOP_ITEM=1\n", "LOOP_HEAD=" + head + "\n", "LOOP_WORKTREE=" + filepath.Join(g.r.Cfg.WorkRoot, "1-build") + "\n",
-		"LOOP_EVIDENCE_DIR=" + ev + "\n", "LOOP_SANDBOX=loop-1\n", "LOOP_REPO=alex/demo\n", "LOOP_BASE=main\n",
+		"LOOP_EVIDENCE_DIR=" + ev + "\n", "LOOP_SANDBOX=loop-1-verify\n", "LOOP_REPO=alex/demo\n", "LOOP_BASE=main\n",
 		"LOOP_MIRROR=" + g.r.mirrorPath("demo") + "\n"} {
 		if !strings.Contains(env, want) {
 			t.Errorf("verify env lacks %q:\n%s", want, env)
@@ -403,5 +403,82 @@ func TestMaskedRead(t *testing.T) {
 		if got := maskedRead(c.log, mask); got != c.want {
 			t.Errorf("maskedRead(%q) = %q, want %q", c.log, got, c.want)
 		}
+	}
+}
+
+// verifyHarness gives the demo repo the test harness (harnessRepo) with a down that appends
+// "down <LOOP_SANDBOX>" to the returned file.
+func (g *rig) verifyHarness() (calls string) {
+	g.t.Helper()
+	g.harnessRepo("")
+	dir := g.t.TempDir()
+	g.r.Cfg.VerifyWritable = append(g.r.Cfg.VerifyWritable, dir)
+	calls = filepath.Join(dir, "calls")
+	rc := g.r.Cfg.Repos["demo"]
+	rc.Harness.Down = `echo "down $LOOP_SANDBOX" >> ` + calls
+	g.r.Cfg.Repos["demo"] = rc
+	return calls
+}
+
+// With a harness, verify runs under its own sandbox name (not the build agent's), and before each
+// step the runner purges both names with the harness's down and waits for it (#327).
+func TestVerifyPurgesTheSandboxesFirst(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	log := g.verifyHarness()
+	g.verifyRepo(VerifyStep{Name: "pipeline", Run: `echo "step $LOOP_SANDBOX" >> ` + log})
+	id := g.toBuild("Add a feature")
+	g.runOnce()
+	if d := g.item(id); d.Item.Stage != pipeline.Review {
+		t.Fatalf("stage %s (question %q); log:\n%s", d.Item.Stage, d.Item.Question, g.logs.String())
+	}
+	if got, want := g.read(log), "down loop-1\ndown loop-1-verify\nstep loop-1-verify\n"; got != want {
+		t.Fatalf("calls:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// A step that fails on its environment (exit 3: the harness did not come up; or envFailure) is
+// purged and run once more; only a second failure sends the build back. A real failure is not
+// retried.
+func TestVerifyRetriesAnEnvironmentFailureOnce(t *testing.T) {
+	for name, tc := range map[string]struct {
+		run    string
+		stage  pipeline.Stage
+		calls  string
+		status string
+	}{
+		"exit 3 then pass": {`n=$(cat "$C" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$C"; echo "try $n" >> "$L"; [ $n -ge 2 ] || exit 3`,
+			pipeline.Review, "down loop-1\ndown loop-1-verify\ntry 1\ndown loop-1\ndown loop-1-verify\ntry 2\n", "passed (0s) on the second try (the first failed (exit 3, 0s))"},
+		"exit 3 twice": {`echo try >> "$L"; echo "400 node_id already exists"; exit 3`,
+			pipeline.Build, "down loop-1\ndown loop-1-verify\ntry\ndown loop-1\ndown loop-1-verify\ntry\n", ""},
+		"setup failed twice": {`echo try >> "$L"; echo "FAIL x [setup failed]"; exit 1`,
+			pipeline.Build, "down loop-1\ndown loop-1-verify\ntry\ndown loop-1\ndown loop-1-verify\ntry\n", ""},
+		"real failure": {`echo try >> "$L"; echo "FAIL: TestHome"; exit 1`,
+			pipeline.Build, "down loop-1\ndown loop-1-verify\ntry\n", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newRig(t, fakeclaude.Good)
+			l := g.verifyHarness()
+			c := filepath.Join(filepath.Dir(l), "count")
+			g.verifyRepo(VerifyStep{Name: "pipeline", Run: "L=" + l + " C=" + c + "; " + tc.run})
+			id := g.toBuild("Add a feature")
+			g.runOnce()
+			d := g.item(id)
+			if d.Item.Stage != tc.stage {
+				t.Fatalf("stage %s (question %q); log:\n%s", d.Item.Stage, d.Item.Question, g.logs.String())
+			}
+			if got := g.read(l); got != tc.calls {
+				t.Fatalf("calls:\n%s\nwant:\n%s", got, tc.calls)
+			}
+			if tc.status != "" {
+				if body := g.prs.bodies[7]; !strings.Contains(body, "- pipeline: "+tc.status) {
+					t.Errorf("PR body lacks the retry:\n%s", body)
+				}
+				return
+			}
+			ev := g.advanced(id)
+			if ev.Outcome != "verify_failed" {
+				t.Fatalf("event %s %+v", ev.Outcome, ev.Data)
+			}
+		})
 	}
 }

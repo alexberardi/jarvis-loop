@@ -180,7 +180,11 @@ type VerifyStep struct {
 	// Name is how the PR footer, the evidence labels and the next build's notes name the step.
 	Name string `json:"name"`
 	// Run is a bash command line. Its environment has LOOP_ITEM, LOOP_HEAD, LOOP_WORKTREE,
-	// LOOP_EVIDENCE_DIR, LOOP_SANDBOX, LOOP_REPO, LOOP_BASE and LOOP_MIRROR.
+	// LOOP_EVIDENCE_DIR, LOOP_SANDBOX, LOOP_REPO, LOOP_BASE and LOOP_MIRROR. LOOP_SANDBOX is
+	// verify's own name (loop-<item>-verify), apart from the agent's harness; use it, as in
+	// `scripts/sandbox up --name $LOOP_SANDBOX || exit 3; …; scripts/sandbox down --name
+	// $LOOP_SANDBOX --purge`. Exit 3 says the sandbox did not come up: with a harness, the runner
+	// purges and runs the step once more.
 	Run string `json:"run"`
 	// Repo, when set, runs the step in a fresh checkout of that configured repo (key) at its base
 	// branch instead of the worktree: e.g. jarvis-server's mobile-shot for jarvis-node-mobile.
@@ -234,7 +238,9 @@ func (c RegressionConfig) Timeout() time.Duration {
 
 // HarnessConfig is a repo's harness for its agents: Up starts it (in the keeper fence, which
 // keeps what it starts alive until the agent's run ends), Down stops it. Both are bash command
-// lines with the verify steps' environment (LOOP_SANDBOX is the item's sandbox name).
+// lines with the verify steps' environment (LOOP_SANDBOX is the item's sandbox name). Down must
+// also purge: the runner's verify runs it before each step for the agent's sandbox name and for
+// verify's own, so no home is left to re-seed.
 type HarnessConfig struct {
 	Up   string `json:"up"`
 	Down string `json:"down"`

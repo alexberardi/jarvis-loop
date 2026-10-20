@@ -98,7 +98,7 @@
           "stage": "build",
           "run": 1,
           "file": "verify/verify-2-mobile-shots/output.log",
-          "text": "^built [0-9a-f]{40} from the runner's mirror; shooting in sandbox loop-1 from 1-verify-demo\\nshots: 1 screen, light\\n$"
+          "text": "^built [0-9a-f]{40} from the runner's mirror; shooting in sandbox loop-1-verify from 1-verify-demo\\nshots: 1 screen, light\\n$"
         },
         {
           "item": "a",
