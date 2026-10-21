@@ -344,9 +344,9 @@ func TestStopAndUsageLimit(t *testing.T) {
 	if c := claim(t, s, "a"); c == nil {
 		t.Fatal("no claim after the pause")
 	}
-	n := 7
+	n := pipeline.MaxActiveAgents + 1
 	if _, err := s.SetControl(ctx, user, ControlPatch{ActiveAgents: &n}); code(err) != pipeline.CodeInvalidField {
-		t.Fatalf("active agents 7: %v", err)
+		t.Fatalf("active agents %d: %v", n, err)
 	}
 	if _, err := s.SetControl(ctx, user, ControlPatch{Limits: map[string]int{"gpu": 1}}); err != nil {
 		t.Fatal(err)
