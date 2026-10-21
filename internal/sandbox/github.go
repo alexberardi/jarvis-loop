@@ -388,7 +388,7 @@ func (g *GitHub) LandView(_ context.Context, slug string, number int) (runner.La
 		return runner.LandPR{}, fmt.Errorf("no pull request %s#%d", slug, number)
 	}
 	p := g.prs[i]
-	pr := runner.LandPR{Number: p.Number, State: p.State, HeadRefName: p.Head, HeadRefOid: p.HeadSHA, BaseRefName: p.Base,
+	pr := runner.LandPR{Number: p.Number, Title: p.Title, State: p.State, HeadRefName: p.Head, HeadRefOid: p.HeadSHA, BaseRefName: p.Base,
 		Body: p.Body, MergeCommit: p.MergeCommit, MergeStateStatus: "UNKNOWN", Mergeable: "UNKNOWN"}
 	if p.State == "OPEN" {
 		pr.HeadRefOid = g.RemoteHead(slug, p.Head)

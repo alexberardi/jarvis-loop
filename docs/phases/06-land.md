@@ -52,6 +52,9 @@ Everything is re-derived from GitHub and git, never from an agent's words.
    `pull_request` CI on a conflicting PR, so waiting for checks only timed out after 30 min. The
    conflict therefore also comes before evidence and hold; the conflict path never merges
    (`docs/decisions/2026-10-17-conflict-before-ci.md`).*
+   *As built (2026-10-20, item #353): then, before CI, a PR whose title (or own body text) says
+   "part N of M" with N<M goes `back_to_build` unless M−N open items are filed after the item; one
+   merged by hand that way is `failed` (`docs/decisions/2026-10-20-partial-prs.md`).*
 4. **CI:** every check on the head (`gh pr checks <n> --json name,state,bucket` or the status
    rollup; *as built:* the rollup, in the same `gh pr view` as the head, bucketed as gh does;
    the failing checks go in `back_to_build`'s `reason`, which loopd requires). All `pass` → go on. Any `fail`/`cancel` → `back_to_build` with the failing check names

@@ -55,6 +55,79 @@ type Result struct {
 	Review string `json:"review,omitempty"`
 	// Why is a routing run's reason for the repo it named.
 	Why string `json:"why,omitempty"`
+	// AskSteps (review's) is the ask's steps, each judged against the diff: done, not done (with
+	// the item filed for it, if any) or out of scope. An approval with a step not done and not
+	// filed after the item is a bounce (UnfiledSteps; docs/decisions/2026-10-20-partial-prs.md).
+	AskSteps []AskStep `json:"ask_steps,omitempty"`
+}
+
+// AskStep is one step of the item's ask as review judged it.
+type AskStep struct {
+	Step   string `json:"step"`
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+	// FollowUp is the item filed for a step not done (it must depend on this item).
+	FollowUp int64 `json:"follow_up,omitempty"`
+}
+
+// The statuses of an ask step.
+const (
+	StepDone       = "done"
+	StepNotDone    = "not_done"
+	StepOutOfScope = "out_of_scope"
+)
+
+// MaxAskSteps bounds a review's ask_steps.
+const MaxAskSteps = 30
+
+// checkAskSteps checks review's ask_steps: a step, a known status, and a reason for any step not
+// done.
+func checkAskSteps(steps []AskStep) error {
+	if len(steps) > MaxAskSteps {
+		return fmt.Errorf("ask_steps: at most %d steps", MaxAskSteps)
+	}
+	for i, st := range steps {
+		switch {
+		case !textOK(st.Step, 500):
+			return fmt.Errorf("ask_steps[%d]: step is required (at most 500 characters)", i)
+		case !slices.Contains([]string{StepDone, StepNotDone, StepOutOfScope}, st.Status):
+			return fmt.Errorf("ask_steps[%d]: status must be %s, %s or %s", i, StepDone, StepNotDone, StepOutOfScope)
+		case st.Status != StepDone && !textOK(st.Reason, 1000):
+			return fmt.Errorf("ask_steps[%d]: a step %s needs a reason (at most 1000 characters)", i, st.Status)
+		case st.FollowUp < 0 || (st.FollowUp != 0 && st.Status != StepNotDone):
+			return fmt.Errorf("ask_steps[%d]: follow_up is the item filed for a step not_done", i)
+		}
+	}
+	return nil
+}
+
+// UnfiledSteps are the steps review marked not done whose follow-up is not an item filed after
+// this one (followedBy: the open items that depend on it).
+func UnfiledSteps(steps []AskStep, followedBy []int64) []AskStep {
+	var out []AskStep
+	for _, st := range steps {
+		if st.Status == StepNotDone && (st.FollowUp == 0 || !slices.Contains(followedBy, st.FollowUp)) {
+			out = append(out, st)
+		}
+	}
+	return out
+}
+
+// BounceUnfiled turns a review's approval that names steps of the ask not done, and not filed, into
+// a bounce: the build agent finishes them, or asks for them to be filed as items after this one.
+func BounceUnfiled(v Result, unfiled []AskStep) Result {
+	var b strings.Builder
+	b.WriteString("The review approved, but marked steps of the ask not done with no item filed after this one for them. Do each in this PR, or return a question asking for it to be filed as an item after this one (loop add --after):\n")
+	for _, st := range unfiled {
+		fmt.Fprintf(&b, "\n- %s (%s)", oneLine(st.Step), oneLine(st.Reason))
+		if st.FollowUp != 0 {
+			fmt.Fprintf(&b, "; #%d is not an open item filed after this one", st.FollowUp)
+		}
+	}
+	v.Outcome, v.Notes = "bounce", b.String()
+	v.Review = "**The runner turned this approval into a bounce:** steps of the ask are not done and not filed.\n\n" + strings.TrimSpace(v.Review)
+	v.NeedsReview, v.NeedsQA, v.Summary, v.NotVerified = false, false, "", nil
+	return v
 }
 
 // Evidence names a file under .loop/evidence and what it shows.
@@ -111,8 +184,8 @@ var outcomeFields = map[string][]string{
 	"reproduced":       {"repo", "area", "size", "risk", "resources", "change_kind", "builder", "summary", "notes", "evidence", "not_verified", "needs_qa"},
 	OutcomeRouted:      {"repo", "why"},
 	"not_reproducible": {"summary", "notes", "evidence", "not_verified"},
-	"approved":         {"summary", "review", "head_sha", "evidence", "not_verified", "needs_review", "needs_qa"},
-	"bounce":           {"notes", "review", "head_sha", "evidence"},
+	"approved":         {"summary", "review", "head_sha", "evidence", "not_verified", "needs_review", "needs_qa", "ask_steps"},
+	"bounce":           {"notes", "review", "head_sha", "evidence", "ask_steps"},
 }
 
 // Limits on what the agent's triage and review text may be.
@@ -411,6 +484,9 @@ func ValidateReview(raw []byte, head string) (Result, error) {
 		return r, fmt.Errorf("head_sha %q is not the reviewed commit %s", r.HeadSHA, head)
 	}
 	r.HeadSHA = head
+	if err := checkAskSteps(r.AskSteps); err != nil {
+		return r, err
+	}
 	switch r.Outcome {
 	case "approved":
 		if !textOK(r.Summary, MaxSummary) {

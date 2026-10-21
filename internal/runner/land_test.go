@@ -46,6 +46,14 @@ func TestDecide(t *testing.T) {
 			f.PR.State, f.PR.MergeCommit = "MERGED", mergeM
 			f.PR.Checks = []Check{{Name: "check", Bucket: BucketFail}}
 		}, ActAdvance, "merged", ""},
+		// 1b. merged by hand, but the PR says it is part of a bigger ask: not done, the user decides
+		{"merged by hand, part 1 of 3", func(f *LandFacts) {
+			f.PR.State, f.PR.MergeCommit, f.PR.Title = "MERGED", mergeM, "MLX, part 1 of 3: decision, install, supervision"
+		}, ActAdvance, "failed", "error=part 1 of 3"},
+		{"merged by hand, part 1 of 3 with the rest filed", func(f *LandFacts) {
+			f.PR.State, f.PR.MergeCommit, f.PR.Title = "MERGED", mergeM, "MLX, part 1 of 3"
+			f.FollowedBy = []int64{12, 13}
+		}, ActAdvance, "merged", ""},
 		{"merged without a merge commit", func(f *LandFacts) { f.PR.State = "MERGED" }, ActAdvance, "failed", "error=no merge commit"},
 		{"closed", func(f *LandFacts) { f.PR.State = "CLOSED" }, ActAdvance, "failed", "error=PR #7 was closed"},
 		{"draft", func(f *LandFacts) { f.PR.IsDraft = true }, ActAdvance, "failed", "error=draft"},
@@ -78,6 +86,27 @@ func TestDecide(t *testing.T) {
 		{"conflict beats missing evidence", func(f *LandFacts) { f.PR.Mergeable, f.BuildEvidence = "CONFLICTING", 0 }, ActConflict, "", ""},
 		{"no changed paths beats a conflict", func(f *LandFacts) { f.PR.Mergeable, f.Paths = "CONFLICTING", nil }, ActAdvance, "failed", ""},
 		{"moved head beats a conflict", func(f *LandFacts) { f.PR.Mergeable, f.PR.HeadRefOid = "CONFLICTING", headB }, ActAdvance, "back_to_review", ""},
+		// 3c. a part of the ask (after a conflict, before CI): the PR says part N of M (N<M) and the rest is not filed as items after this one
+		{"title says part 1 of 3", func(f *LandFacts) { f.PR.Title = "MLX: part 1 of 3: decision, install, supervision" }, ActAdvance, "back_to_build", "reason=part 1 of 3"},
+		{"body says Part 1 of 3", func(f *LandFacts) { f.PR.Body = "This is Part 1 of 3: the engine.\n\n" + footer }, ActAdvance, "back_to_build", "reason=part 1 of 3"},
+		{"part 2/3 in the title", func(f *LandFacts) { f.PR.Title = "MLX (part 2/3)" }, ActAdvance, "back_to_build", "reason=part 2 of 3"},
+		{"part 3 of 3 merges", func(f *LandFacts) { f.PR.Title = "MLX, part 3 of 3: catalog" }, ActMerge, "", ""},
+		{"part 1 of 3 with both remaining parts filed after it", func(f *LandFacts) {
+			f.PR.Title, f.FollowedBy = "MLX, part 1 of 3", []int64{12, 13}
+		}, ActMerge, "", ""},
+		{"part 1 of 3 with one of two remaining parts filed", func(f *LandFacts) {
+			f.PR.Title, f.FollowedBy = "MLX, part 1 of 3", []int64{12}
+		}, ActAdvance, "back_to_build", "reason=1 of the 2"},
+		{"part 1 of 3 only in the runner's footer", func(f *LandFacts) {
+			f.PR.Body = "body\n\n---\n\n" + VerificationHeading + "\n\nProof: part 1 of 3 of the ask.\n\n" + VerificationTrailer + "\n"
+		}, ActMerge, "", ""},
+		{"part 1 of 3 only in a quoted ask", func(f *LandFacts) { f.PR.Body = "> The ask, part 1 of 3: engine\n\nDone in full.\n\n" + footer }, ActMerge, "", ""},
+		{"departure 1 of 3 is not a part", func(f *LandFacts) { f.PR.Title = "Counterpart 1 of 3 renamed" }, ActMerge, "", ""},
+		{"a part beats CI pending", func(f *LandFacts) {
+			f.PR.Title = "part 1 of 2"
+			f.PR.Checks = []Check{{Name: "check", Bucket: BucketPending}}
+		}, ActAdvance, "back_to_build", "reason=part 1 of 2"},
+		{"a conflict beats a part", func(f *LandFacts) { f.PR.Title, f.PR.Mergeable = "part 1 of 2", "CONFLICTING" }, ActConflict, "", ""},
 		// 4. CI
 		{"CI failed", func(f *LandFacts) {
 			f.PR.Checks = []Check{{Name: "check", Bucket: BucketPass}, {Name: "lint", Bucket: BucketFail, URL: "https://ci/lint"}}
@@ -150,7 +179,7 @@ func TestParseLandView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pr.Number != 7 || pr.State != "OPEN" || pr.HeadRefName != "loop/7-show-the-repo" || pr.HeadRefOid != headA ||
+	if pr.Number != 7 || pr.Title != "Show the repo" || pr.State != "OPEN" || pr.HeadRefName != "loop/7-show-the-repo" || pr.HeadRefOid != headA ||
 		pr.BaseRefName != "main" || pr.Mergeable != "MERGEABLE" || pr.MergeStateStatus != "BEHIND" || pr.MergeCommit != "" ||
 		!strings.Contains(pr.Body, VerificationTrailer) {
 		t.Fatalf("pr %+v", pr)

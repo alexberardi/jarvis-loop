@@ -1,0 +1,31 @@
+{
+  "name": "review-undone-step-bounces",
+  "about": "Item #353: review lists the ask's steps against the diff. An approval that marks step 2 not done, with no item filed for it, is a bounce: the runner turns it into one, the build agent gets the step in its notes, and the PR comment shows the step table. Once step 2 is filed as an item after this one and the review names it as the follow-up, the approval stands.",
+  "stages": ["build", "review"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "MLX engine and admin UI"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "for": "review", "play": "approve_undone"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "bounce", "actor": "runner",
+                 "data": {"notes": "steps of the ask not done with no item filed(.|\\n)*2\\. the admin UI \\(left for part 2\\)"}, "count": 1}]},
+    {"do": "add", "item": "b", "title": "MLX admin UI", "after": ["a"]},
+    {"do": "script", "item": "a", "for": "review", "play": "approve_filed"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "land", "b": "triage"},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "bounce", "actor": "runner", "count": 1},
+      {"item": "a", "kind": "advanced", "outcome": "approved", "actor": "runner", "count": 1}
+    ],
+    "prs": 1
+  }
+}

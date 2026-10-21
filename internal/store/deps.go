@@ -117,6 +117,25 @@ func waitingOn(it pipeline.Item, stages map[int64]pipeline.Stage) []int64 {
 	return w
 }
 
+// followedBy is the open (not closed) items that depend on id, in id order.
+func followedBy(tx *sql.Tx, id int64) ([]int64, error) {
+	rows, err := tx.Query(`SELECT id FROM items WHERE ',' || depends_on || ',' LIKE ? AND stage != 'closed' ORDER BY id`,
+		"%,"+strconv.FormatInt(id, 10)+",%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var f int64
+		if err := rows.Scan(&f); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
 // dependencyClosed moves the open items that depend on dep, just dropped or closed, to needs_you
 // (pipeline.ApplyDependencyClosed), in the transaction that closed it.
 func (s *Store) dependencyClosed(tx *sql.Tx, dep int64) error {
