@@ -49,7 +49,7 @@ const usage = `usage: loop <command> [args]
   feature <id> <name|none>    put it in that feature, or in none
   builder <id> <qwen|claude|auto>   who builds it, before its build starts (auto: routing decides)
   rebuild <id> "<notes>" | --notes TEXT   send a held or needs_you item back to build
-  agents [<0-6>]
+  agents [<0-10>]
   night [off|on|auto] [--classes-off verify_flake,...|none]
                               the night shift: off, on, or auto (23:00-08:00 New York); the
                               classes it may not act on
@@ -513,7 +513,7 @@ func controlLine(ctl control) string {
 	if ctl.Stopped {
 		state = "STOPPED"
 	}
-	return fmt.Sprintf("active agents: %d of 6, %s, max run %dm", ctl.ActiveAgents, state, ctl.MaxRunMinutes)
+	return fmt.Sprintf("active agents: %d of %d, %s, max run %dm", ctl.ActiveAgents, pipeline.MaxActiveAgents, state, ctl.MaxRunMinutes)
 }
 
 func cmdShow(c *client, pos []string, _ map[string][]string) error {
@@ -968,7 +968,7 @@ func cmdAgents(c *client, pos []string, _ map[string][]string) error {
 	}
 	n, err := strconv.Atoi(pos[0])
 	if err != nil {
-		return usageError("agents takes a number from 0 to 6")
+		return usageError(fmt.Sprintf("agents takes a number from 0 to %d", pipeline.MaxActiveAgents))
 	}
 	return c.setControl(map[string]any{"active_agents": n})
 }

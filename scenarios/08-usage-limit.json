@@ -40,7 +40,7 @@
         {
           "channel": "digest",
           "pinned": true,
-          "text": "^Active agents: 4 of 6$"
+          "text": "^Active agents: 4 of 10$"
         },
         {
           "channel": "digest",
@@ -148,7 +148,7 @@
       },
       {
         "channel": "digest",
-        "text": "Active agents: 0 of 6"
+        "text": "Active agents: 0 of 10"
       }
     ],
     "prs": 2

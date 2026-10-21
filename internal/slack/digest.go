@@ -146,7 +146,7 @@ func (b *Bot) digestMessage(ctx context.Context, from, to time.Time, evs []store
 		fmt.Fprintf(&sb, "\n%s\n", line)
 	}
 	if ctl, err := b.c.Store.Control(ctx); err == nil {
-		fmt.Fprintf(&sb, "\nActive agents: %d of 6", ctl.ActiveAgents)
+		fmt.Fprintf(&sb, "\nActive agents: %d of %d", ctl.ActiveAgents, pipeline.MaxActiveAgents)
 		if ctl.Stopped {
 			sb.WriteString(" (stopped)")
 		}

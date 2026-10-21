@@ -661,7 +661,7 @@ func TestControlValidate(t *testing.T) {
 	}
 	wantCode(t, ok.Validate(), "")
 	for _, mut := range []func(*Control){
-		func(c *Control) { c.ActiveAgents = 7 },
+		func(c *Control) { c.ActiveAgents = 11 },
 		func(c *Control) { c.ActiveAgents = -1 },
 		func(c *Control) { c.MaxRunMinutes = 0 },
 		func(c *Control) { c.Limits = map[string]int{"tpu": 1} },

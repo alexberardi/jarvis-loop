@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// MaxActiveAgents is the top of the active-agents range (0–6).
-const MaxActiveAgents = 6
+// MaxActiveAgents is the top of the active-agents range (0–10).
+const MaxActiveAgents = 10
 
 // Control is the user's throttle and the limits.
 type Control struct {

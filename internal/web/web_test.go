@@ -76,7 +76,7 @@ func TestBoardPage(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("board: %d %s", resp.StatusCode, body)
 	}
-	for _, want := range []string{"intake", "wake word &lt;misses&gt;", "P1", `type="range"`, `min="0"`, `max="6"`, `value="4"`} {
+	for _, want := range []string{"intake", "wake word &lt;misses&gt;", "P1", `type="range"`, `min="0"`, `max="10"`, `value="4"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("board lacks %q", want)
 		}
@@ -114,7 +114,7 @@ func TestSliderPost(t *testing.T) {
 	if c, _ := st.Control(context.Background()); c.Stopped || c.ActiveAgents != 3 {
 		t.Fatalf("resume: %+v", c)
 	}
-	if resp := post(url.Values{"active_agents": {"9"}}, nil); resp.StatusCode != 400 {
+	if resp := post(url.Values{"active_agents": {"11"}}, nil); resp.StatusCode != 400 {
 		t.Fatalf("out of range: %d", resp.StatusCode)
 	}
 	// A cross-site form post is refused even with the browser's cached credentials.

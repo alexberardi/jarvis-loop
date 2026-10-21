@@ -1041,7 +1041,7 @@ func (b *Bot) paceMessage(ctx context.Context, e store.Event) (Message, bool) {
 // ---- the control message ----
 
 func controlMessage(c pipeline.Control) Message {
-	head := fmt.Sprintf("Active agents: %d of 6", c.ActiveAgents)
+	head := fmt.Sprintf("Active agents: %d of %d", c.ActiveAgents, pipeline.MaxActiveAgents)
 	if c.Stopped {
 		head += " (stopped)"
 	}
