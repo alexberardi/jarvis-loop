@@ -23,7 +23,7 @@ const helpText = "*/loop commands*\n" +
 	"`/loop qa <id>` check it yourself once merged: it waits in qa after it lands\n" +
 	"`/loop verified <id>` your check passed (qa → done)\n" +
 	"`/loop reopen <id> <what is wrong>` your check failed: files a P2 item with your words (this one → done)\n" +
-	"`/loop agents <0-6>` how many agents may run at once (0 = paused)\n" +
+	"`/loop agents <0-10>` how many agents may run at once (0 = paused)\n" +
 	"`/loop stop` / `/loop resume` stop running agents / start again\n" +
 	"`/loop usage <N>%` record what /usage shows\n" +
 	"Answer questions and approve held merges in the item's thread in #loop; talk to a plan in its thread in #plan."
@@ -149,13 +149,13 @@ func (b *Bot) runCommand(ctx context.Context, c command) string {
 		return b.qaCommand(ctx, actor, verb, args, rest)
 	case "agents":
 		n, err := strconv.Atoi(strings.Join(args, ""))
-		if err != nil || n < 0 || n > 6 {
-			return "Give a number from 0 to 6: `/loop agents 3`."
+		if err != nil || n < 0 || n > pipeline.MaxActiveAgents {
+			return fmt.Sprintf("Give a number from 0 to %d: `/loop agents 3`.", pipeline.MaxActiveAgents)
 		}
 		if _, err := b.c.Store.SetControl(ctx, actor, store.ControlPatch{ActiveAgents: &n}); err != nil {
 			return Escape(errMessage(err))
 		}
-		return fmt.Sprintf("Active agents: %d of 6.", n)
+		return fmt.Sprintf("Active agents: %d of %d.", n, pipeline.MaxActiveAgents)
 	case "stop", "resume":
 		stopped := verb == "stop"
 		if _, err := b.c.Store.SetControl(ctx, actor, store.ControlPatch{Stopped: &stopped}); err != nil {
@@ -228,7 +228,7 @@ func (b *Bot) status(ctx context.Context) string {
 	}
 	fmt.Fprintf(&sb, "Done: %d · Closed: %d", done, closed)
 	if ctl, err := b.c.Store.Control(ctx); err == nil {
-		fmt.Fprintf(&sb, " · Active agents: %d of 6", ctl.ActiveAgents)
+		fmt.Fprintf(&sb, " · Active agents: %d of %d", ctl.ActiveAgents, pipeline.MaxActiveAgents)
 		if ctl.Stopped {
 			sb.WriteString(" (stopped)")
 		}

@@ -282,7 +282,7 @@ func TestBadRequests(t *testing.T) {
 	e.refused(userTok, "GET", "/items?stage=nope", nil, 400, "invalid_field")
 	e.refused(runnerTok, "POST", "/claim", map[string]any{"agent": ""}, 400, "missing_field")
 	e.refused(runnerTok, "POST", "/claim", map[string]any{"agent": "a", "capabilities": []string{"tpu"}}, 400, "invalid_field")
-	e.refused(userTok, "PUT", "/control", map[string]any{"active_agents": 7}, 400, "invalid_field")
+	e.refused(userTok, "PUT", "/control", map[string]any{"active_agents": 11}, 400, "invalid_field")
 }
 
 // A bare repo name is stored as its configured slug; a repo loopd is not configured with is

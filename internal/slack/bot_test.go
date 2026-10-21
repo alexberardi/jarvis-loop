@@ -769,7 +769,7 @@ func TestControlMessage(t *testing.T) {
 	}
 	cs := e.calls()
 	posts := only(t, cs, "chat.postMessage")
-	if len(posts) != 1 || posts[0].Body["channel"] != ChannelDigest || !strings.Contains(allText(posts[0]), "Active agents: 4 of 6") {
+	if len(posts) != 1 || posts[0].Body["channel"] != ChannelDigest || !strings.Contains(allText(posts[0]), "Active agents: 4 of 10") {
 		t.Fatalf("control post %+v", cs)
 	}
 	if ids := actionIDs(posts[0]); strings.Join(ids, ",") != "agents_select,agents_minus,agents_plus" {
@@ -797,7 +797,7 @@ func TestControlMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	ups := only(t, e.calls(), "chat.update")
-	if len(ups) != 1 || ups[0].Body["ts"] != st.ControlTS || !strings.Contains(allText(ups[0]), "Active agents: 2 of 6") {
+	if len(ups) != 1 || ups[0].Body["ts"] != st.ControlTS || !strings.Contains(allText(ups[0]), "Active agents: 2 of 10") {
 		t.Fatalf("after CLI %+v", ups)
 	}
 	// ...the buttons and the dropdown (approver only)...
@@ -826,7 +826,7 @@ func TestControlMessage(t *testing.T) {
 	// ...and stop.
 	e.command(Approver, "stop")
 	ups = only(t, e.calls(), "chat.update")
-	if len(ups) != 1 || !strings.Contains(allText(ups[0]), "Active agents: 6 of 6 (stopped)") {
+	if len(ups) != 1 || !strings.Contains(allText(ups[0]), "Active agents: 6 of 10 (stopped)") {
 		t.Fatalf("after stop %+v", ups)
 	}
 }
@@ -893,7 +893,7 @@ func TestUsageLimitIsAnnouncedInTheDigestChannel(t *testing.T) {
 	}
 	// The active-agents number is the user's: the control message is not touched.
 	for _, u := range only(t, cs, "chat.update") {
-		if strings.Contains(allText(u), "Active agents: 0 of 6") {
+		if strings.Contains(allText(u), "Active agents: 0 of 10") {
 			t.Fatalf("the control message went to 0: %+v", u.Body)
 		}
 	}
@@ -936,8 +936,8 @@ func TestLoopCommands(t *testing.T) {
 	if c, _ := e.st.Control(e.ctx); c.ActiveAgents != 5 {
 		t.Fatal("agents")
 	}
-	if out := e.command(Approver, "agents 7"); !strings.Contains(out, "0 to 6") {
-		t.Fatalf("agents 7 %q", out)
+	if out := e.command(Approver, "agents 11"); !strings.Contains(out, "0 to 10") {
+		t.Fatalf("agents 11 %q", out)
 	}
 	e.command(Approver, "stop")
 	if c, _ := e.st.Control(e.ctx); !c.Stopped {
@@ -1062,7 +1062,7 @@ func TestDigest(t *testing.T) {
 		t.Fatalf("digest %+v", posts)
 	}
 	txt := allText(posts[0])
-	for _, want := range []string{"held 1 · needs you 1 · new 3", "Active agents: 4 of 6", "08:00–12:00"} {
+	for _, want := range []string{"held 1 · needs you 1 · new 3", "Active agents: 4 of 10", "08:00–12:00"} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("digest lacks %q: %s", want, txt)
 		}
