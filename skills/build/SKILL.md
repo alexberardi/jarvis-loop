@@ -78,7 +78,8 @@ unsure, stop and ask (outcome `question`) instead of guessing.
    back to build until the remaining parts are filed as loop items after this one. If the item is
    too big for one PR, return `question` proposing the split (one line per remaining part) so
    the user or the orchestrator files them with `loop add --after <this item>`; never ship part 1
-   and leave the rest unfiled.
+   and leave the rest unfiled. Name another PR's part only in quotation marks or code
+   (`#337, titled "part 1 of 3"`): land reads an unquoted "part N of M" as this PR's own.
 
 ## Run everything in the foreground
 

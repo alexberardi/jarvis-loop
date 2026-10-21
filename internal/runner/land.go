@@ -283,9 +283,14 @@ type PartOf struct{ N, M int }
 // partRe matches "part 1 of 3", "Part 2/3", "parts 1 of 2" as a word.
 var partRe = regexp.MustCompile(`(?i)\bparts?\s+(\d{1,3})\s*(?:of|/)\s*(\d{1,3})\b`)
 
+// quotedRe matches what a body quotes rather than says: inline code spans and text in quotation
+// marks ("…", “…”, ‘…’, and '…' opened at a word boundary, so an apostrophe opens none). A
+// mention of another PR's "part 1 of 3" is a quote, not this PR declaring itself a part.
+var quotedRe = regexp.MustCompile("`[^`\n]*`|\"[^\"\n]*\"|“[^”\n]*”|‘[^’\n]*’|(?:^|[^\\pL\\pN])'[^'\n]*'")
+
 // PRPart is the part a PR says it is: its title's, else the first in its body's own text (the
-// agent's, before the runner's Verification footer, outside quoted lines and code blocks). ok is
-// false when it says none.
+// agent's, before the runner's Verification footer, outside quoted lines, code blocks, inline
+// code and quotation marks). ok is false when it says none.
 func PRPart(title, body string) (PartOf, bool) {
 	if p, ok := firstPart(title); ok {
 		return p, true
@@ -303,7 +308,7 @@ func PRPart(title, body string) (PartOf, bool) {
 		if fenced || strings.HasPrefix(t, ">") {
 			continue
 		}
-		if p, ok := firstPart(t); ok {
+		if p, ok := firstPart(quotedRe.ReplaceAllString(t, " ")); ok {
 			return p, true
 		}
 	}

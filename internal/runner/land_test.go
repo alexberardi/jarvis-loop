@@ -101,6 +101,13 @@ func TestDecide(t *testing.T) {
 			f.PR.Body = "body\n\n---\n\n" + VerificationHeading + "\n\nProof: part 1 of 3 of the ask.\n\n" + VerificationTrailer + "\n"
 		}, ActMerge, "", ""},
 		{"part 1 of 3 only in a quoted ask", func(f *LandFacts) { f.PR.Body = "> The ask, part 1 of 3: engine\n\nDone in full.\n\n" + footer }, ActMerge, "", ""},
+		{"a quoted title of another PR is not this PR's part", func(f *LandFacts) {
+			f.PR.Body = "#299 merged PR #337, titled \"part 1 of 3\", went to done.\n\n" + footer
+		}, ActMerge, "", ""},
+		{"a curly-quoted mention is not a part", func(f *LandFacts) { f.PR.Body = "Fixes what “part 1 of 3: install” left.\n\n" + footer }, ActMerge, "", ""},
+		{"a single-quoted mention is not a part", func(f *LandFacts) { f.PR.Body = "A PR that says 'part 2 of 3' isn't done.\n\n" + footer }, ActMerge, "", ""},
+		{"an inline-code mention is not a part", func(f *LandFacts) { f.PR.Body = "PRPart now skips `part 1 of 3` in code spans.\n\n" + footer }, ActMerge, "", ""},
+		{"an apostrophe does not hide a part", func(f *LandFacts) { f.PR.Body = "This PR's part 1 of 3; it doesn't do the catalog.\n\n" + footer }, ActAdvance, "back_to_build", "reason=part 1 of 3"},
 		{"departure 1 of 3 is not a part", func(f *LandFacts) { f.PR.Title = "Counterpart 1 of 3 renamed" }, ActMerge, "", ""},
 		{"a part beats CI pending", func(f *LandFacts) {
 			f.PR.Title = "part 1 of 2"

@@ -9,7 +9,14 @@ What was chosen, each covered by a test or a scenario:
 - **Land gate 3c, "part of the ask"** (`runner.Decide`, `PRPart`). Land reads the PR's title
   (`landViewFields` now asks gh for it). A title, or the agent's part of the body (before the
   runner's Verification footer, outside quoted lines and code blocks), saying "part N of M" or
-  "part N/M" with N<M is part of the ask. It merges only when the item has at least M−N open items
+  "part N/M" with N<M is part of the ask. Only a PR saying it *is* a part counts, so the body
+  rule skips what it quotes: inline code spans and text in quotation marks ("…", “…”, ‘…’, and
+  '…' opened at a word boundary, so an apostrophe as in "PR's" or "doesn't" opens none). Chosen
+  over "title plus first paragraph" because a PR names another PR's part anywhere (this PR's own
+  body quotes #337's title in its first sentence), while a PR declaring itself a part does so in
+  its own words. An unquoted narrative mention ("follow-up to #337, part 1 of 3 of #299") still
+  matches; the build skill says to quote another PR's title, and a false match costs a bounce
+  with the reason, not a wrong merge. It merges only when the item has at least M−N open items
   filed after it (`loop add --after`; GET /items/{id} now carries `followed_by`). Otherwise land
   reports `back_to_build` with "the PR says part N of M, and the remaining … are not filed": the
   build finishes the ask, or returns a question naming the parts to file. The gate comes after
