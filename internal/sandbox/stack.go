@@ -101,6 +101,9 @@ type Options struct {
 	// Qwen gives the runner a qwen block against a fake jarvisd: its builds with no builder set
 	// may then go to qwen (docs/decisions/2026-10-19-qwen-routing.md).
 	Qwen bool
+	// PipelineVerify gives the demo repo (jarvis-server's stand-in) a pipeline-regressions verify
+	// step (PipelineVerifyStep).
+	PipelineVerify bool
 }
 
 // Stack is one sandboxed loop: loopd (store, API on a loopback port, Slack layer), a runner, a
@@ -379,6 +382,13 @@ func StartStack(opts Options) (st *Stack, err error) {
 		// overnight.
 		Regression: &runner.RegressionConfig{Repo: RepoKey, MobileRepo: MobileKey, PipelineCommand: "scripts/pipeline-scenarios"},
 	}
+	if opts.PipelineVerify {
+		rc := cfg.Repos[RepoKey]
+		if rc.Verify, err = PipelineVerifyStep(dir); err != nil {
+			return nil, err
+		}
+		cfg.Repos[RepoKey] = rc
+	}
 	if opts.Qwen {
 		if s.qwen, err = startFakeQwen(); err != nil {
 			return nil, err
@@ -482,6 +492,53 @@ if [ -e ` + shellQuote(fail) + ` ]; then echo "FAIL: the home screen is blank (h
 echo "shots: 1 screen, light"`},
 		{Name: "web screenshots", Run: "echo should not run; exit 1", WhenChanged: []string{"web/**"}},
 	}
+}
+
+// PipelineVerifyMode is the file (under the stack dir) that says how the stand-in pipeline
+// scenarios go on the change, as a scenario's "verify" step with outcome flaky or regressed sets
+// it; absent, the change fails only what fails on main too.
+const PipelineVerifyMode = "work/pipeline-verify-mode"
+
+// pipelineStandIn stands in for tools/pipeline run --json in a pipeline-regressions step: on
+// both sides "timer correction" passes and "computer control off" fails every run (failing on
+// main too); "who am I" passes on the base, and on the change fails every run when the mode is
+// flaky (but passes the confirm round) or regressed (every round).
+const pipelineStandIn = `#!/usr/bin/env bash
+set -euo pipefail
+mode=$(cat "$1" 2>/dev/null || true)
+n=$LOOP_PIPELINE_REPEAT
+echo "pipeline: $LOOP_PIPELINE_SIDE, $n runs, filter '$LOOP_PIPELINE_FILTER', sandbox $LOOP_PIPELINE_SANDBOX"
+who=$n
+if [ "$LOOP_PIPELINE_SIDE" = head ]; then
+  case "$mode" in
+  regressed) who=0 ;;
+  flaky) if [ -z "$LOOP_PIPELINE_FILTER" ]; then who=0; fi ;;
+  esac
+fi
+all="{\"name\": \"timer correction\", \"passed\": $n, \"runs\": $n}, {\"name\": \"computer control off\", \"passed\": 0, \"runs\": $n, \"failures\": [\"run 1: no computer tool call\"]}, {\"name\": \"who am I\", \"passed\": $who, \"runs\": $n}"
+if [ -n "$LOOP_PIPELINE_FILTER" ]; then
+  out=""
+  for sc in "timer correction" "computer control off" "who am I"; do
+    if [[ "$sc" =~ $LOOP_PIPELINE_FILTER ]]; then
+      p=$n; [ "$sc" = "computer control off" ] && p=0; [ "$sc" = "who am I" ] && p=$who
+      out="$out${out:+, }{\"name\": \"$sc\", \"passed\": $p, \"runs\": $n}"
+    fi
+  done
+  all=$out
+fi
+echo "[$all]" > "$LOOP_PIPELINE_OUT"
+exit 1
+`
+
+// PipelineVerifyStep is the demo repo's pipeline-regressions step: the stand-in above, written to
+// the runner's work root (readable in the fence), as jarvis-server's would run tools/pipeline.
+func PipelineVerifyStep(dir string) ([]runner.VerifyStep, error) {
+	script := filepath.Join(dir, "work", "pipeline-standin")
+	if err := os.WriteFile(script, []byte(pipelineStandIn), 0o755); err != nil {
+		return nil, err
+	}
+	return []runner.VerifyStep{{Name: "pipeline scenarios", Pipeline: &runner.PipelineVerify{},
+		Run: shellQuote(script) + " " + shellQuote(filepath.Join(dir, PipelineVerifyMode))}}, nil
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

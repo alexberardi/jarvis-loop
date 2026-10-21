@@ -133,7 +133,7 @@ listed apart in the PR's Verification footer; a failure sends the build back (co
 bounce) with nothing pushed. With a repo harness, verify uses its own sandbox name
 (`loop-<item>-verify`), purges the agent's and its own with the harness `down` before each step,
 and retries a step once after a purge when it fails on its environment (exit 3: the harness did not
-come up; `docs/decisions/2026-10-20-verify-sandbox.md`). A change to a file the runner trusts (`deny_write`) is not verified
+come up; `docs/decisions/2026-10-20-verify-sandbox.md`). jarvis-server's pipeline scenarios (a small real model, flaky) are a `pipeline` step the runner judges itself: it fails only on a scenario that passes every run on the base and none on the change, twice over (3 runs a side, then 5 more for each suspect), and names the suspects that did not confirm as flaky (`docs/decisions/2026-10-21-pipeline-verify-flakes.md`). A change to a file the runner trusts (`deny_write`) is not verified
 until the approver OKs that exact commit (Trust button or `loop trust`); verify then runs it (the OK holds for that commit until verify reaches a verdict on it: the PR, or a real regression;
 a later head whose trusted files' diff against the merge base is byte-identical carries the OK)
 and land holds the PR. Details: `docs/decisions/2026-10-15-all-repos.md`,

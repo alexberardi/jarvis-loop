@@ -201,3 +201,37 @@ func TestTrusted(t *testing.T) {
 		}
 	}
 }
+
+// A pipeline-regressions step (pipelineverify.go): run is optional, repeat and confirm default to
+// 3 and 5 and are capped, and it cannot run in another repo.
+func TestConfigPipelineVerify(t *testing.T) {
+	with := func(step string) string {
+		return strings.Replace(cfgAllRepos, `{"name":"pipeline scenarios","run":"scripts/sandbox up --name loop-$LOOP_ITEM && go run ./tools/pipeline run"}`, step, 1)
+	}
+	c, err := LoadConfig(writeCfg(t, with(`{"name":"pipeline scenarios","pipeline":{},"when_changed":["**/*.go"],"timeout":"90m"}`), 0o600))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := c.Repos["jarvis-server"].Verify[0]
+	if repeat, confirm := v.Pipeline.Runs(); v.Run != "" || repeat != 3 || confirm != 5 {
+		t.Fatalf("pipeline step %+v: repeat %d confirm %d", v, repeat, confirm)
+	}
+	c, err = LoadConfig(writeCfg(t, with(`{"name":"pipeline scenarios","run":"scripts/my-pipeline","pipeline":{"repeat":2,"confirm":8}}`), 0o600))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeat, confirm := c.Repos["jarvis-server"].Verify[0].Pipeline.Runs(); repeat != 2 || confirm != 8 {
+		t.Fatalf("repeat %d confirm %d", repeat, confirm)
+	}
+	for name, step := range map[string]string{
+		"repeat too high":  `{"name":"p","pipeline":{"repeat":11}}`,
+		"negative confirm": `{"name":"p","pipeline":{"confirm":-1}}`,
+		"confirm too high": `{"name":"p","pipeline":{"confirm":21}}`,
+		"in another repo":  `{"name":"p","repo":"jarvis-node-mobile","pipeline":{}}`,
+		"unknown field":    `{"name":"p","pipeline":{"runs":3}}`,
+	} {
+		if _, err := LoadConfig(writeCfg(t, with(step), 0o600)); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}

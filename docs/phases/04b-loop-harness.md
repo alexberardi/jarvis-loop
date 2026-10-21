@@ -84,12 +84,14 @@ a forbidden message), with a readable failure. The fake Slack's injection and re
 
 ## Scenario format (as built)
 
-A scenario file is `{"name", "about", ["stages"], ["slots"], ["extra_repo"], ["qwen"], "steps": [...], "expect": {...}}`; `stages` are
+A scenario file is `{"name", "about", ["stages"], ["slots"], ["extra_repo"], ["qwen"], ["pipeline_verify"], "steps": [...], "expect": {...}}`; `stages` are
 the stages the runner claims (default triage, build and review, as a real runner); `slots` its agent
 slots (default 1; 2 let one run go on while another starts); `extra_repo` puts a
 fourth repo (`sandbox/extra`) on the fake GitHub that loopd and the runner learn of only from a reload; `qwen` gives the runner
 a qwen block against a fake jarvisd (OpenCode is the fake claude called as `run`), so its builds with no builder set may go to
-qwen (docs/decisions/2026-10-19-qwen-routing.md); without it every build is claude's. Items are named by an
+qwen (docs/decisions/2026-10-19-qwen-routing.md); without it every build is claude's. `pipeline_verify` gives the demo repo a
+pipeline-regressions verify step against a stand-in for tools/pipeline (a `verify` step's outcome
+`flaky` or `regressed` sets how "who am I" goes on the change; docs/decisions/2026-10-21-pipeline-verify-flakes.md). Items are named by an
 alias (`"a"`) given when added; ids are the stack's own. An item the loop filed itself (a red
 main's P1) is named by its id: `"#2"`. Unknown fields are refused, so a typo
 cannot silently check nothing. Steps (`"do"`):

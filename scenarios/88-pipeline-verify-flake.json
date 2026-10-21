@@ -1,0 +1,40 @@
+{
+  "name": "pipeline-verify-flake",
+  "about": "#392, the pipeline-regressions verify step (docs/decisions/2026-10-21-pipeline-verify-flakes.md): the runner runs the pipeline scenarios itself, 3 runs on the change, then the ones that failed every run 3 times on the base; a suspect (3/3 on the base, 0/3 on the change) runs 5 more times on each side and counts only if it splits again. Item a's 'who am I' fails 0/3 on the change but passes its confirm round: verify passes and the PR's footer names it as flaky, not counted; 'computer control off' fails on main too and is not the change's. Item b's 'who am I' splits again: verify fails naming the regression, nothing is pushed, and Slack gets the step's name and status, not its log.",
+  "stages": ["build"],
+  "pipeline_verify": true,
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "Friendlier greeting", "text": "[demo] make the greeting friendlier"},
+    {"do": "triage", "item": "a"},
+    {"do": "verify", "outcome": "flaky"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect",
+     "stage": {"a": "review"},
+     "events": [
+       {"item": "a", "kind": "evidence", "actor": "runner",
+        "data": {"name": "^verify-1-pipeline-scenarios\\.log$",
+                 "label": "^runner verify \"pipeline scenarios\": log, passed \\(0s; flaky, not counted: who am I\\)$"}, "count": 1}],
+     "pr": {"a": {"repo": "sandbox/demo",
+       "body": "- pipeline scenarios: passed \\(0s; flaky, not counted: who am I\\); `verify-1-pipeline-scenarios\\.log`"}},
+     "run_files": [
+       {"item": "a", "stage": "build", "run": 1, "file": "verify/verify-1-pipeline-scenarios/output.log",
+        "text": "pipeline: head, 3 runs, filter '', sandbox loop-1-verify\\n[\\s\\S]*pipeline: base, 3 runs, filter '\\^\\(computer control off\\|who am I\\)\\$'[\\s\\S]*pipeline: head, 5 runs, filter '\\^\\(who am I\\)\\$'[\\s\\S]*\\[pipeline verify\\] regressions: none; flaky, not counted: who am I; failing on the base too: computer control off\\n$"}],
+     "absent": ["work/1-verify-base"]},
+
+    {"do": "add", "item": "b", "via": "slack", "title": "Shorter greeting", "text": "[demo] make the greeting shorter"},
+    {"do": "triage", "item": "b"},
+    {"do": "verify", "outcome": "regressed"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "expect",
+     "stage": {"b": "build"},
+     "events": [
+       {"item": "b", "kind": "advanced", "outcome": "verify_failed", "actor": "runner",
+        "data": {"reason": "^Runner verify \"pipeline scenarios\" failed \\(regressed: who am I; 0s\\); nothing was pushed$",
+                 "log_tail": "\\[pipeline verify\\] and 5 more times on the base: passed every run \\(regressions\\): who am I"}, "count": 1}],
+     "messages": [{"thread": "b", "text": "^Runner verify \"pipeline scenarios\" failed; nothing pushed\\. Back to build \\(1\\)"}],
+     "no_messages": [{"text": "pipeline verify\\]"}],
+     "absent": ["work/2-verify-base"]}
+  ]
+}

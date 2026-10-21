@@ -43,9 +43,12 @@ type Scenario struct {
 	Capabilities []string `json:"capabilities,omitempty"`
 	// Qwen: the runner has a qwen block (a fake jarvisd, OpenCode as the fake claude), so its P3
 	// size-S builds go to qwen; without it every build is claude's.
-	Qwen  bool    `json:"qwen,omitempty"`
-	Steps []Step  `json:"steps"`
-	Final *Expect `json:"expect,omitempty"`
+	Qwen bool `json:"qwen,omitempty"`
+	// PipelineVerify: the demo repo has a pipeline-regressions verify step (PipelineVerifyStep),
+	// its change's results set by a "verify" step's outcome flaky or regressed.
+	PipelineVerify bool    `json:"pipeline_verify,omitempty"`
+	Steps          []Step  `json:"steps"`
+	Final          *Expect `json:"expect,omitempty"`
 }
 
 // Step is one thing that happens. Do says what; the other fields are its arguments. An "expect"
@@ -721,9 +724,10 @@ func (p *player) step(st Step) error {
 		s.GitHub.SetChecks(d.Item.Repo, head, st.Checks)
 		return nil
 	case "verify":
-		// How the stand-in node-mobile's "mobile shots" verify step goes from now on.
-		f, m := filepath.Join(s.Dir, VerifyFailFile), filepath.Join(s.Dir, VerifyMaskedMarker)
-		for _, p := range []string{f, m} {
+		// How the stand-in node-mobile's "mobile shots" verify step (or, flaky and regressed, the
+		// demo's pipeline step) goes from now on.
+		f, m, pm := filepath.Join(s.Dir, VerifyFailFile), filepath.Join(s.Dir, VerifyMaskedMarker), filepath.Join(s.Dir, PipelineVerifyMode)
+		for _, p := range []string{f, m, pm} {
 			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 				return err
 			}
@@ -737,10 +741,12 @@ func (p *player) step(st Step) error {
 				return err
 			}
 			return os.WriteFile(f, []byte(st.Outcome+"\n"), 0o644)
+		case "flaky", "regressed":
+			return os.WriteFile(pm, []byte(st.Outcome+"\n"), 0o644)
 		case "pass":
 			return nil
 		}
-		return fmt.Errorf("verify outcome %q: use pass, fail or masked", st.Outcome)
+		return fmt.Errorf("verify outcome %q: use pass, fail, masked, flaky or regressed", st.Outcome)
 	case "github":
 		if st.RefuseMerges != nil {
 			s.GitHub.RefuseMerges(*st.RefuseMerges)
