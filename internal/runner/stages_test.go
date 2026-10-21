@@ -334,7 +334,7 @@ func TestReviewApproves(t *testing.T) {
 	brief := g.read(filepath.Join(run, "brief.md"))
 	for _, want := range []string{"# Review stage", "- PR: #7, branch `loop/", "head `" + head + "`", "`.loop/context/pr.md`",
 		"`.loop/context/diff.patch` (git diff origin/main..." + head[:7] + ")", "`.loop/context/evidence/1-repro.txt` (repro)",
-		"`.loop/context/evidence/2-after.txt` (tests)"} {
+		"`.loop/context/evidence/2-after.txt` (tests)", "- Filed after this item: none"} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("brief lacks %q:\n%s", want, brief[strings.Index(brief, ItemHeading):])
 		}

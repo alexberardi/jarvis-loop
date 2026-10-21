@@ -58,16 +58,26 @@ Listed in the item section at the end of this brief, under `.loop/context/`:
    your own run's results in `.loop/evidence/` (short logs; plain files).
 4. **Read the code** for correctness, the repo's style and the item's ask: does it do what was
    asked, no more? Anything outside the ask is a finding.
-5. **Content the hold list cannot see.** The user's hold rules match paths; some risks hide in
+5. **The ask, step by step.** Compare the item's ask, step by step (its numbered steps, or each
+   thing it asks for), against the diff, and list every step in `ask_steps`: `done`,
+   `not_done` or `out_of_scope`, with a reason for any step not done. Put the same table in your
+   review. A step `not_done` is a bounce unless it is filed as its own loop item after this one
+   (`follow_up`: its id; the brief lists the items filed after this one, if any). A PR that says
+   "part N of M" with N<M is not done either: land will not merge it until the remaining parts
+   are filed. Check the build's **proof** too: when the ask describes something the user does
+   (install a model from the Models page), the proof must name that path (an `e2e` flow or a
+   `manual` look), not only unit tests; if it does not, bounce.
+6. **Content the hold list cannot see.** The user's hold rules match paths; some risks hide in
    ordinary files. Approve with `"needs_review": true` (the merge then waits for the user) when
    the change, wherever it is: adds or edits a `curl … | sh` (or `wget … | bash`) line, a pinned
    install URL or a checksum in a docs page or script; makes a command or device package use a new
    secret (`JarvisSecret`), a new network host or a new system package; or touches auth, tokens,
    signing or what a merge deploys or ships to testers. Say why in the review.
-6. Decide:
-   - `approved`: the change does what the item asks, the tests cover it meaningfully, and the
-     verification you re-ran agrees with the PR. Minor nits may go in the review text, but only
-     approve what you would merge.
+7. Decide:
+   - `approved`: the change does every step of the ask (or each step left is filed, or out of
+     scope with a reason), the tests cover it meaningfully, and the verification you re-ran
+     agrees with the PR. Minor nits may go in the review text, but only approve what you would
+     merge.
    - `bounce`: anything that must change first. `notes` is the list the build agent works from:
      each point specific and actionable, with the file and line where possible
      (`internal/x/y.go:42: …`), and what "done" looks like. No vague advice.

@@ -261,3 +261,26 @@ func TestClosedDependencyAsksAboutDependents(t *testing.T) {
 		t.Fatalf("b after a closed: %+v", d.Item)
 	}
 }
+
+// An item's detail lists the open items filed after it (land counts them as a PR's remaining
+// parts); a dropped one no longer counts, nor does an item after one of its followers.
+func TestDetailFollowedBy(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	a := add(t, s, "a", "")
+	b := addAfter(t, s, "b", "", a.ID)
+	c := addAfter(t, s, "c", "", a.ID)
+	addAfter(t, s, "d", "", b.ID)
+	if d, err := s.GetItem(ctx, a.ID); err != nil || !slices.Equal(d.FollowedBy, []int64{b.ID, c.ID}) {
+		t.Fatalf("followed by %v %v, want [%d %d]", d.FollowedBy, err, b.ID, c.ID)
+	}
+	if _, err := s.Drop(ctx, user, c.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := s.GetItem(ctx, a.ID); !slices.Equal(d.FollowedBy, []int64{b.ID}) {
+		t.Fatalf("after the drop: followed by %v, want [%d]", d.FollowedBy, b.ID)
+	}
+	if d, _ := s.GetItem(ctx, c.ID); len(d.FollowedBy) != 0 {
+		t.Fatalf("c is followed by %v", d.FollowedBy)
+	}
+}

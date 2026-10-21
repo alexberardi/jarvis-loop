@@ -286,6 +286,7 @@ func (r *Runner) landFacts(ctx context.Context, lr *landRun) (LandFacts, error) 
 		f.ApprovedHead = it.Approval.HeadSHA
 	}
 	f.RerunCI = rerunOwed(d.Events, pr.HeadRefOid)
+	f.FollowedBy = d.FollowedBy
 	// Hold: loopd's risk, or loopd's rules on the paths computed here. loopd checks again when
 	// the merge is reported, but by then it has happened; this check is the one that stops it.
 	f.Hold = it.Risk == pipeline.RiskHold

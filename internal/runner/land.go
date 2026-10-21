@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -54,6 +56,7 @@ type LandPR struct {
 	BaseRefName      string
 	Mergeable        string // MERGEABLE, CONFLICTING, UNKNOWN
 	MergeStateStatus string // CLEAN, BEHIND, BLOCKED, DIRTY, ...
+	Title            string
 	Body             string
 	MergeCommit      string // set once merged
 	Checks           []Check
@@ -103,6 +106,9 @@ type LandFacts struct {
 	// RerunCI: the orchestrator's first red_ci answer on the PR's head owes a re-run of its failed jobs, and
 	// no land run has re-run them yet (a ci_rerun event on the head).
 	RerunCI bool
+	// FollowedBy are the open items filed to follow this one (they depend on it): the remaining
+	// parts of an ask the PR does only part of.
+	FollowedBy []int64
 }
 
 // Action is what a pass of the gates decided.
@@ -178,7 +184,11 @@ func Decide(f LandFacts) Decision {
 		if pr.MergeCommit == "" {
 			return failed("PR #%d is merged, but GitHub gave no merge commit", pr.Number)
 		}
-		// Merged by hand: record it (loopd still requires an approval for a held item).
+		// Merged by hand: record it (loopd still requires an approval for a held item), unless the
+		// PR says it is only part of the ask and the rest is not filed: then the user decides.
+		if p, ok := unfiledParts(pr, f.FollowedBy); ok {
+			return failed("PR #%d was merged by hand, but %s", pr.Number, p.why(f.FollowedBy))
+		}
 		return advance("merged", map[string]string{"merge_sha": pr.MergeCommit, "head_sha": pr.HeadRefOid, "merged_outside": "true"})
 	case "OPEN":
 	case "CLOSED":
@@ -213,6 +223,13 @@ func Decide(f LandFacts) Decision {
 	// a docs/ merge makes a new head for review, anything else goes back to build).
 	if pr.Mergeable == "CONFLICTING" || pr.MergeStateStatus == "DIRTY" {
 		return Decision{Action: ActConflict}
+	}
+	// 3c. Part of the ask: a PR that says "part N of M" (N<M) is not the whole item. It merges
+	// only once the remaining parts are filed as items after this one; until then it goes back to
+	// build, to finish the ask or ask for the split (docs/decisions/2026-10-20-partial-prs.md).
+	if p, ok := unfiledParts(pr, f.FollowedBy); ok {
+		return advance("back_to_build", map[string]string{"reason": p.why(f.FollowedBy) +
+			": finish the ask in this PR, or return a question asking for the remaining parts to be filed as items after this one (loop add --after)."})
 	}
 	// 4. CI on this head.
 	var fails, pending []string
@@ -260,6 +277,80 @@ func Decide(f LandFacts) Decision {
 	return Decision{Action: ActWait, Wait: "GitHub's mergeability check"}
 }
 
+// PartOf is a PR's "part N of M" (or "part N/M"): what it says it does of a bigger ask.
+type PartOf struct{ N, M int }
+
+// partRe matches "part 1 of 3", "Part 2/3", "parts 1 of 2" as a word.
+var partRe = regexp.MustCompile(`(?i)\bparts?\s+(\d{1,3})\s*(?:of|/)\s*(\d{1,3})\b`)
+
+// quotedRe matches what a body quotes rather than says: inline code spans and text in quotation
+// marks ("…", “…”, ‘…’, and '…' opened at a word boundary, so an apostrophe opens none). A
+// mention of another PR's "part 1 of 3" is a quote, not this PR declaring itself a part.
+var quotedRe = regexp.MustCompile("`[^`\n]*`|\"[^\"\n]*\"|“[^”\n]*”|‘[^’\n]*’|(?:^|[^\\pL\\pN])'[^'\n]*'")
+
+// PRPart is the part a PR says it is: its title's, else the first in its body's own text (the
+// agent's, before the runner's Verification footer, outside quoted lines, code blocks, inline
+// code and quotation marks). ok is false when it says none.
+func PRPart(title, body string) (PartOf, bool) {
+	if p, ok := firstPart(title); ok {
+		return p, true
+	}
+	if i := strings.LastIndex(body, VerificationHeading); i >= 0 {
+		body = body[:i]
+	}
+	fenced := false
+	for _, line := range strings.Split(body, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+			fenced = !fenced
+			continue
+		}
+		if fenced || strings.HasPrefix(t, ">") {
+			continue
+		}
+		if p, ok := firstPart(quotedRe.ReplaceAllString(t, " ")); ok {
+			return p, true
+		}
+	}
+	return PartOf{}, false
+}
+
+func firstPart(s string) (PartOf, bool) {
+	m := partRe.FindStringSubmatch(s)
+	if m == nil {
+		return PartOf{}, false
+	}
+	n, _ := strconv.Atoi(m[1])
+	mm, _ := strconv.Atoi(m[2])
+	if n < 1 || mm < 1 {
+		return PartOf{}, false
+	}
+	return PartOf{N: n, M: mm}, true
+}
+
+// Remaining is how many parts follow this one.
+func (p PartOf) Remaining() int { return max(p.M-p.N, 0) }
+
+// why says what is missing, for the gate's reason.
+func (p PartOf) why(followedBy []int64) string {
+	s := fmt.Sprintf("the PR says part %d of %d, and %d of the %d remaining parts are filed as items after this one",
+		p.N, p.M, len(followedBy), p.Remaining())
+	if len(followedBy) == 0 {
+		s = fmt.Sprintf("the PR says part %d of %d, and the remaining %d are not filed as items after this one", p.N, p.M, p.Remaining())
+	}
+	return s
+}
+
+// unfiledParts is the PR's part when it leaves parts of the ask that are not filed as items
+// following this one (fewer followers than remaining parts).
+func unfiledParts(pr LandPR, followedBy []int64) (PartOf, bool) {
+	p, ok := PRPart(pr.Title, pr.Body)
+	if !ok || p.Remaining() == 0 || len(followedBy) >= p.Remaining() {
+		return p, false
+	}
+	return p, true
+}
+
 // outsideDocs returns the paths not under docs/.
 func outsideDocs(paths []string) []string {
 	var out []string
@@ -272,7 +363,7 @@ func outsideDocs(paths []string) []string {
 }
 
 // landViewFields are the PR fields LandView asks gh for.
-const landViewFields = "number,state,isDraft,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,body,mergeCommit,statusCheckRollup"
+const landViewFields = "number,title,state,isDraft,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,body,mergeCommit,statusCheckRollup"
 
 // ParseLandView reads gh pr view's JSON (landViewFields). The checks come from the status
 // rollup of the head commit: check runs and commit statuses, one per name (a re-run replaces
@@ -280,6 +371,7 @@ const landViewFields = "number,state,isDraft,headRefName,headRefOid,baseRefName,
 func ParseLandView(raw []byte) (LandPR, error) {
 	var v struct {
 		Number           int    `json:"number"`
+		Title            string `json:"title"`
 		State            string `json:"state"`
 		IsDraft          bool   `json:"isDraft"`
 		HeadRefName      string `json:"headRefName"`
@@ -310,7 +402,7 @@ func ParseLandView(raw []byte) (LandPR, error) {
 	if v.Number <= 0 || v.State == "" {
 		return LandPR{}, fmt.Errorf("gh pr view: no PR in the answer")
 	}
-	pr := LandPR{Number: v.Number, State: v.State, IsDraft: v.IsDraft, HeadRefName: v.HeadRefName, HeadRefOid: v.HeadRefOid,
+	pr := LandPR{Number: v.Number, Title: v.Title, State: v.State, IsDraft: v.IsDraft, HeadRefName: v.HeadRefName, HeadRefOid: v.HeadRefOid,
 		BaseRefName: v.BaseRefName, Mergeable: v.Mergeable, MergeStateStatus: v.MergeStateStatus, Body: v.Body}
 	if v.MergeCommit != nil {
 		pr.MergeCommit = v.MergeCommit.Oid

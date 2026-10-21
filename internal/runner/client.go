@@ -353,6 +353,8 @@ type Detail struct {
 	Item     Item           `json:"item"`
 	Events   []EventInfo    `json:"events"`
 	Evidence []EvidenceInfo `json:"evidence"`
+	// FollowedBy are the open items filed after it (they depend on it).
+	FollowedBy []int64 `json:"followed_by,omitempty"`
 	// Frozen is set while main is red in the item's repo.
 	Frozen *Freeze `json:"frozen,omitempty"`
 }

@@ -1,0 +1,41 @@
+{
+  "name": "partial-pr-stays-out-of-done",
+  "about": "Item #353: a PR titled 'part 1 of 3' does only part of the ask. Review approves it and CI is green, but land does not merge it: the item goes back to build, naming the two remaining parts that are not filed. Once both are filed as items after it (loop add --after), the rebuilt PR merges and the item is done.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "MLX engine, install and catalog"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "part_one"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"}},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build"}, "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "back_to_build", "actor": "runner",
+                 "data": {"reason": "^the PR says part 1 of 3, and the remaining 2 are not filed as items after this one: finish the ask"}, "count": 1}],
+     "messages": [{"thread": "a", "text": "part 1 of 3"}]},
+    {"do": "add", "item": "b", "title": "MLX admin UI (part 2 of 3)", "after": ["a"]},
+    {"do": "add", "item": "c", "title": "MLX catalog (part 3 of 3)", "after": ["a"]},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"}},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done", "b": "triage", "c": "triage"},
+    "pr": {"a": {"state": "MERGED", "merge_calls": 1}},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "back_to_build", "actor": "runner", "count": 1},
+      {"item": "a", "kind": "advanced", "outcome": "merged", "actor": "runner", "count": 1}
+    ]
+  }
+}

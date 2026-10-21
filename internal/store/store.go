@@ -703,10 +703,13 @@ type Detail struct {
 	Item    pipeline.Item `json:"item"`
 	Display string        `json:"display"`
 	// WaitingOn is the items it depends on that are not done yet.
-	WaitingOn []int64    `json:"waiting_on"`
-	Lease     *Lease     `json:"lease,omitempty"`
-	Events    []Event    `json:"events"`
-	Evidence  []Evidence `json:"evidence"`
+	WaitingOn []int64 `json:"waiting_on"`
+	// FollowedBy are the open items that depend on it (filed --after it): land counts them as the
+	// filed remaining parts of a PR that says "part N of M".
+	FollowedBy []int64    `json:"followed_by,omitempty"`
+	Lease      *Lease     `json:"lease,omitempty"`
+	Events     []Event    `json:"events"`
+	Evidence   []Evidence `json:"evidence"`
 	// Frozen is the freeze on the item's repo while its main is red (the item may be its fix).
 	Frozen *Freeze `json:"frozen,omitempty"`
 }
@@ -735,6 +738,9 @@ func (s *Store) GetItem(ctx context.Context, id int64) (Detail, error) {
 		return d, err
 	}
 	d.WaitingOn = waitingOn(d.Item, deps)
+	if d.FollowedBy, err = followedBy(tx, id); err != nil {
+		return d, err
+	}
 
 	rows, err := tx.Query(`SELECT id, at, actor, kind, from_stage, to_stage, outcome, data FROM events WHERE item_id = ? ORDER BY id`, id)
 	if err != nil {

@@ -273,6 +273,14 @@ func TestValidateReview(t *testing.T) {
 		{"a GitHub approval is not a field", `{"outcome":"approved","summary":"s","review":"r","approve":true}`, "unknown field", ""},
 		{"a question is not a review outcome", `{"outcome":"question","question":"?"}`, "not an outcome of review", ""},
 		{"a build field", `{"outcome":"approved","summary":"s","review":"r","pr_body":"x"}`, `field "pr_body"`, ""},
+		// The ask's steps, judged against the diff.
+		{"ask steps", `{"outcome":"approved","summary":"s","review":"r","ask_steps":[{"step":"1. land gate","status":"done"},{"step":"2. UI","status":"not_done","reason":"next part","follow_up":12},{"step":"3. docs","status":"out_of_scope","reason":"the item says so"}]}`, "", "r"},
+		{"ask steps on a bounce", `{"outcome":"bounce","notes":"n","ask_steps":[{"step":"1","status":"not_done","reason":"missing"}]}`, "", "n"},
+		{"ask step with an unknown status", `{"outcome":"approved","summary":"s","review":"r","ask_steps":[{"step":"1","status":"partly"}]}`, "status must be", ""},
+		{"ask step not done without a reason", `{"outcome":"approved","summary":"s","review":"r","ask_steps":[{"step":"1","status":"not_done"}]}`, "needs a reason", ""},
+		{"ask step without a step", `{"outcome":"approved","summary":"s","review":"r","ask_steps":[{"step":" ","status":"done"}]}`, "step is required", ""},
+		{"a follow-up on a done step", `{"outcome":"approved","summary":"s","review":"r","ask_steps":[{"step":"1","status":"done","follow_up":3}]}`, "follow_up", ""},
+		{"ask steps on a build field list", `{"outcome":"approved","summary":"s","review":"r","ask_steps":[{"step":"1","status":"done","owner":"x"}]}`, "unknown field", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -287,5 +295,44 @@ func TestValidateReview(t *testing.T) {
 				t.Fatalf("err %v, want %q", err, c.err)
 			}
 		})
+	}
+}
+
+// A step not done counts as filed only when its follow-up is an open item filed after this one.
+func TestUnfiledSteps(t *testing.T) {
+	steps := []AskStep{
+		{Step: "1. engine", Status: StepDone},
+		{Step: "2. install", Status: StepNotDone, Reason: "part 2", FollowUp: 12},
+		{Step: "3. admin UI", Status: StepNotDone, Reason: "part 3"},
+		{Step: "4. catalog", Status: StepNotDone, Reason: "part 4", FollowUp: 99},
+		{Step: "5. docs", Status: StepOutOfScope, Reason: "not asked"},
+	}
+	got := UnfiledSteps(steps, []int64{12, 13})
+	if len(got) != 2 || got[0].Step != "3. admin UI" || got[1].Step != "4. catalog" {
+		t.Fatalf("unfiled %+v", got)
+	}
+	if got := UnfiledSteps(steps[:2], []int64{12}); got != nil {
+		t.Fatalf("all filed, got %+v", got)
+	}
+	if got := UnfiledSteps(nil, nil); got != nil {
+		t.Fatalf("no steps: %+v", got)
+	}
+}
+
+// An approval naming unfiled steps becomes a bounce whose notes list them.
+func TestBounceUnfiled(t *testing.T) {
+	v := Result{Outcome: "approved", Summary: "s", Review: "**Approved.**", NeedsReview: true, NeedsQA: true, NotVerified: []string{"x"},
+		AskSteps: []AskStep{{Step: "3. admin UI", Status: StepNotDone, Reason: "part 3"}, {Step: "4. catalog", Status: StepNotDone, Reason: "later", FollowUp: 99}}}
+	b := BounceUnfiled(v, v.AskSteps)
+	if b.Outcome != "bounce" || b.NeedsReview || b.NeedsQA || b.Summary != "" || b.NotVerified != nil {
+		t.Fatalf("bounce %+v", b)
+	}
+	for _, want := range []string{"3. admin UI (part 3)", "4. catalog (later); #99 is not an open item filed after this one", "loop add --after"} {
+		if !strings.Contains(b.Notes, want) {
+			t.Errorf("notes %q lack %q", b.Notes, want)
+		}
+	}
+	if !strings.Contains(b.Review, "turned this approval into a bounce") || !strings.HasSuffix(b.Review, "**Approved.**") {
+		t.Fatalf("review %q", b.Review)
 	}
 }

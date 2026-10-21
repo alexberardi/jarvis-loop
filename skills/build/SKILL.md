@@ -69,6 +69,17 @@ unsure, stop and ask (outcome `question`) instead of guessing.
    `e2e/coverage.json`: the specs and flows of the routes and screens you changed go in one `e2e`
    check, with the paths as coverage.json writes them (the next regression run decides it); a change
    that touches no covered page or screen gets a `manual` check whose `look` says why.
+   **When the ask describes something the user does** (install an MLX model from the Models page,
+   ask the node a question), the proof names that path: an `e2e` check of that flow, or a `manual`
+   check whose `look` is that path. Unit tests alone do not prove a user-visible ask.
+8. **Do the whole ask, or say what is left.** Go through the ask's numbered steps (or its
+   sentences, if it has no numbers) before you finish: each is done in this PR or out of scope
+   with a reason in the PR body. A PR that says "part N of M" (N<M) does not merge: land sends it
+   back to build until the remaining parts are filed as loop items after this one. If the item is
+   too big for one PR, return `question` proposing the split (one line per remaining part) so
+   the user or the orchestrator files them with `loop add --after <this item>`; never ship part 1
+   and leave the rest unfiled. Name another PR's part only in quotation marks or code
+   (`#337, titled "part 1 of 3"`): land reads an unquoted "part N of M" as this PR's own.
 
 ## Run everything in the foreground
 
@@ -95,7 +106,8 @@ Every token you read stays in the conversation and is paid for again on every la
 Return `{"outcome": "question", "question": "…"}` instead of guessing when: the ask is ambiguous;
 the fix needs a change on the hold list (auth or access, signing, prod, weakening a test or a CI
 check) that the item did not ask for; a boundary refused something the item needs; the harness
-cannot run; or the change grows much bigger than the item. Make the question precise enough to
+cannot run; or the change grows much bigger than the item (then name the parts to file after
+it, see step 8). Make the question precise enough to
 answer in one reply.
 
 ## Evidence over claims

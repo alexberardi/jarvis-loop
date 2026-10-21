@@ -85,12 +85,15 @@ var AgentStages = []string{StageTriage, StageBuild, StageReview}
 
 // RunInfo is where one run happens.
 type RunInfo struct {
-	Slug     string
-	Base     string
-	Branch   string
-	Worktree string
-	Scratch  string
-	Sandbox  string
+	// FollowedBy are the open items filed after this one (they depend on it): the remaining parts
+	// of its ask, if it was split.
+	FollowedBy []int64
+	Slug       string
+	Base       string
+	Branch     string
+	Worktree   string
+	Scratch    string
+	Sandbox    string
 	// Resumed is how many commits the branch already has over the base (an earlier run's).
 	Resumed int
 	// Triage are the item's evidence files copied into .loop/triage/ (build); TriageErr says why
@@ -216,12 +219,16 @@ func StaticBrief(stage string) string {
 		b.WriteString(`{"outcome": "approved", "summary": "one paragraph: why it can merge",
  "review": "markdown for the PR comment: verdict, what you checked and how, findings",
  "not_verified": ["…"], "evidence": [{"file": "evidence/check.log", "label": "scripts/check at the head"}],
- "needs_review": false, "needs_qa": false}`)
+ "needs_review": false, "needs_qa": false,
+ "ask_steps": [{"step": "1. the ask's first step", "status": "done"},
+  {"step": "2. …", "status": "not_done", "reason": "why", "follow_up": 12},
+  {"step": "3. …", "status": "out_of_scope", "reason": "why"}]}`)
 		b.WriteString("\n```\n\n```json\n")
 		b.WriteString(`{"outcome": "bounce", "notes": "the build agent's list: each point specific, with file:line, and what done looks like",
- "review": "markdown for the PR comment", "evidence": [{"file": "evidence/check.log", "label": "…"}]}`)
+ "review": "markdown for the PR comment", "evidence": [{"file": "evidence/check.log", "label": "…"}],
+ "ask_steps": [{"step": "…", "status": "not_done", "reason": "why"}]}`)
 		b.WriteString("\n```\n\n")
-		b.WriteString("The runner posts `review` on the PR as a comment (never a GitHub approval), with the commit you reviewed, uploads `.loop/evidence/`, and reports the outcome for the head commit named below; `head_sha`, if you give it, must be that commit. `needs_review: true` on an approval holds the merge for the user (see \"Content the hold list cannot see\"). `needs_qa: true` on an approval means only the user can check the change once merged (on their phone or hardware): the item then waits in qa after it lands instead of going to done. No other fields.\n")
+		b.WriteString("The runner posts `review` on the PR as a comment (never a GitHub approval), with the commit you reviewed, uploads `.loop/evidence/`, and reports the outcome for the head commit named below; `head_sha`, if you give it, must be that commit. `needs_review: true` on an approval holds the merge for the user (see \"Content the hold list cannot see\"). `needs_qa: true` on an approval means only the user can check the change once merged (on their phone or hardware): the item then waits in qa after it lands instead of going to done. `ask_steps` lists each step of the item's ask, judged against the diff: `done`, `not_done` or `out_of_scope`, with a `reason` for any step not done; `follow_up` is the loop item filed for a step not done (it must be an open item filed after this one, `loop add --after`). An approval with a step `not_done` and no such follow-up is a bounce: the runner turns it into one. No other fields.\n")
 	default:
 		b.WriteString("Commit your work on the item's branch (the runner pushes it and opens the PR; you never push), then write `.loop/result.json`, exactly one of:\n\n```json\n")
 		b.WriteString(`{"outcome": "ready_for_pr", "pr_title": "one line, at most 256 characters",
@@ -276,6 +283,7 @@ func Brief(stage string, it Item, r RunInfo) string {
 		if it.Summary != "" {
 			fmt.Fprintf(&b, "- The build's summary: %s\n", it.Summary)
 		}
+		b.WriteString(followedByLine(r.FollowedBy))
 	default:
 		fmt.Fprintf(&b, "- Repository: `%s` (base branch `%s`%s; the PR's changes are against `origin/%s`)\n", r.Slug, r.Base, groupNote(r.RepoGroup), r.Base)
 		if it.Area != "" || it.Size != "" {
@@ -432,6 +440,19 @@ const NoResultNote = NoResultHeading + "\nYour last turn ended without `.loop/re
 	"and its process is gone now. This is the same session, resumed once, in the same worktree.\n\n" +
 	"Re-run in the foreground what you were waiting for (raise the Bash `timeout`, up to 600000 ms, or split a long check), " +
 	"then finish with `.loop/result.json` as the brief (still in `.loop/brief.md`) says. If this run ends without it too, the item goes to the user.\n"
+
+// followedByLine names the items filed after this one, for ask_steps' follow_up and a PR's
+// remaining parts ("" when none).
+func followedByLine(ids []int64) string {
+	if len(ids) == 0 {
+		return "- Filed after this item: none (a step of the ask left undone has no follow-up item yet).\n"
+	}
+	s := make([]string, len(ids))
+	for i, id := range ids {
+		s[i] = fmt.Sprintf("#%d", id)
+	}
+	return "- Filed after this item (they wait for it; a step left undone may name one as its `follow_up`): " + strings.Join(s, ", ") + "\n"
+}
 
 // BuildBrief is the build stage's brief.
 func BuildBrief(it Item, r RunInfo) string { return Brief(StageBuild, it, r) }

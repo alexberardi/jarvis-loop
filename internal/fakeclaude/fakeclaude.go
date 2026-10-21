@@ -30,6 +30,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -113,6 +114,8 @@ const (
 	// a change outside the conflict resolution.
 	MergeMain      = "merge_main"
 	MergeMainExtra = "merge_main_extra"
+	// PartOne is good, with a PR titled "part 1 of 3" (a PR that does only part of the ask, #353).
+	PartOne = "part_one"
 
 	// Triage plays (a triage run of a build play plays Reproduce).
 	Reproduce      = "reproduce"       // reproduced, with notes and a repro file; picks the script's repo when the item has none
@@ -135,6 +138,10 @@ const (
 	ApproveToolState    = "approve_tool_state"
 	ApproveNamesDir     = "approve_names_dir"
 	ApproveNamesDirOnce = "approve_names_dir_once"
+	// ApproveUndone approves, listing the ask's steps with step 2 not done and no follow-up filed;
+	// ApproveFiled names the item filed right after this one (its id + 1) as step 2's follow-up (#353).
+	ApproveUndone = "approve_undone"
+	ApproveFiled  = "approve_filed"
 
 	// Plan turns (a prompt with "- Plan: P<id>" and "- Persona: <persona>"; the script is
 	// <dir>/P<id>-<persona>.json). Every play writes out/result.json with a reply.
@@ -179,7 +186,7 @@ const (
 
 var stagePlays = map[string][]string{
 	"triage": {Reproduce, Duplicate, TriageQuestion, TriageBadRepo, Route, Hang, UsageLimit, Exit3, Background},
-	"review": {Approve, Bounce, ReviewCommit, ApproveHold, ApproveQA, ApproveToolState, ApproveNamesDir, ApproveNamesDirOnce, Hang, UsageLimit, Exit3, Background},
+	"review": {Approve, Bounce, ReviewCommit, ApproveHold, ApproveQA, ApproveToolState, ApproveNamesDir, ApproveNamesDirOnce, ApproveUndone, ApproveFiled, Hang, UsageLimit, Exit3, Background},
 	// Plan personas.
 	"product":     {PlanBrief, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
 	"engineering": {PlanBlueprint, BackToBrief, PlanCycle, PlanKeep, PlanUnanswered, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
@@ -588,7 +595,11 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if reviewed != "" {
 		body += "\n\nAddressed the review (" + reviewed + ")."
 	}
-	result := map[string]any{"outcome": "ready_for_pr", "pr_title": "Add a feature",
+	title := "Add a feature"
+	if scenario == PartOne {
+		title = "Add a feature, part 1 of 3"
+	}
+	result := map[string]any{"outcome": "ready_for_pr", "pr_title": title,
 		"pr_body": body, "head_sha": head,
 		"summary": "Added a feature, test first.", "not_verified": []string{"nothing on a phone"},
 		"evidence": []any{map[string]string{"file": "evidence/after.txt", "label": "tests"}}}
@@ -867,6 +878,14 @@ func (f *fake) review(play string, brief []byte) int {
 		}
 		if play == ApproveQA {
 			r["needs_qa"] = true
+		}
+		if play == ApproveUndone || play == ApproveFiled {
+			step2 := map[string]any{"step": "2. the admin UI", "status": "not_done", "reason": "left for part 2"}
+			if play == ApproveFiled {
+				id, _ := strconv.Atoi(find(`(?m)^- Item: #(\d+):`, brief))
+				step2["follow_up"] = id + 1
+			}
+			r["ask_steps"] = []any{map[string]any{"step": "1. the engine", "status": "done"}, step2}
 		}
 	}
 	switch play {

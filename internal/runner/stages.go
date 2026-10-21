@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -337,6 +338,7 @@ func (r *Runner) answersContext(ctx context.Context, ru *run, info *RunInfo, rel
 		info.ContextErrs = append(info.ContextErrs, "the earlier answers from loopd: "+err.Error())
 		return
 	}
+	info.FollowedBy = d.FollowedBy
 	var b strings.Builder
 	n := 0
 	for _, e := range d.Events {
@@ -613,6 +615,23 @@ func (r *Runner) reportReview(ctx context.Context, ru *run, out outcome, raw []b
 			return
 		}
 	}
+	if v.Outcome == "approved" {
+		// A step of the ask not done and not filed after this item is a bounce, whatever the
+		// verdict (docs/decisions/2026-10-20-partial-prs.md).
+		var followedBy []int64
+		if unfiled := UnfiledSteps(v.AskSteps, nil); slices.ContainsFunc(unfiled, func(st AskStep) bool { return st.FollowUp != 0 }) {
+			d, err := r.Client.Detail(ctx, it.ID)
+			if err != nil {
+				r.fail(ctx, ru, out, "could not read the items filed after this one: "+err.Error())
+				return
+			}
+			followedBy = d.FollowedBy
+		}
+		if unfiled := UnfiledSteps(v.AskSteps, followedBy); len(unfiled) > 0 {
+			r.Log.Info("review: approval names steps of the ask not done and not filed; bouncing", "item", it.ID, "steps", len(unfiled))
+			v = BounceUnfiled(v, unfiled)
+		}
+	}
 	if ru.carry != nil && v.Outcome == "approved" {
 		// The runner's own file (an agent's file of that name is replaced): the delta loopd decides on.
 		p := filepath.Join(ru.wt, ".loop", "evidence", ApprovalDeltaFile)
@@ -691,6 +710,16 @@ func ReviewComment(v Result, it Item, evidence []EvidenceFile, labels map[string
 	fmt.Fprintf(&b, "## Loop review: %s\n\n%s\n", verdict, strings.TrimSpace(v.Review))
 	if v.Outcome == "bounce" && strings.TrimSpace(v.Notes) != strings.TrimSpace(v.Review) {
 		fmt.Fprintf(&b, "\n### What to change\n\n%s\n", strings.TrimSpace(v.Notes))
+	}
+	if len(v.AskSteps) > 0 {
+		b.WriteString("\n### The ask, step by step\n\n| Step | Status | Why |\n|---|---|---|\n")
+		for _, st := range v.AskSteps {
+			status := strings.ReplaceAll(st.Status, "_", " ")
+			if st.FollowUp != 0 {
+				status += fmt.Sprintf(" (#%d)", st.FollowUp)
+			}
+			fmt.Fprintf(&b, "| %s | %s | %s |\n", cell(st.Step), status, cell(st.Reason))
+		}
 	}
 	if len(v.NotVerified) > 0 {
 		b.WriteString("\n**Not verified:** " + oneLine(strings.Join(v.NotVerified, "; ")) + "\n")
