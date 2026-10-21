@@ -131,7 +131,9 @@ After the build agent returns `ready_for_pr` and the runner has checked the comm
   - jarvis-server: `scripts/sandbox up --name $LOOP_SANDBOX || exit 3` + `go run ./tools/pipeline run` +
     `scripts/screenshots` when `web/` changed + `down --purge` (`$LOOP_SANDBOX` is verify's own
     `loop-<item>-verify`, apart from the agent's `loop-<item>`; exit 3 gets one retry after a purge:
-    `docs/decisions/2026-10-20-verify-sandbox.md`).
+    `docs/decisions/2026-10-20-verify-sandbox.md`). Since #392 the pipeline scenarios are a
+    `pipeline` step the runner judges itself (change vs base, suspects re-run on both sides) and
+    skips when no Go, prompt or scenario path changed: `docs/decisions/2026-10-21-pipeline-verify-flakes.md`.
   - jarvis-node-mobile: from the runner's jarvis-server checkout, `scripts/sandbox up --name
     loop-$LOOP_ITEM`, `scripts/mobile-shot --sandbox loop-$LOOP_ITEM --ref $LOOP_HEAD` against the
     runner's node-mobile mirror (`JARVIS_MOBILE_REPO`), copy the PNGs and `index.json` to evidence,

@@ -193,8 +193,44 @@ type VerifyStep struct {
 	TimeoutText string `json:"timeout,omitempty"`
 	// WhenChanged are globs: the step runs only when a changed path matches one (e.g. web/**).
 	WhenChanged []string `json:"when_changed,omitempty"`
+	// Pipeline makes this a pipeline-regressions step (pipelineverify.go): the runner runs the
+	// pipeline scenarios on the change and on the base itself, re-runs each suspected regression
+	// on both sides, and fails only on the ones that still split. Run is then optional: one run's
+	// command (default PipelineCommand), with LOOP_PIPELINE_* set.
+	Pipeline *PipelineVerify `json:"pipeline,omitempty"`
 
 	timeout time.Duration
+}
+
+// PipelineVerify is a pipeline-regressions step's counts
+// (docs/decisions/2026-10-21-pipeline-verify-flakes.md).
+type PipelineVerify struct {
+	// Repeat is how many times each scenario runs on each side (default 3): a suspect passed every
+	// run on the base and none on the change.
+	Repeat int `json:"repeat,omitempty"`
+	// Confirm is how many more times each suspect runs on each side (default 5): it is a
+	// regression only if it again passes every run on the base and none on the change.
+	Confirm int `json:"confirm,omitempty"`
+}
+
+// Defaults and caps of a pipeline-regressions step.
+const (
+	DefaultPipelineRepeat  = 3
+	DefaultPipelineConfirm = 5
+	MaxPipelineRepeat      = 10
+	MaxPipelineConfirm     = 20
+)
+
+// Runs are the step's Repeat and Confirm with their defaults.
+func (p PipelineVerify) Runs() (repeat, confirm int) {
+	repeat, confirm = p.Repeat, p.Confirm
+	if repeat <= 0 {
+		repeat = DefaultPipelineRepeat
+	}
+	if confirm <= 0 {
+		confirm = DefaultPipelineConfirm
+	}
+	return repeat, confirm
 }
 
 // Timeout is the step's time limit.
@@ -493,8 +529,18 @@ func (c *Config) normalize() error {
 			switch {
 			case strings.TrimSpace(v.Name) == "":
 				return fmt.Errorf("config: repo %s: verify step %d needs a name", name, i+1)
-			case strings.TrimSpace(v.Run) == "":
+			case strings.TrimSpace(v.Run) == "" && v.Pipeline == nil:
 				return fmt.Errorf("config: repo %s: verify step %q needs run", name, v.Name)
+			}
+			if p := v.Pipeline; p != nil {
+				switch {
+				case v.Repo != "":
+					return fmt.Errorf("config: repo %s: verify step %q: a pipeline step runs on the change and its base, not in repo %q", name, v.Name, v.Repo)
+				case p.Repeat < 0 || p.Repeat > MaxPipelineRepeat:
+					return fmt.Errorf("config: repo %s: verify step %q: pipeline repeat must be 1 to %d, not %d", name, v.Name, MaxPipelineRepeat, p.Repeat)
+				case p.Confirm < 0 || p.Confirm > MaxPipelineConfirm:
+					return fmt.Errorf("config: repo %s: verify step %q: pipeline confirm must be 1 to %d, not %d", name, v.Name, MaxPipelineConfirm, p.Confirm)
+				}
 			}
 			if v.Repo != "" {
 				if _, ok := c.Repos[v.Repo]; !ok {

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,7 +61,7 @@ func overnightLanes(mobileDir, pipelineCmd string) []overnightLane {
 		}},
 		{name: LanePipeline, cmd: func(sb, _, filter string) string {
 			if pipelineCmd == "" {
-				return PipelineCommand(sb, filter)
+				return PipelineCommand(sb, filter, 0)
 			}
 			return "LOOP_PIPELINE_SANDBOX=" + shellQuote(sb) + " LOOP_PIPELINE_FILTER=" + shellQuote(filter) +
 				"; export LOOP_PIPELINE_SANDBOX LOOP_PIPELINE_FILTER; " + pipelineCmd
@@ -70,9 +71,13 @@ func overnightLanes(mobileDir, pipelineCmd string) []overnightLane {
 
 // PipelineCommand runs the pipeline scenarios (jarvis-server's tools/pipeline, the real model
 // through the tap) on a sandbox of their own, their JSON summary on stdout's file
-// $LOOP_PIPELINE_OUT, and takes the sandbox down however they end.
-func PipelineCommand(sandbox, filter string) string {
+// $LOOP_PIPELINE_OUT, and takes the sandbox down however they end. repeat > 1 runs each scenario
+// that many times.
+func PipelineCommand(sandbox, filter string, repeat int) string {
 	run := "go run ./tools/pipeline run --sandbox " + shellQuote(sandbox) + " --json"
+	if repeat > 1 {
+		run += " --repeat " + strconv.Itoa(repeat)
+	}
 	if filter != "" {
 		run += " --filter " + shellQuote(filter)
 	}

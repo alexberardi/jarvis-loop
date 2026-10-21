@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -56,6 +57,10 @@ type VerifyResult struct {
 	// Retried is the first try's status when the step failed on its environment and ran again
 	// after a purge ("" when it ran once).
 	Retried string
+	// Regressed and Flaky are a pipeline step's (pipelineverify.go) confirmed regressions and the
+	// suspects that did not confirm (not counted).
+	Regressed []string
+	Flaky     []string
 }
 
 // Passed reports whether the step passed (a skipped step passes).
@@ -77,8 +82,12 @@ func (v VerifyResult) Status() string {
 		return "failed (" + v.Err + ")"
 	case v.TimedOut:
 		return fmt.Sprintf("timed out after %s", duration(v.Seconds))
+	case len(v.Regressed) > 0:
+		return fmt.Sprintf("failed (regressed: %s; %s)", clip(strings.Join(v.Regressed, ", "), 300), duration(v.Seconds))
 	case v.ExitCode != 0:
 		return fmt.Sprintf("failed (exit %d, %s)", v.ExitCode, duration(v.Seconds))
+	case len(v.Flaky) > 0:
+		return fmt.Sprintf("passed (%s; flaky, not counted: %s)", duration(v.Seconds), clip(strings.Join(v.Flaky, ", "), 300))
 	}
 	return fmt.Sprintf("passed (%s)", duration(v.Seconds))
 }
@@ -437,50 +446,24 @@ func (r *Runner) verifyStep(ctx context.Context, ru *run, n int, st VerifyStep, 
 	if err != nil {
 		return res, err
 	}
-	cmd, err := r.fence(cwd, st.Run, r.verifyEnv(ru, head, evDir, ru.verifySandbox), []string{dir})
-	if err != nil {
-		logf.Close()
-		return res, fmt.Errorf("verify %q cannot run fenced: %w", st.Name, err)
-	}
-	cmd.Stdout, cmd.Stderr = logf, logf
-	ownGroup(cmd)
 	started := r.Clock.Now()
 	r.Log.Info("verify starting", "item", ru.item.ID, "step", st.Name, "dir", cwd)
-	if err := cmd.Start(); err != nil {
-		logf.Close()
-		res.Err = "could not start: " + err.Error()
-		return res, nil
+	if st.Pipeline != nil {
+		err = r.pipelineVerify(ctx, ru, st, head, evDir, dir, logf, limit, &res)
+	} else {
+		res.ExitCode, res.TimedOut, err = r.verifyProcess(ctx, ru, cwd, st.Run, r.verifyEnv(ru, head, evDir, ru.verifySandbox), []string{dir}, logf, st.Name, limit)
 	}
-	pid := cmd.Process.Pid
-	exited := make(chan struct{})
-	var state *os.ProcessState
-	go func() {
-		state, _ = cmd.Process.Wait()
-		close(exited)
-	}()
-	w := r.keepAlive(ctx, ru, "verify: "+st.Name, st.Name, exited, limit)
-	if w != waitDone {
-		_ = signalGroup(pid, syscall.SIGTERM)
-		grace := r.Clock.NewTimer(r.killGrace())
-		select {
-		case <-exited:
-		case <-grace.C():
-		}
-		grace.Stop()
-	}
-	// Whatever the step left in its group goes with it (a harness it started with setsid does
-	// not: its own command must take it down).
-	_ = signalGroup(pid, syscall.SIGKILL)
-	<-exited
 	logf.Close()
 	res.Seconds = int(r.Clock.Now().Sub(started).Seconds())
-	if w == waitStopped {
+	var se *startError
+	switch {
+	case errors.Is(err, errVerifyStopped):
 		return res, errVerifyStopped
-	}
-	res.TimedOut = w == waitTimeout
-	res.ExitCode = -1
-	if state != nil {
-		res.ExitCode = state.ExitCode()
+	case errors.As(err, &se):
+		res.Err = "could not start: " + se.err.Error()
+		return res, nil
+	case err != nil:
+		return res, fmt.Errorf("verify %q: %w", st.Name, err)
 	}
 	b, _ := os.ReadFile(logPath)
 	res.Log = logTail(string(b))
@@ -505,6 +488,55 @@ func (r *Runner) verifyStep(ctx context.Context, ru *run, n int, st VerifyStep, 
 	}
 	r.Log.Info("verify ended", "item", ru.item.ID, "step", st.Name, "status", res.Status())
 	return res, nil
+}
+
+// startError is a fenced command that could not start (the step fails; not the runner's error).
+type startError struct{ err error }
+
+func (e *startError) Error() string { return "could not start: " + e.err.Error() }
+
+// verifyProcess runs cmdline fenced in cwd (writable: besides it), its output to out, keeping the
+// lease alive, for at most limit. It returns the exit code and whether it timed out; an error is
+// errVerifyStopped, a *startError, or a fence that cannot run it.
+func (r *Runner) verifyProcess(ctx context.Context, ru *run, cwd, cmdline string, env, writable []string, out io.Writer, note string, limit time.Duration) (int, bool, error) {
+	cmd, err := r.fence(cwd, cmdline, env, writable)
+	if err != nil {
+		return -1, false, fmt.Errorf("cannot run fenced: %w", err)
+	}
+	cmd.Stdout, cmd.Stderr = out, out
+	ownGroup(cmd)
+	if err := cmd.Start(); err != nil {
+		return -1, false, &startError{err}
+	}
+	pid := cmd.Process.Pid
+	exited := make(chan struct{})
+	var state *os.ProcessState
+	go func() {
+		state, _ = cmd.Process.Wait()
+		close(exited)
+	}()
+	w := r.keepAlive(ctx, ru, "verify: "+note, note, exited, limit)
+	if w != waitDone {
+		_ = signalGroup(pid, syscall.SIGTERM)
+		grace := r.Clock.NewTimer(r.killGrace())
+		select {
+		case <-exited:
+		case <-grace.C():
+		}
+		grace.Stop()
+	}
+	// Whatever the step left in its group goes with it (a harness it started with setsid does
+	// not: its own command must take it down).
+	_ = signalGroup(pid, syscall.SIGKILL)
+	<-exited
+	if w == waitStopped {
+		return -1, false, errVerifyStopped
+	}
+	exit := -1
+	if state != nil {
+		exit = state.ExitCode()
+	}
+	return exit, w == waitTimeout, nil
 }
 
 // maskedRead is the first mask path the log says could not be read: a file the fence binds

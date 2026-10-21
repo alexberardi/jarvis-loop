@@ -13,6 +13,7 @@
      "events": [{"item": "a", "kind": "advanced", "outcome": "failed", "actor": "runner",
                  "data": {"trust_sha": "^[0-9a-f]{40}$", "trusted_diff_sha256": "^[0-9a-f]{64}$"}}]},
     {"do": "press", "item": "a", "as": "approver", "button": "trust"},
+    {"do": "wait", "events": [{"item": "a", "kind": "trusted", "actor": "approver", "count": 1}]},
     {"do": "runner", "claims": "a"},
     {"do": "runner_idle"},
     {"do": "expect", "stage": {"a": "review"}},

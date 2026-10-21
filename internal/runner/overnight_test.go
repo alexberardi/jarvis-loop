@@ -80,7 +80,10 @@ func TestRegressionTestsRecordings(t *testing.T) {
 }
 
 func TestPipelineCommand(t *testing.T) {
-	c := PipelineCommand("loop-reg-3-2", "a|b")
+	if c := PipelineCommand("loop-1-verify", "", 3); !strings.Contains(c, "--json --repeat 3 > ") {
+		t.Errorf("%q lacks the repeat", c)
+	}
+	c := PipelineCommand("loop-reg-3-2", "a|b", 1)
 	for _, want := range []string{"scripts/sandbox up --name 'loop-reg-3-2' || exit 3;", "go run ./tools/pipeline run --sandbox 'loop-reg-3-2' --json --filter 'a|b' > \"$LOOP_PIPELINE_OUT\"",
 		"scripts/sandbox down --name 'loop-reg-3-2' --purge; exit $rc"} {
 		if !strings.Contains(c, want) {
