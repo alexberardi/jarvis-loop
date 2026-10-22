@@ -998,3 +998,73 @@ func TestNoAnswersNoFile(t *testing.T) {
 		t.Fatal("answers context without an answer")
 	}
 }
+
+// slowSetup makes the demo repo's setup wait (as npm ci or a mirror lock can, past the lease's
+// TTL) until the test releases it; started and release are in the worktree's scratch dir.
+func (g *rig) slowSetup(id int64) (started, release string) {
+	rc := g.r.Cfg.Repos["demo"]
+	rc.Setup = []string{"touch .loop/scratch/started; while [ ! -f .loop/scratch/release ]; do sleep 0.05; done"}
+	g.r.Cfg.Repos["demo"] = rc
+	scratch := filepath.Join(g.r.Cfg.WorkRoot, fmt.Sprintf("%d-build", id), ".loop", "scratch")
+	return filepath.Join(scratch, "started"), filepath.Join(scratch, "release")
+}
+
+// The lease is renewed while the run prepares (#454): a setup longer than the lease's TTL no
+// longer lets it expire and the item go to another claim before the agent starts.
+func TestHeartbeatsWhilePreparing(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	id := g.toBuild("Add a feature")
+	started, release := g.slowSetup(id)
+	wait := g.runAsync()
+	waitFile(t, started)
+	for i := 0; i < 3; i++ {
+		g.clk.BlockUntil(1) // the prepare heartbeat
+		g.loopdClk.Advance(2 * time.Minute)
+		g.clk.Advance(60 * time.Second)
+		g.clk.BlockUntil(1) // re-armed after the heartbeat
+		l := g.item(id).Lease
+		if l == nil || !l.ExpiresAt.Equal(g.loopdClk.Now().Add(store.LeaseTTL)) {
+			t.Fatalf("heartbeat %d did not extend the lease: %+v; log:\n%s", i, l, g.logs.String())
+		}
+		if a := l.Activity; a == nil || a.Phase != "setup" || a.ElapsedS != int64(60*(i+1)) {
+			t.Fatalf("heartbeat %d activity: %+v", i, a)
+		}
+	}
+	if err := os.WriteFile(release, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+	if d := g.item(id); d.Item.Stage != pipeline.Review {
+		t.Fatalf("stage %s after the slow setup; log:\n%s", d.Item.Stage, g.logs.String())
+	}
+}
+
+// When loopd ends the lease while the run prepares, the agent never starts and the run leaves the
+// worktree alone: the item may be another claim's by then, setting up in the same directory.
+func TestLeaseEndedWhilePreparing(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	id := g.toBuild("Add a feature")
+	started, _ := g.slowSetup(id)
+	wait := g.runAsync()
+	waitFile(t, started)
+	g.clk.BlockUntil(1)
+	stop := true
+	if _, err := g.st.SetControl(g.ctx, "user:alex", store.ControlPatch{Stopped: &stop}); err != nil {
+		t.Fatal(err)
+	}
+	g.clk.Advance(60 * time.Second)
+	wait()
+	if strings.Contains(g.logs.String(), "agent starting") {
+		t.Fatalf("the agent started after the lease ended; log:\n%s", g.logs.String())
+	}
+	d := g.item(id)
+	if d.Item.Stage != pipeline.Build || d.Lease != nil || len(g.events(id, "advanced")) != 1 {
+		t.Fatalf("stage %s, lease %+v: a stopped item returns to its queue without a report", d.Item.Stage, d.Lease)
+	}
+	if g.remoteHead(fmt.Sprintf("loop/%d-add-a-feature", id)) != "" {
+		t.Fatal("pushed a branch after the lease ended")
+	}
+	if _, err := os.Stat(filepath.Join(g.r.Cfg.WorkRoot, fmt.Sprintf("%d-build", id), ".git")); err != nil {
+		t.Fatalf("the worktree was removed after the lease ended: %v", err)
+	}
+}

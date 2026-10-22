@@ -41,44 +41,6 @@ func (g *rig) buildWorktree(id int64) string {
 	return filepath.Join(g.r.Cfg.WorkRoot, fmt.Sprintf("%d-build", id))
 }
 
-// The lease stays alive while the run is set up, however long that takes (#453: it expired in a
-// slow prepare, and the item's next claim ran on the same worktree); when loopd says stop there,
-// no agent starts and nothing is reported.
-func TestPrepareKeepsTheLeaseAlive(t *testing.T) {
-	g := newRig(t, fakeclaude.Good)
-	id := g.toBuild("Slow setup")
-	g.slowPrepare()
-	wait := g.runAsync()
-	waitFile(t, filepath.Join(g.buildWorktree(id), ".loop", "scratch", "preparing"))
-	g.armed(t, 2)            // heartbeat + the time cap
-	for i := 0; i < 6; i++ { // 12 minutes on loopd's clock, past the 5-minute TTL
-		g.loopdClk.Advance(2 * time.Minute)
-		g.clk.Advance(60 * time.Second)
-		g.armed(t, 2)
-		l := g.item(id).Lease
-		if l == nil || !l.ExpiresAt.Equal(g.loopdClk.Now().Add(store.LeaseTTL)) {
-			t.Fatalf("heartbeat %d did not extend the lease: %+v; log:\n%s", i, l, g.logs.String())
-		}
-		if a := l.Activity; a == nil || a.Phase != "setup" {
-			t.Fatalf("heartbeat %d activity: %+v", i, a)
-		}
-	}
-	stop := true
-	if _, err := g.st.SetControl(g.ctx, "user:alex", store.ControlPatch{Stopped: &stop}); err != nil {
-		t.Fatal(err)
-	}
-	g.clk.Advance(60 * time.Second)
-	wait()
-	d := g.item(id)
-	if d.Item.Stage != pipeline.Build || d.Lease != nil || len(g.events(id, "advanced")) != 1 || len(g.events(id, "lease_expired")) != 0 {
-		t.Fatalf("stage %s, lease %+v; log:\n%s", d.Item.Stage, d.Lease, g.logs.String())
-	}
-	if strings.Contains(g.logs.String(), "agent starting") {
-		t.Fatalf("an agent started after the stop; log:\n%s", g.logs.String())
-	}
-	g.cleanedUp(id)
-}
-
 // A claim made while the item's earlier run is still ending on this runner (its lease expired)
 // does not touch the worktree until that run's cleanup is done; the earlier run's cleanup does
 // not remove the later run's worktree, and one agent runs (#453).
@@ -89,7 +51,7 @@ func TestASecondClaimWaitsForTheEarlierRun(t *testing.T) {
 	wt := g.buildWorktree(id)
 	waitA := g.runAsync()
 	waitFile(t, filepath.Join(wt, ".loop", "scratch", "preparing"))
-	g.armed(t, 2)
+	g.armed(t, 1) // the first run's heartbeat
 	first := worktreeOwner(wt)
 	if first == "" {
 		t.Fatal("the worktree names no lease")
@@ -98,7 +60,7 @@ func TestASecondClaimWaitsForTheEarlierRun(t *testing.T) {
 	// claim gets the item.
 	g.loopdClk.Advance(store.LeaseTTL + time.Minute)
 	waitB := g.runAsync()
-	g.armed(t, 4) // both runs heartbeat: the first preparing, the second waiting for it
+	g.armed(t, 3) // the first run's heartbeat; the second's heartbeat and time cap while it waits
 	if !strings.Contains(g.logs.String(), "an earlier run of the item is still ending") {
 		t.Fatalf("log:\n%s", g.logs.String())
 	}

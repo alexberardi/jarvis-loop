@@ -41,7 +41,7 @@
       "board": {
         "a": {
           "column": "Build",
-          "working": "setup: preparing \\(7m\\)"
+          "working": "setup: prepare \\(7m\\)"
         }
       }
     },

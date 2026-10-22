@@ -18,11 +18,11 @@ loopd already allows one live lease per item (`leases_one_live`). The gap was on
 
 ## Decision
 
-1. **The lease stays alive while the run is set up.** `prepareAlive` runs `prepare` while
-   heartbeating (`keepAliveIn`, phase `setup`, note "preparing the run"), up to the run's time
-   cap. When loopd says stop or the lease is gone (4xx), prepare is cancelled, no agent starts and
-   nothing is advanced: the run ends as a stop does mid-run. A prepare past the time cap fails the
-   run.
+1. **The lease stays alive while the run is set up.** This part landed first as #454:
+   `prepareAlive` runs `prepare` while heartbeating (`keepAliveIn`, phase `setup`, note
+   "preparing the run"). When loopd says stop or the lease is gone (4xx), prepare is cancelled,
+   no agent starts, nothing is advanced, and cleanup leaves the worktree, which may already be the
+   item's next run's.
 2. **One run per item on a runner.** `Runner.live` maps an item to its run until that run's
    cleanup is done. A claim made while an earlier run of the item is still ending **waits** for
    that cleanup, heartbeating its own lease, before it touches the worktree. It does not give the
@@ -40,9 +40,9 @@ already.
 
 ## Tests
 
-`internal/runner/liverun_test.go`: the lease is extended through a 12-minute prepare, and a stop
-there starts no agent; a second claim waits for the first run's cleanup, and one agent runs; a
-taken-over worktree survives cleanup. Scenario `91-slow-prepare.json`: a 7-minute Prepare keeps
+`internal/runner/liverun_test.go`: a second claim waits for the first run's cleanup, and one agent
+runs; a taken-over worktree survives cleanup. The prepare heartbeat is #454's
+(`TestHeartbeatsWhilePreparing`, `TestLeaseEndedWhilePreparing` in `runner_test.go`). Scenario `91-slow-prepare.json`: a 7-minute Prepare keeps
 the lease, and a second slot claims nothing.
 
 ## Not done

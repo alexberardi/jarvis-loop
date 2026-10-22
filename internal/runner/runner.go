@@ -395,6 +395,9 @@ type run struct {
 	// done closes when the run must stop (the runner shutting down): its reports go on, but a
 	// verify step is ended.
 	done <-chan struct{}
+	// leaseLost: loopd ended the lease before the agent started; the item may be another claim's
+	// now, setting up in the same worktree, so cleanup leaves it alone.
+	leaseLost bool
 }
 
 func (r *Runner) lockMirror(path string) func() {
@@ -475,11 +478,10 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 		ru.prevSession = r.loadBuildSession(ru)
 	}
 
-	brief, stopped, err := r.prepareAlive(ctx, ru)
-	if stopped {
-		// The lease ended while the run was being set up (loopd said stop, or it is gone): no
-		// agent and no report, as for a stop mid-run.
-		log.Info("loopd ended the lease while preparing; not starting the agent")
+	brief, err := r.prepareAlive(ctx, ru)
+	if errors.Is(err, errLeaseLost) {
+		ru.leaseLost = true
+		log.Warn("the lease ended while the run was preparing; the agent does not start")
 		return
 	}
 	if err == nil && ru.resumedFrom != nil {
@@ -643,6 +645,31 @@ func (r *Runner) writeBrief(ru *run, brief string) error {
 		}
 	}
 	return nil
+}
+
+// errLeaseLost: loopd ended the lease (a stop, or it expired) before the agent started.
+var errLeaseLost = errors.New("the lease ended while the run was preparing")
+
+// prepareAlive runs prepare (the mirror lock, the fetch, the repo's prepare and setup commands:
+// minutes, past the lease's TTL) while heartbeating the lease (#454). When loopd says stop or the
+// lease is gone, prepare is cancelled and it returns errLeaseLost.
+func (r *Runner) prepareAlive(ctx context.Context, ru *run) (string, error) {
+	pctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var brief string
+	var err error
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		brief, err = r.prepare(pctx, ru)
+	}()
+	if r.keepAliveIn(ctx, ru, "setup", "preparing the run", "prepare", finished, 0) == waitStopped && ctx.Err() == nil {
+		cancel()
+		<-finished // nothing more runs in the worktree once this returns
+		return "", errLeaseLost
+	}
+	<-finished
+	return brief, err
 }
 
 // prepare makes the working directory (per stage), the context files, the brief, the guard
@@ -1830,6 +1857,10 @@ func readResult(p string) ([]byte, error) {
 // worktree and the scratch dir. The run dir stays as the run's log. It never touches anything
 // else, nor a worktree a later run of the item took over (#453): that one is the later run's.
 func (r *Runner) cleanup(ctx context.Context, ru *run, log *slog.Logger) {
+	if ru.leaseLost {
+		log.Info("not cleaning up: the lease ended, the worktree may be the item's next run's", "worktree", ru.wt)
+		return
+	}
 	if err := r.takenOver(ru); err != nil {
 		log.Warn("worktree taken over by a later run; not removing it", "worktree", ru.wt, "why", err)
 		return

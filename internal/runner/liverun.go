@@ -12,9 +12,9 @@ import (
 
 // One live run per item (#453): a run whose lease ended without it knowing (it expired while the
 // run was being set up) went on, and its cleanup removed the worktree under the item's next run.
-// So the runner keeps the lease alive while it prepares, holds each item's worktree for one run at
-// a time, and a run's cleanup removes a worktree only while it is still the run's own
-// (docs/decisions/2026-10-22-one-live-run-per-item.md).
+// prepareAlive (#454) keeps the lease alive while the run prepares; on top of it the runner holds
+// each item's worktree for one run at a time, and a run's cleanup removes a worktree only while it
+// is still the run's own (docs/decisions/2026-10-22-one-live-run-per-item.md).
 
 // liveRun is an item's agent run on this runner; ended closes once its cleanup is done.
 type liveRun struct {
@@ -60,30 +60,6 @@ func (r *Runner) holdItem(ctx context.Context, ru *run, log *slog.Logger) (func(
 			return nil, nil
 		}
 	}
-}
-
-// prepareAlive is prepare (the mirror lock, a fetch, the worktree, the repo's Prepare commands:
-// minutes, past the lease's TTL) with the lease kept alive meanwhile, up to the run's time cap.
-// stopped: loopd ended the lease (or the runner is shutting down); prepare was cancelled.
-func (r *Runner) prepareAlive(ctx context.Context, ru *run) (brief string, stopped bool, err error) {
-	pctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		brief, err = r.prepare(pctx, ru)
-	}()
-	limit := r.maxRun(ctx, ru)
-	w := r.keepAliveIn(ctx, ru, "setup", "preparing the run", "preparing", done, limit)
-	if w == waitDone {
-		return brief, false, err
-	}
-	cancel()
-	<-done
-	if w == waitTimeout {
-		return "", false, fmt.Errorf("preparing the run took longer than its time cap (%d minutes)", int(limit.Minutes()))
-	}
-	return "", true, nil
 }
 
 // claimWorktree marks the worktree as this run's.
