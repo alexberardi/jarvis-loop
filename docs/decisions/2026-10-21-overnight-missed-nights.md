@@ -22,7 +22,7 @@ the next 07:00 note will name the runners and what they offer.
   nights can be counted.
 - **Runners record their kinds.** Every claim sends the kinds the runner's config takes in all its
   lanes (`runner_kinds`, next to `runner_stages`), and loopd keeps them in the runner's new `kinds`
-  column (migration 0038; empty: items only, as the claim reads it). One runner claims in two lanes
+  column (migration 0039; empty: items only, as the claim reads it). One runner claims in two lanes
   under one name, and the land lane (or a paused runner) asks for `[land]` alone, so the kinds of
   one claim would make a runner that takes regression runs read as items only. A runner that
   predates `runner_kinds` records the kinds its claim asks for, and a claim that asks for none
