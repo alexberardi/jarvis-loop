@@ -69,7 +69,7 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | items | one unit of work: title, ask, source (user, finding, nightly, scout), repo, stage, area, size, risk (`hold` or not), resources it needs, priority, bounce count, PR, branch |
 | events | every change to an item, append-only: stage moves, questions and answers, approvals (who, words, commit), CI results. The item's history and its Slack thread are both built from it |
 | evidence | files attached to an item: screenshots, scenario logs, `llm.jsonl` slices, diffs. Stored on the server's disk, served behind a LAN link |
-| runners | each machine that does work: name, capabilities (`gpu`, `voice`, `emulator`, `macos`), last heartbeat |
+| runners | each machine that does work: name, capabilities (`gpu`, `voice`, `emulator`, `macos`), the repos it has checked out, last heartbeat |
 | leases | which runner and agent hold which item at which stage, with an expiry kept alive by heartbeats. An expired lease returns the item to its queue |
 | control | the active-agents number (0–6), stop, the per-run time cap, the usage budgets |
 
@@ -80,7 +80,7 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | `POST /items` | add an item (from Slack, the CLI, a finding) |
 | `GET /items`, `GET /items/{id}` | the board and one item with its history |
 | `PATCH /items/{id}` | change priority or title |
-| `POST /claim` | a runner asks for work matching its capabilities; returns an item, its stage brief and a lease, or nothing |
+| `POST /claim` | a runner asks for work matching its capabilities and its repos (an item's resources ⊆ the capabilities and its repo among the runner's, [decision](decisions/2026-10-22-claim-by-runner-repos.md)); returns an item, its stage brief and a lease, or nothing |
 | `POST /leases/{id}/heartbeat` | keep a lease alive, with an optional `activity` (what the agent is doing, for the board's "Working now"; [decision](decisions/2026-10-16-working-now.md)); the answer says whether to stop |
 | `POST /items/{id}/advance` | finish a stage with its result and evidence; the server checks the exit criteria and picks the next stage |
 | `POST /items/{id}/evidence` | upload a file |

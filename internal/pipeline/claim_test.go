@@ -11,6 +11,11 @@ func waiting(id int64, stage Stage, pri string, age time.Duration, res ...string
 	return Item{ID: id, Title: "t", Stage: stage, Priority: pri, Resources: res, CreatedAt: t0.Add(-age)}
 }
 
+func onRepo(it Item, repo string) Item {
+	it.Repo = repo
+	return it
+}
+
 func TestChoose(t *testing.T) {
 	allCaps := ClaimRequest{Runner: "devbox", Agent: "agent-1", Capabilities: []string{"gpu", "voice", "emulator"}}
 	ctl := DefaultControl()
@@ -52,6 +57,21 @@ func TestChoose(t *testing.T) {
 		{"resources subset of caps", ctl, []Item{waiting(1, Build, "P1", 0, "gpu", "voice")}, nil, allCaps, 1},
 		{"no caps still gets triage", ctl, []Item{waiting(1, Build, "P1", 0, "gpu"), waiting(2, Triage, "P5", 0)}, nil, ClaimRequest{Runner: "r", Agent: "a"}, 2},
 		{"no caps gets a build with no resources", ctl, []Item{waiting(1, Build, "P3", 0)}, nil, ClaimRequest{Runner: "r", Agent: "a"}, 1},
+		// The runner's repos (#467): an item on a repo the runner has no checkout of waits for one
+		// that has it; a runner that sent no repos (it predates them) takes any; a repo-less item
+		// (triage routing) goes to any runner.
+		{"repos: not the runner's repo", ctl, []Item{onRepo(waiting(1, Build, "P1", 0, "macos"), "o/mobile")}, nil,
+			ClaimRequest{Runner: "mbp", Agent: "mbp-1", Capabilities: []string{"macos"}, Repos: []string{"o/server"}}, 0},
+		{"repos: the runner's repo", ctl, []Item{onRepo(waiting(1, Build, "P1", 0, "macos"), "o/mobile")}, nil,
+			ClaimRequest{Runner: "mbp", Agent: "mbp-1", Capabilities: []string{"macos"}, Repos: []string{"mobile", "o/mobile", "o/server", "server"}}, 1},
+		{"repos: an alias or slug name in another case", ctl, []Item{onRepo(waiting(1, Build, "P1", 0), " Mobile")}, nil,
+			ClaimRequest{Runner: "mbp", Agent: "mbp-1", Repos: []string{"mobile", "o/mobile"}}, 1},
+		{"repos: a runner that sent none takes any", ctl, []Item{onRepo(waiting(1, Build, "P1", 0, "macos"), "o/mobile")}, nil,
+			ClaimRequest{Runner: "mbp", Agent: "mbp-1", Capabilities: []string{"macos"}}, 1},
+		{"repos: a repo-less triage item goes to any runner", ctl, []Item{waiting(1, Triage, "P1", 0)}, nil,
+			ClaimRequest{Runner: "mbp", Agent: "mbp-1", Repos: []string{"o/server"}}, 1},
+		{"repos: land checks the repo too", ctl, []Item{onRepo(waiting(1, Land, "P1", 0), "o/mobile"), onRepo(waiting(2, Build, "P5", 0), "o/server")}, nil,
+			ClaimRequest{Runner: "mbp", Agent: "mbp-1", Repos: []string{"o/server"}}, 2},
 		// A Mac runner (capabilities and only_resources [macos]) takes the items that need macos
 		// and leaves everything else to the dev box, whatever its priority.
 		{"only: skips an item without the resource", ctl, []Item{waiting(1, Build, "P1", 0), waiting(2, Build, "P5", 0, "macos")}, nil,

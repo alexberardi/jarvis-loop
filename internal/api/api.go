@@ -382,6 +382,9 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		Slots int `json:"slots"`
 		// Builders: the other builders the runner can run (qwen), for a paced claim's route.
 		Builders []string `json:"builders"`
+		// Repos: the names of the repos the runner has a checkout of (its config's keys, slugs,
+		// aliases); it gets only items on them (#467). Empty: it did not say, so any.
+		Repos []string `json:"repos"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -444,7 +447,7 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds, RunnerKinds: body.RunnerKinds, Builders: body.Builders, Slots: body.Slots})
+	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds, RunnerKinds: body.RunnerKinds, Builders: body.Builders, Slots: body.Slots, Repos: body.Repos})
 	if err != nil {
 		s.fail(w, err)
 		return

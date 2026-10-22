@@ -606,6 +606,28 @@ func (c *Config) normalizeRegression() error {
 	return nil
 }
 
+// RepoNames are every name Repo resolves (config keys, slugs, and lowercased aliases and slug
+// names), sorted: the runner sends them with each claim, so loopd gives it only items on a repo it
+// has (pipeline.HasRepo, #467).
+func (c *Config) RepoNames() []string {
+	var names []string
+	for k, r := range c.Repos {
+		names = append(names, k, r.Slug)
+		for _, a := range r.Aliases {
+			names = append(names, strings.ToLower(strings.TrimSpace(a)))
+		}
+		if _, short, ok := strings.Cut(r.Slug, "/"); ok {
+			names = append(names, strings.ToLower(short))
+		}
+	}
+	names = slices.DeleteFunc(names, func(n string) bool {
+		_, _, ok := c.Repo(n)
+		return n == "" || !ok
+	})
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
 // Repo finds a repo by its config key or by its slug (loopd keeps the PR's owner/name on the
 // item once a PR exists), by one of its aliases, or by the name part of its slug (an item added
 // with a bare --repo jarvis-server) when no other repo has that name.

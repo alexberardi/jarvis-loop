@@ -41,10 +41,13 @@ type OrchSnapItem struct {
 
 // OrchSnapRunner is a runner's health.
 type OrchSnapRunner struct {
-	Name         string    `json:"name"`
-	Capabilities []string  `json:"capabilities"`
-	LastSeen     time.Time `json:"last_seen"`
-	LastClaim    time.Time `json:"last_claim,omitempty"`
+	Name         string   `json:"name"`
+	Capabilities []string `json:"capabilities"`
+	// Repos are the names of the repos it has a checkout of, as it last claimed (none: it did not
+	// say, so any); it is given only items on them (#467).
+	Repos     []string  `json:"repos,omitempty"`
+	LastSeen  time.Time `json:"last_seen"`
+	LastClaim time.Time `json:"last_claim,omitempty"`
 	// State is "draining" while the runner claims nothing new before a restart ("" working).
 	State string `json:"state,omitempty"`
 }
@@ -163,7 +166,7 @@ func (s *Store) OrchSnapshot(ctx context.Context) (OrchSnapshot, error) {
 	}
 
 	// The runners.
-	rrows, err := s.r.QueryContext(ctx, `SELECT r.name, r.capabilities, r.last_seen, r.state,
+	rrows, err := s.r.QueryContext(ctx, `SELECT r.name, r.capabilities, r.repos, r.last_seen, r.state,
 		COALESCE((SELECT MAX(e.at) FROM events e WHERE e.actor = 'runner:' || r.name AND e.kind IN ('claimed','plan_turn_claimed','orchestrate_claimed')), 0)
 		FROM runners r ORDER BY r.name`)
 	if err != nil {
@@ -171,13 +174,13 @@ func (s *Store) OrchSnapshot(ctx context.Context) (OrchSnapshot, error) {
 	}
 	for rrows.Next() {
 		var r OrchSnapRunner
-		var caps string
+		var caps, repos string
 		var seen, claim int64
-		if err := rrows.Scan(&r.Name, &caps, &seen, &r.State, &claim); err != nil {
+		if err := rrows.Scan(&r.Name, &caps, &repos, &seen, &r.State, &claim); err != nil {
 			rrows.Close()
 			return snap, err
 		}
-		r.Capabilities, r.LastSeen = splitList(caps), fromNanos(seen)
+		r.Capabilities, r.Repos, r.LastSeen = splitList(caps), splitList(repos), fromNanos(seen)
 		if claim != 0 {
 			r.LastClaim = fromNanos(claim)
 		}

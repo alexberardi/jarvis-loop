@@ -173,6 +173,10 @@ type ClaimRequest struct {
 	// Builders are the other builders the runner can run (BuilderQwen when it has a qwen block):
 	// a build with no builder set may go to one (autoRoutable).
 	Builders []string `json:"builders,omitempty"`
+	// Repos are the names of the repos the runner has a checkout of (its config keys, slugs, and
+	// lowercased aliases and slug names, as its config resolves an item's repo): it gets only items
+	// on one of them, or with no repo yet (#467). None: it did not say (it predates them), so any.
+	Repos []string `json:"repos,omitempty"`
 }
 
 // The kinds of work a claim may return.
@@ -443,7 +447,7 @@ func choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 			continue
 		}
 		// 2. Eligible: waiting, in a work stage, what it needs ⊆ capabilities (and, with
-		// OnlyResources, needing one of them; land needs none, Needs).
+		// OnlyResources, needing one of them; land needs none, Needs), on one of its repos.
 		if !it.Stage.IsWork() || claimed[it.ID] {
 			continue
 		}
@@ -451,6 +455,9 @@ func choose(c Control, items []Item, deps map[int64]Stage, live []LiveLease, req
 			continue
 		}
 		if !subset(it.Needs(), req.Capabilities) {
+			continue
+		}
+		if !HasRepo(req.Repos, it.Repo) {
 			continue
 		}
 		if len(req.OnlyResources) > 0 && !slices.ContainsFunc(it.Needs(), func(r string) bool { return slices.Contains(req.OnlyResources, r) }) {
@@ -497,6 +504,13 @@ func (it Item) Needs() []string {
 		return nil
 	}
 	return it.Resources
+}
+
+// HasRepo says whether a runner with repos (ClaimRequest.Repos) can run an item on repo: by the
+// name as it is, or lowercased (aliases and slug names, as the runner's config matches them). An
+// item with no repo (triage routes it) runs anywhere, and a runner that sent no repos predates them.
+func HasRepo(repos []string, repo string) bool {
+	return repo == "" || len(repos) == 0 || slices.Contains(repos, repo) || slices.Contains(repos, strings.ToLower(strings.TrimSpace(repo)))
 }
 
 func subset(need, have []string) bool {
