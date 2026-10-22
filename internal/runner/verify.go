@@ -333,7 +333,7 @@ func verifyEnvFailure(v VerifyResult) bool {
 
 // verifyEnv is a verify step's (and its purge's) environment, with sandbox as LOOP_SANDBOX.
 func (r *Runner) verifyEnv(ru *run, head, evDir, sandbox string) []string {
-	return append(r.agentEnv(),
+	return append(venvEnv(r.agentEnv(), ru.wt),
 		"LOOP_ITEM="+strconv.FormatInt(ru.item.ID, 10), "LOOP_HEAD="+head, "LOOP_WORKTREE="+ru.wt,
 		"LOOP_EVIDENCE_DIR="+evDir, "LOOP_SANDBOX="+sandbox, "LOOP_REPO="+ru.repo.Slug, "LOOP_BASE="+ru.repo.Base,
 		"LOOP_MIRROR="+ru.mirror)

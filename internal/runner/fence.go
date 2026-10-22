@@ -202,3 +202,23 @@ func (r *Runner) fenceWith(dir, script string, env []string, o fenceOpts) (*exec
 	}
 	return r.fencedWith(dir, script, env, o)
 }
+
+// venvEnv is env with dir's Python venv (the .venv the repo's setup made) active, when there is
+// one: VIRTUAL_ENV and its bin first on PATH, appended so they win over env's own (#461). Without
+// it a proof or verify command's python3 is the system's, which has none of the repo's packages.
+func venvEnv(env []string, dir string) []string {
+	venv := filepath.Join(dir, ".venv")
+	if fi, err := os.Stat(filepath.Join(venv, "bin")); err != nil || !fi.IsDir() {
+		return env
+	}
+	path := filepath.Join(venv, "bin")
+	for i := len(env) - 1; i >= 0; i-- {
+		if v, ok := strings.CutPrefix(env[i], "PATH="); ok {
+			if v != "" {
+				path += string(os.PathListSeparator) + v
+			}
+			break
+		}
+	}
+	return append(env, "VIRTUAL_ENV="+venv, "PATH="+path)
+}

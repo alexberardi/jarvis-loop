@@ -131,7 +131,7 @@ func (r *Runner) proofCommand(ctx context.Context, key string, repo RepoConfig, 
 	if err != nil {
 		return res, err
 	}
-	cmd, err := r.fence(cwd, c.Run, append(r.agentEnv(),
+	cmd, err := r.fence(cwd, c.Run, append(venvEnv(r.agentEnv(), cwd),
 		"LOOP_ITEM="+strconv.FormatInt(it.ID, 10), "LOOP_REPO="+repo.Slug, "LOOP_BASE="+repo.Base,
 		"LOOP_MERGE_SHA="+it.MergeSHA, "LOOP_EVIDENCE_DIR="+dir), []string{dir})
 	if err != nil {

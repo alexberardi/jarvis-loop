@@ -92,6 +92,15 @@ PR and its evidence: one `proof` action with `checks`, a list of these kinds:
   (`event` is the event kind, `actor` and `match`, on the event's data fields, are optional).
 - `command`: one shell line the runner runs, fenced, in a checkout of the repo's main (exit 0 passes):
   a test, a script. `{"kind": "command", "run": "go test ./internal/web -run TestBoardQA"}`
+  Its environment (docs/decisions/2026-10-22-proof-env.md): a fresh checkout of main after the
+  repo's `prepare` and `setup` commands; the setup's `.venv`, when it makes one, is on `PATH` (so
+  `python3 -m pytest` is the repo's); when the setup makes none, the system python has no packages,
+  so build one in the checkout first (`python3 -m venv .venv && .venv/bin/pip install -q -e . pytest
+  && .venv/bin/python -m pytest …`, the repo's CLAUDE.md names what to install). It may write only
+  the checkout, `$TMPDIR`, `$LOOP_EVIDENCE_DIR` (its output, kept with the result) and the
+  toolchain caches: put temp files and clones under `$TMPDIR` or the checkout, never `/tmp` (it is
+  read-only on the mac runners). The network is open but it holds no credentials: no `gh`, no push,
+  no clone of a private repo (exit 128).
 - `pi`: commands for the test Pi (they wait until the loop has a Pi device): `{"kind": "pi", "run": "…"}`
 - `e2e`: tests of the E2E suite, for an app change (below): the next regression run that runs them
   decides it, passed (verified, with the report's link) or failed (reopened at once, with the
