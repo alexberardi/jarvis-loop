@@ -1472,6 +1472,11 @@ func (s *Store) applyAdvance(tx *sql.Tx, actor string, id int64, leaseID string,
 		if err := s.dependencyClosed(tx, id); err != nil {
 			return err
 		}
+		if tr.Outcome == pipeline.NotReproducible && tr.Item.ReopenOf != 0 {
+			if err := s.reopenNotReproducible(tx, actor, tr.Item, now); err != nil {
+				return err
+			}
+		}
 	}
 	if err := s.checkUnservable(tx, now); err != nil {
 		return err

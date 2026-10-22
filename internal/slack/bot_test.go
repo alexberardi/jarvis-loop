@@ -1452,3 +1452,20 @@ func TestBuilderSetLine(t *testing.T) {
 		}
 	}
 }
+
+// done_reproof (#415): the failed done item's thread hears that its reopen was not reproducible
+// and that it is back to unproven, with a new proof to come.
+func TestDoneReproofLine(t *testing.T) {
+	e := newBotEnv(t)
+	it, err := e.st.AddItem(e.ctx, "user:alex", store.NewItem{Title: "Pair screen", Repo: "jarvis-server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := store.Event{ItemID: it.ID, Actor: "runner:devbox", Kind: pipeline.KindDoneReproof, From: "done", To: "done",
+		Data: map[string]any{"reopen_item": float64(201), "reason": "reopen #201 closed not reproducible: no <pytest>", "verify": "unproven"}}
+	m, ok := e.b.describe(e.ctx, ev, store.Detail{Item: it})
+	want := "Reopen #201 was closed not reproducible: no &lt;pytest&gt;. Back to unproven; the done sweep will ask for a new proof."
+	if !ok || m.Text != want {
+		t.Errorf("got %q, want %q", m.Text, want)
+	}
+}

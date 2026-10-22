@@ -246,3 +246,160 @@ func TestDoneVerifiedByTheUser(t *testing.T) {
 		t.Fatalf("verified: %+v %v", got, err)
 	}
 }
+
+// failDone is a done item whose proof failed twice, and the reopen that filed (#415's setup).
+func failDone(t *testing.T, s *Store, clk *clock.Fake) (bad, filed pipeline.Item) {
+	t.Helper()
+	ctx := context.Background()
+	bad = toMerged(t, s, runner, nil, nil)
+	if _, err := s.OrchProof(ctx, "orchestrator:loop", bad.ID, json.RawMessage(`[{"kind":"command","run":"go test ./x"}]`), "r"); err != nil {
+		t.Fatal(err)
+	}
+	exec(t, s, `UPDATE items SET verify_asked = 1 WHERE id = ?`, bad.ID)
+	fail := map[string]any{"results": []any{map[string]any{"check": 0, "state": "failed", "evidence": "exit 127: pytest: not found"}}}
+	if _, err := s.ProofChecked(ctx, runner, bad.ID, fail); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(pipeline.ProofRecheck)
+	ev, err := s.ProofChecked(ctx, runner, bad.ID, fail)
+	if err != nil || ev.Kind != pipeline.KindDoneFailed {
+		t.Fatalf("second failure: %+v %v", ev, err)
+	}
+	var nid int64
+	if err := s.w.QueryRow(`SELECT MAX(id) FROM items WHERE reopen_of = ?`, bad.ID).Scan(&nid); err != nil {
+		t.Fatal(err)
+	}
+	return item(t, s, bad.ID), item(t, s, nid)
+}
+
+func closeNotReproducible(t *testing.T, s *Store, id int64, summary string) {
+	t.Helper()
+	if c := claim(t, s, "triager"); c == nil || c.Item.ID != id {
+		t.Fatalf("claim of #%d: %+v", id, c)
+	}
+	evidence(t, s, id)
+	if _, err := s.Advance(context.Background(), runner, id, pipeline.NotReproducible, map[string]string{"summary": summary}, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func verifyAsked(t *testing.T, s *Store, id int64) int64 {
+	t.Helper()
+	var n int64
+	if err := s.w.QueryRow(`SELECT verify_asked FROM items WHERE id = ?`, id).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// A failed done item whose reopen triage closes not reproducible goes back to unproven, and the
+// done sweep asks for a new proof (#415): the failure was the proof's environment, not the change.
+func TestReopenNotReproducibleSendsDoneBackToUnproven(t *testing.T) {
+	s, clk := open(t)
+	ctx := context.Background()
+	bad, filed := failDone(t, s, clk)
+	closeNotReproducible(t, s, filed.ID, "works here; the proof had no pytest")
+
+	it := item(t, s, bad.ID)
+	want := "reopen #" + strconv.FormatInt(filed.ID, 10) + " closed not reproducible: works here; the proof had no pytest"
+	if it.Stage != pipeline.Done || it.Verify != pipeline.DoneUnproven || it.VerifyReason != want || it.Proof != nil {
+		t.Fatalf("original: %s %s %q %+v", it.Stage, it.Verify, it.VerifyReason, it.Proof)
+	}
+	if n := verifyAsked(t, s, bad.ID); n != 0 {
+		t.Fatalf("verify_asked %d, want 0", n)
+	}
+	d, err := s.GetItem(ctx, bad.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := d.Events[len(d.Events)-1]; last.Kind != pipeline.KindDoneReproof || !strings.HasSuffix(last.Actor, runner) {
+		t.Fatalf("last event: %+v", last)
+	}
+	r, err := s.DoneReport(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Counts[pipeline.DoneFailed] != 0 || r.Counts[pipeline.DoneUnproven] != 1 {
+		t.Fatalf("report %+v", r.Counts)
+	}
+	tx, err := s.w.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.doneSweep(tx, clk.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if n := verifyAsked(t, s, bad.ID); n == 0 {
+		t.Fatal("the sweep did not ask for a new proof")
+	}
+}
+
+// A reopen closed as a duplicate is a real failure tracked elsewhere: the original stays failed.
+// So does one closed while a newer reopen of the same item is still open.
+func TestReopenNotReproducibleKeepsRealFailures(t *testing.T) {
+	s, clk := open(t)
+	bad, filed := failDone(t, s, clk)
+	closeNotReproducible(t, s, filed.ID, "duplicate of #3")
+	if it := item(t, s, bad.ID); it.Verify != pipeline.DoneFailed {
+		t.Fatalf("duplicate: %s %q", it.Verify, it.VerifyReason)
+	}
+
+	s, clk = open(t)
+	bad, filed = failDone(t, s, clk)
+	newer := add(t, s, "newer reopen", "P3")
+	exec(t, s, `UPDATE items SET reopen_of = ? WHERE id = ?`, bad.ID, newer.ID)
+	closeNotReproducible(t, s, filed.ID, "works")
+	if it := item(t, s, bad.ID); it.Verify != pipeline.DoneFailed {
+		t.Fatalf("newer reopen open: %s %q", it.Verify, it.VerifyReason)
+	}
+}
+
+// The user's reopen from qa counts too: closed not reproducible, the item is unproven again.
+func TestUserReopenNotReproducible(t *testing.T) {
+	s, _ := open(t)
+	bad := toMerged(t, s, runner, nil, map[string]string{"needs_qa": "true"})
+	_, filed, err := s.Reopen(context.Background(), user, bad.ID, "broken on the phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeNotReproducible(t, s, filed.ID, "works on the phone")
+	if it := item(t, s, bad.ID); it.Verify != pipeline.DoneUnproven {
+		t.Fatalf("original: %s %q", it.Verify, it.VerifyReason)
+	}
+}
+
+// The items that failed before #415: one whose newest reopen was closed not reproducible goes back
+// to unproven; one closed as a duplicate, and one whose reopen is still open, stay failed.
+func TestReopenNotReproducibleBackfill(t *testing.T) {
+	dir := t.TempDir()
+	clk := clock.NewFake(t0)
+	s, err := Open(dir, clk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone, goneR := failDone(t, s, clk)
+	closeNotReproducible(t, s, goneR.ID, "pytest: not found\nmore")
+	dup, dupR := failDone(t, s, clk)
+	closeNotReproducible(t, s, dupR.ID, "Duplicate of #3")
+	open, _ := failDone(t, s, clk)
+	exec(t, s, `UPDATE items SET verify = 'failed', verify_reason = 'x', verify_asked = 5 WHERE id = ?`, gone.ID)
+	exec(t, s, `DELETE FROM schema_migrations WHERE version = 38`)
+	s.Close()
+	s, err = Open(dir, clk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	want := "reopen #" + strconv.FormatInt(goneR.ID, 10) + " closed not reproducible: pytest: not found"
+	if it := item(t, s, gone.ID); it.Verify != pipeline.DoneUnproven || it.VerifyReason != want || it.Proof != nil || verifyAsked(t, s, gone.ID) != 0 {
+		t.Errorf("not reproducible: %s %q %+v", it.Verify, it.VerifyReason, it.Proof)
+	}
+	for _, id := range []int64{dup.ID, open.ID} {
+		if it := item(t, s, id); it.Verify != pipeline.DoneFailed {
+			t.Errorf("#%d: %s %q, want failed", id, it.Verify, it.VerifyReason)
+		}
+	}
+}
