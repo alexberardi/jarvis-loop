@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -386,5 +387,35 @@ func TestOvernightUnstartedNoRunnerTakesIt(t *testing.T) {
 	want := "no runner takes it: it needs one that claims regression runs and has emulator, gpu, voice (seen: devbox has emulator, gpu and takes item, regression)"
 	if err != nil || u == nil || u.Why != want {
 		t.Fatalf("note: %+v %v\nwant why %q", u, err, want)
+	}
+}
+
+// One runner claims in two lanes under one name: the land lane (or a paused runner) claims [land]
+// with no kinds, and must not make the 07:00 note say the runner does not take regression runs.
+func TestOvernightUnstartedLandLaneKeepsKinds(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		s, clk := open(t)
+		ctx := context.Background()
+		if _, err := s.ScheduleRegression(ctx, "slack:U1", "slack"); err != nil {
+			t.Fatal(err)
+		}
+		add(t, s, "late work", "P3")
+		clk.Advance(toOne + 6*time.Hour)
+		agent := pipeline.ClaimRequest{Runner: runner, Agent: "a1", Capabilities: []string{"emulator", "gpu", "voice"}, Stages: []pipeline.Stage{pipeline.Build}, Kinds: []string{pipeline.WorkItem, pipeline.WorkRegression}}
+		land := pipeline.ClaimRequest{Runner: runner, Agent: "a1", Capabilities: []string{"emulator", "gpu", "voice"}, Stages: []pipeline.Stage{pipeline.Land}}
+		if configured {
+			agent.RunnerKinds = []string{pipeline.WorkItem, pipeline.WorkRegression}
+			land.RunnerKinds = agent.RunnerKinds
+		}
+		if _, err := s.Claim(ctx, runner, agent); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Claim(ctx, runner, land); err != nil {
+			t.Fatal(err)
+		}
+		u, err := s.UnstartedOvernight(ctx)
+		if err != nil || u == nil || strings.Contains(u.Why, "no runner takes it") {
+			t.Fatalf("configured=%v: note %+v %v; the runner takes regression runs", configured, u, err)
+		}
 	}
 }

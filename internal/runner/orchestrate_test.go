@@ -159,6 +159,29 @@ func TestClaimForSendsSlotsAndBuilders(t *testing.T) {
 	}
 }
 
+// The land lane claims [land] alone, yet says the kinds the runner's config takes, so loopd does
+// not record the runner as items only (#416).
+func TestClaimForLandLaneSendsRunnerKinds(t *testing.T) {
+	var got struct {
+		Stages      []string `json:"stages"`
+		Kinds       []string `json:"kinds"`
+		RunnerKinds []string `json:"runner_kinds"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, Token: runnerToken}
+	cfg := &Config{Stages: []string{StageBuild, StageLand, StageRegression}}
+	if _, err := c.ClaimFor(context.Background(), "a", cfg, []string{StageLand}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got.Stages, []string{StageLand}) || got.Kinds != nil || !slices.Equal(got.RunnerKinds, []string{pipeline.WorkItem, pipeline.WorkRegression}) {
+		t.Fatalf("land claim stages %v kinds %v runner_kinds %v, want [land] [] [item regression]", got.Stages, got.Kinds, got.RunnerKinds)
+	}
+}
+
 func orchRig(t *testing.T, scenario string) *rig {
 	g := newRig(t, scenario)
 	g.r.Cfg.Stages = []string{StageOrchestrate, StageBuild}

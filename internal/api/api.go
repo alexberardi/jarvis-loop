@@ -375,6 +375,9 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 		RunnerStages []string `json:"runner_stages"`
 		// Kinds: item, plan (plan turns), orchestrate, regression; empty is items only.
 		Kinds []string `json:"kinds"`
+		// RunnerKinds: the kinds the runner takes in all its lanes, from its config (loopd keeps
+		// them with the runner); empty: it did not say.
+		RunnerKinds []string `json:"runner_kinds"`
 		// Slots: how many runs the runner works at once, for the flow panel (0: not said).
 		Slots int `json:"slots"`
 		// Builders: the other builders the runner can run (qwen), for a paced claim's route.
@@ -389,9 +392,9 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	for _, k := range body.Kinds {
+	for _, k := range append(slices.Clone(body.Kinds), body.RunnerKinds...) {
 		if !validKind(k) {
-			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kinds may be item, plan, orchestrate and regression, got " + strconv.Quote(k)})
+			s.fail(w, &pipeline.Error{Code: pipeline.CodeInvalidField, Message: "kinds and runner_kinds may be item, plan, orchestrate and regression, got " + strconv.Quote(k)})
 			return
 		}
 	}
@@ -441,7 +444,7 @@ func (s *server) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds, Builders: body.Builders, Slots: body.Slots})
+	c, err := s.st.Claim(r.Context(), p.Name, pipeline.ClaimRequest{Runner: p.Name, Agent: body.Agent, Capabilities: caps, OnlyResources: only, PollSeconds: body.PollSeconds, RunnerStages: runnerStages, Stages: stages, Kinds: body.Kinds, RunnerKinds: body.RunnerKinds, Builders: body.Builders, Slots: body.Slots})
 	if err != nil {
 		s.fail(w, err)
 		return

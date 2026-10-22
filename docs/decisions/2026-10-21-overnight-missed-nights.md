@@ -20,8 +20,13 @@ the next 07:00 note will name the runners and what they offer.
   after the last note; a run that carries over gets a note on every night it misses. Each note
   posted is a `regression_missed` event (data: the run, the night's 07:00, the why), so missed
   nights can be counted.
-- **Runners record their kinds.** The claim writes the kinds of work it asks for to the runner's new
-  `kinds` column (migration 0038; empty: items only, as the claim reads it).
+- **Runners record their kinds.** Every claim sends the kinds the runner's config takes in all its
+  lanes (`runner_kinds`, next to `runner_stages`), and loopd keeps them in the runner's new `kinds`
+  column (migration 0038; empty: items only, as the claim reads it). One runner claims in two lanes
+  under one name, and the land lane (or a paused runner) asks for `[land]` alone, so the kinds of
+  one claim would make a runner that takes regression runs read as items only. A runner that
+  predates `runner_kinds` records the kinds its claim asks for, and a claim that asks for none
+  keeps what is recorded.
 - **The note names the cause.** When runners were seen in the last day and none of them asks for
   regression runs with every resource the suite needs (`pipeline.NoRegressionTaker`), the note
   starts with "no runner takes it: it needs one that claims regression runs and has emulator, gpu,

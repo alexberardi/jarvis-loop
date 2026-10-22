@@ -164,6 +164,9 @@ type ClaimRequest struct {
 	// Kinds is the work the runner takes: WorkItem, WorkPlan (plan turns), WorkOrchestrate.
 	// Empty: items only, so a runner that predates plans never gets a turn.
 	Kinds []string
+	// RunnerKinds are the kinds the runner takes in all its lanes, from its config (none: it did
+	// not say); loopd keeps them with the runner, so a land-lane claim does not reset them.
+	RunnerKinds []string
 	// Slots is how many runs the runner works at once (0: unknown, a runner that predates it):
 	// loopd records it for the flow panel's idle capacity; the claim rules do not use it.
 	Slots int
