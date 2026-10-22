@@ -640,6 +640,11 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		reopen, _ := e.Data["reopen_item"].(float64)
 		return Message{Text: fmt.Sprintf("%s. Filed %s (%s) to fix it; this one stays done.",
 			f("words", 600), b.refID(ctx, int64(reopen)), pipeline.DoneProofReopenPriority)}, true
+	case pipeline.KindDoneReproof:
+		reopen, _ := e.Data["reopen_item"].(float64)
+		why := strings.TrimPrefix(str(e.Data, "reason"), fmt.Sprintf("reopen #%d closed not reproducible: ", int64(reopen)))
+		return Message{Text: fmt.Sprintf("Reopen #%d was closed not reproducible: %s. Back to unproven; the done sweep will ask for a new proof.",
+			int64(reopen), strings.TrimRight(b.field(why, 400, e.ItemID), "."))}, true
 	}
 	by := who(e.Actor)
 	if via := str(e.Data, "via"); strings.HasPrefix(via, orchestratorPrefix) {

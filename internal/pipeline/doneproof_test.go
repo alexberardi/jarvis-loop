@@ -191,3 +191,27 @@ func TestMainRedItem(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyReopenNotReproducible(t *testing.T) {
+	failed := doneItem(t, `[{"kind":"command","run":"go test ./x"}]`)
+	failed.Verify, failed.VerifyReason = DoneFailed, "Proof failed"
+	tr, err := ApplyReopenNotReproducible(failed, 12, "  works here\nlong story ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if it := tr.Item; it.Stage != Done || it.Verify != DoneUnproven || it.Proof != nil ||
+		it.VerifyReason != "reopen #12 closed not reproducible: works here" || tr.Kind != KindDoneReproof || tr.From != Done || tr.To != Done {
+		t.Fatalf("%+v", tr)
+	}
+	for name, it := range map[string]Item{
+		"unproven": doneItem(t, ""),
+		"not done": {ID: 9, Stage: QA, Verify: DoneFailed},
+	} {
+		if _, err := ApplyReopenNotReproducible(it, 12, "works"); err == nil {
+			t.Errorf("%s: applied", name)
+		}
+	}
+	if _, err := ApplyReopenNotReproducible(failed, 12, "Duplicate of #3"); err == nil {
+		t.Error("duplicate: applied")
+	}
+}

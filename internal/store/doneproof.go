@@ -212,3 +212,33 @@ func (r DoneReport) Line() string {
 	}
 	return strconv.Itoa(r.Total) + " done: " + strings.Join(parts, ", ")
 }
+
+// reopenNotReproducible is a reopen closed not reproducible (#415): the failed done item it was
+// filed for goes back to unproven and the done sweep asks for a new proof, unless a newer reopen of
+// it is still open or this one was a duplicate (ApplyReopenNotReproducible). The event is the
+// original item's.
+func (s *Store) reopenNotReproducible(tx *sql.Tx, actor string, reopen pipeline.Item, now time.Time) error {
+	var newest int64
+	if err := tx.QueryRow(`SELECT MAX(id) FROM items WHERE reopen_of = ?`, reopen.ReopenOf).Scan(&newest); err != nil {
+		return err
+	}
+	if newest != reopen.ID {
+		return nil
+	}
+	orig, err := loadItem(tx, reopen.ReopenOf)
+	if err != nil {
+		return err
+	}
+	tr, err := pipeline.ApplyReopenNotReproducible(orig, reopen.ID, reopen.Summary)
+	if err != nil {
+		return nil // not a failed done item, or a duplicate: the failure stands
+	}
+	tr.Item.UpdatedAt = now
+	if err := saveItem(tx, tr.Item); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE items SET verify_asked = 0 WHERE id = ?`, orig.ID); err != nil {
+		return err
+	}
+	return s.event(tx, transitionEvent(orig.ID, actor, tr))
+}

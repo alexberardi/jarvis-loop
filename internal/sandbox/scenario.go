@@ -581,6 +581,11 @@ func (p *player) step(st Step) error {
 			return s.PlanScript(id, st.For, st.Play, st.Picks)
 		}
 		r, err := p.ref(st.Item)
+		if n, perr := strconv.ParseInt(strings.TrimPrefix(st.Item, "#"), 10, 64); err != nil && strings.HasPrefix(st.Item, "#") && perr == nil {
+			// An item the loop has yet to file (a failed proof's reopen), scripted before the runner
+			// pass that files and claims it.
+			r, err = itemRef{id: n}, nil
+		}
 		if err != nil {
 			return err
 		}

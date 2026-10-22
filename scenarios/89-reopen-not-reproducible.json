@@ -1,0 +1,215 @@
+{
+ "name": "reopen-not-reproducible",
+ "about": "#415: a done item's proof fails twice on its environment (as done-proof-fails), and the loop files #2 to fix it. Triage of #2 finds the check passes on main where its tools are installed and closes it not reproducible: a goes back from failed to unproven (its proof dropped), with a done_reproof event, and a's thread says so; the morning report no longer counts it failed, and the done sweep asks for a new proof.",
+ "stages": [
+  "triage",
+  "build",
+  "review",
+  "land",
+  "orchestrate"
+ ],
+ "steps": [
+  {
+   "do": "script",
+   "for": "orchestrate",
+   "play": "proofs"
+  },
+  {
+   "do": "add",
+   "item": "a",
+   "title": "Chime volume"
+  },
+  {
+   "do": "script",
+   "item": "a",
+   "for": "proof",
+   "proof": [
+    {
+     "kind": "command",
+     "run": "test -f chime.wav || { echo 'chime.wav is not on main'; exit 1; }"
+    }
+   ]
+  },
+  {
+   "do": "ci",
+   "main": {
+    "ci": "pass"
+   }
+  },
+  {
+   "do": "triage",
+   "item": "a"
+  },
+  {
+   "do": "runner",
+   "claims": "a"
+  },
+  {
+   "do": "runner_idle"
+  },
+  {
+   "do": "ci",
+   "item": "a",
+   "checks": {
+    "check": "pass"
+   }
+  },
+  {
+   "do": "runner",
+   "claims": "a"
+  },
+  {
+   "do": "runner_idle"
+  },
+  {
+   "do": "runner",
+   "claims": "a"
+  },
+  {
+   "do": "runner_idle"
+  },
+  {
+   "do": "clock",
+   "advance": "1m"
+  },
+  {
+   "do": "runner",
+   "claims": "orchestrator"
+  },
+  {
+   "do": "runner_idle"
+  },
+  {
+   "do": "expect",
+   "stage": {
+    "a": "done"
+   },
+   "events": [
+    {
+     "item": "a",
+     "kind": "proof_set",
+     "data": {
+      "verify": "^proving$"
+     },
+     "count": 1
+    }
+   ]
+  },
+  {
+   "do": "runner",
+   "claims": "none"
+  },
+  {
+   "do": "expect",
+   "stage": {
+    "a": "done"
+   },
+   "events": [
+    {
+     "item": "a",
+     "kind": "done_proof_checked",
+     "actor": "runner",
+     "data": {
+      "status": "^failed$",
+      "verify": "^proving$"
+     },
+     "count": 1
+    }
+   ],
+   "no_messages": [
+    {
+     "thread": "a",
+     "text": "^Proof"
+    }
+   ]
+  },
+  {
+   "do": "script",
+   "item": "#2",
+   "for": "triage",
+   "play": "not_reproducible"
+  },
+  {
+   "do": "clock",
+   "advance": "30m"
+  },
+  {
+   "do": "runner",
+   "claims": "#2"
+  },
+  {
+   "do": "runner_idle"
+  },
+  {
+   "do": "expect",
+   "stage": {
+    "a": "done",
+    "#2": "closed"
+   },
+   "events": [
+    {
+     "item": "#2",
+     "kind": "advanced",
+     "outcome": "not_reproducible",
+     "actor": "runner",
+     "data": {
+      "summary": "^works on main; "
+     },
+     "count": 1
+    },
+    {
+     "item": "a",
+     "kind": "done_reproof",
+     "actor": "runner",
+     "data": {
+      "verify": "^unproven$",
+      "reopen_item": "^2$",
+      "reason": "^reopen #2 closed not reproducible: works on main; the proof's environment lacked a tool\\.$"
+     },
+     "count": 1
+    }
+   ],
+   "messages": [
+    {
+     "thread": "a",
+     "from": "bot",
+     "text": "^Reopen #2 was closed not reproducible: works on main; the proof's environment lacked a tool\\. Back to unproven; the done sweep will ask for a new proof\\.$"
+    }
+   ],
+   "board": {
+    "a": {
+     "column": "Done",
+     "card": "done · unproven"
+    }
+   }
+  }
+ ],
+ "expect": {
+  "stage": {
+   "a": "done",
+   "#2": "closed"
+  },
+  "events": [
+   {
+    "item": "a",
+    "kind": "done_failed",
+    "count": 1
+   },
+   {
+    "item": "a",
+    "kind": "done_reproof",
+    "count": 1
+   }
+  ],
+  "no_events": [
+   {
+    "item": "a",
+    "kind": "refused"
+   },
+   {
+    "item": "a",
+    "kind": "reopened"
+   }
+  ]
+ }
+}
