@@ -162,6 +162,11 @@ const (
 // limit (0: no limit). It returns waitStopped when loopd says stop, the lease is gone, or the run
 // is cancelled (ru.done).
 func (r *Runner) keepAlive(ctx context.Context, ru *run, note, step string, done <-chan struct{}, limit time.Duration) waitResult {
+	return r.keepAliveIn(ctx, ru, "verify", note, step, done, limit)
+}
+
+// keepAliveIn is keepAlive with the activity's phase ("verify", "setup").
+func (r *Runner) keepAliveIn(ctx context.Context, ru *run, phase, note, step string, done <-chan struct{}, limit time.Duration) waitResult {
 	stepStarted := r.Clock.Now()
 	hb := r.Clock.NewTimer(r.heartbeatEvery())
 	defer func() { hb.Stop() }()
@@ -180,7 +185,7 @@ func (r *Runner) keepAlive(ctx context.Context, ru *run, note, step string, done
 		case <-ru.done:
 			return waitStopped
 		case <-hb.C():
-			stop, err := r.Client.Heartbeat(ctx, ru.lease, note, r.stepActivity("verify", step, ru.started, stepStarted))
+			stop, err := r.Client.Heartbeat(ctx, ru.lease, note, r.stepActivity(phase, step, ru.started, stepStarted))
 			var ae *APIError
 			if err == nil && stop || errors.As(err, &ae) && ae.Status >= 400 && ae.Status < 500 {
 				return waitStopped
