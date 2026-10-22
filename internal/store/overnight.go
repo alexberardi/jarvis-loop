@@ -261,16 +261,19 @@ func (s *Store) MarkRegressionReported(ctx context.Context, id int64) error {
 }
 
 // UnstartedRun is a scheduled overnight run still not started at pipeline.UnstartedNoteAt after its
-// set time, and why it waits (#317).
+// set time, and why it waits (#317). Night is the UnstartedNoteAt it is the note for: a run carried
+// over gets one on every night it misses (#416).
 type UnstartedRun struct {
-	Run Regression
-	Why string
+	Run   Regression
+	Why   string
+	Night time.Time
 }
 
 // UnstartedOvernight is the scheduled overnight run whose note is due and not yet posted
-// (MarkUnstartedNoted), or nil: its set time has passed and so has the next UnstartedNoteAt. Why
-// says what keeps it: the queue's work (pipeline.QueueBusy), claude's pace, another open run, or
-// a quiet queue no runner has polled since.
+// (MarkUnstartedNoted), or nil: its set time has passed, so has the next UnstartedNoteAt, and no
+// note went since the latest one (one note a night, #416). Why says what keeps it: no runner seen
+// can take it (pipeline.NoRegressionTaker), the queue's work (pipeline.QueueBusy), claude's pace,
+// another open run, or a quiet queue no runner has polled since.
 func (s *Store) UnstartedOvernight(ctx context.Context) (*UnstartedRun, error) {
 	var out *UnstartedRun
 	err := s.tx(ctx, func(tx *sql.Tx) error {
@@ -282,8 +285,9 @@ func (s *Store) UnstartedOvernight(ctx context.Context) (*UnstartedRun, error) {
 		if now.Before(*sched.NotBefore) || now.Before(pipeline.NextAt(*sched.NotBefore, s.orchLoc(), pipeline.UnstartedNoteAt)) {
 			return nil
 		}
+		night := pipeline.LastAt(now, s.orchLoc(), pipeline.UnstartedNoteAt)
 		var noted int64
-		if err := tx.QueryRow(`SELECT unstarted_noted_at FROM regressions WHERE id = ?`, sched.ID).Scan(&noted); err != nil || noted != 0 {
+		if err := tx.QueryRow(`SELECT unstarted_noted_at FROM regressions WHERE id = ?`, sched.ID).Scan(&noted); err != nil || noted >= night.UnixNano() {
 			return err
 		}
 		cs, err := s.claimState(tx, now)
@@ -303,11 +307,17 @@ func (s *Store) UnstartedOvernight(ctx context.Context) (*UnstartedRun, error) {
 			return err
 		}
 		var why []string
+		noTaker := pipeline.NoRegressionTaker(pipeline.SuiteResources(sched.Suite), cs.runners, now)
+		if noTaker != "" {
+			why = append(why, noTaker)
+		}
 		switch busy := pipeline.QueueBusy(cs.ctl, cs.pace, cs.waiting, cs.deps, cs.live, turns, orch != nil, cs.frozen, cs.runners, now); {
 		case busy != "":
 			why = append(why, "the queue is busy: "+busy)
 		case open != nil:
 			why = append(why, fmt.Sprintf("R%d (%s) is still open", open.ID, open.Suite))
+		case noTaker != "":
+			// A quiet queue does not start it.
 		case sched.QuietSince != nil:
 			why = append(why, "the queue has been quiet since "+s.clockText(*sched.QuietSince)+"; it starts after "+pipeline.OvernightQuiet.String()+" of quiet")
 		default:
@@ -316,16 +326,26 @@ func (s *Store) UnstartedOvernight(ctx context.Context) (*UnstartedRun, error) {
 		if cs.pace.Level != pipeline.PaceNormal {
 			why = append(why, "claude's pace: "+cs.pace.Describe(usageZone()))
 		}
-		out = &UnstartedRun{Run: *sched, Why: strings.Join(why, "; ")}
+		out = &UnstartedRun{Run: *sched, Why: strings.Join(why, "; "), Night: night}
 		return nil
 	})
 	return out, err
 }
 
-// MarkUnstartedNoted records that the unstarted run's note was posted.
-func (s *Store) MarkUnstartedNoted(ctx context.Context, id int64) error {
+// MarkUnstartedNoted records that u's note was posted (none again until the next night) and the
+// missed night (a regression_missed event, #416).
+func (s *Store) MarkUnstartedNoted(ctx context.Context, u *UnstartedRun) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.Exec(`UPDATE regressions SET unstarted_noted_at = ? WHERE id = ? AND unstarted_noted_at = 0`, s.clock.Now().UnixNano(), id)
-		return err
+		now := s.clock.Now()
+		res, err := tx.Exec(`UPDATE regressions SET unstarted_noted_at = ? WHERE id = ? AND unstarted_noted_at < ?`, now.UnixNano(), u.Run.ID, u.Night.UnixNano())
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
+			return err
+		}
+		data := regEventData(u.Run)
+		data["night"], data["why"] = u.Night.Format(time.RFC3339), u.Why
+		return s.event(tx, Event{Actor: "loopd", Kind: KindRegMissed, Data: data})
 	})
 }

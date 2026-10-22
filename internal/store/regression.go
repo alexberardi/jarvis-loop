@@ -45,6 +45,8 @@ const (
 	// The overnight run: scheduled (for tonight, by the approver or the nightly setting), cancelled.
 	KindRegScheduled = "regression_scheduled"
 	KindRegCancelled = "regression_cancelled"
+	// KindRegMissed: a scheduled overnight run had not started by the night's 07:00 note (#416).
+	KindRegMissed = "regression_missed"
 )
 
 // CodeRegressionOpen refuses a second run while one is queued or running.

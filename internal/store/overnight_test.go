@@ -325,10 +325,66 @@ func TestOvernightUnstartedNote(t *testing.T) {
 	if err != nil || u == nil || u.Run.ID != r.ID || u.Why != want {
 		t.Fatalf("at 07:00: %+v %v, want why %q", u, err, want)
 	}
-	if err := s.MarkUnstartedNoted(ctx, r.ID); err != nil {
+	if err := s.MarkUnstartedNoted(ctx, u); err != nil {
 		t.Fatal(err)
 	}
 	if u, err := s.UnstartedOvernight(ctx); err != nil || u != nil {
 		t.Fatalf("a second note: %+v %v", u, err)
+	}
+}
+
+// #416: a run carried over to the next night gets a note on every night it misses, once each,
+// and a regression_missed event per night.
+func TestOvernightUnstartedNoteEveryNight(t *testing.T) {
+	s, clk := open(t)
+	ctx := context.Background()
+	r, err := s.ScheduleRegression(ctx, "slack:U1", "slack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	add(t, s, "late work", "P3")
+	clk.Advance(toOne + 6*time.Hour)
+	for night := 1; night <= 3; night++ {
+		u, err := s.UnstartedOvernight(ctx)
+		if err != nil || u == nil || u.Run.ID != r.ID {
+			t.Fatalf("night %d: no note at 07:00 (%+v %v)", night, u, err)
+		}
+		if err := s.MarkUnstartedNoted(ctx, u); err != nil {
+			t.Fatal(err)
+		}
+		if u, err := s.UnstartedOvernight(ctx); err != nil || u != nil {
+			t.Fatalf("night %d: a second note: %+v %v", night, u, err)
+		}
+		clk.Advance(24*time.Hour - time.Minute)
+		if u, err := s.UnstartedOvernight(ctx); err != nil || u != nil {
+			t.Fatalf("night %d: a note at 06:59 the next day: %+v %v", night, u, err)
+		}
+		clk.Advance(time.Minute)
+	}
+	if n := countEvents(t, s, KindRegMissed); n != 3 {
+		t.Fatalf("%d regression_missed events, want 3", n)
+	}
+}
+
+// #416: when the runners seen lately cannot take the overnight run (no regression kind, or not
+// every resource), the note says so instead of "it starts after 10m of quiet".
+func TestOvernightUnstartedNoRunnerTakesIt(t *testing.T) {
+	s, clk := open(t)
+	ctx := context.Background()
+	if _, err := s.ScheduleRegression(ctx, "slack:U1", "slack"); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(toOne)
+	for i := 0; i < 40; i++ {
+		c, err := s.Claim(ctx, runner, pipeline.ClaimRequest{Runner: runner, Agent: "a1", Capabilities: []string{"gpu", "emulator"}, Kinds: []string{pipeline.WorkItem, pipeline.WorkRegression}})
+		if err != nil || c != nil {
+			t.Fatalf("claim: %+v %v", c, err)
+		}
+		clk.Advance(9 * time.Minute)
+	}
+	u, err := s.UnstartedOvernight(ctx)
+	want := "no runner takes it: it needs one that claims regression runs and has emulator, gpu, voice (seen: devbox has emulator, gpu and takes item, regression)"
+	if err != nil || u == nil || u.Why != want {
+		t.Fatalf("note: %+v %v\nwant why %q", u, err, want)
 	}
 }

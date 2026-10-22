@@ -891,11 +891,13 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 			stages = append(stages, string(st))
 		}
 		sort.Strings(stages)
-		if _, err := tx.Exec(`INSERT INTO runners (name, capabilities, only_resources, poll_seconds, stages, last_seen, slots, builders) VALUES (?,?,?,?,?,?,?,?)
+		kinds := append([]string(nil), req.Kinds...)
+		sort.Strings(kinds)
+		if _, err := tx.Exec(`INSERT INTO runners (name, capabilities, only_resources, poll_seconds, stages, last_seen, slots, builders, kinds) VALUES (?,?,?,?,?,?,?,?,?)
 			ON CONFLICT (name) DO UPDATE SET capabilities = excluded.capabilities, only_resources = excluded.only_resources,
 				poll_seconds = excluded.poll_seconds, stages = excluded.stages, last_seen = excluded.last_seen, state = '',
-				slots = excluded.slots, builders = excluded.builders`,
-			runnerName, strings.Join(caps, ","), strings.Join(only, ","), max(req.PollSeconds, 0), strings.Join(stages, ","), now.UnixNano(), req.Slots, strings.Join(req.Builders, ",")); err != nil {
+				slots = excluded.slots, builders = excluded.builders, kinds = excluded.kinds`,
+			runnerName, strings.Join(caps, ","), strings.Join(only, ","), max(req.PollSeconds, 0), strings.Join(stages, ","), now.UnixNano(), req.Slots, strings.Join(req.Builders, ","), strings.Join(kinds, ",")); err != nil {
 			return err
 		}
 		if err := s.checkUnservable(tx, now); err != nil {

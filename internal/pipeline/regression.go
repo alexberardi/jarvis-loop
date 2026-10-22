@@ -3,6 +3,7 @@ package pipeline
 import (
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 )
@@ -97,4 +98,34 @@ func regressionFits(c Control, reg *RegCandidate, live []LiveLease, req ClaimReq
 		}
 	}
 	return true
+}
+
+// NoRegressionTaker says why no runner seen within RunnerSeenWindow of now can take a run that
+// needs resources (#416): none claims WorkRegression with all of them. "" when one can, or when
+// no runner was seen at all (the note says so itself).
+func NoRegressionTaker(resources []string, runners []RunnerSeen, now time.Time) string {
+	var seen []string
+	for _, r := range runners {
+		if now.Sub(r.LastSeen) > RunnerSeenWindow {
+			continue
+		}
+		if (ClaimRequest{Kinds: r.Kinds}).wants(WorkRegression) && subset(resources, r.Capabilities) {
+			return ""
+		}
+		kinds := r.Kinds
+		if len(kinds) == 0 {
+			kinds = []string{WorkItem}
+		}
+		caps := "nothing"
+		if len(r.Capabilities) > 0 {
+			caps = strings.Join(r.Capabilities, ", ")
+		}
+		seen = append(seen, r.Name+" has "+caps+" and takes "+strings.Join(kinds, ", "))
+	}
+	if len(seen) == 0 {
+		return ""
+	}
+	sort.Strings(seen)
+	return "no runner takes it: it needs one that claims regression runs and has " + strings.Join(resources, ", ") +
+		" (seen: " + strings.Join(seen, "; ") + ")"
 }

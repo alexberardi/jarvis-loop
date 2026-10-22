@@ -115,3 +115,28 @@ func TestChooseWorkRegressionHeldSlot(t *testing.T) {
 		t.Fatalf("a mobile run did not take the emulator's held slot: %+v %v", w, ok)
 	}
 }
+
+func TestNoRegressionTaker(t *testing.T) {
+	now := time.Date(2026, 10, 21, 7, 0, 0, 0, time.UTC)
+	res := SuiteResources(SuiteOvernight)
+	dev := RunnerSeen{Name: "dev", Capabilities: []string{"emulator", "gpu"}, Kinds: []string{WorkItem, WorkRegression}, LastSeen: now}
+	full := RunnerSeen{Name: "full", Capabilities: []string{"emulator", "gpu", "voice"}, Kinds: []string{WorkItem, WorkRegression}, LastSeen: now}
+	noKind := RunnerSeen{Name: "nokind", Capabilities: []string{"emulator", "gpu", "voice"}, LastSeen: now}
+	stale := full
+	stale.LastSeen = now.Add(-RunnerSeenWindow - time.Second)
+	for _, c := range []struct {
+		name    string
+		runners []RunnerSeen
+		want    string
+	}{
+		{"none seen", nil, ""},
+		{"one takes it", []RunnerSeen{dev, full}, ""},
+		{"lacks a resource", []RunnerSeen{dev}, "no runner takes it: it needs one that claims regression runs and has emulator, gpu, voice (seen: dev has emulator, gpu and takes item, regression)"},
+		{"does not claim regression runs", []RunnerSeen{noKind}, "no runner takes it: it needs one that claims regression runs and has emulator, gpu, voice (seen: nokind has emulator, gpu, voice and takes item)"},
+		{"the one that could is stale", []RunnerSeen{dev, stale}, "no runner takes it: it needs one that claims regression runs and has emulator, gpu, voice (seen: dev has emulator, gpu and takes item, regression)"},
+	} {
+		if got := NoRegressionTaker(res, c.runners, now); got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)
+		}
+	}
+}

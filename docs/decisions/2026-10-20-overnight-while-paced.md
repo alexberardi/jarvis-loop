@@ -31,4 +31,5 @@ no regression run.
   lease, the item, plan turn or orchestrate turn `QueueBusy` names), another open run, or a quiet
   queue no runner has polled since, plus claude's pace when it is not normal. The row's
   `unstarted_noted_at` (migration 0037) keeps it to one per run; a message Slack refuses is tried
-  again on the next tick.
+  again on the next tick. *Since 2026-10-21:* one per night, and it can say no runner takes the run
+  ([decision](2026-10-21-overnight-missed-nights.md)).
