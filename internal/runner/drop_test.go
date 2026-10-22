@@ -148,7 +148,7 @@ type fakeLand struct {
 	logCalls []int64
 	reruns   []int64
 	// commits, when set, are the runs by commit instead (none for a commit not in it); rerunErr
-	// refuses every re-run.
+	// refuses every re-run. A run with a pending check is refused too, as GitHub does.
 	commits  map[string][]WorkflowRun
 	rerunErr error
 }
@@ -158,6 +158,11 @@ func (f *fakeLand) RerunFailed(_ context.Context, _ string, id int64) error {
 	defer f.mu.Unlock()
 	if f.rerunErr != nil {
 		return f.rerunErr
+	}
+	for _, c := range f.pr.Checks {
+		if c.Bucket == BucketPending && RunIDFromURL(c.URL) == id {
+			return fmt.Errorf("run %d cannot be rerun; its workflow run is still in progress", id)
+		}
 	}
 	f.reruns = append(f.reruns, id)
 	return nil

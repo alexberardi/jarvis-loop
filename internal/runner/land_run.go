@@ -143,6 +143,20 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 				return
 			}
 			if d.Outcome == "back_to_build" && d.Fields["ci_head_sha"] != "" {
+				if f.RerunCI && !reran && runsInProgress(f.PR.Checks) {
+					// #417: GitHub refuses to re-run the failed jobs of a run still in progress, so
+					// wait for it (within land_ci_wait and land_ci_give_up) before spending the re-run.
+					now := r.Clock.Now()
+					if waitSince.IsZero() {
+						waitSince = now
+					}
+					if now.Sub(waitSince) < ciWait && now.Sub(pendingSince(f.PR, lr.item, waitSince)) < r.ciGiveUp() {
+						if !sleep(fmt.Sprintf("land: waiting for the failed CI run to finish before re-running it (%s)", roundDur(now.Sub(waitSince)))) {
+							return
+						}
+						continue
+					}
+				}
 				if f.RerunCI && !reran {
 					// Once per run, whatever loopd took: a re-run that GitHub refused leaves the red standing.
 					reran = true
@@ -408,6 +422,21 @@ func rerunOwed(evs []EventInfo, head string) bool {
 		}
 	}
 	return owed
+}
+
+// runsInProgress says whether a run behind a failed check still has a pending check: GitHub
+// re-runs a run's failed jobs only once the whole run has finished.
+func runsInProgress(checks []Check) bool {
+	failed := map[int64]bool{}
+	for _, run := range ciRunsFromChecks(checks) {
+		failed[run.ID] = true
+	}
+	for _, c := range checks {
+		if c.Bucket == BucketPending && failed[RunIDFromURL(c.URL)] {
+			return true
+		}
+	}
+	return false
 }
 
 // rerunPRFailed re-runs the failed jobs behind the PR's failed checks once, and records it

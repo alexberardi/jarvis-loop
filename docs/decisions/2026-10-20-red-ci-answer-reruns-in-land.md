@@ -24,7 +24,9 @@ test or a scenario:
   usual (and goes back to the land queue as `ci_pending` past the wait), green merges, red again
   is today's `back_to_build`. The marker is the event, not a column: no migration, and a land run
   that stops after the rerun does not rerun again. GitHub refusing every rerun leaves the red
-  standing (back to build).
+  standing (back to build). GitHub refuses to rerun a run still in progress, so while a run behind a failed check
+  has a pending check, land waits (polling, within `land_ci_wait` and `land_ci_give_up`) before it
+  reruns (#417, after #358 spent its rerun on a run in progress).
 - **Wording:** the orchestrator skill (and its brief golden), scenario 59 (now expects the rerun)
   and a new scenario 85 (bounce, red CI at the limit, answer → land, rerun passes, merged, two
   build runs only).
