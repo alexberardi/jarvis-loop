@@ -25,6 +25,18 @@ func (g *rig) slowPrepare() (release func()) {
 	return func() { os.WriteFile(rel, nil, 0o644) }
 }
 
+// armed waits until at least n of the runner's timers are armed, failing the test after 30 s
+// instead of hanging the way BlockUntil does when a heartbeat never arms.
+func (g *rig) armed(t *testing.T, n int) {
+	t.Helper()
+	for i := 0; g.clk.Armed() < n; i++ {
+		if i > 600 {
+			t.Fatalf("%d of %d timers armed after 30 s; log:\n%s", g.clk.Armed(), n, g.logs.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func (g *rig) buildWorktree(id int64) string {
 	return filepath.Join(g.r.Cfg.WorkRoot, fmt.Sprintf("%d-build", id))
 }
@@ -38,11 +50,11 @@ func TestPrepareKeepsTheLeaseAlive(t *testing.T) {
 	g.slowPrepare()
 	wait := g.runAsync()
 	waitFile(t, filepath.Join(g.buildWorktree(id), ".loop", "scratch", "preparing"))
-	g.clk.BlockUntil(2)      // heartbeat + the time cap
+	g.armed(t, 2)            // heartbeat + the time cap
 	for i := 0; i < 6; i++ { // 12 minutes on loopd's clock, past the 5-minute TTL
 		g.loopdClk.Advance(2 * time.Minute)
 		g.clk.Advance(60 * time.Second)
-		g.clk.BlockUntil(2)
+		g.armed(t, 2)
 		l := g.item(id).Lease
 		if l == nil || !l.ExpiresAt.Equal(g.loopdClk.Now().Add(store.LeaseTTL)) {
 			t.Fatalf("heartbeat %d did not extend the lease: %+v; log:\n%s", i, l, g.logs.String())
@@ -77,7 +89,7 @@ func TestASecondClaimWaitsForTheEarlierRun(t *testing.T) {
 	wt := g.buildWorktree(id)
 	waitA := g.runAsync()
 	waitFile(t, filepath.Join(wt, ".loop", "scratch", "preparing"))
-	g.clk.BlockUntil(2)
+	g.armed(t, 2)
 	first := worktreeOwner(wt)
 	if first == "" {
 		t.Fatal("the worktree names no lease")
@@ -86,7 +98,7 @@ func TestASecondClaimWaitsForTheEarlierRun(t *testing.T) {
 	// claim gets the item.
 	g.loopdClk.Advance(store.LeaseTTL + time.Minute)
 	waitB := g.runAsync()
-	g.clk.BlockUntil(4) // both runs heartbeat: the first preparing, the second waiting for it
+	g.armed(t, 4) // both runs heartbeat: the first preparing, the second waiting for it
 	if !strings.Contains(g.logs.String(), "an earlier run of the item is still ending") {
 		t.Fatalf("log:\n%s", g.logs.String())
 	}
