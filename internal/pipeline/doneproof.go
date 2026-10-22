@@ -99,3 +99,25 @@ func doneReason(p *Proof) string {
 	_, why := QAGroup(p, false)
 	return clipRunes(why, 400)
 }
+
+// KindDoneReproof is a failed done item sent back to unproven: the reopen its failure filed was
+// closed not reproducible (#415), so the failure was the proof's environment, not the change.
+const KindDoneReproof = "done_reproof"
+
+// ApplyReopenNotReproducible is a failed done item's reopen (reopenID) closed not reproducible
+// with summary: the item goes back to unproven, without its proof, and the done sweep asks for a
+// new one. A reopen closed as a duplicate is a real failure tracked elsewhere: the item stays
+// failed.
+func ApplyReopenNotReproducible(it Item, reopenID int64, summary string) (Transition, error) {
+	if it.Stage != Done || it.Verify != DoneFailed {
+		return Transition{}, errf(CodeWrongStage, "item is %s (%s), not a failed done item", it.Stage, it.Verify)
+	}
+	summary = strings.TrimSpace(summary)
+	if strings.HasPrefix(strings.ToLower(summary), "duplicate") {
+		return Transition{}, errf(CodeWrongStage, "reopen #%d closed as a duplicate: the failure stands", reopenID)
+	}
+	it.Verify, it.Proof = DoneUnproven, nil
+	it.VerifyReason = clipRunes(fmt.Sprintf("reopen #%d closed not reproducible: %s", reopenID, firstLine(summary)), 400)
+	return Transition{Item: it, From: Done, To: Done, Kind: KindDoneReproof,
+		Data: map[string]any{"verify": it.Verify, "reason": it.VerifyReason, "reopen_item": reopenID}}, nil
+}

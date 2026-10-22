@@ -118,10 +118,11 @@ const (
 	PartOne = "part_one"
 
 	// Triage plays (a triage run of a build play plays Reproduce).
-	Reproduce      = "reproduce"       // reproduced, with notes and a repro file; picks the script's repo when the item has none
-	Duplicate      = "duplicate"       // not_reproducible: the open item with the same title, and its PR
-	TriageQuestion = "triage_question" // a question
-	TriageBadRepo  = "triage_bad_repo" // reproduced, naming a repo that is not configured
+	Reproduce      = "reproduce"        // reproduced, with notes and a repro file; picks the script's repo when the item has none
+	Duplicate      = "duplicate"        // not_reproducible: the open item with the same title, and its PR
+	NotRepro       = "not_reproducible" // not_reproducible: works on main, the failure was the check's environment
+	TriageQuestion = "triage_question"  // a question
+	TriageBadRepo  = "triage_bad_repo"  // reproduced, naming a repo that is not configured
 	// Route names the script's repo for an item with none (routed); once the item has a repo, it
 	// plays Reproduce.
 	Route = "route"
@@ -185,7 +186,7 @@ const (
 )
 
 var stagePlays = map[string][]string{
-	"triage": {Reproduce, Duplicate, TriageQuestion, TriageBadRepo, Route, Hang, UsageLimit, Exit3, Background},
+	"triage": {Reproduce, Duplicate, NotRepro, TriageQuestion, TriageBadRepo, Route, Hang, UsageLimit, Exit3, Background},
 	"review": {Approve, Bounce, ReviewCommit, ApproveHold, ApproveQA, ApproveToolState, ApproveNamesDir, ApproveNamesDirOnce, ApproveUndone, ApproveFiled, Hang, UsageLimit, Exit3, Background},
 	// Plan personas.
 	"product":     {PlanBrief, PlanEscape, PlanWait, Hang, UsageLimit, Exit3},
@@ -799,6 +800,13 @@ func (f *fake) triage(play string, brief []byte, sc script) int {
 	case TriageQuestion:
 		f.write(".loop/result.json", `{"outcome":"question","question":"Which screen do you mean?"}`)
 		f.result("Asked a question.")
+		return 0
+	case NotRepro:
+		f.write(".loop/evidence/repro.txt", "ran the failing check on main with its tools installed: exit 0\n")
+		res, _ := json.Marshal(map[string]any{"outcome": "not_reproducible", "summary": "works on main; the proof's environment lacked a tool.",
+			"notes": "The check passes where its tools are installed.", "evidence": []any{map[string]string{"file": "evidence/repro.txt", "label": "repro"}}})
+		f.write(".loop/result.json", string(res))
+		f.result("Not reproducible.")
 		return 0
 	case Duplicate:
 		title := find(`Item: #\d+: (.*)`, brief)
