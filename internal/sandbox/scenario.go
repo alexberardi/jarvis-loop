@@ -46,9 +46,12 @@ type Scenario struct {
 	Qwen bool `json:"qwen,omitempty"`
 	// PipelineVerify: the demo repo has a pipeline-regressions verify step (PipelineVerifyStep),
 	// its change's results set by a "verify" step's outcome flaky or regressed.
-	PipelineVerify bool    `json:"pipeline_verify,omitempty"`
-	Steps          []Step  `json:"steps"`
-	Final          *Expect `json:"expect,omitempty"`
+	PipelineVerify bool `json:"pipeline_verify,omitempty"`
+	// SlowPrepare: the demo repo's Prepare command waits for a release_prepare step (a slow
+	// fetch); a preparing step waits until a build is in it.
+	SlowPrepare bool    `json:"slow_prepare,omitempty"`
+	Steps       []Step  `json:"steps"`
+	Final       *Expect `json:"expect,omitempty"`
 }
 
 // Step is one thing that happens. Do says what; the other fields are its arguments. An "expect"
@@ -676,6 +679,19 @@ func (p *player) step(st Step) error {
 			}
 			return fmt.Errorf("the agent for %s is not running yet (state %v)", st.Item, s.AgentState(r.id))
 		})
+	case "preparing":
+		r, err := p.ref(st.Item)
+		if err != nil {
+			return err
+		}
+		return eventually(30*time.Second, func() error {
+			if s.Preparing(r.id) {
+				return nil
+			}
+			return fmt.Errorf("the build of %s is not preparing yet", st.Item)
+		})
+	case "release_prepare":
+		return s.ReleasePrepare()
 	case "runner_idle":
 		return s.WaitRuns(60 * time.Second)
 	case "reload_runner":

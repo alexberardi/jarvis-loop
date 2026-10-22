@@ -77,6 +77,9 @@ type Runner struct {
 	drainC   chan struct{} // closed by Drain
 	draining atomic.Bool
 	waits    waitSet // what Run waits on, for the drain's log
+
+	liveMu sync.Mutex
+	live   map[int64]*liveRun // item -> its agent run on this runner, until its cleanup ends (#453)
 }
 
 // PRInfo is what GitHub says about a PR.
@@ -456,13 +459,29 @@ func (r *Runner) work(ctx context.Context, cl *Claim, agent string) {
 	}
 	cleanupCtx := context.WithoutCancel(ctx)
 	ru.done = ctx.Done()
+	// One run per item on this runner: a claim made while an earlier run of the item is still
+	// ending waits for its cleanup before it touches the worktree (#453).
+	release, err := r.holdItem(ctx, ru, log)
+	if release == nil {
+		if err != nil {
+			r.advance(ctx, ru, "failed", map[string]string{"error": err.Error()}, nil)
+		}
+		return
+	}
+	defer release() // after the cleanup below
 	defer r.cleanup(cleanupCtx, ru, log)
 	r.pickBuilder(ctx, ru)
 	if ru.claudeBuild() {
 		ru.prevSession = r.loadBuildSession(ru)
 	}
 
-	brief, err := r.prepare(ctx, ru)
+	brief, stopped, err := r.prepareAlive(ctx, ru)
+	if stopped {
+		// The lease ended while the run was being set up (loopd said stop, or it is gone): no
+		// agent and no report, as for a stop mid-run.
+		log.Info("loopd ended the lease while preparing; not starting the agent")
+		return
+	}
 	if err == nil && ru.resumedFrom != nil {
 		// The session has the brief already: its prompt is a note on the interruption alone.
 		err = os.WriteFile(filepath.Join(ru.dir, "brief.md"), []byte(ResumeNote(ru.resumedFrom)), 0o644)
@@ -660,6 +679,9 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return "", err
 		}
+	}
+	if err := claimWorktree(ru); err != nil {
+		return "", err
 	}
 	brief := Brief(ru.stage, ru.item, info)
 	if err := r.writeBrief(ru, brief); err != nil {
@@ -1806,8 +1828,12 @@ func readResult(p string) ([]byte, error) {
 // cleanup removes what the runner made for this item: the harness sandbox (with the harness
 // files restored from the base branch first, so no agent edit runs with the runner's rights), the
 // worktree and the scratch dir. The run dir stays as the run's log. It never touches anything
-// else.
+// else, nor a worktree a later run of the item took over (#453): that one is the later run's.
 func (r *Runner) cleanup(ctx context.Context, ru *run, log *slog.Logger) {
+	if err := r.takenOver(ru); err != nil {
+		log.Warn("worktree taken over by a later run; not removing it", "worktree", ru.wt, "why", err)
+		return
+	}
 	if _, err := os.Stat(ru.repoDir); ru.repoDir != "" && err == nil && len(ru.repo.Cleanup) > 0 {
 		restored := true
 		if len(ru.repo.CleanupRestore) > 0 {

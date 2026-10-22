@@ -1,0 +1,94 @@
+{
+  "name": "slow-prepare",
+  "about": "#453: the build's setup (the repo's Prepare command: a slow fetch) takes 7 minutes, past the 5-minute lease TTL. The runner heartbeats while it prepares, so the lease never expires, a second slot polling meanwhile claims nothing, and one agent builds the item on its own worktree.",
+  "slots": 2,
+  "slow_prepare": true,
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Fetch the libs before the build"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "script",
+      "item": "a",
+      "play": "good"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "preparing",
+      "item": "a"
+    },
+    {
+      "do": "clock",
+      "advance": "7m"
+    },
+    {
+      "do": "expect",
+      "stage": {
+        "a": "build"
+      },
+      "leased": {
+        "a": true
+      },
+      "board": {
+        "a": {
+          "column": "Build",
+          "working": "setup: preparing \\(7m\\)"
+        }
+      }
+    },
+    {
+      "do": "runner",
+      "claims": "none"
+    },
+    {
+      "do": "release_prepare"
+    },
+    {
+      "do": "runner_idle"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "review"
+    },
+    "agent_runs": {
+      "build": 1
+    },
+    "events": [
+      {
+        "item": "a",
+        "kind": "claimed",
+        "actor": "runner",
+        "count": 1
+      },
+      {
+        "item": "a",
+        "kind": "advanced",
+        "outcome": "pr_opened",
+        "actor": "runner"
+      }
+    ],
+    "no_events": [
+      {
+        "item": "a",
+        "kind": "lease_expired"
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "text": "^Claimed for build\\.$"
+      }
+    ],
+    "prs": 1
+  }
+}
