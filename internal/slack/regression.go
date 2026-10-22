@@ -70,8 +70,8 @@ func (b *Bot) morningReports(ctx context.Context) {
 	}
 }
 
-// unstartedNote posts, once, why a scheduled overnight run has still not started at
-// pipeline.UnstartedNoteAt (#317); one Slack refuses is tried again on the next tick.
+// unstartedNote posts, once a night, why a scheduled overnight run has still not started at
+// pipeline.UnstartedNoteAt (#317, #416); one Slack refuses is tried again on the next tick.
 func (b *Bot) unstartedNote(ctx context.Context) {
 	u, err := b.c.Store.UnstartedOvernight(ctx)
 	if err != nil {
@@ -85,7 +85,7 @@ func (b *Bot) unstartedNote(ctx context.Context) {
 	if _, err := b.post(ctx, "unstarted regression", Message{Channel: ChannelLoop, Text: text, Blocks: []map[string]any{section(text)}}); err != nil {
 		return
 	}
-	if err := b.c.Store.MarkUnstartedNoted(ctx, u.Run.ID); err != nil {
+	if err := b.c.Store.MarkUnstartedNoted(ctx, u); err != nil {
 		b.c.Log.Error("slack: record unstarted note", "regression", u.Run.ID, "err", err.Error())
 	}
 }

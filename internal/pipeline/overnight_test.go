@@ -251,3 +251,24 @@ func TestParseRegressionTonight(t *testing.T) {
 		t.Error("ParseRegression took 'regression tonight' as a run now")
 	}
 }
+
+func TestLastAt(t *testing.T) {
+	loc := ny(t)
+	at := func(s string) time.Time {
+		v, err := time.ParseInLocation("2006-01-02 15:04", s, loc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	for _, c := range []struct{ now, want string }{
+		{"2026-10-21 07:00", "2026-10-21 07:00"},
+		{"2026-10-21 06:59", "2026-10-20 07:00"},
+		{"2026-10-21 23:00", "2026-10-21 07:00"},
+		{"2026-11-01 08:00", "2026-11-01 07:00"}, // the day the clocks go back
+	} {
+		if got := LastAt(at(c.now), loc, "07:00"); !got.Equal(at(c.want)) {
+			t.Errorf("LastAt(%s) = %s, want %s", c.now, got, c.want)
+		}
+	}
+}

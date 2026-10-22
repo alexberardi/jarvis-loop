@@ -164,19 +164,11 @@ func (c *Client) claim(ctx context.Context, agent string, caps, only, stages []s
 	if len(runnerStages) > 0 {
 		body["runner_stages"] = runnerStages
 	}
-	turnKinds := map[string]string{StagePlan: pipeline.WorkPlan, StageOrchestrate: pipeline.WorkOrchestrate, StageRegression: pipeline.WorkRegression}
-	if slices.ContainsFunc(stages, func(s string) bool { return turnKinds[s] != "" }) {
-		var items, kinds []string
-		for _, s := range stages {
-			if k := turnKinds[s]; k != "" {
-				kinds = append(kinds, k)
-			} else {
-				items = append(items, s)
-			}
-		}
-		if len(items) > 0 {
-			kinds = append([]string{pipeline.WorkItem}, kinds...)
-		}
+	// The kinds from the config, so a land-lane claim does not tell loopd the runner takes items only.
+	if _, kinds := claimKinds(cfgStages); len(kinds) > 0 {
+		body["runner_kinds"] = kinds
+	}
+	if items, kinds := claimKinds(stages); len(kinds) > 0 && !slices.Equal(kinds, []string{pipeline.WorkItem}) {
 		body["stages"], body["kinds"] = items, kinds
 	}
 	var cl Claim
@@ -188,6 +180,24 @@ func (c *Client) claim(ctx context.Context, agent string, caps, only, stages []s
 		return nil, nil
 	}
 	return &cl, nil
+}
+
+var turnKinds = map[string]string{StagePlan: pipeline.WorkPlan, StageOrchestrate: pipeline.WorkOrchestrate, StageRegression: pipeline.WorkRegression}
+
+// claimKinds splits stages into the item stages and the kinds of work they take (item first,
+// when there are item stages).
+func claimKinds(stages []string) (items, kinds []string) {
+	for _, s := range stages {
+		if k := turnKinds[s]; k != "" {
+			kinds = append(kinds, k)
+		} else {
+			items = append(items, s)
+		}
+	}
+	if len(items) > 0 {
+		kinds = append([]string{pipeline.WorkItem}, kinds...)
+	}
+	return items, kinds
 }
 
 // OrchTurnResult finishes the orchestrate turn this runner holds the lease on.

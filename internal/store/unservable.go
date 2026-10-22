@@ -15,7 +15,7 @@ const (
 )
 
 func runnersSeen(tx *sql.Tx) ([]pipeline.RunnerSeen, error) {
-	rows, err := tx.Query(`SELECT name, capabilities, only_resources, poll_seconds, stages, last_seen, builders FROM runners`)
+	rows, err := tx.Query(`SELECT name, capabilities, only_resources, poll_seconds, stages, last_seen, builders, kinds FROM runners`)
 	if err != nil {
 		return nil, err
 	}
@@ -23,12 +23,12 @@ func runnersSeen(tx *sql.Tx) ([]pipeline.RunnerSeen, error) {
 	var out []pipeline.RunnerSeen
 	for rows.Next() {
 		var r pipeline.RunnerSeen
-		var caps, only, stages, builders string
+		var caps, only, stages, builders, kinds string
 		var seen int64
-		if err := rows.Scan(&r.Name, &caps, &only, &r.PollSeconds, &stages, &seen, &builders); err != nil {
+		if err := rows.Scan(&r.Name, &caps, &only, &r.PollSeconds, &stages, &seen, &builders, &kinds); err != nil {
 			return nil, err
 		}
-		r.Capabilities, r.OnlyResources, r.LastSeen, r.Builders = splitList(caps), splitList(only), fromNanos(seen), splitList(builders)
+		r.Capabilities, r.OnlyResources, r.LastSeen, r.Builders, r.Kinds = splitList(caps), splitList(only), fromNanos(seen), splitList(builders), splitList(kinds)
 		for _, st := range splitList(stages) {
 			r.Stages = append(r.Stages, pipeline.Stage(st))
 		}

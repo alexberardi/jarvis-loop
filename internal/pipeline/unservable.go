@@ -26,6 +26,9 @@ type RunnerSeen struct {
 	// Builders are the other builders it said it can run (BuilderQwen), for the flow panel's
 	// usage-paced reason (WaitReason).
 	Builders []string
+	// Kinds are the kinds of work it takes (ClaimRequest.RunnerKinds, else the last claim's Kinds
+	// that named any; none: items only).
+	Kinds    []string
 	LastSeen time.Time
 }
 

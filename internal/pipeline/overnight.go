@@ -75,6 +75,20 @@ func NextAt(now time.Time, loc *time.Location, hhmm string) time.Time {
 	return at
 }
 
+// LastAt is the latest hhmm on loc's clock at or before now (NextAt's mirror).
+func LastAt(now time.Time, loc *time.Location, hhmm string) time.Time {
+	mins, err := ParseClock(hhmm)
+	if err != nil {
+		mins, _ = ParseClock(DefaultRegressionAt)
+	}
+	t := now.In(loc)
+	at := time.Date(t.Year(), t.Month(), t.Day(), mins/60, mins%60, 0, 0, loc)
+	if at.After(t) {
+		at = time.Date(t.Year(), t.Month(), t.Day()-1, mins/60, mins%60, 0, 0, loc)
+	}
+	return at
+}
+
 // MorningReport is when an overnight run that finished at finished is reported: at once in the day
 // (MorningReportAt to EveningAt on loc's clock), else at the next MorningReportAt.
 func MorningReport(finished time.Time, loc *time.Location) time.Time {
