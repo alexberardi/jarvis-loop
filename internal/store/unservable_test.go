@@ -196,3 +196,44 @@ func TestDevboxLandsAMacosItem(t *testing.T) {
 		t.Fatalf("flagged in land: %v", b.Unservable)
 	}
 }
+
+// A runner that has no checkout of the item's repo (#467): its claim gets nothing, the item is
+// flagged with the repo, and the flag clears once a runner with the repo claims it.
+func TestUnservableRepo(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	it := add(t, s, "mac app", "P4")
+	triagedWith(t, s, it, "macos", "macos")
+	mbp := func(repos ...string) *Claim {
+		c, err := s.Claim(ctx, "mbp", pipeline.ClaimRequest{Runner: "mbp", Agent: "mbp-1", Capabilities: []string{"macos"}, Repos: repos})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	// The triage claim came from "runner" with macos and no repos (any): now it goes quiet.
+	if _, err := s.w.Exec(`DELETE FROM runners WHERE name = ?`, runner); err != nil {
+		t.Fatal(err)
+	}
+	if c := mbp("o/other"); c != nil {
+		t.Fatalf("mbp without the repo claimed %+v", c.Item)
+	}
+	// mbp offers macos: only the repo is missing.
+	want := []string{it.Repo}
+	if b := boardItem(t, s, it.ID); !slices.Equal(b.Unservable, want) {
+		t.Fatalf("board unservable %v, want %v", b.Unservable, want)
+	}
+	if got := kindsOf(t, s, it.ID, KindUnservable, KindServable); !slices.Equal(got, []string{KindUnservable}) {
+		t.Fatalf("events %v", got)
+	}
+	var repos string
+	if err := s.w.QueryRow(`SELECT repos FROM runners WHERE name = 'mbp'`).Scan(&repos); err != nil || repos != "o/other" {
+		t.Fatalf("runner repos %q %v", repos, err)
+	}
+	if c := mbp("o/other", it.Repo); c == nil || c.Item.ID != it.ID {
+		t.Fatalf("mbp with the repo: %+v", c)
+	}
+	if got := kindsOf(t, s, it.ID, KindUnservable, KindServable); !slices.Equal(got, []string{KindUnservable, KindServable}) {
+		t.Fatalf("events %v", got)
+	}
+}

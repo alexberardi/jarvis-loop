@@ -898,11 +898,14 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 			kinds = append(kinds, req.Kinds...)
 		}
 		sort.Strings(kinds)
-		if _, err := tx.Exec(`INSERT INTO runners (name, capabilities, only_resources, poll_seconds, stages, last_seen, slots, builders, kinds) VALUES (?,?,?,?,?,?,?,?,?)
+		repos := append([]string(nil), req.Repos...)
+		sort.Strings(repos)
+		if _, err := tx.Exec(`INSERT INTO runners (name, capabilities, only_resources, poll_seconds, stages, last_seen, slots, builders, kinds, repos) VALUES (?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT (name) DO UPDATE SET capabilities = excluded.capabilities, only_resources = excluded.only_resources,
 				poll_seconds = excluded.poll_seconds, stages = excluded.stages, last_seen = excluded.last_seen, state = '',
-				slots = excluded.slots, builders = excluded.builders, kinds = CASE WHEN ? THEN excluded.kinds ELSE runners.kinds END`,
-			runnerName, strings.Join(caps, ","), strings.Join(only, ","), max(req.PollSeconds, 0), strings.Join(stages, ","), now.UnixNano(), req.Slots, strings.Join(req.Builders, ","), strings.Join(kinds, ","), len(kinds) > 0); err != nil {
+				slots = excluded.slots, builders = excluded.builders, kinds = CASE WHEN ? THEN excluded.kinds ELSE runners.kinds END,
+				repos = excluded.repos`,
+			runnerName, strings.Join(caps, ","), strings.Join(only, ","), max(req.PollSeconds, 0), strings.Join(stages, ","), now.UnixNano(), req.Slots, strings.Join(req.Builders, ","), strings.Join(kinds, ","), strings.Join(repos, ","), len(kinds) > 0); err != nil {
 			return err
 		}
 		if err := s.checkUnservable(tx, now); err != nil {

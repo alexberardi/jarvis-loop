@@ -1,0 +1,34 @@
+{
+  "name": "runner-without-the-repo",
+  "about": "#467: an item is on a repo (sandbox/extra) loopd knows but the only runner has no checkout of. The runner's claims name its repos, so it is not given the item: no claim, no run failing with 'no repo configured', the item waits in build. Once the hand runner that triaged it has not been seen for a day, loopd flags it unservable, naming the repo. When runner.json gains the repo (a reload, as on SIGHUP), the flag clears and the runner claims and builds it.",
+  "extra_repo": true,
+  "stages": ["build"],
+  "steps": [
+    {"do": "reload_loopd", "text": "sandbox/extra: pantry\nsandbox/jarvis-node-mobile: mobile, node app\n"},
+    {"do": "add", "item": "a", "title": "A pantry list", "repo_as": "pantry"},
+    {"do": "triage", "item": "a"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "25h"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "build"}, "repo": {"a": "sandbox/extra"}, "leased": {"a": false},
+     "events": [{"item": "a", "kind": "unservable", "actor": "loopd", "data": {"missing": "sandbox/extra"}, "count": 1}],
+     "no_events": [{"item": "a", "kind": "claimed", "actor": "runner"}]},
+    {"do": "reload_runner", "add_repo": "extra"},
+    {"do": "runner", "claims": "a"},
+    {"do": "wait", "stage": {"a": "review"}},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review"},
+    "repo": {"a": "sandbox/extra"},
+    "prs": 1,
+    "agent_runs": {"build": 1},
+    "events": [
+      {"item": "a", "kind": "servable", "actor": "loopd", "data": {"missing": "sandbox/extra"}, "count": 1},
+      {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "count": 1}
+    ],
+    "no_events": [
+      {"item": "a", "kind": "needs_you"}
+    ]
+  }
+}

@@ -59,7 +59,7 @@ func SlotHolds(c Control, pace Pace, items []Item, deps map[int64]Stage, live []
 			if len(stages) == 0 {
 				continue
 			}
-			req := ClaimRequest{Runner: r.Name, Capabilities: r.Capabilities, OnlyResources: []string{res}, Stages: stages}
+			req := ClaimRequest{Runner: r.Name, Capabilities: r.Capabilities, Repos: r.Repos, OnlyResources: []string{res}, Stages: stages}
 			if it, ok := choosePaced(c, items, deps, live, req, frozen, newPacing(c, pace, live, nil).eligible); ok {
 				byRes[res] = SlotHold{Resource: res, Runner: r.Name, ItemID: it.ID}
 			}

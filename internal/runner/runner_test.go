@@ -850,15 +850,21 @@ func TestShutdownSavesWorkWithoutReporting(t *testing.T) {
 	}
 }
 
-func TestUnknownRepoFails(t *testing.T) {
+// A runner with no checkout of the item's repo is not given it (#467): the item waits in its
+// stage, flagged unservable, instead of failing at once with "no repo configured".
+func TestUnknownRepoWaits(t *testing.T) {
 	g := newRig(t, fakeclaude.Good)
 	other := g.r.Cfg.Repos["demo"]
 	other.Slug = "alex/other" // not alex/demo, whose name part would match
 	g.r.Cfg.Repos = map[string]RepoConfig{"other": other}
 	id := g.toBuild("Wrong repo")
 	g.runOnce()
-	if q := g.item(id).Item.Question; !strings.Contains(q, `no repo "alex/demo"`) {
-		t.Fatalf("%q", q)
+	it := g.item(id).Item
+	if it.Stage != pipeline.Build || it.Question != "" || len(g.events(id, "claimed")) != 1 { // triage's
+		t.Fatalf("stage %s question %q claimed %d, want build, none, 1", it.Stage, it.Question, len(g.events(id, "claimed")))
+	}
+	if evs := g.events(id, "unservable"); len(evs) != 1 || fmt.Sprint(evs[0].Data["missing"]) != "[alex/demo]" {
+		t.Fatalf("unservable events %v", evs)
 	}
 }
 

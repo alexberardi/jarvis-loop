@@ -10,12 +10,12 @@ import (
 
 // Event kinds of the unservable flag (docs/decisions/2026-10-17-unservable-items.md).
 const (
-	KindUnservable = "unservable" // data.missing: the resources no runner offers
+	KindUnservable = "unservable" // data.missing: the resources (and the repo, #467) no runner offers
 	KindServable   = "servable"   // the flag cleared: a runner offers them now, or the item moved on
 )
 
 func runnersSeen(tx *sql.Tx) ([]pipeline.RunnerSeen, error) {
-	rows, err := tx.Query(`SELECT name, capabilities, only_resources, poll_seconds, stages, last_seen, builders, kinds FROM runners`)
+	rows, err := tx.Query(`SELECT name, capabilities, only_resources, poll_seconds, stages, last_seen, builders, kinds, repos FROM runners`)
 	if err != nil {
 		return nil, err
 	}
@@ -23,12 +23,12 @@ func runnersSeen(tx *sql.Tx) ([]pipeline.RunnerSeen, error) {
 	var out []pipeline.RunnerSeen
 	for rows.Next() {
 		var r pipeline.RunnerSeen
-		var caps, only, stages, builders, kinds string
+		var caps, only, stages, builders, kinds, repos string
 		var seen int64
-		if err := rows.Scan(&r.Name, &caps, &only, &r.PollSeconds, &stages, &seen, &builders, &kinds); err != nil {
+		if err := rows.Scan(&r.Name, &caps, &only, &r.PollSeconds, &stages, &seen, &builders, &kinds, &repos); err != nil {
 			return nil, err
 		}
-		r.Capabilities, r.OnlyResources, r.LastSeen, r.Builders, r.Kinds = splitList(caps), splitList(only), fromNanos(seen), splitList(builders), splitList(kinds)
+		r.Capabilities, r.OnlyResources, r.LastSeen, r.Builders, r.Kinds, r.Repos = splitList(caps), splitList(only), fromNanos(seen), splitList(builders), splitList(kinds), splitList(repos)
 		for _, st := range splitList(stages) {
 			r.Stages = append(r.Stages, pipeline.Stage(st))
 		}
@@ -37,8 +37,9 @@ func runnersSeen(tx *sql.Tx) ([]pipeline.RunnerSeen, error) {
 	return out, rows.Err()
 }
 
-// checkUnservable flags each item in an agent stage (land needs no resources, pipeline.Item.Needs)
-// whose resources no runner seen lately offers (an unservable event, once per missing set) and
+// checkUnservable flags each item in a work stage whose resources (land needs none,
+// pipeline.Item.Needs) or repo no runner seen lately offers (an unservable event, once per missing
+// set; the repo is named with the resources) and
 // clears the flag of the others (servable, when a runner offers them now). It runs on every claim
 // (a runner's capabilities may have changed), on every advance (triage sets the resources) and
 // once a minute (a runner may have gone quiet).
@@ -69,20 +70,24 @@ func (s *Store) checkUnservable(tx *sql.Tx, now time.Time) error {
 		id    int64
 		stage string
 		res   []string
+		repo  string
 	}
 	var items []cand
-	rows, err = tx.Query(`SELECT id, stage, resources FROM items WHERE stage IN ('triage','build','review') AND resources != ''`)
+	rows, err = tx.Query(`SELECT id, stage, resources, repo FROM items
+		WHERE (stage IN ('triage','build','review') AND resources != '') OR (stage IN ('triage','build','review','land') AND repo != '')`)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var c cand
 		var res string
-		if err := rows.Scan(&c.id, &c.stage, &res); err != nil {
+		if err := rows.Scan(&c.id, &c.stage, &res, &c.repo); err != nil {
 			rows.Close()
 			return err
 		}
-		c.res = splitList(res)
+		if c.stage != string(pipeline.Land) {
+			c.res = splitList(res)
+		}
 		items = append(items, c)
 	}
 	rows.Close()
@@ -90,7 +95,7 @@ func (s *Store) checkUnservable(tx *sql.Tx, now time.Time) error {
 		return err
 	}
 	for _, c := range items {
-		missing := pipeline.Unservable(c.res, runners, now)
+		missing := pipeline.Unservable(c.res, c.repo, runners, now)
 		was, ok := flagged[c.id]
 		delete(flagged, c.id)
 		if len(missing) == 0 {

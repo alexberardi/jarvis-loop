@@ -1190,3 +1190,15 @@ func TestBuilder(t *testing.T) {
 	e.refused(runnerTok, "POST", path, map[string]any{"builder": "qwen"}, 403, "forbidden")
 	e.refused(userTok, "POST", "/items/42/builder", map[string]any{"builder": "qwen"}, 404, "not_found")
 }
+
+// A runner's claim names its repos (#467): it gets no item on another repo, and gets one on its own.
+func TestClaimRepos(t *testing.T) {
+	e := newEnv(t)
+	id := e.addItem("on jarvis-server")
+	e.do(runnerTok, "POST", "/claim", map[string]any{"agent": "a1", "repos": []string{"alexberardi/jarvis-node-mobile", "jarvis-node-mobile"}}, 204, nil)
+	var c claimResp
+	e.do(runnerTok, "POST", "/claim", map[string]any{"agent": "a1", "repos": []string{"alexberardi/jarvis-server", "jarvis-server"}}, 200, &c)
+	if c.Item.ID != id {
+		t.Fatalf("claim %+v, want item %d", c, id)
+	}
+}

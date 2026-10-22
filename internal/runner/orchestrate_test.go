@@ -368,3 +368,33 @@ func TestOrchStaticIsTheSkillThenTheContract(t *testing.T) {
 		t.Error("the skill contains the turn heading")
 	}
 }
+
+// A claim names every repo the runner can resolve an item's repo to, so loopd gives it only items
+// it has a checkout of (#467).
+func TestClaimForSendsRepos(t *testing.T) {
+	var got struct {
+		Repos []string `json:"repos"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, Token: runnerToken}
+	cfg := &Config{Repos: map[string]RepoConfig{
+		"server": {Slug: "alex/jarvis-server"},
+		"mobile": {Slug: "alex/jarvis-node-mobile", Aliases: []string{" Node App "}},
+	}}
+	if _, err := c.ClaimFor(context.Background(), "a", cfg, []string{StageBuild}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"alex/jarvis-node-mobile", "alex/jarvis-server", "jarvis-node-mobile", "jarvis-server", "mobile", "node app", "server"}
+	if !slices.Equal(got.Repos, want) {
+		t.Fatalf("claim body repos %v, want %v", got.Repos, want)
+	}
+	for _, n := range got.Repos {
+		if _, _, ok := cfg.Repo(n); !ok {
+			t.Fatalf("sent %q, which the config does not resolve", n)
+		}
+	}
+}

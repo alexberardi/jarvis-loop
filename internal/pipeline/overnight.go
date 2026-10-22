@@ -146,7 +146,7 @@ func QueueBusy(c Control, pace Pace, items []Item, deps map[int64]Stage, live []
 		if it.Stage == Land || !it.Stage.IsWork() || claimed[it.ID] {
 			continue
 		}
-		if len(WaitingOn(it, deps)) > 0 || frozen.Blocks(it) || len(Unservable(it.Needs(), runners, now)) > 0 || !p.fallback(it) {
+		if len(WaitingOn(it, deps)) > 0 || frozen.Blocks(it) || len(Unservable(it.Needs(), it.Repo, runners, now)) > 0 || !p.fallback(it) {
 			continue
 		}
 		return fmt.Sprintf("#%d waits in %s", it.ID, it.Stage)
