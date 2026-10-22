@@ -57,3 +57,32 @@ func TestSignalRunner(t *testing.T) {
 		t.Fatalf("another runner's pid file was removed: %v", err)
 	}
 }
+
+// A runner refuses to start while the pid file names a live loop-runner, and takes over a stale
+// one (a dead pid, another program, or garbage) (#474).
+func TestWritePIDRefusesALiveRunner(t *testing.T) {
+	orig := isLoopRunner
+	t.Cleanup(func() { isLoopRunner = orig })
+	live := os.Getpid() + 1
+	isLoopRunner = func(pid int) bool { return pid == live }
+	root := t.TempDir()
+	p := filepath.Join(root, pidName)
+
+	os.WriteFile(p, []byte(strconv.Itoa(live)+"\n"), 0o600)
+	if _, err := writePID(root); err == nil || !strings.Contains(err.Error(), "already running (pid "+strconv.Itoa(live)) {
+		t.Fatalf("live runner: %v", err)
+	}
+	if b, _ := os.ReadFile(p); strings.TrimSpace(string(b)) != strconv.Itoa(live) {
+		t.Fatalf("the live runner's pid file was changed: %q", b)
+	}
+
+	for _, stale := range []string{strconv.Itoa(live + 1), "not a pid", ""} {
+		os.WriteFile(p, []byte(stale), 0o600)
+		if _, err := writePID(root); err != nil {
+			t.Fatalf("stale %q: %v", stale, err)
+		}
+		if b, _ := os.ReadFile(p); strings.TrimSpace(string(b)) != strconv.Itoa(os.Getpid()) {
+			t.Fatalf("stale %q: the pid file holds %q", stale, b)
+		}
+	}
+}
