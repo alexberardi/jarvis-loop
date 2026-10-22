@@ -104,6 +104,9 @@ type Options struct {
 	// PipelineVerify gives the demo repo (jarvis-server's stand-in) a pipeline-regressions verify
 	// step (PipelineVerifyStep).
 	PipelineVerify bool
+	// SlowPrepare gives the demo repo a Prepare command that waits for ReleasePrepare (a slow
+	// fetch or lib download; #453).
+	SlowPrepare bool
 }
 
 // Stack is one sandboxed loop: loopd (store, API on a loopback port, Slack layer), a runner, a
@@ -387,6 +390,11 @@ func StartStack(opts Options) (st *Stack, err error) {
 		if rc.Verify, err = PipelineVerifyStep(dir); err != nil {
 			return nil, err
 		}
+		cfg.Repos[RepoKey] = rc
+	}
+	if opts.SlowPrepare {
+		rc := cfg.Repos[RepoKey]
+		rc.Prepare = []string{"touch .loop/scratch/preparing; while [ ! -e " + shellQuote(filepath.Join(cfg.WorkRoot, PrepareRelease)) + " ]; do sleep 0.05; done"}
 		cfg.Repos[RepoKey] = rc
 	}
 	if opts.Qwen {
@@ -912,6 +920,22 @@ func (s *Stack) ReloadLoopd(text string) error {
 // ReleasePlan lets a plan's waiting fake agent (play "wait") finish its turn.
 func (s *Stack) ReleasePlan(id int64) error {
 	return os.WriteFile(filepath.Join(s.scripts, fmt.Sprintf("P%d.release", id)), nil, 0o644)
+}
+
+// PrepareRelease is the file (under the runner's work root, which the fence shows read-only; the
+// rest of a stack under the host's /tmp is behind its private /tmp) that lets a SlowPrepare
+// command end.
+const PrepareRelease = "prepare-release"
+
+// ReleasePrepare lets the demo repo's slow Prepare commands end, now and from then on.
+func (s *Stack) ReleasePrepare() error {
+	return os.WriteFile(filepath.Join(s.Runner.Config().WorkRoot, PrepareRelease), nil, 0o644)
+}
+
+// Preparing says whether the item's build is in its slow Prepare command.
+func (s *Stack) Preparing(id int64) bool {
+	_, err := os.Stat(filepath.Join(s.Runner.Config().WorkRoot, fmt.Sprintf("%d-build", id), ".loop", "scratch", "preparing"))
+	return err == nil
 }
 
 // Release lets an item's waiting build (play "wait" or "wait_release") go on.
