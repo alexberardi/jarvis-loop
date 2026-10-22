@@ -3,6 +3,7 @@ package runner
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -153,5 +154,38 @@ func TestProofEnvironmentErrorDoesNotReopen(t *testing.T) {
 				t.Fatalf("no warning; log:\n%s", g.logs.String())
 			}
 		})
+	}
+}
+
+// The repo's setup venv is the proof command's python, and $TMPDIR is writable (#461): a check
+// running pytest found the system python, not the .venv the setup built.
+func TestProofCommandUsesTheSetupVenv(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	id := g.toQAWithProof(t, `[{"kind":"command","run":"test \"$(python3 -c 'import sys; print(sys.prefix)')\" = \"$PWD/.venv\" && test \"$VIRTUAL_ENV\" = \"$PWD/.venv\""},`+
+		`{"kind":"command","run":"echo hi > \"$TMPDIR/x\" && test -s \"$TMPDIR/x\""}]`)
+	rc := g.r.Cfg.Repos["demo"]
+	rc.Setup = []string{"python3 -m venv --without-pip .venv"}
+	g.r.Cfg.Repos["demo"] = rc
+	if err := g.r.CheckProofs(g.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d := g.item(id); d.Item.Stage != pipeline.Done {
+		t.Fatalf("stage %s, proof %+v; log:\n%s", d.Item.Stage, d.Item.Proof, g.logs.String())
+	}
+}
+
+func TestVenvEnv(t *testing.T) {
+	dir := t.TempDir()
+	env := []string{"HOME=/h", "PATH=/a:/b", "PATH=/usr/bin"}
+	if got := venvEnv(env, dir); len(got) != len(env) {
+		t.Fatalf("no .venv: got %v", got)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".venv", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := venvEnv(env, dir)
+	want := append(env, "VIRTUAL_ENV="+filepath.Join(dir, ".venv"), "PATH="+filepath.Join(dir, ".venv", "bin")+":/usr/bin")
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("got %v\nwant %v", got, want)
 	}
 }
