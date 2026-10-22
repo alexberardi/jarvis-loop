@@ -17,39 +17,7 @@ func TestLandRerunsFailedJobsOnceAfterRedCIAnswer(t *testing.T) {
 		name := map[bool]string{true: "rerun passes", false: "red again"}[green]
 		t.Run(name, func(t *testing.T) {
 			g := newRig(t, fakeclaude.Good)
-			id := g.toReview("Add a feature")
-			if c, err := g.st.Claim(g.ctx, "devbox", pipeline.ClaimRequest{Runner: "devbox", Agent: "reviewer", Stages: []pipeline.Stage{pipeline.Review}}); err != nil || c == nil {
-				t.Fatalf("review claim %v %v", c, err)
-			}
-			if _, err := g.st.Advance(g.ctx, "devbox", id, pipeline.Bounce, map[string]string{"notes": "fix the test"}, nil); err != nil {
-				t.Fatal(err)
-			}
-			g.stages(StageBuild)
-			if !g.runOnce() || g.item(id).Item.Stage != pipeline.Review {
-				t.Fatalf("rebuild did not reach review; log:\n%s", g.logs.String())
-			}
-			it := g.item(id).Item
-			if c, err := g.st.Claim(g.ctx, "devbox", pipeline.ClaimRequest{Runner: "devbox", Agent: "reviewer", Stages: []pipeline.Stage{pipeline.Review}}); err != nil || c == nil {
-				t.Fatalf("review claim %v %v", c, err)
-			}
-			if _, err := g.st.Advance(g.ctx, "devbox", id, pipeline.Approved, map[string]string{"summary": "fine", "head_sha": it.HeadSHA}, nil); err != nil {
-				t.Fatal(err)
-			}
-			gh := &fakeLand{pr: LandPR{Number: it.PR, State: "OPEN", HeadRefName: it.Branch, HeadRefOid: it.HeadSHA, BaseRefName: "main",
-				Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN", Body: g.prs.bodies[it.PR]}}
-			red := []Check{{Name: "check", Bucket: BucketFail, URL: "https://github.com/alex/demo/actions/runs/78"}}
-			gh.pr.Checks = red
-			g.r.Land = gh
-			g.stages(StageLand)
-
-			// Without a red_ci answer, land does not re-run anything: the bounce limit asks.
-			g.runOnce()
-			if d := g.item(id).Item; d.Stage != pipeline.NeedsYou || d.ReturnStage != pipeline.Build || len(gh.reruns) != 0 {
-				t.Fatalf("stage %s return %s, reruns %v; log:\n%s", d.Stage, d.ReturnStage, gh.reruns, g.logs.String())
-			}
-			if got, err := g.st.OrchAnswer(g.ctx, "orchestrator:loop", id, pipeline.AnswerRedCI, "Land reads CI again: re-run it once.", "maybe flaky"); err != nil || got.Stage != pipeline.Land {
-				t.Fatalf("first red_ci answer: %s %v", got.Stage, err)
-			}
+			id, it, gh := g.landOwingRerun(t, []Check{{Name: "check", Bucket: BucketFail, URL: "https://github.com/alex/demo/actions/runs/78"}})
 
 			wait := g.runAsync()
 			g.clk.BlockUntil(2) // the heartbeat and the poll after the re-run
@@ -77,5 +45,94 @@ func TestLandRerunsFailedJobsOnceAfterRedCIAnswer(t *testing.T) {
 				t.Fatalf("second red_ci answer: %s %v", got.Stage, err)
 			}
 		})
+	}
+}
+
+// landOwingRerun takes a new item through a review bounce to land with checks, where the first red
+// CI reaches needs_you, and answers red_ci: the item is back in land, owing one re-run.
+func (g *rig) landOwingRerun(t *testing.T, checks []Check) (int64, pipeline.Item, *fakeLand) {
+	t.Helper()
+	id := g.toReview("Add a feature")
+	if c, err := g.st.Claim(g.ctx, "devbox", pipeline.ClaimRequest{Runner: "devbox", Agent: "reviewer", Stages: []pipeline.Stage{pipeline.Review}}); err != nil || c == nil {
+		t.Fatalf("review claim %v %v", c, err)
+	}
+	if _, err := g.st.Advance(g.ctx, "devbox", id, pipeline.Bounce, map[string]string{"notes": "fix the test"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	g.stages(StageBuild)
+	if !g.runOnce() || g.item(id).Item.Stage != pipeline.Review {
+		t.Fatalf("rebuild did not reach review; log:\n%s", g.logs.String())
+	}
+	it := g.item(id).Item
+	if c, err := g.st.Claim(g.ctx, "devbox", pipeline.ClaimRequest{Runner: "devbox", Agent: "reviewer", Stages: []pipeline.Stage{pipeline.Review}}); err != nil || c == nil {
+		t.Fatalf("review claim %v %v", c, err)
+	}
+	if _, err := g.st.Advance(g.ctx, "devbox", id, pipeline.Approved, map[string]string{"summary": "fine", "head_sha": it.HeadSHA}, nil); err != nil {
+		t.Fatal(err)
+	}
+	gh := &fakeLand{pr: LandPR{Number: it.PR, State: "OPEN", HeadRefName: it.Branch, HeadRefOid: it.HeadSHA, BaseRefName: "main",
+		Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN", Body: g.prs.bodies[it.PR]}}
+	gh.pr.Checks = checks
+	g.r.Land = gh
+	g.stages(StageLand)
+
+	// Without a red_ci answer, land does not re-run anything: the bounce limit asks.
+	g.runOnce()
+	if d := g.item(id).Item; d.Stage != pipeline.NeedsYou || d.ReturnStage != pipeline.Build || len(gh.reruns) != 0 {
+		t.Fatalf("stage %s return %s, reruns %v; log:\n%s", d.Stage, d.ReturnStage, gh.reruns, g.logs.String())
+	}
+	if got, err := g.st.OrchAnswer(g.ctx, "orchestrator:loop", id, pipeline.AnswerRedCI, "Land reads CI again: re-run it once.", "maybe flaky"); err != nil || got.Stage != pipeline.Land {
+		t.Fatalf("first red_ci answer: %s %v", got.Stage, err)
+	}
+	return id, it, gh
+}
+
+// #417: GitHub refuses to re-run the failed jobs of a run that is still in progress, so the owed
+// re-run waits until the failed check's run has finished (its other jobs no longer pending), and
+// only then re-runs it.
+func TestLandRerunWaitsForTheFailedRunToFinish(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	const run = "https://github.com/alex/demo/actions/runs/78"
+	id, it, gh := g.landOwingRerun(t, []Check{{Name: "check", Bucket: BucketFail, URL: run}, {Name: "other", Bucket: BucketPending, URL: run}})
+
+	wait := g.runAsync()
+	g.clk.BlockUntil(2) // the heartbeat and the poll: waiting for run 78 to finish
+	if len(gh.reruns) != 0 || g.lastEvent(id, "ci_rerun") != nil {
+		t.Fatalf("re-ran an in-progress run: reruns %v; log:\n%s", gh.reruns, g.logs.String())
+	}
+	gh.mu.Lock()
+	gh.pr.Checks = []Check{{Name: "check", Bucket: BucketFail, URL: run}, {Name: "other", Bucket: BucketPass, URL: run}}
+	gh.mu.Unlock()
+	g.clk.Advance(LandPollEvery)
+	g.clk.BlockUntil(2) // the poll after the re-run
+	if !slices.Equal(gh.reruns, []int64{78}) {
+		t.Fatalf("reruns %v; log:\n%s", gh.reruns, g.logs.String())
+	}
+	if e := g.lastEvent(id, "ci_rerun"); e == nil || e.Data["head_sha"] != it.HeadSHA || e.Data["jobs"] != "check" {
+		t.Fatalf("ci_rerun event %+v", e)
+	}
+	gh.setChecks(BucketPass)
+	g.clk.Advance(LandPollEvery)
+	wait()
+	if d := g.item(id).Item; d.Stage != pipeline.Done || len(gh.merges) != 1 {
+		t.Fatalf("stage %s, merges %v; log:\n%s", d.Stage, gh.merges, g.logs.String())
+	}
+}
+
+func TestRunsInProgress(t *testing.T) {
+	const r78, r79 = "https://github.com/alex/demo/actions/runs/78", "https://github.com/alex/demo/actions/runs/79"
+	for _, tc := range []struct {
+		name   string
+		checks []Check
+		want   bool
+	}{
+		{"failed run finished", []Check{{Name: "a", Bucket: BucketFail, URL: r78}, {Name: "b", Bucket: BucketPass, URL: r78}}, false},
+		{"failed run has a pending job", []Check{{Name: "a", Bucket: BucketFail, URL: r78}, {Name: "b", Bucket: BucketPending, URL: r78}}, true},
+		{"only another run is pending", []Check{{Name: "a", Bucket: BucketFail, URL: r78}, {Name: "b", Bucket: BucketPending, URL: r79}}, false},
+		{"pending without a failure", []Check{{Name: "b", Bucket: BucketPending, URL: r78}}, false},
+	} {
+		if got := runsInProgress(tc.checks); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
