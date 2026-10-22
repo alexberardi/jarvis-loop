@@ -14,9 +14,11 @@ import (
 )
 
 // slowPrepare gives the demo repo a Prepare command that waits until the returned func is called
-// (a fetch, a lib download), touching .loop/scratch/preparing in the worktree while it waits.
+// (a fetch, a lib download), touching .loop/scratch/preparing in the worktree while it waits. The
+// release file is in the work root: the fence shows it read-only, while the rest of a test dir
+// under the host's /tmp is behind the fence's private /tmp.
 func (g *rig) slowPrepare() (release func()) {
-	rel := filepath.Join(filepath.Dir(g.r.Cfg.WorkRoot), "release-prepare")
+	rel := filepath.Join(g.r.Cfg.WorkRoot, "release-prepare")
 	rc := g.r.Cfg.Repos["demo"]
 	rc.Prepare = []string{"touch .loop/scratch/preparing; while [ ! -e '" + rel + "' ]; do sleep 0.05; done"}
 	g.r.Cfg.Repos["demo"] = rc

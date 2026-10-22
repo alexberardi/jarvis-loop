@@ -394,7 +394,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 	}
 	if opts.SlowPrepare {
 		rc := cfg.Repos[RepoKey]
-		rc.Prepare = []string{"touch .loop/scratch/preparing; while [ ! -e " + shellQuote(filepath.Join(dir, PrepareRelease)) + " ]; do sleep 0.05; done"}
+		rc.Prepare = []string{"touch .loop/scratch/preparing; while [ ! -e " + shellQuote(filepath.Join(cfg.WorkRoot, PrepareRelease)) + " ]; do sleep 0.05; done"}
 		cfg.Repos[RepoKey] = rc
 	}
 	if opts.Qwen {
@@ -922,13 +922,14 @@ func (s *Stack) ReleasePlan(id int64) error {
 	return os.WriteFile(filepath.Join(s.scripts, fmt.Sprintf("P%d.release", id)), nil, 0o644)
 }
 
-// Release lets an item's waiting build (play "wait" or "wait_release") go on.
-// PrepareRelease is the file (under the stack dir) that lets a SlowPrepare command end.
+// PrepareRelease is the file (under the runner's work root, which the fence shows read-only; the
+// rest of a stack under the host's /tmp is behind its private /tmp) that lets a SlowPrepare
+// command end.
 const PrepareRelease = "prepare-release"
 
 // ReleasePrepare lets the demo repo's slow Prepare commands end, now and from then on.
 func (s *Stack) ReleasePrepare() error {
-	return os.WriteFile(filepath.Join(s.Dir, PrepareRelease), nil, 0o644)
+	return os.WriteFile(filepath.Join(s.Runner.Config().WorkRoot, PrepareRelease), nil, 0o644)
 }
 
 // Preparing says whether the item's build is in its slow Prepare command.
@@ -937,6 +938,7 @@ func (s *Stack) Preparing(id int64) bool {
 	return err == nil
 }
 
+// Release lets an item's waiting build (play "wait" or "wait_release") go on.
 func (s *Stack) Release(id int64) error {
 	return os.WriteFile(filepath.Join(s.scripts, fmt.Sprintf("%d.release", id)), nil, 0o644)
 }
