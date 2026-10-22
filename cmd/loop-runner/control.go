@@ -41,13 +41,29 @@ func onSignals(ctx context.Context, r *runner.Runner, sigs <-chan os.Signal, log
 	}
 }
 
-// writePID writes this process's pid to the work root's pid file.
+// writePID writes this process's pid to the work root's pid file. It refuses while the file names
+// another live loop-runner: a second runner would take the file and, when it exited, remove it,
+// leaving the live runner with none for reload and drain (#474). A stale file is replaced.
 func writePID(workRoot string) (string, error) {
 	p := filepath.Join(workRoot, pidName)
 	if err := os.MkdirAll(workRoot, 0o700); err != nil {
 		return "", err
 	}
-	return p, os.WriteFile(p, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
+	if b, err := os.ReadFile(p); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && pid > 1 && pid != os.Getpid() && isLoopRunner(pid) {
+			return "", fmt.Errorf("loop-runner already running (pid %d, from %s): drain or stop it first", pid, p)
+		}
+	}
+	// Write and rename, so a reader never sees a half-written file.
+	tmp := p + ".tmp" + strconv.Itoa(os.Getpid())
+	if err := os.WriteFile(tmp, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		os.Remove(tmp)
+		return "", err
+	}
+	return p, nil
 }
 
 // removePID removes the pid file if it is still this process's (a second runner may have

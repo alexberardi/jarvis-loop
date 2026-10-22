@@ -69,6 +69,10 @@ board shows it draining (and logs what it still waits on every 30 s), and it exi
 live runs end, so a service that restarts on failure (systemd `Restart=on-failure` or `always`,
 launchd `KeepAlive`) starts the new binary. loopd reads `--repos-file` again on
 SIGHUP. Why: [docs/decisions/2026-10-18-runner-reload-drain.md](docs/decisions/2026-10-18-runner-reload-drain.md).
+Both find the runner by `loop-runner.pid` in the work root. A second runner on the same work root
+refuses to start while that file names a live loop-runner, and a runner removes the file only while
+it holds its own pid. `loop-runner version` prints the commit the binary was built from; any other
+subcommand is an error.
 
 Harness (phase 4b, [docs/phases/04b-loop-harness.md](docs/phases/04b-loop-harness.md)):
 `scripts/loop-sandbox run` plays `scenarios/*.json` against the real loopd wiring, runner, bot and

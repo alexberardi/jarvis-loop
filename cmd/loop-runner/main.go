@@ -6,11 +6,15 @@
 //
 //	loop-runner [--config ~/.config/jarvis-loop/runner.json] [--once] [--dry-run]
 //	loop-runner reload|drain [--config ...]
+//	loop-runner version
 //
 // SIGHUP (loop-runner reload) reloads the config for the next claim; live runs keep theirs, and an
 // invalid file is refused with a log line. SIGUSR1 (loop-runner drain) stops claiming, waits for
 // the live runs to end and exits 0, for the service manager to start the new binary
 // (docs/decisions/2026-10-18-runner-reload-drain.md). SIGINT and SIGTERM end the runs, as before.
+//
+// Only one runner runs on a work root: a second refuses to start while the pid file names a live
+// one. Any other argument is an error, never a runner.
 //
 // --once claims and works at most one item (and, after a merge, watches main's CI), then exits.
 // --dry-run opens no PR and skips the GitHub check (for runs with a fake claude and a local
@@ -59,11 +63,24 @@ func exitCode(err error) int {
 	}
 }
 
+// version prints the commit this binary was built from, or why it is unknown.
+func version() error {
+	rev, why := runner.BuildRevision()
+	if rev == "" {
+		rev = "unknown: " + why
+	}
+	fmt.Println("loop-runner", rev)
+	return nil
+}
+
 const defaultConfig = "~/.config/jarvis-loop/runner.json"
 
 func run(args []string) error {
 	if len(args) > 0 && (args[0] == "reload" || args[0] == "drain") {
 		return control(args[0], args[1:])
+	}
+	if len(args) > 0 && args[0] == "version" {
+		return version()
 	}
 	fs := flag.NewFlagSet("loop-runner", flag.ContinueOnError)
 	cfgPath := fs.String("config", defaultConfig, "runner config (0600)")
@@ -72,9 +89,25 @@ func run(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	// flag stops at the first non-flag: a leftover word is a subcommand (`loop-runner --config c
+	// version`) or a typo, and never starts a runner (#474).
+	switch {
+	case fs.NArg() == 1 && fs.Arg(0) == "version":
+		return version()
+	case fs.NArg() > 0:
+		return fmt.Errorf("unknown subcommand %q (want reload, drain or version)", fs.Arg(0))
+	}
 	cfg, err := runner.LoadConfig(runner.Expand(*cfgPath))
 	if err != nil {
 		return err
+	}
+	if !*once {
+		// Before anything else, so a second runner does nothing (#474).
+		pid, err := writePID(cfg.WorkRoot)
+		if err != nil {
+			return err
+		}
+		defer removePID(pid)
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	r := &runner.Runner{
@@ -131,11 +164,6 @@ func run(args []string) error {
 		r.Wait()
 		return err
 	}
-	pid, err := writePID(cfg.WorkRoot)
-	if err != nil {
-		return err
-	}
-	defer removePID(pid)
 	err = r.Run(ctx)
 	if err == nil && r.Draining() && ctx.Err() == nil {
 		log.Info("drained: the live runs ended; exiting for the service manager to restart the runner", "status", exitDrained)
