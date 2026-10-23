@@ -358,7 +358,7 @@ func TestBashWriteProtected(t *testing.T) {
 		{"cp -t scripts/sandbox x", RuleWriteProtected},
 		{"bash -c 'echo x > scripts/sandbox/run'", RuleWriteProtected},
 		{"echo $(echo x > .git/config)", RuleWriteProtected},
-		{"echo x > $WT/.git/config", RuleWriteProtected},   // unresolvable, but its text names .git
+		{"echo x > $WT/.git/config", RuleWriteProtected},           // unresolvable, but its text names .git
 		{"cd internal && echo x > hooks.json", RuleWriteProtected}, // after cd a relative target is unknowable
 		{"cd internal && touch hooks.json", RuleWriteProtected},
 
