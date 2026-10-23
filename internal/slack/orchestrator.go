@@ -57,6 +57,9 @@ const (
 	orchestratorPrefix = "orchestrator:"
 	actionAccept       = "orch_accept"
 	actionOther        = "orch_other"
+	// actionDone is the second press on an escalation with a step: the step is done, record the
+	// recommendation as the answer and re-queue the item.
+	actionDone = "orch_done"
 	// maxBatch caps the items in one message (Slack allows 50 blocks; each item takes 2).
 	maxBatch = 10
 	// reactionSeen marks a message the orchestrator recorded.
@@ -230,10 +233,14 @@ func (o *Orchestrator) recommendation(ctx context.Context, e store.Event, mentio
 		text += "Orchestrator: " + f("text", 800)
 	}
 	rec := strings.TrimSpace(str(e.Data, "recommendation"))
+	step := strings.TrimSpace(str(e.Data, "step"))
 	if rec != "" {
 		text += "\n*Recommend:* " + f("recommendation", 600)
 		if r := strings.TrimSpace(str(e.Data, "reason")); r != "" {
 			text += " _Because_ " + f("reason", 400)
+		}
+		if step != "" {
+			text += "\n*First:* " + f("step", 400)
 		}
 	}
 	approval := e.Data["approval"] == true
@@ -254,11 +261,17 @@ func (o *Orchestrator) recommendation(ctx context.Context, e store.Event, mentio
 	if at, err := time.Parse(time.RFC3339Nano, str(e.Data, "act_at")); err == nil && accept {
 		text += fmt.Sprintf("\nNight shift: I act on this recommendation at %s unless you answer first.", at.In(o.bot.c.Location).Format("15:04"))
 	}
+	acceptLabel := "Accept"
+	if accept && step != "" {
+		// Accepting does not finish it: the item waits for the step, then the second press.
+		text += "\nAccept holds it while you do that; *Done — re-queue* then records the answer."
+		acceptLabel = "Accept — step first"
+	}
 	blocks := []map[string]any{section(text)}
 	if accept {
 		value := strconv.FormatInt(e.ID, 10)
 		blocks = append(blocks, map[string]any{"type": "actions", "block_id": "orch:" + value, "elements": []any{
-			button("Accept", actionAccept, value, "primary"),
+			button(acceptLabel, actionAccept, value, "primary"),
 			button("Other…", actionOther, value, ""),
 		}})
 	}
@@ -381,7 +394,7 @@ func (o *Orchestrator) onActions(ctx context.Context, p interaction) {
 	}
 	user := p.User.ID
 	for _, a := range p.Actions {
-		if a.ActionID != actionAccept && a.ActionID != actionOther {
+		if a.ActionID != actionAccept && a.ActionID != actionDone && a.ActionID != actionOther {
 			continue
 		}
 		evID, _ := strconv.ParseInt(a.Value, 10, 64)
@@ -399,8 +412,29 @@ func (o *Orchestrator) onActions(ctx context.Context, p interaction) {
 		}
 		switch a.ActionID {
 		case actionAccept:
+			// An escalation whose recommendation needs a hand step first holds instead of
+			// answering: the pending accept keeps the item in needs_you, and the buttons become
+			// 'Done — re-queue' for the second press.
+			if step := o.escalationStep(ctx, evID); step != "" {
+				if _, err := o.c.Store.AcceptPending(ctx, actorPrefix+user, evID); err != nil {
+					o.ephemeral(ctx, channel, user, "Not accepted: "+Escape(errMessage(err)))
+					continue
+				}
+				o.swap(ctx, channel, msgTS, a.BlockID, p.Message.Blocks, map[string]any{
+					"type": "actions", "block_id": a.BlockID, "elements": []any{
+						button("Done — re-queue", actionDone, a.Value, "primary"),
+						button("Other…", actionOther, a.Value, ""),
+					}})
+				continue
+			}
 			if _, err := o.c.Store.AcceptRecommendation(ctx, actorPrefix+user, evID); err != nil {
 				o.ephemeral(ctx, channel, user, "Not accepted: "+Escape(errMessage(err)))
+				continue
+			}
+			o.settle(ctx, channel, msgTS, a.BlockID, p.Message.Blocks, "Accepted by you.")
+		case actionDone:
+			if _, err := o.c.Store.AcceptRecommendation(ctx, actorPrefix+user, evID); err != nil {
+				o.ephemeral(ctx, channel, user, "Not re-queued: "+Escape(errMessage(err)))
 				continue
 			}
 			o.settle(ctx, channel, msgTS, a.BlockID, p.Message.Blocks, "Accepted by you.")
@@ -431,6 +465,12 @@ func (o *Orchestrator) escalationItem(ctx context.Context, evID int64) (int64, e
 // settle replaces an answered recommendation's buttons (the actions block blockID) with what was
 // done, in the message as Slack sent it with the press.
 func (o *Orchestrator) settle(ctx context.Context, channel, ts, blockID string, blocks []map[string]any, done string) {
+	o.swap(ctx, channel, ts, blockID, blocks, map[string]any{"type": "context", "block_id": blockID, "elements": []any{mrkdwn(done)}})
+}
+
+// swap replaces a recommendation's actions block (blockID) with another block, in the message as
+// Slack sent it with the press.
+func (o *Orchestrator) swap(ctx context.Context, channel, ts, blockID string, blocks []map[string]any, with map[string]any) {
 	if len(blocks) == 0 || ts == "" {
 		return
 	}
@@ -438,14 +478,23 @@ func (o *Orchestrator) settle(ctx context.Context, channel, ts, blockID string, 
 	text := ""
 	for _, b := range blocks {
 		if b["block_id"] == blockID {
-			b = map[string]any{"type": "context", "block_id": blockID, "elements": []any{mrkdwn(done)}}
+			b = with
 		}
 		if t, ok := b["text"].(map[string]any); ok && text == "" {
 			text, _ = t["text"].(string)
 		}
 		out = append(out, b)
 	}
-	o.bot.update(ctx, "orchestrator settle", Message{Channel: channel, TS: ts, Text: text, Blocks: out})
+	o.bot.update(ctx, "orchestrator swap", Message{Channel: channel, TS: ts, Text: text, Blocks: out})
+}
+
+// escalationStep is the hand step of escalation evID, or "".
+func (o *Orchestrator) escalationStep(ctx context.Context, evID int64) string {
+	e, err := o.c.Store.GetEvent(ctx, evID)
+	if err != nil || e.Kind != store.KindOrchEscalated {
+		return ""
+	}
+	return strings.TrimSpace(str(e.Data, "step"))
 }
 
 // nightWord handles the approver's "@orchestrator night" or "morning" itself, without a turn: in

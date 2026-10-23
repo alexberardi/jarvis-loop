@@ -116,6 +116,11 @@ In the item's thread, mentioning the user, one message:
 
 - **Accept** records the recommendation as the user's answer (approver only, like approvals).
   **Other…** or any reply in the thread is the answer instead. Approvals keep their own buttons.
+- A recommendation that needs the user's hand first (the escalation's `step`: file an item, grep
+  the runner log, edit runner.json) shows "**First:** <step>" and takes two presses: Accept records
+  a pending accept and the item stays in needs_you; **Done — re-queue** then records the answer, so
+  the item never re-queues before the step is done. The night shift never acts on one.
+  [Decision](../decisions/2026-10-23-accept-step.md).
 - Pings are batched: several items that need the user within a few minutes go in one message.
   No quiet hours (the user's choice).
 

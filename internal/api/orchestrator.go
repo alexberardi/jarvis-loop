@@ -165,6 +165,9 @@ func (s *server) orchEscalate(w http.ResponseWriter, r *http.Request) {
 		// Deferred is what a scope choice leaves for a P3 item.
 		Class    string `json:"class"`
 		Deferred string `json:"deferred"`
+		// Step is a hand step the user must do before the recommendation can be the answer:
+		// Accept then holds the item until they confirm it, and the night shift never acts.
+		Step string `json:"step"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -173,7 +176,7 @@ func (s *server) orchEscalate(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "item_id must be a positive number, or 0 for none")
 		return
 	}
-	ev, err := s.st.OrchEscalateNight(r.Context(), actor(r), body.ItemID, body.Text, body.Recommendation, body.Reason, body.Class, body.Deferred)
+	ev, err := s.st.OrchEscalateNight(r.Context(), actor(r), body.ItemID, body.Text, body.Recommendation, body.Reason, body.Class, body.Deferred, body.Step)
 	if err != nil {
 		s.fail(w, err)
 		return

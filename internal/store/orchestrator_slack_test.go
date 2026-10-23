@@ -153,6 +153,93 @@ func TestAcceptRecommendation(t *testing.T) {
 	}
 }
 
+// An escalation whose recommendation needs a hand step first (data.step) holds on Accept: the
+// first press records a pending accept and the item stays in needs_you; an accept without that
+// press is refused (the API cannot bypass the hold); the second press records the answer and
+// re-queues the item once.
+func TestAcceptStep(t *testing.T) {
+	s, clk := open(t)
+	ctx := context.Background()
+	const you = "slack:U0APPROVER"
+	it := add(t, s, "x", "")
+	stuck(t, s, it.ID, pipeline.Question)
+	esc, err := s.OrchEscalateNight(ctx, orch, it.ID, "the runner log needs a look", "grep the runner log, then retry it",
+		"the log is on your box", "", "", "grep the runner log for item 7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if esc.Data["step"] != "grep the runner log for item 7" {
+		t.Fatalf("escalation %+v", esc.Data)
+	}
+	// The answer before the step is done is refused, from the API too.
+	if _, err := s.AcceptRecommendation(ctx, you, esc.ID); code(err) != pipeline.CodeWrongStage {
+		t.Fatalf("accept without the pending press: %v", err)
+	}
+	// First press: a pending accept; the item stays in needs_you, its question standing.
+	p, err := s.AcceptPending(ctx, you, esc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Kind != KindOrchAcceptPending || p.ItemID != it.ID || p.Data["escalation"] != float64(esc.ID) ||
+		p.Data["step"] != "grep the runner log for item 7" {
+		t.Fatalf("pending %+v", p)
+	}
+	if d, _ := s.GetItem(ctx, it.ID); d.Item.Stage != pipeline.NeedsYou {
+		t.Fatalf("the first press moved the item: %s", d.Item.Stage)
+	}
+	if _, err := s.AcceptPending(ctx, you, esc.ID); code(err) != pipeline.CodeWrongStage {
+		t.Fatalf("pending twice: %v", err)
+	}
+	// Second press: the recommendation is the answer, the item re-queues once.
+	got, err := s.AcceptRecommendation(ctx, you, esc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Stage != pipeline.Triage {
+		t.Fatalf("stage %s", got.Stage)
+	}
+	if e := newest(t, s, it.ID); e.Kind != "answered" || e.Data["accepted"] != float64(esc.ID) ||
+		e.Data["answer"] != "grep the runner log, then retry it" {
+		t.Fatalf("event %+v", e)
+	}
+
+	// A pending press on an escalation without a step has nothing to wait for.
+	stuck(t, s, it.ID, pipeline.Question)
+	clk.Advance(pipeline.OrchEscalateEvery)
+	plain, err := s.OrchEscalate(ctx, orch, it.ID, "q", "do it", "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AcceptPending(ctx, you, plain.ID); code(err) != pipeline.CodeInvalidField {
+		t.Fatalf("pending without a step: %v", err)
+	}
+
+	// A new question since the escalation refuses both presses, pending or not.
+	clk.Advance(pipeline.OrchEscalateEvery)
+	step2, err := s.OrchEscalateNight(ctx, orch, it.ID, "q2", "file the follow-up, then retry", "r", "", "", "file the follow-up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AcceptPending(ctx, you, step2.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Answer(ctx, you, it.ID, "never mind"); err != nil {
+		t.Fatal(err)
+	}
+	stuck(t, s, it.ID, pipeline.Question)
+	if _, err := s.AcceptRecommendation(ctx, you, step2.ID); code(err) != pipeline.CodeWrongStage {
+		t.Fatalf("done after a newer question: %v", err)
+	}
+	if _, err := s.AcceptPending(ctx, you, step2.ID); code(err) != pipeline.CodeWrongStage {
+		t.Fatalf("pending after a newer question: %v", err)
+	}
+	// A step needs a recommendation to hold for.
+	clk.Advance(pipeline.OrchEscalateEvery)
+	if _, err := s.OrchEscalateNight(ctx, orch, it.ID, "q3", "", "r", "", "", "edit runner.json"); code(err) != pipeline.CodeMissingField {
+		t.Fatalf("step without a recommendation: %v", err)
+	}
+}
+
 // Asked to OK trusted files, it has the item's trust message posted again, for an item waiting on
 // that OK only: a plain question is refused, and nothing is trusted.
 func TestOrchAskTrust(t *testing.T) {

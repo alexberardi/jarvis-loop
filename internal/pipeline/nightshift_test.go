@@ -210,6 +210,7 @@ func TestDecideNight(t *testing.T) {
 		{"escalated in the day", with(verify, func(c *NightCase) { c.Esc.Night = false }), on, grace, NightStay, "night shift was off"},
 
 		{"approval", with(verify, func(c *NightCase) { c.Esc.Approval = true }), on, grace, NightStay, "approval"},
+		{"hand step", with(verify, func(c *NightCase) { c.Esc.Step = "grep the runner log" }), on, grace, NightStay, "your hand first"},
 		{"hold list", with(verify, func(c *NightCase) { c.Item.Risk, c.Item.HoldReason = RiskHold, "auth: internal/api/auth.go" }), on, grace, NightStay, "hold list"},
 		{"trust pending", with(verify, func(c *NightCase) { c.Item.Trust = &Trust{HeadSHA: "abc1234"} }), on, grace, NightStay, "trusted"},
 		{"merge", with(scope, func(c *NightCase) { c.Esc.Recommendation = "merge the doc part now" }), on, grace, NightStay, "merges"},

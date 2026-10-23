@@ -22,6 +22,10 @@ const (
 	KindOrchReply = "orchestrator.reply"
 	// KindOrchApprovalAsked has the item's approval message, with its button, posted again.
 	KindOrchApprovalAsked = "orchestrator.approval_asked"
+	// KindOrchAcceptPending is the approver's Accept on an escalation whose recommendation needs
+	// their hand first (its step): the item stays in needs_you until 'Done — re-queue' records the
+	// answer (data escalation, step).
+	KindOrchAcceptPending = "orchestrator.accept_pending"
 )
 
 // recordEvent records e and sets *out to it as subscribers get it (with its id and time).
@@ -142,45 +146,111 @@ func (s *Store) OrchAskApproval(ctx context.Context, actor string, id int64, rea
 	return out, nil
 }
 
+// acceptable loads escalation escalationID and its item, and checks its recommendation can still
+// be the item's answer: an escalation with a recommendation about an item that is in needs_you,
+// waits on no trusted-file OK, and asks nothing newer than the escalation. esc is returned even
+// when the check fails, for the refusal's item.
+func acceptable(tx *sql.Tx, escalationID int64) (esc Event, it pipeline.Item, err error) {
+	evs, err := scanEventRows(tx.Query(`SELECT `+eventCols+` FROM events WHERE id = ?`, escalationID))
+	if err != nil {
+		return esc, it, err
+	}
+	if len(evs) == 1 {
+		esc = evs[0]
+	}
+	if esc.Kind != KindOrchEscalated || esc.ItemID == 0 || strings.TrimSpace(str(esc.Data, "recommendation")) == "" {
+		return esc, it, errf(pipeline.CodeInvalidField, "no recommendation %d about an item to accept", escalationID)
+	}
+	if it, err = loadItem(tx, esc.ItemID); err != nil {
+		return esc, it, err
+	}
+	if it.Stage != pipeline.NeedsYou {
+		return esc, it, errf(pipeline.CodeWrongStage, "item is %s, not needs_you: nothing to accept", it.Stage)
+	}
+	if it.Trust != nil && it.Trust.By == "" {
+		return esc, it, errf(pipeline.CodeWrongStage, "the item waits on your OK of its trusted files: use the Trust button on its message")
+	}
+	all, err := itemEvents(tx, esc.ItemID)
+	if err != nil {
+		return esc, it, err
+	}
+	if last, ok := lastNeedsYou(all); ok && last.ID > esc.ID {
+		return esc, it, errf(pipeline.CodeWrongStage, "the item asks something new since that recommendation: answer it in the thread")
+	}
+	return esc, it, nil
+}
+
+// hasAcceptPending reports whether escalation esc already has a pending accept (AcceptPending).
+func hasAcceptPending(tx *sql.Tx, esc Event) (bool, error) {
+	var n int
+	err := tx.QueryRow(`SELECT COUNT(*) FROM events WHERE item_id = ? AND kind = ? AND json_extract(data, '$.escalation') = ?`,
+		esc.ItemID, KindOrchAcceptPending, esc.ID).Scan(&n)
+	return n > 0, err
+}
+
+// AcceptPending records the approver's Accept on an escalation whose recommendation needs their
+// hand first (data.step): the item stays in needs_you, its question standing, until
+// 'Done — re-queue' records the answer (AcceptRecommendation). A second press, or one on an
+// escalation without a step, is refused.
+func (s *Store) AcceptPending(ctx context.Context, actor string, escalationID int64) (Event, error) {
+	var out Event
+	var itemID int64
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		esc, _, err := acceptable(tx, escalationID)
+		itemID = esc.ItemID
+		if err != nil {
+			return err
+		}
+		step := str(esc.Data, "step")
+		if step == "" {
+			return errf(pipeline.CodeInvalidField, "the recommendation has no step to wait for: Accept answers at once")
+		}
+		pending, err := hasAcceptPending(tx, esc)
+		if err != nil {
+			return err
+		}
+		if pending {
+			return errf(pipeline.CodeWrongStage, "already accepted: do the step (%s), then press 'Done — re-queue'", step)
+		}
+		return s.recordEvent(tx, &out, Event{ItemID: esc.ItemID, Actor: actor, Kind: KindOrchAcceptPending,
+			Data: map[string]any{"escalation": esc.ID, "step": step}})
+	})
+	if err != nil {
+		var pe *pipeline.Error
+		if itemID != 0 && errors.As(err, &pe) {
+			return out, s.refuse(ctx, actor, itemID, "accept", err)
+		}
+		return out, err
+	}
+	return out, nil
+}
+
 // AcceptRecommendation answers an item's question with the recommendation of the orchestrator's
 // escalation (event escalationID), as actor (the approver: the Slack layer checks): the Accept
 // button. The answer event says which escalation it accepted (data.accepted). An item that has
-// left needs_you, or asks something new since the escalation, is refused.
+// left needs_you, or asks something new since the escalation, is refused; so is an escalation
+// whose recommendation needs the user's hand first (data.step) until its pending accept
+// (AcceptPending) is recorded, so an Accept never re-queues the item before the step is done.
 func (s *Store) AcceptRecommendation(ctx context.Context, actor string, escalationID int64) (pipeline.Item, error) {
 	var out pipeline.Item
 	var itemID int64
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		var esc Event
-		evs, err := scanEventRows(tx.Query(`SELECT `+eventCols+` FROM events WHERE id = ?`, escalationID))
-		if err != nil {
-			return err
-		}
-		if len(evs) == 1 {
-			esc = evs[0]
-		}
-		rec := strings.TrimSpace(str(esc.Data, "recommendation"))
-		if esc.Kind != KindOrchEscalated || esc.ItemID == 0 || rec == "" {
-			return errf(pipeline.CodeInvalidField, "no recommendation %d about an item to accept", escalationID)
-		}
+		esc, it, err := acceptable(tx, escalationID)
 		itemID = esc.ItemID
-		it, err := loadItem(tx, esc.ItemID)
 		if err != nil {
 			return err
 		}
-		if it.Stage != pipeline.NeedsYou {
-			return errf(pipeline.CodeWrongStage, "item is %s, not needs_you: nothing to accept", it.Stage)
+		if step := str(esc.Data, "step"); step != "" {
+			pending, err := hasAcceptPending(tx, esc)
+			if err != nil {
+				return err
+			}
+			if !pending {
+				return errf(pipeline.CodeWrongStage,
+					"the recommendation needs your hand first (%s): Accept holds the item for it, then 'Done — re-queue' records the answer", step)
+			}
 		}
-		if it.Trust != nil && it.Trust.By == "" {
-			return errf(pipeline.CodeWrongStage, "the item waits on your OK of its trusted files: use the Trust button on its message")
-		}
-		all, err := itemEvents(tx, esc.ItemID)
-		if err != nil {
-			return err
-		}
-		if last, ok := lastNeedsYou(all); ok && last.ID > esc.ID {
-			return errf(pipeline.CodeWrongStage, "the item asks something new since that recommendation: answer it in the thread")
-		}
-		tr, err := pipeline.ApplyAnswer(it, rec)
+		tr, err := pipeline.ApplyAnswer(it, strings.TrimSpace(str(esc.Data, "recommendation")))
 		if err != nil {
 			return err
 		}

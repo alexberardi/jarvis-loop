@@ -294,6 +294,96 @@ func TestRecommendationAccept(t *testing.T) {
 	}
 }
 
+// An escalation whose recommendation needs a hand step first (step) takes two presses: Accept
+// records a pending accept and the item stays in needs_you while the buttons give way to
+// 'Done — re-queue'; Done records the answer and re-queues the item. A stale Accept in between,
+// or a Done without the first press, is refused.
+func TestRecommendationAcceptStep(t *testing.T) {
+	e := newOrchEnv(t)
+	id := e.add("x")
+	e.toNeedsYou(id, "retry the run?")
+	e.orchCalls()
+	esc, err := e.st.OrchEscalateNight(e.ctx, orchActor, id, "the runner log needs a look first",
+		"grep the runner log, then retry it", "the log is on your box", "", "", "grep the runner log for item 7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.orchCalls()
+	e.clk.Advance(2 * time.Minute)
+	e.o.Tick(e.ctx)
+	_, orch := e.orchCalls()
+	posts := only(t, orch, "chat.postMessage")
+	if len(posts) != 1 {
+		t.Fatalf("posts %+v", orch)
+	}
+	p := posts[0]
+	txt := allText(p)
+	if !strings.Contains(txt, "*First:* grep the runner log for item 7") || !strings.Contains(txt, "Accept holds it") ||
+		!strings.Contains(txt, "Accept — step first") {
+		t.Fatalf("message %s", txt)
+	}
+	value := elementValue(p, actionAccept)
+
+	// Done without the first press: the hold cannot be skipped.
+	e.orchPress(Approver, ChannelLoop, "1.1", actionDone, value, blocksOf(p))
+	if e.item(id).Item.Stage != pipeline.NeedsYou {
+		t.Fatal("Done without Accept answered")
+	}
+	_, orch = e.orchCalls()
+	if eph := only(t, orch, "chat.postEphemeral"); len(eph) != 1 || !strings.Contains(fmt.Sprint(eph[0].Body["text"]), "Not re-queued") {
+		t.Fatalf("done first %+v", orch)
+	}
+
+	// Accept: the item stays in needs_you; the buttons become 'Done — re-queue'.
+	e.orchPress(Approver, ChannelLoop, "1.1", actionAccept, value, blocksOf(p))
+	d := e.item(id)
+	if d.Item.Stage != pipeline.NeedsYou {
+		t.Fatalf("the first press moved the item: %s", d.Item.Stage)
+	}
+	if ev := lastEvent(d); ev.Kind != store.KindOrchAcceptPending || ev.Data["escalation"] != float64(esc.ID) {
+		t.Fatalf("pending event %+v", ev)
+	}
+	loop, orch := e.orchCalls()
+	if lines := only(t, loop, "chat.postMessage"); len(lines) != 1 ||
+		!strings.Contains(fmt.Sprint(lines[0].Body["text"]), "waiting for the step (grep the runner log for item 7)") {
+		t.Fatalf("thread line %+v", loop)
+	}
+	up := only(t, orch, "chat.update")
+	if len(up) != 1 {
+		t.Fatalf("update %+v", orch)
+	}
+	if ids := actionIDs(up[0]); len(ids) != 2 || ids[0] != actionDone || ids[1] != actionOther {
+		t.Fatalf("buttons after the first press: %v", ids)
+	}
+	if v := elementValue(up[0], actionDone); v != value {
+		t.Fatalf("done value %q, want %q", v, value)
+	}
+
+	// A stale Accept presses again: refused, still in needs_you.
+	e.orchPress(Approver, ChannelLoop, "1.1", actionAccept, value, blocksOf(p))
+	if e.item(id).Item.Stage != pipeline.NeedsYou {
+		t.Fatal("a second Accept answered")
+	}
+	_, orch = e.orchCalls()
+	if eph := only(t, orch, "chat.postEphemeral"); len(eph) != 1 || !strings.Contains(fmt.Sprint(eph[0].Body["text"]), "already accepted") {
+		t.Fatalf("accept twice %+v", orch)
+	}
+
+	// Done: the recommendation is the answer and the item re-queues.
+	e.orchPress(Approver, ChannelLoop, "1.1", actionDone, value, blocksOf(up[0]))
+	d = e.item(id)
+	ev := lastEvent(d)
+	if d.Item.Stage == pipeline.NeedsYou || ev.Kind != "answered" || ev.Data["answer"] != "grep the runner log, then retry it" ||
+		ev.Data["accepted"] != float64(esc.ID) {
+		t.Fatalf("done: %s %+v", d.Item.Stage, ev)
+	}
+	_, orch = e.orchCalls()
+	settled := only(t, orch, "chat.update")
+	if len(settled) != 1 || !strings.Contains(allText(settled[0]), "Accepted by you.") || len(actionIDs(settled[0])) != 0 {
+		t.Fatalf("settle %+v", orch)
+	}
+}
+
 // Escalations inside one window share a message in #loop (one section and Accept each) with a
 // line in each item's thread; an approval's has no Accept (approvals stay on their button), nor
 // one with no recommendation.
