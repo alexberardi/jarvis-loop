@@ -103,6 +103,52 @@ func gitT(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// seedDB is a once-migrated loop.db for the whole test binary: running the 41 migrations'
+// DDL through race-instrumented SQLite costs ~1s per rig on a slow machine, and with ~140
+// rigs that alone pushed the package past CI's 12m go-test timeout. Each rig gets a copy;
+// store.Open then sees every migration applied and only re-stamps the cheap version rows.
+var seedDB struct {
+	once sync.Once
+	data []byte
+	err  error
+}
+
+func seedStore(t *testing.T, dir string) {
+	t.Helper()
+	seedDB.once.Do(func() {
+		tmp, err := os.MkdirTemp("", "loop-seed-")
+		if err != nil {
+			seedDB.err = err
+			return
+		}
+		defer os.RemoveAll(tmp)
+		st, err := store.Open(tmp, clock.NewFake(t0))
+		if err != nil {
+			seedDB.err = err
+			return
+		}
+		if err := st.Close(); err != nil {
+			seedDB.err = err
+			return
+		}
+		// Closing the last connection checkpoints and removes the WAL, so loop.db is whole.
+		if _, err := os.Stat(filepath.Join(tmp, "loop.db-wal")); err == nil {
+			seedDB.err = fmt.Errorf("seed store left a WAL behind; refusing a partial template")
+			return
+		}
+		seedDB.data, seedDB.err = os.ReadFile(filepath.Join(tmp, "loop.db"))
+	})
+	if seedDB.err != nil {
+		t.Fatalf("seeding the template store: %v", seedDB.err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "loop.db"), seedDB.data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newRig(t *testing.T, scenario string) *rig {
 	t.Helper()
 	root := t.TempDir()
@@ -123,6 +169,7 @@ func newRig(t *testing.T, scenario string) *rig {
 	gitT(t, root, "clone", "-q", remote, local)
 
 	loopdClk := clock.NewFake(t0)
+	seedStore(t, filepath.Join(root, "loopd"))
 	st, err := store.Open(filepath.Join(root, "loopd"), loopdClk)
 	if err != nil {
 		t.Fatal(err)
