@@ -70,6 +70,10 @@ type GitHub struct {
 	runs map[int64]fakeRun
 	// refuse is how many of the next merges GitHub refuses anyway (as when the base moved).
 	refuse int
+	// requireUpToDate marks repos whose base requires merging heads to be up to date (GitHub's
+	// "require branches to be up to date before merging"): a clean head that lacks the base's tip
+	// is BEHIND, and merging it is refused (#521).
+	requireUpToDate map[string]bool
 }
 
 var (
@@ -80,7 +84,7 @@ var (
 // NewGitHub returns a fake over these remotes (owner/name -> bare repo).
 func NewGitHub(repos map[string]string) *GitHub {
 	g := &GitHub{next: 101, repos: repos, checks: map[string]map[string]string{}, mainCI: map[string]string{}, mainCIAt: map[string]map[string]string{}, mainRerun: map[string]string{}, reran: map[string]map[string]bool{}, mainHead: map[string]string{}, runIDs: 9000,
-		runs: map[int64]fakeRun{}}
+		runs: map[int64]fakeRun{}, requireUpToDate: map[string]bool{}}
 	for slug := range repos {
 		g.mainHead[slug] = g.RemoteHead(slug, "main")
 	}
@@ -370,6 +374,23 @@ func (g *GitHub) MainHead(slug string) string {
 var checkBuckets = map[string]string{"pass": runner.BucketPass, "fail": runner.BucketFail, "pending": runner.BucketPending,
 	"cancel": runner.BucketCancel, "skip": runner.BucketSkipping}
 
+// behindBase says whether head lacks the base branch's tip (merge-base --is-ancestor): what
+// GitHub calls BEHIND when the repo requires up-to-date heads.
+func (g *GitHub) behindBase(slug, base, head string) bool {
+	tip := g.RemoteHead(slug, base)
+	if tip == "" || head == "" {
+		return false
+	}
+	return exec.Command("git", "-C", g.repos[slug], "merge-base", "--is-ancestor", tip, head).Run() != nil
+}
+
+// SetRequireUpToDate turns a repo's require-up-to-date protection on or off.
+func (g *GitHub) SetRequireUpToDate(slug string, on bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.requireUpToDate[slug] = on
+}
+
 // mergeTree says whether head merges into the base cleanly (git merge-tree), and the tree.
 func (g *GitHub) mergeTree(slug, base, head string) (string, bool) {
 	cmd := exec.Command("git", "-C", g.repos[slug], "merge-tree", "--write-tree", "refs/heads/"+base, head)
@@ -394,6 +415,9 @@ func (g *GitHub) LandView(_ context.Context, slug string, number int) (runner.La
 		pr.HeadRefOid = g.RemoteHead(slug, p.Head)
 		if _, clean := g.mergeTree(slug, p.Base, pr.HeadRefOid); clean {
 			pr.Mergeable, pr.MergeStateStatus = "MERGEABLE", "CLEAN"
+			if g.requireUpToDate[slug] && g.behindBase(slug, p.Base, pr.HeadRefOid) {
+				pr.MergeStateStatus = "BEHIND"
+			}
 		} else {
 			pr.Mergeable, pr.MergeStateStatus = "CONFLICTING", "DIRTY"
 		}
@@ -439,6 +463,10 @@ func (g *GitHub) Merge(_ context.Context, slug string, number int, head string) 
 	tree, clean := g.mergeTree(slug, p.Base, head)
 	if !clean {
 		return refuse("Pull request is not mergeable: the merge commit cannot be cleanly created.")
+	}
+	if g.requireUpToDate[slug] && g.behindBase(slug, p.Base, head) {
+		// gh's wording when the base requires up-to-date heads (#496, #521).
+		return refuse("Pull request is not mergeable: the head branch is not up to date with the base branch.")
 	}
 	if g.refuse > 0 {
 		g.refuse--
