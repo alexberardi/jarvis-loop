@@ -506,14 +506,16 @@ func TestGuardRefusalIsReported(t *testing.T) {
 	id := g.toBuild("Escape artist")
 	g.runOnce()
 	refs := g.events(id, "guard_refused")
-	if len(refs) != 2 {
+	if len(refs) != 3 {
 		t.Fatalf("guard_refused events %d; log:\n%s", len(refs), g.logs.String())
 	}
-	if !strings.Contains(fmt.Sprint(refs[1].Data["reason"]), "ready_for_pr") {
-		t.Errorf("the push refusal should say who pushes: %v", refs[1].Data["reason"])
+	if !strings.Contains(fmt.Sprint(refs[2].Data["reason"]), "ready_for_pr") {
+		t.Errorf("the push refusal should say who pushes: %v", refs[2].Data["reason"])
 	}
-	if refs[0].Data["rule"] != guard.RuleWriteOutside || refs[0].Data["tool"] != "Write" || refs[1].Data["rule"] != guard.RuleGitPush {
-		t.Fatalf("refusals %v / %v", refs[0].Data, refs[1].Data)
+	if refs[0].Data["rule"] != guard.RuleWriteOutside || refs[0].Data["tool"] != "Write" ||
+		refs[1].Data["rule"] != guard.RuleWriteProtected || refs[1].Data["tool"] != "Bash" ||
+		refs[2].Data["rule"] != guard.RuleGitPush {
+		t.Fatalf("refusals %v / %v / %v", refs[0].Data, refs[1].Data, refs[2].Data)
 	}
 	if _, err := os.Stat(filepath.Join(g.r.Cfg.WorkRoot, "escaped.txt")); !os.IsNotExist(err) {
 		t.Fatal("the write outside the worktree happened")
@@ -521,7 +523,7 @@ func TestGuardRefusalIsReported(t *testing.T) {
 	if g.remoteHead("main") != g.localRef {
 		t.Fatal("main was pushed")
 	}
-	if g.item(id).Item.Stage != pipeline.Review || g.advanced(id).Data["guard_refusals"] != "2" {
+	if g.item(id).Item.Stage != pipeline.Review || g.advanced(id).Data["guard_refusals"] != "3" {
 		t.Fatalf("the run should still finish: %+v", g.advanced(id).Data)
 	}
 }

@@ -46,7 +46,10 @@ rule in [2026-10-15-all-repos.md](2026-10-15-all-repos.md); each point is enforc
   result the runner refuses) runs the agent as before, with that brief line. Only a later rebuild
   (a review bounce, a held note, the user's Rebuild) runs the agent, and its new commit needs a new
   OK. The guard still refuses the agent's Write/Edit on `deny_write` paths: the OK only lets verify
-  run a commit that already exists.
+  run a commit that already exists. *(Since 2026-10-23, #537: the guard refuses shell redirects and
+  write-shaped commands there too; a trusted change now arrives only through channels no hook sees —
+  a build script, a git operation — and verify holds it the same. See
+  [2026-10-23-guard-writes-every-channel.md](2026-10-23-guard-writes-every-channel.md).)*
 - **Land holds it.** The OK raises the item's risk to hold with the reason "trusted files changed
   (verify ran the agent's version on the user's OK)", so land holds the PR for the user's approval
   whatever the path rules say. The hold rules also gain `trusted-file` rules: jarvis-server's
