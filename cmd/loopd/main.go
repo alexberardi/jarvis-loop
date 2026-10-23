@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/api"
+	"github.com/alexberardi/jarvis-loop/internal/build"
 	"github.com/alexberardi/jarvis-loop/internal/clock"
 	"github.com/alexberardi/jarvis-loop/internal/loopd"
 	"github.com/alexberardi/jarvis-loop/internal/slack"
@@ -112,10 +113,14 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	st.SetRepos(repos)
 	st.SetAliases(aliases)
 
+	// The commit this loopd runs, which it serves at GET /version: since loopd is deployed on its
+	// own (fly.io) the runner asks for this rather than taking its own build for the loop's
+	// (docs/decisions/2026-10-23-loopd-on-fly.md).
+	bld := build.Current()
 	boardCfg := web.BoardConfig{SlackWorkspace: *slackWorkspace, Clock: clock.Real{}}
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           handler(st, toks, log, boardCfg),
+		Handler:           handler(st, toks, log, boardCfg, bld),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       5 * time.Minute, // evidence uploads
 		WriteTimeout:      5 * time.Minute,
@@ -126,7 +131,11 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	log.Info("loopd listening", "addr", ln.Addr().String(), "data", expand(*data))
+	bi := bld.Info()
+	log.Info("loopd listening", "addr", ln.Addr().String(), "data", expand(*data), "revision", bi.Revision)
+	if bi.Revision == "" {
+		log.Warn("build revision unknown: no deployed reports for qa_after_deploy repos (use /loop verified)", "why", bi.Why)
+	}
 	var boardSrv *http.Server
 	var boardLn net.Listener
 	if *boardAddr != "" {
@@ -152,7 +161,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		// The remote runners' listener, for the LAN: runner tokens only, so it needs no --lan.
 		runnerSrv = &http.Server{
 			Addr:              *runnerAddr,
-			Handler:           loopd.RunnerHandler(st, toks, log),
+			Handler:           loopd.RunnerHandler(st, toks, log, bld),
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       5 * time.Minute, // evidence uploads
 			WriteTimeout:      5 * time.Minute,
@@ -261,8 +270,8 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 }
 
 // handler serves the API, plus the status page at / and its form at /ui/control, and the board.
-func handler(st *store.Store, toks *api.Tokens, log *slog.Logger, board web.BoardConfig) http.Handler {
-	return loopd.Handler(st, toks, log, board)
+func handler(st *store.Store, toks *api.Tokens, log *slog.Logger, board web.BoardConfig, b *build.Build) http.Handler {
+	return loopd.Handler(st, toks, log, board, b)
 }
 
 // orchestratorEnvName is the @orchestrator app's env file, next to the loop bot's.

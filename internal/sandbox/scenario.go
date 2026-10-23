@@ -144,6 +144,9 @@ type Step struct {
 	// deploy: the runner restarts on a loop build, "base" (jarvis-loop's main when the stack
 	// started) or "main" (its main now)
 	Build string `json:"build,omitempty"`
+	// Component is which half of the loop a deploy step moves: "loopd", "runner", or empty for
+	// both (they are deployed separately since loopd moved to fly.io).
+	Component string `json:"component,omitempty"`
 	// control (as the CLI's PUT /control)
 	ActiveAgents  *int  `json:"active_agents,omitempty"`
 	MaxRunMinutes *int  `json:"max_run_minutes,omitempty"`
@@ -653,7 +656,7 @@ func (p *player) step(st Step) error {
 		}
 		return nil
 	case "deploy":
-		return s.Deploy(st.Build)
+		return s.Deploy(st.Build, st.Component)
 	case "release":
 		if st.Item != "" {
 			r, err := p.ref(st.Item)

@@ -53,8 +53,9 @@ type Runner struct {
 	Land LandGitHub
 	// Close closes dropped items' PRs (GH; nil: this runner leaves them to another).
 	Close PRCloser
-	// Revision is the loop commit this runner was built from (BuildRevision; "" when unknown): it
-	// reports deployed for the qa items whose merge it contains (deploy.go).
+	// Revision is the loop commit this runner was built from (build.Revision; "" when unknown).
+	// With the revision loopd reports for itself, it says which qa items of a qa_after_deploy
+	// repo are deployed: both builds must contain the merge (deploy.go).
 	Revision string
 	// HeartbeatEvery and KillGrace default to 60 s and 10 s.
 	HeartbeatEvery time.Duration
@@ -62,6 +63,9 @@ type Runner struct {
 
 	fenceOnce sync.Once
 	fenceErr  error
+
+	noLoopdRev atomic.Bool // loopd reported no revision, said once (deploy.go)
+	noOwnRev   atomic.Bool // this runner has no vcs stamp, said once
 
 	hbMu sync.Mutex
 	hb   *harnessBroker // the harness broker's sessions (harness.go)
@@ -140,7 +144,9 @@ func (r *Runner) Run(ctx context.Context) error {
 	if r.Close != nil {
 		loop("close-dropped loop", func() { r.closeDroppedLoop(claimCtx) })
 	}
-	if r.Revision != "" {
+	// Which items are deployed depends on loopd's build as well as this runner's, so the loop
+	// asks loopd every poll; without a qa_after_deploy repo there is nothing to ask about.
+	if r.hasQAAfterDeployRepo() {
 		loop("deployed-report loop", func() { r.reportDeployedLoop(claimCtx) })
 	}
 	if r.Land != nil {

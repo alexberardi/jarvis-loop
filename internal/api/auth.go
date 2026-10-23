@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/alexberardi/jarvis-loop/internal/build"
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 	"github.com/alexberardi/jarvis-loop/internal/store"
 )
@@ -141,8 +142,8 @@ const CodeRunnersOnly = "runners_only"
 // serves, so the main API, the status page and the board stay on their own listeners. A token of
 // any other kind (user, board, orchestrator) is refused on every route before routing, which also
 // rules out acting for the user; a runner token then meets New's routes and rules.
-func NewRunners(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
-	s := &server{st: st, tokens: tokens, log: log}
+func NewRunners(st *store.Store, tokens *Tokens, log *slog.Logger, b *build.Build) http.Handler {
+	s := &server{st: st, tokens: tokens, log: log, build: b}
 	mux := s.routes()
 	return Logged(log, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := tokens.Lookup(BearerToken(r))

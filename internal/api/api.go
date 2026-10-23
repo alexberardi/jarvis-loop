@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alexberardi/jarvis-loop/internal/build"
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 	"github.com/alexberardi/jarvis-loop/internal/store"
 )
@@ -25,11 +26,14 @@ type server struct {
 	st     *store.Store
 	tokens *Tokens
 	log    *slog.Logger
+	// build is the running loopd's own build, served at GET /version; nil reports no revision.
+	build *build.Build
 }
 
-// New returns the API handler.
-func New(st *store.Store, tokens *Tokens, log *slog.Logger) http.Handler {
-	s := &server{st: st, tokens: tokens, log: log}
+// New returns the API handler. b is loopd's own build, which GET /version reports so the runner
+// can tell what the loop is running (docs/decisions/2026-10-23-loopd-on-fly.md); nil has none.
+func New(st *store.Store, tokens *Tokens, log *slog.Logger, b *build.Build) http.Handler {
+	s := &server{st: st, tokens: tokens, log: log, build: b}
 	return Logged(log, s.routes())
 }
 
@@ -82,6 +86,7 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /plans/{id}/approve", user, s.approvePlan)
 	route("POST /plans/{id}/drop", user, s.dropPlan)
 	route("POST /plans/{id}/turns/{turn}/result", runner, s.planTurnResult)
+	route("GET /version", reads, s.version)
 	route("GET /control", reads, s.getControl)
 	route("GET /night", reads, s.getNight)
 	route("GET /flow", reads, s.flow)
@@ -1058,6 +1063,13 @@ func (s *server) unfreeze(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, f)
+}
+
+// version is the build loopd itself is running: the commit, or why it has none. Since loopd moved
+// to fly.io it is deployed on its own, so the runner asks for this instead of taking its own build
+// for the loop's (internal/runner/deploy.go). It is a read, behind a token like every other route.
+func (s *server) version(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.build.Info())
 }
 
 func (s *server) getControl(w http.ResponseWriter, r *http.Request) {

@@ -55,7 +55,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	logs := &bytes.Buffer{}
-	srv := httptest.NewServer(New(st, toks, slog.New(slog.NewJSONHandler(logs, nil))))
+	srv := httptest.NewServer(New(st, toks, slog.New(slog.NewJSONHandler(logs, nil)), testBuild))
 	t.Cleanup(srv.Close)
 	return &env{t: t, srv: srv, clock: clk, store: st, logs: logs}
 }
@@ -868,7 +868,7 @@ func TestBoardTokenRefusedByAPI(t *testing.T) {
 	if pr, ok := toks.Lookup(boardTok); !ok || pr.Kind != KindBoard || pr.Actor() != "board:phone" {
 		t.Fatalf("lookup: %+v %v", pr, ok)
 	}
-	srv := httptest.NewServer(New(st, toks, slog.New(slog.DiscardHandler)))
+	srv := httptest.NewServer(New(st, toks, slog.New(slog.DiscardHandler), nil))
 	t.Cleanup(srv.Close)
 	e := &env{t: t, srv: srv, store: st}
 	var it struct{ ID int64 }
@@ -878,7 +878,7 @@ func TestBoardTokenRefusedByAPI(t *testing.T) {
 		{"POST", "/claim"}, {"POST", "/leases/x/heartbeat"}, {"POST", "/items/1/advance"},
 		{"POST", "/items/1/evidence"}, {"POST", "/items/1/events"}, {"GET", "/items/1/evidence/1"},
 		{"POST", "/items/1/answer"}, {"POST", "/items/1/approve"}, {"POST", "/items/1/hold"}, {"POST", "/items/1/drop"},
-		{"GET", "/control"}, {"PUT", "/control"},
+		{"GET", "/control"}, {"PUT", "/control"}, {"GET", "/version"},
 	} {
 		e.refused(boardTok, r.method, r.path, nil, 403, "forbidden")
 	}

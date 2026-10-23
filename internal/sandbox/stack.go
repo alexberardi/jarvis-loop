@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/api"
+	"github.com/alexberardi/jarvis-loop/internal/build"
 	"github.com/alexberardi/jarvis-loop/internal/clock"
 	"github.com/alexberardi/jarvis-loop/internal/loopd"
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
@@ -120,9 +121,14 @@ type Stack struct {
 	Runner   *runner.Runner
 	Bot      *slack.Bot
 	LoopdURL string
-	// BoardURL is loopd's board listener (--board-addr), on its own loopback port.
+	// LoopdBuild is the commit the sandbox's loopd reports at GET /version, which the runner asks
+	// for to tell which qa items are deployed (Deploy; internal/runner/deploy.go). It starts with
+	// no revision, as a loopd nobody has deployed yet.
+	LoopdBuild *build.Build
+	// BoardURL is a listener serving loopd.BoardHandler (the board alone), on its own loopback
+	// port: what the user's phone reaches.
 	BoardURL string
-	// RunnerURL is loopd's listener for remote runners (--runner-addr): runner tokens only.
+	// RunnerURL is a listener serving loopd.RunnerHandler: runner tokens only.
 	RunnerURL string
 	Remote    string
 	MainSHA   string // the remote's main when the stack started
@@ -282,8 +288,9 @@ func StartStack(opts Options) (st *Stack, err error) {
 		return nil, err
 	}
 	s.LoopdURL = "http://" + ln.Addr().String()
+	s.LoopdBuild = build.New("", "the sandbox has not deployed loopd yet")
 	boardCfg := web.BoardConfig{SlackWorkspace: SlackWorkspace, Clock: clk}
-	s.srv = &http.Server{Handler: loopd.Handler(s.Store, toks, log.With("component", "api"), boardCfg), ReadHeaderTimeout: 10 * time.Second}
+	s.srv = &http.Server{Handler: loopd.Handler(s.Store, toks, log.With("component", "api"), boardCfg, s.LoopdBuild), ReadHeaderTimeout: 10 * time.Second}
 	go s.srv.Serve(ln)
 	bln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -297,7 +304,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 		return nil, err
 	}
 	s.RunnerURL = "http://" + rln.Addr().String()
-	s.runners = &http.Server{Handler: loopd.RunnerHandler(s.Store, toks, log.With("component", "runners")), ReadHeaderTimeout: 10 * time.Second}
+	s.runners = &http.Server{Handler: loopd.RunnerHandler(s.Store, toks, log.With("component", "runners"), s.LoopdBuild), ReadHeaderTimeout: 10 * time.Second}
 	go s.runners.Serve(rln)
 	if opts.RealClock {
 		s.bg.Add(1)
@@ -435,12 +442,19 @@ func StartStack(opts Options) (st *Stack, err error) {
 	return s, nil
 }
 
-// Deploy is the runner restarting on a loop build (docs/decisions/2026-10-16-qa-after-deploy.md):
-// "base", jarvis-loop's main when the stack started, or "main", its main now. As on its start, it
-// reports deployed for the qa items awaiting a deploy whose merge that build contains.
-func (s *Stack) Deploy(build string) error {
+// Deploy is a loop build going live (docs/decisions/2026-10-16-qa-after-deploy.md): "base" is
+// jarvis-loop's main when the stack started, "main" its main now. loopd and the runner are
+// deployed separately since loopd moved to fly.io (docs/decisions/2026-10-23-loopd-on-fly.md), so
+// component says which one moves: "loopd", "runner", or "" for both. Either way the runner then
+// reports deployed for the qa items awaiting a deploy whose merge BOTH running builds contain.
+func (s *Stack) Deploy(which, component string) error {
+	switch component {
+	case "", "loopd", "runner":
+	default:
+		return fmt.Errorf("deploy component must be loopd, runner or empty, not %q", component)
+	}
 	rev := s.LoopMainSHA
-	switch build {
+	switch which {
 	case "base":
 	case "main":
 		out, err := exec.Command("git", "-C", s.LoopRemote, "rev-parse", "refs/heads/main").Output()
@@ -449,9 +463,16 @@ func (s *Stack) Deploy(build string) error {
 		}
 		rev = strings.TrimSpace(string(out))
 	default:
-		return fmt.Errorf("deploy build must be base or main, not %q", build)
+		return fmt.Errorf("deploy build must be base or main, not %q", which)
 	}
-	s.Runner.Revision = rev
+	switch component {
+	case "", "loopd":
+		s.LoopdBuild.Set(rev, "")
+	}
+	switch component {
+	case "", "runner":
+		s.Runner.Revision = rev
+	}
 	return s.Runner.ReportDeployed(s.ctx)
 }
 

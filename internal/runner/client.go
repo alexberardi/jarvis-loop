@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alexberardi/jarvis-loop/internal/build"
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
@@ -431,6 +432,14 @@ func (c *Client) AwaitingDeploy(ctx context.Context) ([]BoardRow, error) {
 	}
 	_, err := c.json(ctx, "GET", "/items?awaiting_deploy=1", nil, &out)
 	return out.Items, err
+}
+
+// Version is the build the running loopd reports for itself (GET /version): the commit it was
+// built from, or none and why not (docs/decisions/2026-10-23-loopd-on-fly.md).
+func (c *Client) Version(ctx context.Context) (build.Info, error) {
+	var out build.Info
+	_, err := c.json(ctx, "GET", "/version", nil, &out)
+	return out, err
 }
 
 // ProofsDue lists the qa items whose proof is due a check (GET /items?proof_due=1).

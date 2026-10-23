@@ -54,7 +54,7 @@ func TestCLISmoke(t *testing.T) {
 	}
 	defer st.Close()
 	toks, _ := api.ParseTokens(strings.NewReader(userTok + "\tuser\talex\n" + runnerTok + "\trunner\tdevbox\n"))
-	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler)))
+	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler), nil))
 	defer srv.Close()
 	c := cli{t: t, url: srv.URL}
 
@@ -187,7 +187,7 @@ func TestCLIDrop(t *testing.T) {
 	}
 	defer st.Close()
 	toks, _ := api.ParseTokens(strings.NewReader(userTok + "\tuser\talex\n" + runnerTok + "\trunner\tdevbox\n"))
-	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler)))
+	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler), nil))
 	defer srv.Close()
 	c := cli{t: t, url: srv.URL}
 
@@ -213,7 +213,7 @@ func TestCLIQA(t *testing.T) {
 	}
 	defer st.Close()
 	toks, _ := api.ParseTokens(strings.NewReader(userTok + "\tuser\talex\n" + runnerTok + "\trunner\tdevbox\n"))
-	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler)))
+	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler), nil))
 	defer srv.Close()
 	c := cli{t: t, url: srv.URL}
 
@@ -243,7 +243,7 @@ func TestCLIAfter(t *testing.T) {
 	}
 	defer st.Close()
 	toks, _ := api.ParseTokens(strings.NewReader(userTok + "\tuser\talex\n" + runnerTok + "\trunner\tdevbox\n"))
-	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler)))
+	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler), nil))
 	defer srv.Close()
 	c := cli{t: t, url: srv.URL}
 
@@ -273,7 +273,7 @@ func TestCLIBudgetAndUsage(t *testing.T) {
 	}
 	defer st.Close()
 	toks, _ := api.ParseTokens(strings.NewReader(userTok + "\tuser\talex\n" + runnerTok + "\trunner\tdevbox\n"))
-	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler)))
+	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler), nil))
 	defer srv.Close()
 	c := cli{t: t, url: srv.URL}
 
@@ -391,7 +391,7 @@ func testLoopd(t *testing.T) cli {
 	}
 	t.Cleanup(func() { st.Close() })
 	toks, _ := api.ParseTokens(strings.NewReader(userTok + "\tuser\talex\n" + runnerTok + "\trunner\tdevbox\n"))
-	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler)))
+	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.DiscardHandler), nil))
 	t.Cleanup(srv.Close)
 	return cli{t: t, url: srv.URL}
 }

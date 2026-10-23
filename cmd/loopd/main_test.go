@@ -49,7 +49,7 @@ func TestHandlerRouting(t *testing.T) {
 	}
 	defer st.Close()
 	toks, _ := api.ParseTokens(strings.NewReader("user-token-0123456789abcdef\tuser\talex\n"))
-	srv := httptest.NewServer(handler(st, toks, slog.New(slog.DiscardHandler), web.BoardConfig{}))
+	srv := httptest.NewServer(handler(st, toks, slog.New(slog.DiscardHandler), web.BoardConfig{}, nil))
 	defer srv.Close()
 	for path, want := range map[string]string{"/": "Basic", "/items": "Bearer", "/control": "Bearer", "/board": "", "/board/items/1": ""} {
 		resp, err := http.Get(srv.URL + path)
@@ -153,7 +153,7 @@ func TestRunnerHandlerRouting(t *testing.T) {
 	defer st.Close()
 	const runnerTok = "runner-token-0123456789abcdef"
 	toks, _ := api.ParseTokens(strings.NewReader(runnerTok + "\trunner\tmbp\n"))
-	srv := httptest.NewServer(loopd.RunnerHandler(st, toks, slog.New(slog.DiscardHandler)))
+	srv := httptest.NewServer(loopd.RunnerHandler(st, toks, slog.New(slog.DiscardHandler), nil))
 	defer srv.Close()
 	for path, want := range map[string]int{"/": 404, "/board": 404, "/ui/control": 404, "/items": 200, "/control": 200} {
 		req, _ := http.NewRequest("GET", srv.URL+path, nil)

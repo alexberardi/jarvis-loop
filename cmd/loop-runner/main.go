@@ -34,6 +34,7 @@ import (
 	"slices"
 	"syscall"
 
+	"github.com/alexberardi/jarvis-loop/internal/build"
 	"github.com/alexberardi/jarvis-loop/internal/runner"
 )
 
@@ -65,7 +66,7 @@ func exitCode(err error) int {
 
 // version prints the commit this binary was built from, or why it is unknown.
 func version() error {
-	rev, why := runner.BuildRevision()
+	rev, why := build.Revision()
 	if rev == "" {
 		rev = "unknown: " + why
 	}
@@ -148,9 +149,10 @@ func run(args []string) error {
 	if err := r.ProbeFence(); err != nil {
 		log.Error("fence unavailable: items with setup or verify steps will go to the user", "err", err)
 	}
-	// The commit this build contains: the qa items of a qa_after_deploy repo (the loop itself) whose
-	// merge it contains are reported deployed (docs/decisions/2026-10-16-qa-after-deploy.md).
-	rev, why := runner.BuildRevision()
+	// The commit this build contains: with the revision loopd reports for itself, it says which qa
+	// items of a qa_after_deploy repo are deployed (docs/decisions/2026-10-16-qa-after-deploy.md,
+	// docs/decisions/2026-10-23-loopd-on-fly.md).
+	rev, why := build.Revision()
 	r.Revision = rev
 	if rev == "" {
 		log.Warn("build revision unknown: no deployed reports for qa_after_deploy repos (use /loop verified)", "why", why)

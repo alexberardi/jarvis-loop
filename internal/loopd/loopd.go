@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/api"
+	"github.com/alexberardi/jarvis-loop/internal/build"
 	"github.com/alexberardi/jarvis-loop/internal/clock"
 	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/store"
@@ -20,9 +21,9 @@ import (
 
 // Handler serves the API, plus the status page at / and its form at /ui/control, and the board
 // at /board.
-func Handler(st *store.Store, toks *api.Tokens, log *slog.Logger, board web.BoardConfig) http.Handler {
+func Handler(st *store.Store, toks *api.Tokens, log *slog.Logger, board web.BoardConfig, bld *build.Build) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/", api.New(st, toks, log))
+	mux.Handle("/", api.New(st, toks, log, bld))
 	page := api.Logged(log, web.New(st, toks, log))
 	mux.Handle("GET /{$}", page)
 	mux.Handle("POST /ui/control", page)
@@ -41,8 +42,8 @@ func BoardHandler(st *store.Store, toks *api.Tokens, log *slog.Logger, board web
 // RunnerHandler serves the API to runner tokens only, and no status page or board: it is what
 // loopd's LAN listener for remote runners (--runner-addr) serves, so the main API stays on
 // loopback (docs/decisions/2026-10-17-mac-runners.md).
-func RunnerHandler(st *store.Store, toks *api.Tokens, log *slog.Logger) http.Handler {
-	return api.NewRunners(st, toks, log)
+func RunnerHandler(st *store.Store, toks *api.Tokens, log *slog.Logger, bld *build.Build) http.Handler {
+	return api.NewRunners(st, toks, log, bld)
 }
 
 // Slack configures the Slack layer.
