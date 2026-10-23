@@ -1,7 +1,11 @@
 package pipeline
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -439,6 +443,201 @@ func TestAllReposHoldRules(t *testing.T) {
 	}
 }
 
+// jarvis-node-setup and jarvis-command-sdk (item #549, docs/decisions/2026-10-23-node-setup-hold-rules.md):
+// until this both repos matched no default rule at all, so a change to their auth, pairing, CI or
+// release config would have landed on review and CI alone. node-setup's push to main publishes the
+// ghcr.io/alexberardi/jarvis-node images, and the SDK is what every package and the node import.
+func TestNodeSetupAndCommandSDKHoldRules(t *testing.T) {
+	rules := DefaultHoldRules()
+	cases := []struct{ repo, line, rule string }{
+		// The paths item #549 names, each of which matched nothing before.
+		{NodeSetupRepo, "M core/ijarvis_authentication.py", "auth"},
+		{NodeSetupRepo, "M provisioning/pairing.py", "pairing"},
+		{NodeSetupRepo, "M .github/workflows/ci.yml", "ci"},
+		{NodeSetupRepo, "M .github/workflows/release.yml", "release-config"},
+		{NodeSetupRepo, "M pyproject.toml", "release-config"},
+		{NodeSetupRepo, "D tests/test_auth.py", "deleted-test"},
+		{NodeSetupRepo, "R tests/test_pairing.py jarvis_node/pairing_check.py", "deleted-test"},
+		// release and packaging: a merge to main pushes the images.
+		{NodeSetupRepo, "M Dockerfile", "release-config"},
+		{NodeSetupRepo, "M Dockerfile.audio", "release-config"},
+		{NodeSetupRepo, "M docker-compose.audio.yaml", "release-config"},
+		{NodeSetupRepo, "M compose/base.yaml", "release-config"},
+		{NodeSetupRepo, "M requirements.txt", "release-config"},
+		{NodeSetupRepo, "M requirements-pi.txt", "release-config"},
+		{NodeSetupRepo, "M custom-requirements.txt", "release-config"},
+		{NodeSetupRepo, "M .dockerignore", "release-config"},
+		{NodeSetupRepo, "M build/build-tarball.sh", "release-config"},
+		// auth, secrets and the K1/K2 keys.
+		{NodeSetupRepo, "M core/ijarvis_secret.py", "auth"},
+		{NodeSetupRepo, "M services/command_auth_service.py", "auth"},
+		{NodeSetupRepo, "M services/secret_service.py", "auth"},
+		{NodeSetupRepo, "M repositories/secrets_repository.py", "auth"},
+		{NodeSetupRepo, "M models/secret.py", "auth"},
+		{NodeSetupRepo, "M models/command_auth.py", "auth"},
+		{NodeSetupRepo, "M agents/token_refresh_agent.py", "auth"},
+		{NodeSetupRepo, "M utils/set_secret.py", "auth"},
+		{NodeSetupRepo, "M utils/encryption_utils.py", "auth"},
+		{NodeSetupRepo, "M utils/authorize_node.py", "auth"},
+		{NodeSetupRepo, "M utils/generate_dev_k2.py", "auth"},
+		// provisioning and pairing.
+		{NodeSetupRepo, "M provisioning/wifi_credentials.py", "pairing"},
+		{NodeSetupRepo, "A provisioning/state_machine.py", "pairing"},
+		{NodeSetupRepo, "M services/bluetooth_pair_agent.py", "pairing"},
+		{NodeSetupRepo, "M services/camera_credentials_handler.py", "pairing"},
+		{NodeSetupRepo, "M utils/mqtt_credentials.py", "pairing"},
+		{NodeSetupRepo, "M scripts/run_provisioning.py", "pairing"},
+		{NodeSetupRepo, "M scripts/setup_mode.py", "pairing"},
+		// install, update and root: the sudoers drop-in, the systemd units, the self-updater.
+		{NodeSetupRepo, "M install.sh", "install-scripts"},
+		{NodeSetupRepo, "M setup.sh", "install-scripts"},
+		{NodeSetupRepo, "M setup_macos.sh", "install-scripts"},
+		{NodeSetupRepo, "M setup/pi.sh", "install-scripts"},
+		{NodeSetupRepo, "M setup/systemd/jarvis-node.service", "install-scripts"},
+		{NodeSetupRepo, "M scripts/jarvis-deploy.sudoers", "install-scripts"},
+		{NodeSetupRepo, "M scripts/jarvis-self-update", "install-scripts"},
+		{NodeSetupRepo, "M scripts/jarvis-post-install.sh", "install-scripts"},
+		{NodeSetupRepo, "M scripts/jarvis-apt-hold", "install-scripts"},
+		{NodeSetupRepo, "M services/post_install_dropins.py", "install-scripts"},
+		{NodeSetupRepo, "M services/update_service.py", "install-scripts"},
+		{NodeSetupRepo, "M services/package_install_handler.py", "install-scripts"},
+		{NodeSetupRepo, "M scripts/install_command.py", "install-scripts"},
+		{NodeSetupRepo, "M scripts/verify_package.py", "install-scripts"},
+		// deleted tests, wherever node-setup keeps them (top level, services/, utils/).
+		{NodeSetupRepo, "D test_node.py", "deleted-test"},
+		{NodeSetupRepo, "D services/test_secret_service.py", "deleted-test"},
+		{NodeSetupRepo, "D utils/test_command.py", "deleted-test"},
+		{NodeSetupRepo, "D scripts/test_install_signature_verify.sh", "deleted-test"},
+		{NodeSetupRepo, "M scripts/test_install_signature_verify.sh", ""},
+		// Ordinary node code, a modified or added test, docs: nothing.
+		{NodeSetupRepo, "M commands/timer_command.py", ""},
+		{NodeSetupRepo, "M README.md", ""},
+		{NodeSetupRepo, "M tests/test_auth.py", ""},
+		{NodeSetupRepo, "A tests/test_new.py", ""},
+		{NodeSetupRepo, "M agents/conversation_agent.py", ""},
+		{NodeSetupRepo, "M docs/architecture.md", ""},
+		// command-sdk: the auth and process helpers every package imports, its release config, CI.
+		{CommandSDKRepo, "M jarvis_command_sdk/auth.py", "auth"},
+		{CommandSDKRepo, "M jarvis_command_sdk/authentication.py", "auth"},
+		{CommandSDKRepo, "M jarvis_command_sdk/secret.py", "auth"},
+		{CommandSDKRepo, "M jarvis_command_sdk/cc_http.py", "auth"},
+		{CommandSDKRepo, "M jarvis_command_sdk/process.py", "auth"},
+		{CommandSDKRepo, "M pyproject.toml", "release-config"},
+		{CommandSDKRepo, "M .github/workflows/ci.yml", "ci"},
+		{CommandSDKRepo, "D tests/test_auth.py", "deleted-test"},
+		{CommandSDKRepo, "R jarvis_command_sdk/test_x.py jarvis_command_sdk/x.py", "deleted-test"},
+		{CommandSDKRepo, "M jarvis_command_sdk/logging.py", ""},
+		{CommandSDKRepo, "M README.md", ""},
+		{CommandSDKRepo, "M tests/test_auth.py", ""},
+	}
+	for _, c := range cases {
+		paths, err := ParseChangedPaths([]string{c.line})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hits := MatchHoldRules(rules, c.repo, paths)
+		if c.rule == "" {
+			if len(hits) != 0 {
+				t.Errorf("%s %q matched %v, want nothing", c.repo, c.line, hits)
+			}
+			continue
+		}
+		found := false
+		for _, h := range hits {
+			found = found || h.Rule == c.rule
+		}
+		if !found {
+			t.Errorf("%s %q matched %v, want rule %q", c.repo, c.line, hits, c.rule)
+		}
+	}
+	// Neither repo's rules leak into the other, into the packages or into jarvis-node-mobile:
+	// NodeSetupRepo is an exact slug, never a jarvis-node-* wildcard.
+	for _, c := range []struct{ repo, line string }{
+		{"alexberardi/jarvis-node-mobile", "M install.sh"},
+		{"alexberardi/jarvis-node-mobile", "M provisioning/api.py"},
+		{"alexberardi/jarvis-cmd-weather", "M install.sh"},
+		{"alexberardi/jarvis-cmd-weather", "M core/ijarvis_secret.py"},
+		{NodeSetupRepo, "M jarvis_package.yaml"},
+		{NodeSetupRepo, "M jarvis_command_sdk/auth.py"},
+		{CommandSDKRepo, "M install.sh"},
+		{CommandSDKRepo, "M provisioning/api.py"},
+		{CommandSDKRepo, "M jarvis_package.yaml"},
+		{ServerRepo, "M core/ijarvis_authentication.py"},
+		// The SDK's slug is not under the jarvis-cmd-* wildcard, and must not be made so.
+		{CommandSDKRepo, "M weather_scripts/install.sh"},
+	} {
+		paths, _ := ParseChangedPaths([]string{c.line})
+		if m := MatchHoldRules(rules, c.repo, paths); len(m) != 0 {
+			t.Errorf("%s %q matched %v, want nothing", c.repo, c.line, m)
+		}
+	}
+}
+
+// The guard that would have caught #549: every repo the default rules name in holdrules.go's
+// const block (read from the source, so a const added with no rules fails here) has at least one
+// rule that applies to it. A repo nobody named faces no hold rules at all.
+func TestEveryNamedRepoHasHoldRules(t *testing.T) {
+	repos := repoConstsInSource(t)
+	if len(repos) < 8 {
+		t.Fatalf("found only %d repo consts in holdrules.go: %v", len(repos), repos)
+	}
+	rules := DefaultHoldRules()
+	for name, slug := range repos {
+		// A wildcard repo stands for every slug with that prefix: test a representative one.
+		item := slug
+		if p, ok := strings.CutSuffix(slug, "*"); ok {
+			item = p + "example"
+		}
+		n := 0
+		for _, r := range rules {
+			if ruleApplies(r.Repo, item) {
+				n++
+			}
+		}
+		t.Logf("%-16s %-40s %3d rules", name, item, n)
+		if n == 0 {
+			t.Errorf("%s (%s): no default hold rule applies to it", name, item)
+		}
+	}
+}
+
+// repoConstsInSource reads holdrules.go and returns its owner/name string consts by const name.
+func repoConstsInSource(t *testing.T) map[string]string {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "holdrules.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, s := range gd.Specs {
+			vs, ok := s.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range vs.Names {
+				if i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				v, err := strconv.Unquote(lit.Value)
+				if err != nil || !strings.Contains(v, "/") {
+					continue
+				}
+				out[name.Name] = v
+			}
+		}
+	}
+	return out
+}
+
 // Rules a store saved as a copy of an earlier built-in set (any control change used to write
 // them out) are recognised, so loopd can go back to the live defaults.
 func TestIsBuiltInHoldRuleSet(t *testing.T) {
@@ -450,22 +649,27 @@ func TestIsBuiltInHoldRuleSet(t *testing.T) {
 	}
 	// Before #204 jarvis-loop's list held all of internal/pipeline, internal/api, internal/store
 	// and cmd/loopd: a database carrying that default list moves to the new one.
-	before204 := defaultHoldRules(loopRulesV1(), true)
-	phase6b := defaultHoldRules(loopRulesV1(), false)
+	before204 := defaultHoldRules(loopRulesV1(), true, false)
+	phase6b := defaultHoldRules(loopRulesV1(), false, false)
+	// Before #549 no rule named jarvis-node-setup or jarvis-command-sdk: the list loopd shipped
+	// until then is still recognised, so a database carrying a copy of it moves to the new one.
+	before549 := defaultHoldRules(loopRules(), true, false)
 	for name, rules := range map[string][]HoldRule{"server only": server, "phase 6": phase6, "reordered": reversed,
-		"phase 6b": phase6b, "before #204": before204, "today's": DefaultHoldRules()} {
+		"phase 6b": phase6b, "before #204": before204, "before #549": before549, "today's": DefaultHoldRules()} {
 		if !IsBuiltInHoldRuleSet(rules) {
 			t.Errorf("%s: not recognised as a built-in set", name)
 		}
 	}
-	if sameRuleSet(before204, DefaultHoldRules()) {
-		t.Fatal("today's default list is still the one before #204")
+	for name, rules := range map[string][]HoldRule{"before #204": before204, "before #549": before549} {
+		if sameRuleSet(rules, DefaultHoldRules()) {
+			t.Fatalf("today's default list is still the one %s", name)
+		}
 	}
 	changed := append([]HoldRule(nil), phase6...)
 	changed[0].Glob = "elsewhere/**"
 	for name, rules := range map[string][]HoldRule{"empty": nil, "one removed": phase6[1:], "one changed": changed,
 		"one added":                append(append([]HoldRule(nil), phase6...), HoldRule{Name: "x", Glob: "x/**", Repo: LoopRepo}),
-		"before #204, one removed": before204[1:]} {
+		"before #204, one removed": before204[1:], "before #549, one removed": before549[1:]} {
 		if IsBuiltInHoldRuleSet(rules) {
 			t.Errorf("%s: taken for a built-in set", name)
 		}

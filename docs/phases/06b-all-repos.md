@@ -5,6 +5,11 @@ interface". The loop works on jarvis-server and jarvis-loop today; this phase ad
 apps, the docs, the installer and the 29 command/device packages. **Proves:** an item about any of
 them goes from a Slack message to a merged PR with the same gates.
 
+**Since 2026-10-23 (#549):** two more, jarvis-node-setup and jarvis-command-sdk, which were in the
+runner's `repos` map but named by no hold rule at all, so a change to their auth, pairing, CI or
+release config faced only review and CI. Both are in the table and the hold lists below
+([decision](../decisions/2026-10-23-node-setup-hold-rules.md)); 37 repos in all.
+
 **As built (loop side, 2026-10-15):** `docs/decisions/2026-10-15-all-repos.md`. In short: loopd's
 `routed` and `verify_failed` outcomes and review's `needs_review`; `--repos-file` with aliases; wildcard
 hold-rule repos and the lists below (plus `*Presence*`); built-in rules no longer freeze on a control
@@ -24,6 +29,8 @@ recorded in `docs/decisions/2026-10-15-all-repos.md`.
 | docs | jarvis-docs | MkDocs (Python) | venv, `pip install -r requirements-dev.txt && pytest` (`mkdocs build --strict`) | nothing (deploy is the manual `deploy.sh`) |
 | installer | jarvis-installer | React / Vite (node 24) | `npm ci && npm test && npm run build` | GitHub Pages deploy of installer.jarvisautomation.io, install-e2e dispatch |
 | packages | 17 `jarvis-cmd-*`, 12 `jarvis-device-*` (not archived) | Python, `jdt` template | venv, `pip install` the toolkit, `jdt test . --install-deps`, `pytest tests` when present | nothing (Pantry submission and the `v<version>` tag are manual) |
+| server | jarvis-node-setup (added 2026-10-23, #549) | Python 3.11 (the node that runs on the Pis) | venv, `pip install pytest pytest-asyncio httpx pydantic fastapi uvicorn cryptography python-dotenv sqlalchemy`, `pytest tests/test_provisioning/` (minus the two hostapd/wifi-manager files) and `pytest tests/integration/test_timer_commands.py`, as its own CI does; the rest of its suite needs `pysqlcipher3`, which is Pi-only | **ships:** every push builds and pushes `ghcr.io/alexberardi/jarvis-node:latest` and `-audio` (amd64 + arm64); a tag publishes the tarball, `install.sh` and a minisign-signed `checksums.txt` |
+| package | jarvis-command-sdk (added 2026-10-23, #549) | Python 3.11 (the SDK every package and the node import) | venv, `pip install -e ".[dev]"`, `pytest --cov=jarvis_command_sdk --cov-fail-under=90`, as its own CI does | no workflow, but node-setup's CI installs it with `pip install git+https://github.com/alexberardi/jarvis-command-sdk.git`, so a merge to its main is what consumers get |
 
 ## User decisions (2026-10-15)
 
@@ -57,10 +64,23 @@ recorded in `docs/decisions/2026-10-15-all-repos.md`.
 - Sandbox network adds PyPI (`pypi.org`, `files.pythonhosted.org`) to the defaults; npm and GitHub
   are there already.
 
+**jarvis-node-setup and jarvis-command-sdk (2026-10-23, #549).** `runner.json` lives in
+`~/.config/jarvis-loop/`, outside any agent's sandbox, so the loop cannot write these rows itself;
+they are the user's edit. Both repos already have a `slug`, a `group` and a `description` there and
+no `aliases`, `setup` or `verify`. What they want:
+
+| Repo | group | aliases | setup | verify |
+| --- | --- | --- | --- | --- |
+| jarvis-node-setup | `server` (as configured) | `node setup`, `python node` — **not** `node`, `mobile` or `node app`, which mean jarvis-node-mobile | `python3 -m venv .venv && .venv/bin/pip install -U pip pytest pytest-asyncio httpx pydantic fastapi uvicorn cryptography python-dotenv sqlalchemy` | `.venv/bin/pytest tests/test_provisioning/ --tb=short --ignore=tests/test_provisioning/test_hostapd_wifi_manager.py --ignore=tests/test_provisioning/test_wifi_manager.py`, then `.venv/bin/pytest tests/integration/test_timer_commands.py --tb=short` (what its CI runs; the rest of the suite needs the Pi-only `pysqlcipher3`) |
+| jarvis-command-sdk | `package` (as configured) | `command sdk`, `sdk` | `python3 -m venv .venv && .venv/bin/pip install -U pip && .venv/bin/pip install -e ".[dev]"` | `.venv/bin/pytest --tb=short --cov=jarvis_command_sdk --cov-fail-under=90` |
+
+The `group` is only shown to triage and in the brief (`groupNote`); hold rules key on the slug, so
+a configured `group: server` never gave jarvis-node-setup jarvis-server's rules.
+
 ### Triage with many repos: route first
 
-Today an item with no repo checks out **every** configured repo for triage. With 35 repos that is
-35 mirrors and worktrees. Instead:
+Today an item with no repo checks out **every** configured repo for triage. With 37 repos that is
+37 mirrors and worktrees. Instead:
 
 - Item has no repo → triage gets **no checkouts**, only `repos.md` (key, slug, group, description,
   last 5 merged PR titles) and the open items, and a brief that says "pick the repo". Its outcome
@@ -106,6 +126,32 @@ survey):
   `apt_packages`, `post_install` and `version` are the risky fields and a path rule cannot see
   fields), `*_scripts/**`, `*_shared/**` (OAuth and token code lives there), `.github/**`; deleted
   tests.
+- **jarvis-node-setup** (2026-10-23, #549; a push to main publishes the node images, so it is a
+  "ships every merge" repo like the mobile apps). `release-config`:
+  `.github/workflows/release.yml`, `Dockerfile`, `Dockerfile.*`, `.dockerignore`,
+  `docker-compose*.yaml`, `compose/**`, `pyproject.toml`, `*requirements*.txt`, `build/**`;
+  `ci`: `.github/**`; `auth`: `core/ijarvis_authentication.py`, `core/ijarvis_secret.py`,
+  `services/command_auth_service.py`, `services/secret_service.py`,
+  `repositories/secrets_repository.py`, `models/secret.py`, `models/command_auth.py`,
+  `agents/token_refresh_agent.py`, `utils/set_secret.py`, `utils/encryption_utils.py`,
+  `utils/authorize_node.py`, `utils/generate_dev_k2.py` (the K1/K2 keys); `pairing`:
+  `provisioning/**`, `services/bluetooth_pair_agent.py`, `services/camera_credentials_handler.py`,
+  `utils/mqtt_credentials.py`, `scripts/run_provisioning.py`, `scripts/setup_mode.py`;
+  `install-scripts` (these run as root on a device): `install.sh`, `setup.sh`, `setup_*.sh`,
+  `setup/**` (the systemd units), `scripts/jarvis-*` (the `jarvis-deploy.sudoers` drop-in, the
+  self-updater, the post-install and apt helpers), `services/post_install_dropins.py`,
+  `services/update_service.py`, `services/package_install_handler.py`,
+  `scripts/install_command.py`, `scripts/verify_package.py`; deleted tests (`tests/**`,
+  `**/test_*.py`, and `**/test_*.sh` for its shell test of the release signature check).
+- **jarvis-command-sdk** (2026-10-23, #549; every package and the node import it, from git main).
+  `auth`: `jarvis_command_sdk/auth.py`, `authentication.py`, `secret.py`, `cc_http.py`,
+  `process.py`; `release-config`: `pyproject.toml`; `ci`: `.github/**`; deleted tests. Its slug is
+  **not** under `alexberardi/jarvis-cmd-*` and must not be made so: it has no `jarvis_package.yaml`
+  or `*_scripts/`, and widening that wildcard would reach repos nobody surveyed.
+
+Every default rule names a repo, so a repo no rule names has no hold rules whatever — which is how
+both of these were worked without any (#549). `TestEveryNamedRepoHasHoldRules` reads holdrules.go's
+repo const block and fails on a repo with no rule.
 
 Note the content-level risks a path rule misses (a `curl … | sh` pin edited inside an ordinary docs
 page; a `JarvisSecret` use added in a command file): the review brief tells the review agent to

@@ -29,6 +29,8 @@ const (
 	RecipesRepo    = "alexberardi/jarvis-recipes-mobile"
 	DocsRepo       = "alexberardi/jarvis-docs"
 	InstallerRepo  = "alexberardi/jarvis-installer"
+	NodeSetupRepo  = "alexberardi/jarvis-node-setup"
+	CommandSDKRepo = "alexberardi/jarvis-command-sdk"
 	CmdPackages    = "alexberardi/jarvis-cmd-*"
 	DevicePackages = "alexberardi/jarvis-device-*"
 )
@@ -42,14 +44,21 @@ const (
 // internal/pipeline, internal/api, internal/store and cmd/loopd lands on review and CI
 // (docs/decisions/2026-10-18-narrow-loop-holds.md). The mobile apps, the docs, the installer and the packages: release and store config,
 // native code, auth and pairing, deploy and hosting, secret generation, package manifests and
-// install scripts, CI, and deleted tests (docs/phases/06b-all-repos.md).
+// install scripts, CI, and deleted tests (docs/phases/06b-all-repos.md). jarvis-node-setup (a push
+// to main publishes the node images): its release and image config, auth and secrets, provisioning
+// and pairing, the install and update scripts that run as root, CI and deleted tests;
+// jarvis-command-sdk (every package imports it): its auth helpers, release config, CI and deleted
+// tests (docs/decisions/2026-10-23-node-setup-hold-rules.md).
+// Every rule names a repo, so a repo no rule names faces no hold rules at all: a new one belongs
+// in the const block above and in a list here (TestEveryNamedRepoHasHoldRules).
 func DefaultHoldRules() []HoldRule {
-	return defaultHoldRules(loopRules(), true)
+	return defaultHoldRules(loopRules(), true, true)
 }
 
-// defaultHoldRules is the default list with jarvis-loop's rules loop, and the trusted-file rules
-// when trusted (an earlier loopd shipped it without them).
-func defaultHoldRules(loop []HoldRule, trusted bool) []HoldRule {
+// defaultHoldRules is the default list with jarvis-loop's rules loop, the trusted-file rules when
+// trusted and jarvis-node-setup's and jarvis-command-sdk's when nodeSetup (earlier loopds shipped
+// it without each, and those lists must stay recognisable: EarlierDefaultHoldRules).
+func defaultHoldRules(loop []HoldRule, trusted, nodeSetup bool) []HoldRule {
 	out := append(serverRules(), loop...)
 	if trusted {
 		out = append(out, trustedFileRules()...)
@@ -61,6 +70,10 @@ func defaultHoldRules(loop []HoldRule, trusted bool) []HoldRule {
 	out = append(out, installerRules(InstallerRepo)...)
 	for _, repo := range []string{CmdPackages, DevicePackages} {
 		out = append(out, packageRules(repo)...)
+	}
+	if nodeSetup {
+		out = append(out, nodeSetupRules(NodeSetupRepo)...)
+		out = append(out, commandSDKRules(CommandSDKRepo)...)
 	}
 	return out
 }
@@ -229,6 +242,73 @@ func installerRules(r string) []HoldRule {
 	}, tsTestRules(r)...)
 }
 
+// nodeSetupRules: jarvis-node-setup is the Python node that runs on the user's Pis, and a push to
+// main publishes the ghcr.io/alexberardi/jarvis-node images (`.github/workflows/release.yml`,
+// "fast enough to run on every push"), so a merge ships to real devices like the mobile apps'.
+// Held: the release and image config, CI, the node's auth, secrets and K1/K2 keys, provisioning
+// and pairing, and the install, update and sudoers paths that run as root on a device.
+func nodeSetupRules(r string) []HoldRule {
+	return append([]HoldRule{
+		{Name: "release-config", Glob: ".github/workflows/release.yml", Repo: r},
+		{Name: "release-config", Glob: "Dockerfile", Repo: r},
+		{Name: "release-config", Glob: "Dockerfile.*", Repo: r},
+		{Name: "release-config", Glob: ".dockerignore", Repo: r},
+		{Name: "release-config", Glob: "docker-compose*.yaml", Repo: r},
+		{Name: "release-config", Glob: "compose/**", Repo: r},
+		{Name: "release-config", Glob: "pyproject.toml", Repo: r},
+		{Name: "release-config", Glob: "*requirements*.txt", Repo: r},
+		{Name: "release-config", Glob: "build/**", Repo: r},
+		{Name: "ci", Glob: ".github/**", Repo: r},
+		{Name: "auth", Glob: "core/ijarvis_authentication.py", Repo: r},
+		{Name: "auth", Glob: "core/ijarvis_secret.py", Repo: r},
+		{Name: "auth", Glob: "services/command_auth_service.py", Repo: r},
+		{Name: "auth", Glob: "services/secret_service.py", Repo: r},
+		{Name: "auth", Glob: "repositories/secrets_repository.py", Repo: r},
+		{Name: "auth", Glob: "models/secret.py", Repo: r},
+		{Name: "auth", Glob: "models/command_auth.py", Repo: r},
+		{Name: "auth", Glob: "agents/token_refresh_agent.py", Repo: r},
+		{Name: "auth", Glob: "utils/set_secret.py", Repo: r},
+		{Name: "auth", Glob: "utils/encryption_utils.py", Repo: r},
+		{Name: "auth", Glob: "utils/authorize_node.py", Repo: r},
+		{Name: "auth", Glob: "utils/generate_dev_k2.py", Repo: r},
+		{Name: "pairing", Glob: "provisioning/**", Repo: r},
+		{Name: "pairing", Glob: "services/bluetooth_pair_agent.py", Repo: r},
+		{Name: "pairing", Glob: "services/camera_credentials_handler.py", Repo: r},
+		{Name: "pairing", Glob: "utils/mqtt_credentials.py", Repo: r},
+		{Name: "pairing", Glob: "scripts/run_provisioning.py", Repo: r},
+		{Name: "pairing", Glob: "scripts/setup_mode.py", Repo: r},
+		{Name: "install-scripts", Glob: "install.sh", Repo: r},
+		{Name: "install-scripts", Glob: "setup.sh", Repo: r},
+		{Name: "install-scripts", Glob: "setup_*.sh", Repo: r},
+		{Name: "install-scripts", Glob: "setup/**", Repo: r},
+		{Name: "install-scripts", Glob: "scripts/jarvis-*", Repo: r},
+		{Name: "install-scripts", Glob: "services/post_install_dropins.py", Repo: r},
+		{Name: "install-scripts", Glob: "services/update_service.py", Repo: r},
+		{Name: "install-scripts", Glob: "services/package_install_handler.py", Repo: r},
+		{Name: "install-scripts", Glob: "scripts/install_command.py", Repo: r},
+		{Name: "install-scripts", Glob: "scripts/verify_package.py", Repo: r},
+		// pyTestRules covers the Python tests; node-setup also keeps a shell one
+		// (scripts/test_install_signature_verify.sh, the release signature check).
+		{Name: "deleted-test", Glob: "**/test_*.sh", Statuses: deletedOrRenamed, Repo: r},
+	}, pyTestRules(r)...)
+}
+
+// commandSDKRules: jarvis-command-sdk is the published SDK every command package and the Python
+// node import, so its auth, secret and process helpers reach every one of them. Its slug is not
+// under the jarvis-cmd-* wildcard and it has no manifest or `*_scripts/`, so it gets its own list
+// rather than a wider wildcard.
+func commandSDKRules(r string) []HoldRule {
+	return append([]HoldRule{
+		{Name: "auth", Glob: "jarvis_command_sdk/auth.py", Repo: r},
+		{Name: "auth", Glob: "jarvis_command_sdk/authentication.py", Repo: r},
+		{Name: "auth", Glob: "jarvis_command_sdk/secret.py", Repo: r},
+		{Name: "auth", Glob: "jarvis_command_sdk/cc_http.py", Repo: r},
+		{Name: "auth", Glob: "jarvis_command_sdk/process.py", Repo: r},
+		{Name: "release-config", Glob: "pyproject.toml", Repo: r},
+		{Name: "ci", Glob: ".github/**", Repo: r},
+	}, pyTestRules(r)...)
+}
+
 // packageRules: any change to the manifest (its secrets, packages, apt_packages, post_install and
 // version are the risky fields, and a path rule cannot see fields), install scripts, the shared
 // OAuth and token code, CI.
@@ -243,13 +323,15 @@ func packageRules(r string) []HoldRule {
 
 // EarlierDefaultHoldRules are the built-in lists earlier loopds shipped: jarvis-server's alone
 // before phase 6, then with jarvis-loop's, then every repo's (phase 6b), then with the trusted
-// files, until #204 narrowed jarvis-loop's.
+// files, then #204's narrowed jarvis-loop list, until #549 added jarvis-node-setup's and
+// jarvis-command-sdk's.
 func EarlierDefaultHoldRules() [][]HoldRule {
 	return [][]HoldRule{
 		serverRules(),
 		append(serverRules(), loopRulesV1()...),
-		defaultHoldRules(loopRulesV1(), false),
-		defaultHoldRules(loopRulesV1(), true),
+		defaultHoldRules(loopRulesV1(), false, false),
+		defaultHoldRules(loopRulesV1(), true, false),
+		defaultHoldRules(loopRules(), true, false),
 	}
 }
 
