@@ -1,0 +1,27 @@
+# The build context for loopd's image (Dockerfile).
+#
+# .git IS NOT IGNORED, on purpose: the vcs.revision stamp loopd serves at GET /version comes from
+# it, and the build fails without it (-buildvcs=true, plus the check in the Dockerfile).
+
+# Never: data, secrets, and anything the harness left behind.
+.sandbox/
+.loop/
+*.db
+*.db-wal
+*.db-shm
+.data/
+tokens
+.env
+.env.*
+
+# Built binaries; the image builds its own.
+/loopd
+/loop
+/loop-runner
+/loop-entrypoint
+
+# Nothing the build needs.
+.github/
+.idea/
+.vscode/
+.claude/
