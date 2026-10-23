@@ -10,16 +10,30 @@ import (
 // its runs' advances wait; the fix is exempt and goes first.
 type Frozen map[string]int64
 
-// Blocks reports whether the freeze holds it: its repo is frozen and it is not the fix.
+// Blocks reports whether the freeze holds it: its repo is frozen and it is not a fix.
 func (f Frozen) Blocks(it Item) bool {
-	fix, ok := f[it.Repo]
-	return ok && it.Repo != "" && it.ID != fix
+	return f.frozen(it) && !f.Fixes(it)
 }
 
-// Fixes reports whether it is the main-red item of its frozen repo.
+// Fixes reports whether it is a main-red item of its frozen repo: the one the freeze names, or
+// any other main-red P1 of the repo. The freeze does not hang on one id staying open: a closed
+// or dropped mover would otherwise block the repo's live main-red P1 too
+// (docs/decisions/2026-10-23-freeze-without-one-item.md, #558).
 func (f Frozen) Fixes(it Item) bool {
 	fix, ok := f[it.Repo]
-	return ok && it.Repo != "" && it.ID == fix
+	return ok && it.Repo != "" && (it.ID == fix || IsMainRed(it))
+}
+
+func (f Frozen) frozen(it Item) bool {
+	_, ok := f[it.Repo]
+	return ok && it.Repo != ""
+}
+
+// IsMainRed reports whether it is a main-red P1 the loop filed for a red main: the items a
+// freeze lets through, besides the one it names. Narrowed to the loop's own findings at P1 so no
+// unrelated P1 slips through a freeze.
+func IsMainRed(it Item) bool {
+	return it.Priority == "P1" && MainRedItem(it)
 }
 
 // MainRedTitle is the title of a repo's main-red P1.

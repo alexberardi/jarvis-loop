@@ -215,3 +215,25 @@ func TestApplyReopenNotReproducible(t *testing.T) {
 		t.Error("duplicate: applied")
 	}
 }
+
+func TestDuplicateOf(t *testing.T) {
+	cases := []struct {
+		summary string
+		id      int64
+		dup     bool
+	}{
+		{"duplicate of #5 / PR #101: the same ask is already in flight.", 5, true},
+		{"Duplicate of #545, filed twice", 545, true},
+		{"  duplicate #12: same thing", 12, true},
+		{"duplicate of the open main-red P1", 0, true},
+		{"works on main; the proof's environment lacked a tool.", 0, false},
+		{"", 0, false},
+		{"not a duplicate of #5", 0, false},
+	}
+	for _, tc := range cases {
+		id, dup := DuplicateOf(tc.summary)
+		if id != tc.id || dup != tc.dup {
+			t.Errorf("DuplicateOf(%q) = %d, %v; want %d, %v", tc.summary, id, dup, tc.id, tc.dup)
+		}
+	}
+}
