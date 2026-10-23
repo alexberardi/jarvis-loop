@@ -233,9 +233,9 @@ func envFailure(code int, out string, ran time.Duration) bool {
 	}
 	for _, sig := range []string{
 		"[setup failed]",
-		"no such tool",     // go: no such tool "vet"
+		"no such tool", // go: no such tool "vet"
 		"cannot find GOROOT",
-		"mise ERROR",       // mise could not provide the toolchain
+		"mise ERROR", // mise could not provide the toolchain
 		"ImportError while importing test module",
 		"error during collection",
 		"errors during collection",
