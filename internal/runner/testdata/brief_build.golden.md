@@ -128,6 +128,12 @@ Commit your work on the item's branch (the runner pushes it and opens the PR; yo
 {"outcome": "question", "question": "…"}
 ```
 
+```json
+{"outcome": "wait", "on": [472], "prs": ["owner/name#444"], "reason": "one line: what must be done first, and why"}
+```
+
 `ready_for_pr` means everything is committed: the runner refuses a worktree with uncommitted changes, and reports git's own HEAD and changed files. It adds a Verification footer (the evidence files, the run's numbers, your proof) to your `pr_body`. Set `needs_review` to true when the change touches something the user should look at before it merges. No other fields.
 
 `proof` (optional, at most 10 checks) is how the loop can tell, once merged, that the change works; an item that waits in qa is checked with it. Kinds: `usage` (`event`: a loopd event kind seen since the merge, with optional `actor` and `match` lists on its data fields: `{"kind": "usage", "event": "claimed", "actor": ["runner:mbp"]}`); `command` (`run`: one shell line the runner runs fenced in a checkout of main, exit 0 passes); `pi` (`run`, for the test Pi; it waits until the loop has one); `e2e` (`tests`: E2E specs or flows, as jarvis-server's e2e/coverage.json lists them for the pages and screens an app change touches; the next regression run that runs them decides it); `manual` (`look`: one line, what only the user can judge). Every automatic check passing verifies the item without the user; a command failing twice in a row, or an E2E test failing, reopens it. So make each check really show the change works, and use `manual` only for looks, feel or a product call.
+
+`wait` parks the item instead of asking the user when its next step needs other work done first: `on` the loop items (ids) that must be merged, `prs` the PRs that are not loop items (owner/name#444) that must merge on GitHub, `reason` one line. loopd moves it back to this stage by itself once they are all merged; one that is dropped, or a wait that would make a cycle, goes to the user. Use it only when that work exists already (an open item or PR); otherwise ask. A build's work so far stays on the branch. No other fields.

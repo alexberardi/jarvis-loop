@@ -38,6 +38,8 @@ const (
 	ActPriority = "priority"
 	ActAdd      = "add"
 	ActLink     = "link"
+	// ActParkWait parks an item on items and PRs (the waiting stage) instead of escalating it.
+	ActParkWait = "wait"
 	ActEscalate = "escalate"
 	ActAgents   = "agents"
 	ActNote     = "note"
@@ -57,6 +59,7 @@ var orchFields = map[string]struct{ allowed, required []string }{
 	ActPriority:    {[]string{"item_id", "priority"}, []string{"item_id", "priority"}},
 	ActAdd:         {[]string{"title", "ask", "repo", "priority", "depends_on", "signature"}, []string{"title", "signature"}},
 	ActLink:        {[]string{"item_id", "after"}, []string{"item_id", "after"}},
+	ActParkWait:    {[]string{"item_id", "on", "prs"}, []string{"item_id"}},
 	ActEscalate:    {[]string{"item_id", "text", "recommendation", "class", "deferred"}, []string{"text"}},
 	ActAgents:      {[]string{"active_agents"}, []string{"active_agents"}},
 	ActNote:        {[]string{"text"}, []string{"text"}},
@@ -82,10 +85,13 @@ type OrchAction struct {
 	Ask            string  `json:"ask,omitempty"`
 	Repo           string  `json:"repo,omitempty"`
 	DependsOn      []int64 `json:"depends_on,omitempty"`
-	Signature      string  `json:"signature,omitempty"`
-	ActiveAgents   *int    `json:"active_agents,omitempty"`
-	Channel        string  `json:"channel,omitempty"`
-	ThreadTS       string  `json:"thread_ts,omitempty"`
+	// On and PRs are a wait's items and PRs (owner/name#444).
+	On           []int64  `json:"on,omitempty"`
+	PRs          []string `json:"prs,omitempty"`
+	Signature    string   `json:"signature,omitempty"`
+	ActiveAgents *int     `json:"active_agents,omitempty"`
+	Channel      string   `json:"channel,omitempty"`
+	ThreadTS     string   `json:"thread_ts,omitempty"`
 	// Class is an escalation's night class, Deferred a scope choice's deferred part
 	// (docs/decisions/2026-10-20-night-shift.md).
 	Class    string `json:"class,omitempty"`
@@ -183,6 +189,9 @@ func (a OrchAction) route() (path string, body map[string]any) {
 	case ActLink:
 		body["after"] = a.After
 		return item + "link", body
+	case ActParkWait:
+		body["on"], body["prs"] = a.On, a.PRs
+		return item + "wait", body
 	case ActAdd:
 		body["title"], body["ask"], body["repo"], body["priority"], body["signature"] = a.Title, a.Ask, a.Repo, a.Priority, a.Signature
 		if len(a.DependsOn) > 0 {
@@ -252,6 +261,7 @@ Every turn, write ` + "`out/result.json`" + ` as your last step:
   {"action": "answer", "item_id": 14, "kind": "harness", "text": "list it under not verified; the runner's verify runs it", "reason": "the standing answer"},
   {"action": "priority", "item_id": 15, "priority": "P2", "reason": "…"},
   {"action": "link", "item_id": 16, "after": 12, "reason": "…"},
+  {"action": "wait", "item_id": 16, "on": [12], "prs": ["owner/name#444"], "reason": "verify fails until main's test fix merges"},
   {"action": "add", "title": "…", "ask": "…", "repo": "owner/name", "priority": "P1", "depends_on": [], "signature": "the normalised failure", "reason": "…"},
   {"action": "escalate", "item_id": 17, "text": "what needs the user", "recommendation": "what you would do, and why", "reason": "…"},
   {"action": "escalate", "item_id": 19, "text": "scope: the parser too, or docs only?", "recommendation": "docs only now", "class": "scope_choice", "deferred": "the parser change", "reason": "…"},
@@ -265,7 +275,7 @@ Every turn, write ` + "`out/result.json`" + ` as your last step:
 
 Every action needs a reason (it is recorded with the action and shown to the user). Each takes only
 its own fields. ` + "`answer`" + `'s kind is one of history, harness, bounce, red_ci, loop. An empty list is
-a fine turn. An ` + "`escalate`" + `'s optional class (verify_flake, bounce_limit, scope_choice; ` + "`deferred`" + ` only with scope_choice) lets the night shift act on your recommendation (the skill's "Night shift"). A ` + "`reply`" + ` takes the channel and thread_ts its message trigger names. A result with an unknown action or field is refused once with the reason, and you are
+a fine turn. An ` + "`escalate`" + `'s optional class (verify_flake, bounce_limit, scope_choice; ` + "`deferred`" + ` only with scope_choice) lets the night shift act on your recommendation (the skill's "Night shift"). A ` + "`wait`" + ` parks an item in build, review or land (or on a question from one) until those items and PRs are merged, instead of escalating it: loopd moves it back by itself, and sends it to the user if one is dropped. A ` + "`reply`" + ` takes the channel and thread_ts its message trigger names. A result with an unknown action or field is refused once with the reason, and you are
 asked again.
 `
 
