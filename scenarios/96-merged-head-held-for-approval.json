@@ -1,0 +1,56 @@
+{
+  "name": "merged-head-held-for-approval",
+  "about": "#535: the approver approves a held auth-path PR; someone pushes a new head (gh pr update-branch) and merges the PR by hand on GitHub. Land's 'advance merged' gets 409 approval_required — and instead of needs_you (where loop approve is refused wrong_stage and every answer replays the 409), the runner parks the item in held at the merged head. The Approve button applies, the next land run records the merge, main's CI is watched.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Shorten the session timeout"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "good", "file": "internal/modules/auth/session.go"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "held"}},
+    {"do": "press", "item": "a", "as": "approver", "button": "approve"},
+    {"do": "expect", "stage": {"a": "land"}},
+    {"do": "push", "item": "a", "file": "internal/modules/auth/extra.go", "text": "package auth // merged main in (update-branch)\n"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"}},
+    {"do": "github", "item": "a", "merge_by_hand": true},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "held"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "hold", "actor": "runner",
+                 "data": {"reason": "is already merged on GitHub as `[0-9a-f]{7}`; approve the merged head `[0-9a-f]{7}` to record it"}, "count": 1}],
+     "messages": [{"thread": "a", "text": "is held for your approval: .*sandbox/demo#101.* at `[0-9a-f]{7}`\\.\\nWhy: .*land: PR #101 is already merged on GitHub",
+                   "buttons": ["Approve merge", "Keep holding"]}]},
+    {"do": "press", "item": "a", "as": "approver", "button": "approve"},
+    {"do": "expect", "stage": {"a": "land"}, "events": [{"item": "a", "kind": "approved", "actor": "approver", "count": 2}]},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "agent_runs": {"land": 0},
+    "pr": {"a": {"state": "MERGED", "merge_calls": 1}},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "merged", "actor": "runner", "data": {"merged_outside": "^true$", "main_ci": "^watching$"}, "count": 1},
+      {"item": "a", "kind": "main_ci", "data": {"result": "^green$"}, "count": 1}
+    ],
+    "no_events": [
+      {"item": "a", "kind": "advanced", "outcome": "failed"}
+    ],
+    "messages": [
+      {"thread": "a", "text": "^Merged .*sandbox/demo#101> as `[0-9a-f]{7}` on GitHub, outside the loop; watching main's CI\\.$"},
+      {"thread": "a", "text": "^main green on `[0-9a-f]{7}`\\.$"}
+    ]
+  }
+}
