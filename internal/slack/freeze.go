@@ -44,10 +44,24 @@ func (b *Bot) freezeMessage(ctx context.Context, e store.Event) Message {
 		jobs := Escape(Clip(strings.Join(listOf(e.Data, "jobs"), ", "), 300, ""))
 		lead := fmt.Sprintf(":rotating_light: *main is red in %s* (failing: %s, still red after a re-run): *frozen*.", repo, jobs)
 		if e.Data["again"] == true {
-			lead = fmt.Sprintf(":rotating_light: *main is still red in %s* (failing: %s) after the fix merged: still *frozen*, now for a new P1.", repo, jobs)
+			what := "a new P1"
+			if e.Data["reused"] == true {
+				what = "the repo's open main-red P1"
+			}
+			lead = fmt.Sprintf(":rotating_light: *main is still red in %s* (failing: %s) after the fix merged: still *frozen*, now for %s.", repo, jobs, what)
 		}
 		text = lead + fmt.Sprintf(" Nothing else in it moves stages (no claims, no advances, no merges) until main is green; runs already going finish and their results wait. %s goes first. Likely culprit: %s (PR #%d). Lift it by hand: `loop unfreeze %s`.",
 			b.refID(ctx, fix), b.refID(ctx, idOf(e.Data["culprit_item"])), idOf(e.Data["culprit_pr"]), repo)
+	case store.KindFreezeHandover:
+		// #558: the item the freeze named is closed, so the freeze follows another one.
+		lead := fmt.Sprintf(":arrows_counterclockwise: *%s stays frozen*, now with %s as the item that moves (%s is closed).",
+			repo, b.refID(ctx, idOf(e.Data["to"])), b.refID(ctx, idOf(e.Data["from"])))
+		if e.Data["refiled"] == true {
+			lead += " Nothing else was tracking the red main, so its P1 was re-filed: main is still red, and the freeze holds rather than letting merges resume onto it."
+		} else {
+			lead += " A freeze never waits on one item id: it hands over to the item that tracks the same red main."
+		}
+		text = lead + fmt.Sprintf(" Nothing else in %s moves stages until main is green. Lift it by hand: `loop unfreeze %s`.", repo, repo)
 	case store.KindUnfrozen:
 		text = fmt.Sprintf(":large_green_circle: *%s unfrozen* (%s).", repo, Escape(Clip(str(e.Data, "reason"), 200, "")))
 		if n := idOf(e.Data["applied"]); n > 0 {
@@ -77,6 +91,9 @@ func (b *Bot) freezeLine(ctx context.Context, e store.Event, id int64) string {
 	case store.KindLandFrozen:
 		return fmt.Sprintf("Land stopped before merging: main is red in %s (%s first). Waits in land until main is green.",
 			repo, b.refID(ctx, idOf(e.Data["fix_item"])))
+	case store.KindFreezeHandover:
+		return fmt.Sprintf("This is now the item that moves while main is red in %s (%s): it goes first, through every stage, and nothing else in the repo moves until main is green.",
+			repo, b.field(str(e.Data, "reason"), 300, id))
 	case store.KindQueuedDropped:
 		return fmt.Sprintf("The %s result that waited while main was red was dropped: %s.", e.Outcome, b.field(str(e.Data, "reason"), 300, id))
 	}

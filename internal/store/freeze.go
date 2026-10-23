@@ -26,6 +26,9 @@ const (
 	KindAdvanceQueued = "advance_queued"
 	KindQueuedDropped = "queued_advance_dropped"
 	KindLandFrozen    = "land_frozen"
+	// KindFreezeHandover is a freeze given to another item, because the one it named closed or was
+	// dropped: on the item that takes it over (#558).
+	KindFreezeHandover = "freeze_handover"
 )
 
 // CodeNotFrozen refuses lifting a freeze that is not there.
@@ -110,7 +113,7 @@ func (s *Store) Freezes(ctx context.Context) ([]Freeze, error) {
 
 // mainRed handles a red main_ci on culprit (the item whose merge main went red on): it files the
 // repo's main-red P1 and freezes the repo, or reuses the P1 of the freeze already there while that
-// item is open (a freeze whose P1 is done or closed gets a new one). It returns the P1.
+// item is open, or the repo's own open main-red P1 (#558). It returns the P1.
 func (s *Store) mainRed(tx *sql.Tx, actor string, culprit pipeline.Item, data map[string]any, now time.Time) (int64, error) {
 	repo := culprit.Repo
 	f, err := liveFreeze(tx, repo)
@@ -128,19 +131,36 @@ func (s *Store) mainRed(tx *sql.Tx, actor string, culprit pipeline.Item, data ma
 		}
 	}
 	jobs := anyStrings(data["failing"])
-	m := pipeline.MainRed{Slug: repo, PR: culprit.PR, Item: culprit.ID, Failing: jobs, URLs: anyStrings(data["urls"])}
-	m.MergeSHA, _ = data["merge_sha"].(string)
-	m.LastGreen, _ = data["last_green"].(string)
-	it, err := pipeline.NewItem(pipeline.MainRedTitle(repo, jobs), pipeline.MainRedAsk(m), repo, "P1", "finding", now)
+	mergeSHA, _ := data["merge_sha"].(string)
+	// An open main-red P1 of the repo takes the freeze over instead: a second one would carry the
+	// same title, and triage would only close it as a duplicate of the first -- which is how a
+	// freeze came to name a closed item and deadlock the repo (#558).
+	existing, err := openMainRed(tx, repo, 0)
 	if err != nil {
 		return 0, err
 	}
-	if err := s.insertItem(tx, actor, &it); err != nil {
-		return 0, err
+	itemID := int64(0)
+	if existing != nil {
+		itemID, data["reused"] = existing.ID, true
+	} else {
+		m := pipeline.MainRed{Slug: repo, PR: culprit.PR, Item: culprit.ID, Failing: jobs, URLs: anyStrings(data["urls"])}
+		m.MergeSHA = mergeSHA
+		m.LastGreen, _ = data["last_green"].(string)
+		it, err := pipeline.NewItem(pipeline.MainRedTitle(repo, jobs), pipeline.MainRedAsk(m), repo, "P1", "finding", now)
+		if err != nil {
+			return 0, err
+		}
+		if err := s.insertItem(tx, actor, &it); err != nil {
+			return 0, err
+		}
+		itemID = it.ID
 	}
-	ev := map[string]any{"repo": repo, "item": it.ID, "jobs": jobs, "merge_sha": m.MergeSHA, "culprit_item": culprit.ID, "culprit_pr": culprit.PR}
+	ev := map[string]any{"repo": repo, "item": itemID, "jobs": jobs, "merge_sha": mergeSHA, "culprit_item": culprit.ID, "culprit_pr": culprit.PR}
+	if existing != nil {
+		ev["reused"] = true
+	}
 	if f != nil {
-		if _, err := tx.Exec(`UPDATE repo_freezes SET item_id = ?, jobs = ? WHERE id = ?`, it.ID, strings.Join(jobs, ","), f.ID); err != nil {
+		if _, err := tx.Exec(`UPDATE repo_freezes SET item_id = ?, jobs = ? WHERE id = ?`, itemID, strings.Join(jobs, ","), f.ID); err != nil {
 			return 0, err
 		}
 		ev["again"] = true
@@ -155,12 +175,115 @@ func (s *Store) mainRed(tx *sql.Tx, actor string, culprit pipeline.Item, data ma
 			return 0, err
 		}
 		if _, err := tx.Exec(`INSERT INTO repo_freezes (repo, item_id, since, red_since, jobs) VALUES (?,?,?,?,?)`,
-			repo, it.ID, now.UnixNano(), redSince.UnixNano(), strings.Join(jobs, ",")); err != nil {
+			repo, itemID, now.UnixNano(), redSince.UnixNano(), strings.Join(jobs, ",")); err != nil {
 			return 0, err
 		}
 	}
-	return it.ID, s.event(tx, Event{Actor: "loopd", Kind: KindFrozen, Data: ev})
+	return itemID, s.event(tx, Event{Actor: "loopd", Kind: KindFrozen, Data: ev})
 }
+
+// openMainRed is the repo's oldest open main-red P1 (pipeline.IsMainRed) other than skip, nil when
+// it has none. Open: before done, so a P1 whose fix merged is not taken up again.
+func openMainRed(q querier, repo string, skip int64) (*pipeline.Item, error) {
+	if repo == "" {
+		return nil, nil
+	}
+	rows, err := q.Query(`SELECT `+itemCols+` FROM items WHERE repo = ? AND priority = 'P1'
+		AND stage NOT IN ('done','closed') AND id != ? ORDER BY id`, repo, skip)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		it, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		if pipeline.IsMainRed(it) {
+			return &it, nil
+		}
+	}
+	return nil, rows.Err()
+}
+
+// freezeItemSettled keeps a freeze's mover alive when the item it names stops being open: triage
+// closed it, or the user dropped it. A freeze must not depend on one item id staying open (#558,
+// docs/decisions/2026-10-23-freeze-without-one-item.md), so the freeze, in order:
+//
+//   - hands over to the item a duplicate closure names, when that one is open in the same repo
+//     (the incident: the P1 was closed as a duplicate of the P1 whose fix was already in review);
+//   - else hands over to another open main-red P1 of the repo;
+//   - else re-files the P1 from the closed one's ask and hands over to that, keeping the red
+//     window: main is still red, and lifting here would drain the queued advances and resume
+//     merges onto it, the opposite of the freeze's job;
+//   - and only when the re-filed one settles too does it lift, saying why.
+func (s *Store) freezeItemSettled(tx *sql.Tx, it pipeline.Item, now time.Time) error {
+	f, err := liveFreeze(tx, it.Repo)
+	if err != nil || f == nil || f.ItemID != it.ID {
+		return err
+	}
+	if dup, isDup := pipeline.DuplicateOf(it.Summary); isDup && dup != 0 && dup != it.ID {
+		target, err := scanItem(tx.QueryRow(`SELECT `+itemCols+` FROM items WHERE id = ?`, dup))
+		switch {
+		case errors.Is(err, sql.ErrNoRows): // it named an item that is not there
+		case err != nil:
+			return err
+		case target.Repo == it.Repo && !settled(target.Stage):
+			return s.handFreezeTo(tx, *f, target, fmt.Sprintf("#%d closed as a duplicate of it", it.ID), false, now)
+		}
+	}
+	other, err := openMainRed(tx, it.Repo, it.ID)
+	if err != nil {
+		return err
+	}
+	if other != nil {
+		return s.handFreezeTo(tx, *f, *other, fmt.Sprintf("#%d closed; this is the repo's open main-red P1", it.ID), false, now)
+	}
+	refiled, err := freezeRefiled(tx, f.ID)
+	if err != nil {
+		return err
+	}
+	if refiled {
+		_, err := s.unfreeze(tx, "loopd", *f,
+			fmt.Sprintf("the re-filed P1 #%d closed too; no main-red item left to move", it.ID), now)
+		return err
+	}
+	fresh, err := pipeline.NewItem(it.Title, it.Ask, it.Repo, "P1", "finding", now)
+	if err != nil {
+		return err
+	}
+	if err := s.insertItem(tx, "loopd", &fresh); err != nil {
+		return err
+	}
+	return s.handFreezeTo(tx, *f, fresh, fmt.Sprintf("#%d closed before main went green, so its P1 is re-filed", it.ID), true, now)
+}
+
+// handFreezeTo points f at to and records it on to's thread: who moves while the repo is frozen
+// changed.
+func (s *Store) handFreezeTo(tx *sql.Tx, f Freeze, to pipeline.Item, reason string, refiled bool, now time.Time) error {
+	if _, err := tx.Exec(`UPDATE repo_freezes SET item_id = ? WHERE id = ?`, to.ID, f.ID); err != nil {
+		return err
+	}
+	data := map[string]any{"repo": f.Repo, "freeze": f.ID, "from": f.ItemID, "to": to.ID, "reason": reason,
+		"jobs": f.Jobs, "since": f.Since.UTC().Format(time.RFC3339)}
+	if refiled {
+		data["refiled"] = true
+	}
+	return s.event(tx, Event{ItemID: to.ID, Actor: "loopd", Kind: KindFreezeHandover,
+		From: string(to.Stage), To: string(to.Stage), Data: data})
+}
+
+// freezeRefiled reports whether f has already re-filed its P1 once: the guard against re-filing
+// for ever when nothing ever fixes main.
+func freezeRefiled(q querier, freezeID int64) (bool, error) {
+	var n int
+	err := q.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = ?
+		AND json_extract(data, '$.freeze') = ? AND json_extract(data, '$.refiled') = 1`, KindFreezeHandover, freezeID).Scan(&n)
+	return n > 0, err
+}
+
+// settled: the item is not open any more, so a freeze cannot wait on it.
+func settled(st pipeline.Stage) bool { return st == pipeline.Closed || st == pipeline.Done }
 
 // mainGreen handles a green main_ci on item: when its repo is frozen and the item merged after
 // the culprit (so the green commit has the red one in it), the freeze lifts.

@@ -1559,6 +1559,10 @@ func (s *Store) applyAdvance(tx *sql.Tx, actor string, id int64, leaseID string,
 				return err
 			}
 		}
+		// A freeze whose item closes hands over instead of deadlocking the repo (#558).
+		if err := s.freezeItemSettled(tx, tr.Item, now); err != nil {
+			return err
+		}
 	}
 	if err := s.checkUnservable(tx, now); err != nil {
 		return err

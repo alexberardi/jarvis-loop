@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -96,6 +97,12 @@ func (r *Runner) proofCommand(ctx context.Context, key string, repo RepoConfig, 
 	cwd := filepath.Join(r.Cfg.WorkRoot, fmt.Sprintf("%d-proof", it.ID))
 	unlock := r.lockMirror(mirror)
 	err := r.Git.EnsureMirror(ctx, mirror, repo)
+	if err == nil && it.MergeSHA != "" && !r.Git.isAncestor(ctx, mirror, it.MergeSHA, "refs/remotes/origin/"+repo.Base) {
+		// The fetched view of main can lag the merge (#532): a command run against a main that
+		// does not have the change yet fails for the runner's trouble, not the change's. Not run,
+		// not reported: the check stays pending and the next pass retries.
+		err = fmt.Errorf("%s's %s does not have the merge commit %s yet", repo.Slug, repo.Base, short7(it.MergeSHA))
+	}
 	if err == nil {
 		err = r.Git.AddDetached(ctx, mirror, cwd, "refs/remotes/origin/"+repo.Base)
 	}
@@ -116,7 +123,10 @@ func (r *Runner) proofCommand(ctx context.Context, key string, repo RepoConfig, 
 				return fmt.Errorf("prepare %q: %v: %s", c, err, clip(tail(out, 5), 500))
 			}
 		}
-		return r.runSetup(ctx, repo.Setup, cwd, dir)
+		if err := r.runSetup(ctx, repo.Setup, cwd, dir); err != nil {
+			return err
+		}
+		return r.buildProofVenv(ctx, cwd, dir, c.Run)
 	}()
 	if ctx.Err() != nil {
 		return res, ctx.Err()
@@ -191,7 +201,7 @@ func (r *Runner) proofCommand(ctx context.Context, key string, repo RepoConfig, 
 	case timedOut:
 		status = "timed out after " + duration(int(ProofCommandTimeout.Seconds()))
 		res.State = pipeline.CheckFailed
-	case code != 0 && envFailure(code, string(b)):
+	case code != 0 && envFailure(code, string(b), r.Clock.Now().Sub(started)):
 		res.State = pipeline.CheckError
 	case code != 0:
 		res.State = pipeline.CheckFailed
@@ -207,13 +217,70 @@ func (r *Runner) proofCommand(ctx context.Context, key string, repo RepoConfig, 
 	return res, nil
 }
 
-// envFailure tells whether a failed command never got to test the change: go's "[setup failed]"
-// (a package whose embedded or fetched files are missing) or exit 127 (a tool not installed). A
-// "[build failed]" is not one: the merged change may have broken the build
-// (docs/decisions/2026-10-19-proof-setup.md).
-func envFailure(code int, out string) bool {
-	return code == 127 || strings.Contains(out, "[setup failed]")
+// envFailure tells whether a failed command never got to test the change: exit 127 (a tool not
+// installed), go's "[setup failed]" (a package whose embedded or fetched files are missing), a
+// broken toolchain ("no such tool", GOROOT, mise: #292, #443, #444, #510), pytest import or
+// collection errors (#527), or an errors-only pytest summary in under a second (nothing was
+// collected, so nothing ran). A "[build failed]" is not one: the merged change may have broken
+// the build (docs/decisions/2026-10-19-proof-setup.md); so a failure whose output names none of
+// these, however fast — the change may be what the command greps for.
+func envFailure(code int, out string, ran time.Duration) bool {
+	if code == 0 {
+		return false
+	}
+	if code == 127 {
+		return true
+	}
+	for _, sig := range []string{
+		"[setup failed]",
+		"no such tool", // go: no such tool "vet"
+		"cannot find GOROOT",
+		"mise ERROR", // mise could not provide the toolchain
+		"ImportError while importing test module",
+		"error during collection",
+		"errors during collection",
+	} {
+		if strings.Contains(out, sig) {
+			return true
+		}
+	}
+	return ran < time.Second && pytestErrorsOnly.MatchString(out)
 }
+
+// pytestErrorsOnly is pytest's summary when only errors happened ("===== 8 errors in 0.05s ====="):
+// no test passed or failed, so with a sub-second run nothing tested the change. A summary that
+// counts failed tests ("2 failed, 1 error in …") does not match: those ran.
+var pytestErrorsOnly = regexp.MustCompile(`=+ \d+ errors? in [0-9.]+s`)
+
+// buildProofVenv builds the checkout's Python venv for a python proof command when the repo's
+// setup made none (#527, docs/decisions/2026-10-23-proof-env-hardening.md): the venv, then the
+// package (pyproject.toml, editable with its dev extra) or its requirements*.txt into it, appended
+// to setup.log under the same SetupTimeout per command. A failure is a setup failure: the check
+// errors and never strikes. A repo with nothing to install gets no venv: the command's own error
+// says more than a bare venv would.
+func (r *Runner) buildProofVenv(ctx context.Context, cwd, logDir, run string) error {
+	if !pythonProof(run) {
+		return nil
+	}
+	if fi, err := os.Stat(filepath.Join(cwd, ".venv", "bin")); err == nil && fi.IsDir() {
+		return nil // the repo's setup made one; venvEnv activates it
+	}
+	var installs []string
+	if _, err := os.Stat(filepath.Join(cwd, "pyproject.toml")); err == nil {
+		// pip skips an extra the package does not declare, with a warning.
+		installs = append(installs, `.venv/bin/pip install -q -e '.[dev]'`)
+	} else if reqs, _ := filepath.Glob(filepath.Join(cwd, "requirements*.txt")); len(reqs) > 0 {
+		for _, f := range reqs {
+			installs = append(installs, ".venv/bin/pip install -q -r "+filepath.Base(f))
+		}
+	} else {
+		return nil
+	}
+	return r.runSetup(ctx, append([]string{"python3 -m venv .venv"}, installs...), cwd, logDir)
+}
+
+// pythonProof tells whether a proof command wants Python: it names python, pytest or pip.
+var pythonProof = regexp.MustCompile(`\b(python3?|pytest|pip3?)\b`).MatchString
 
 func lastLine(s string) string {
 	s = strings.TrimSpace(s)

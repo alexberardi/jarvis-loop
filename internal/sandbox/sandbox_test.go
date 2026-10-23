@@ -2,12 +2,15 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/alexberardi/jarvis-loop/internal/clock"
 	"github.com/alexberardi/jarvis-loop/internal/fakeclaude"
 	"github.com/alexberardi/jarvis-loop/internal/guard"
 	"github.com/alexberardi/jarvis-loop/internal/slack"
@@ -55,6 +58,55 @@ func tempDir(t *testing.T) string {
 	return d
 }
 
+// seedDB is a once-migrated loop.db for the whole test binary (as in the runner's tests):
+// each stack's loopd boot otherwise runs every migration through race-instrumented SQLite,
+// and this package ran within 40 s of CI's 12 m go-test timeout.
+var seedDB struct {
+	once sync.Once
+	data []byte
+	err  error
+}
+
+// seedStore pre-writes the migrated loop.db where the stack at stackDir opens its store, so
+// store.Open finds every migration applied and only re-stamps the cheap version rows. If the
+// stack's layout ever moves, the file is never read and the boot migrates as before.
+func seedStore(t *testing.T, stackDir string) {
+	t.Helper()
+	seedDB.once.Do(func() {
+		tmp, err := os.MkdirTemp("", "loop-seed-")
+		if err != nil {
+			seedDB.err = err
+			return
+		}
+		defer os.RemoveAll(tmp)
+		st, err := store.Open(tmp, clock.Real{})
+		if err != nil {
+			seedDB.err = err
+			return
+		}
+		if err := st.Close(); err != nil {
+			seedDB.err = err
+			return
+		}
+		// Closing the last connection checkpoints and removes the WAL, so loop.db is whole.
+		if _, err := os.Stat(filepath.Join(tmp, "loop.db-wal")); err == nil {
+			seedDB.err = fmt.Errorf("seed store left a WAL behind; refusing a partial template")
+			return
+		}
+		seedDB.data, seedDB.err = os.ReadFile(filepath.Join(tmp, "loop.db"))
+	})
+	if seedDB.err != nil {
+		t.Fatalf("seeding the template store: %v", seedDB.err)
+	}
+	dir := filepath.Join(stackDir, "loopd")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "loop.db"), seedDB.data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Every scenario in scenarios/ passes: the same run CI does with scripts/loop-sandbox run.
 func TestScenarios(t *testing.T) {
 	scs, err := LoadScenarios([]string{filepath.Join("..", "..", "scenarios")})
@@ -73,6 +125,7 @@ func TestScenarios(t *testing.T) {
 				dir = filepath.Join(keep, sc.Name)
 				os.RemoveAll(dir)
 			}
+			seedStore(t, filepath.Join(dir, "stack"))
 			res := RunScenario(sc, dir, bin)
 			if !res.Pass {
 				tr, _ := os.ReadFile(filepath.Join(dir, "transcript.md"))
@@ -137,7 +190,9 @@ func TestFailingScenariosFail(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s, err := StartStack(Options{Dir: tempDir(t), Bin: bin})
+			dir := tempDir(t)
+			seedStore(t, dir)
+			s, err := StartStack(Options{Dir: dir, Bin: bin})
 			if err != nil {
 				t.Fatal(err)
 			}
