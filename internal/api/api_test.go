@@ -878,7 +878,7 @@ func TestBoardTokenRefusedByAPI(t *testing.T) {
 		{"POST", "/claim"}, {"POST", "/leases/x/heartbeat"}, {"POST", "/items/1/advance"},
 		{"POST", "/items/1/evidence"}, {"POST", "/items/1/events"}, {"GET", "/items/1/evidence/1"},
 		{"POST", "/items/1/answer"}, {"POST", "/items/1/approve"}, {"POST", "/items/1/hold"}, {"POST", "/items/1/drop"},
-		{"GET", "/control"}, {"PUT", "/control"}, {"GET", "/version"},
+		{"GET", "/control"}, {"PUT", "/control"}, {"GET", "/version"}, {"GET", "/backup"},
 	} {
 		e.refused(boardTok, r.method, r.path, nil, 403, "forbidden")
 	}

@@ -87,6 +87,9 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /plans/{id}/drop", user, s.dropPlan)
 	route("POST /plans/{id}/turns/{turn}/result", runner, s.planTurnResult)
 	route("GET /version", reads, s.version)
+	// The whole database and every uploaded file, in one archive: the user's token only
+	// (backup.go).
+	route("GET /backup", user, s.backup)
 	route("GET /control", reads, s.getControl)
 	route("GET /night", reads, s.getNight)
 	route("GET /flow", reads, s.flow)
