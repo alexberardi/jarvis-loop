@@ -1,0 +1,30 @@
+{
+  "name": "auth-mismatch",
+  "about": "#548: the loop's agents run on the user's subscription only. A build whose session reports an API key as its auth source (apiKeySource is not \"none\", as a run with ANTHROPIC_API_KEY in the runner's environment would report) is killed on the init event: the item goes to needs-you naming the source, the advance records api_key_source, and the runner stops claiming (the key would outlive the run) until it is restarted.",
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "add", "item": "b", "title": "Something else waiting"},
+    {"do": "triage", "item": "a"},
+    {"do": "triage", "item": "b"},
+    {"do": "script", "item": "a", "play": "wrong_auth"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "none"}
+  ],
+  "expect": {
+    "stage": {"a": "needs_you", "b": "build"},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "failed", "actor": "runner",
+       "data": {"error": "^boundary check failed: the session's auth source is \"ANTHROPIC_API_KEY\", not the subscription's \"none\"\\. The loop's agents run on the subscription only",
+                "api_key_source": "^ANTHROPIC_API_KEY$", "permission_mode": "^auto$"},
+       "count": 1}
+    ],
+    "messages": [
+      {"thread": "a", "text": "needs you: boundary check failed: the session's auth source is \"ANTHROPIC_API_KEY\", not the subscription's \"none\""}
+    ],
+    "no_messages": [
+      {"thread": "a", "text": "opened, head"}
+    ],
+    "prs": 0
+  }
+}

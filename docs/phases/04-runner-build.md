@@ -51,8 +51,12 @@ own; tests prove each one.
    sandbox options; if the sandbox blocks something the harness genuinely needs, record exactly
    what and why in a decision file and keep the other three layers. Do not silently disable it.
 
-Not used: `bypassPermissions`. Check `--bare` before using it: it may skip the OAuth login the
-agents need (subscription auth). **Every flag and setting named here must be confirmed against the
+Not used: `bypassPermissions`, and `--bare` (checked: it skips hooks and never reads the OAuth
+login the agents need). **As built (2026-10-23, #548):** subscription auth is a rule, not an
+omission — `scrubEnv` drops every `ANTHROPIC_*` variable (and the Bedrock/Vertex switches) from
+every environment the runner hands out, and the init event's `apiKeySource` is recorded on each
+advance and asserted: anything but `"none"` ends the run as `auth_mismatch` and pauses claims, as
+`mode_mismatch` does ([decision](../decisions/2026-10-23-subscription-auth-only.md)). **Every flag and setting named here must be confirmed against the
 installed `claude --help` and its docs before use; the summary this spec was written from was
 partly inferred.**
 

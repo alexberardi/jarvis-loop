@@ -719,6 +719,98 @@ func TestWrongModePausesTheRunner(t *testing.T) {
 	}
 }
 
+// The loop's agents run on the user's subscription only: a session that reports any other auth
+// source dies as auth_mismatch and the runner stops claiming (an API key in its environment would
+// otherwise bill every later claim too). The reading itself is on the advance.
+func TestWrongAuthSourcePausesTheRunner(t *testing.T) {
+	g := newRig(t, fakeclaude.WrongAuth)
+	id := g.toBuild("Auth check")
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.NeedsYou || !strings.Contains(d.Item.Question, `auth source is "ANTHROPIC_API_KEY", not the subscription's "none"`) {
+		t.Fatalf("%s %q", d.Item.Stage, d.Item.Question)
+	}
+	if !strings.Contains(d.Item.Question, "ANTHROPIC_* variable in its environment") {
+		t.Fatalf("the question should say how to fix it: %q", d.Item.Question)
+	}
+	if ev := g.advanced(id); ev.Data["api_key_source"] != "ANTHROPIC_API_KEY" {
+		t.Fatalf("the advance should record what the init event said: %+v", ev.Data)
+	}
+	if g.r.Paused() == "" {
+		t.Fatal("the runner should stop claiming")
+	}
+	g.toBuild("Next one")
+	if g.runOnce() {
+		t.Fatal("a paused runner claimed")
+	}
+}
+
+// A good run records its auth source on the advance, so the value is visible before it is ever
+// asserted against.
+func TestAdvanceRecordsTheAuthSource(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	id := g.toBuild("Add a feature")
+	g.runOnce()
+	if ev := g.advanced(id); ev.Data["api_key_source"] != "none" {
+		t.Fatalf("api_key_source on the advance: %+v", ev.Data)
+	}
+}
+
+// No agent run, and no command the runner starts for it, may carry an Anthropic variable: the
+// runner needs none, and one stray key would bill every build to it. The rule has no exceptions,
+// so the table is "everything with that prefix", not a list to keep in step with the CLI's.
+func TestScrubEnvDropsEveryAnthropicVariable(t *testing.T) {
+	for _, tc := range []struct {
+		kv   string
+		keep bool
+	}{
+		{kv: "ANTHROPIC_API_KEY=sk-ant-xxx"},
+		{kv: "ANTHROPIC_AUTH_TOKEN=tok"},
+		{kv: "ANTHROPIC_BASE_URL=https://proxy"},
+		{kv: "ANTHROPIC_MODEL=some-model"},
+		{kv: "ANTHROPIC_SMALL_FAST_MODEL=m2"},
+		{kv: "ANTHROPIC_CUSTOM_HEADERS=x"},
+		{kv: "ANTHROPIC_DEFAULT_OPUS_MODEL=m3"},
+		{kv: "ANTHROPIC_VERTEX_PROJECT_ID=p"},
+		{kv: "ANTHROPIC_=odd"},
+		// Bedrock and Vertex take a run off the subscription the same way.
+		{kv: "CLAUDE_CODE_USE_BEDROCK=1"},
+		{kv: "CLAUDE_CODE_USE_VERTEX=1"},
+		// loopd's and Slack's secrets, as before.
+		{kv: "LOOP_TOKEN=t"},
+		{kv: "LOOP_URL=http://127.0.0.1:7780"},
+		{kv: "SLACK_BOT_TOKEN=xoxb"},
+		// Not an Anthropic variable: the prefix is ANTHROPIC_, not ANTHROPIC.
+		{kv: "ANTHROPICX=keep", keep: true},
+		{kv: "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", keep: true},
+		{kv: "PATH=/bin", keep: true},
+		{kv: "HOME=/h", keep: true},
+		{kv: "LOOP_ITEM=7", keep: true},
+	} {
+		got := scrubEnv([]string{"PATH=/bin", tc.kv})
+		if kept := slices.Contains(got, tc.kv); kept != tc.keep {
+			t.Errorf("scrubEnv(%q): kept=%v, want %v (got %v)", tc.kv, kept, tc.keep, got)
+		}
+	}
+	// The whole environment at once, with every caller's layer on top: the agent's own, and a
+	// fenced setup/verify command's (fencedEnv is fed the scrubbed env, never the runner's).
+	r := &Runner{Env: []string{"PATH=/bin", "HOME=/h", "ANTHROPIC_API_KEY=sk-ant-xxx", "ANTHROPIC_AUTH_TOKEN=tok",
+		"ANTHROPIC_BASE_URL=https://proxy", "ANTHROPIC_MODEL=some-model", "ANTHROPIC_SMALL_FAST_MODEL=m2",
+		"CLAUDE_CODE_USE_BEDROCK=1", "LOOP_TOKEN=t"}}
+	for _, layer := range [][2]any{{"agentEnv", r.agentEnv()}, {"fencedEnv", fencedEnv(r.agentEnv(), "/w/fenced.gitconfig")}} {
+		env := layer[1].([]string)
+		for _, kv := range env {
+			k, _, _ := strings.Cut(kv, "=")
+			if strings.HasPrefix(k, "ANTHROPIC_") || billingRedirect[k] {
+				t.Errorf("%s still carries %q (%v)", layer[0], k, env)
+			}
+		}
+		if !slices.Contains(env, "PATH=/bin") {
+			t.Errorf("%s dropped PATH (%v)", layer[0], env)
+		}
+	}
+}
+
 func TestUsageLimit(t *testing.T) {
 	g := newRig(t, fakeclaude.UsageLimit)
 	id := g.toBuild("Limited")
