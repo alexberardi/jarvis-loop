@@ -28,6 +28,12 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(guard.Hook(path, os.Stdin, os.Stdout, os.Stderr, time.Now))
 	}
+	// git's detached "maintenance run --auto" after a commit races t.TempDir's RemoveAll
+	// ("mirror.git: directory not empty"), so every git the tests start gets it switched off.
+	for k, v := range map[string]string{"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "gc.auto", "GIT_CONFIG_VALUE_0": "0",
+		"GIT_CONFIG_KEY_1": "maintenance.auto", "GIT_CONFIG_VALUE_1": "false"} {
+		os.Setenv(k, v)
+	}
 	os.Exit(m.Run())
 }
 
