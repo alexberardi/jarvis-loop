@@ -468,6 +468,12 @@ func TestNodeSetupAndCommandSDKHoldRules(t *testing.T) {
 		{NodeSetupRepo, "M custom-requirements.txt", "release-config"},
 		{NodeSetupRepo, "M .dockerignore", "release-config"},
 		{NodeSetupRepo, "M build/build-tarball.sh", "release-config"},
+		// A compose file or requirements list the repo does not have yet: a subdirectory or the
+		// other YAML extension must not slip the release hold ("*" does not cross "/").
+		{NodeSetupRepo, "M docker-compose.override.yml", "release-config"},
+		{NodeSetupRepo, "M deploy/docker-compose.pi.yml", "release-config"},
+		{NodeSetupRepo, "M requirements/base.txt", "release-config"},
+		{NodeSetupRepo, "M deploy/requirements-extra.txt", "release-config"},
 		// auth, secrets and the K1/K2 keys.
 		{NodeSetupRepo, "M core/ijarvis_secret.py", "auth"},
 		{NodeSetupRepo, "M services/command_auth_service.py", "auth"},

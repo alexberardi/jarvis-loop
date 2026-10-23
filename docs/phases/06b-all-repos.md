@@ -71,8 +71,19 @@ no `aliases`, `setup` or `verify`. What they want:
 
 | Repo | group | aliases | setup | verify |
 | --- | --- | --- | --- | --- |
-| jarvis-node-setup | `server` (as configured) | `node setup`, `python node` — **not** `node`, `mobile` or `node app`, which mean jarvis-node-mobile | `python3 -m venv .venv && .venv/bin/pip install -U pip pytest pytest-asyncio httpx pydantic fastapi uvicorn cryptography python-dotenv sqlalchemy` | `.venv/bin/pytest tests/test_provisioning/ --tb=short --ignore=tests/test_provisioning/test_hostapd_wifi_manager.py --ignore=tests/test_provisioning/test_wifi_manager.py`, then `.venv/bin/pytest tests/integration/test_timer_commands.py --tb=short` (what its CI runs; the rest of the suite needs the Pi-only `pysqlcipher3`) |
+| jarvis-node-setup | `server` (as configured) | `node setup`, `python node` — **not** `node`, `mobile` or `node app`, which mean jarvis-node-mobile | the venv and the packages its CI installs — **verbatim in the block below** (it contains shell `\|\|`, which a table cell cannot hold) | `.venv/bin/pytest tests/test_provisioning/ --tb=short --ignore=tests/test_provisioning/test_hostapd_wifi_manager.py --ignore=tests/test_provisioning/test_wifi_manager.py`, then `.venv/bin/pytest tests/integration/test_timer_commands.py --tb=short` (what its CI runs; the rest of the suite needs the Pi-only `pysqlcipher3`) |
 | jarvis-command-sdk | `package` (as configured) | `command sdk`, `sdk` | `python3 -m venv .venv && .venv/bin/pip install -U pip && .venv/bin/pip install -e ".[dev]"` | `.venv/bin/pytest --tb=short --cov=jarvis_command_sdk --cov-fail-under=90` |
+
+jarvis-node-setup's `setup`, to paste as one line:
+
+```sh
+python3 -m venv .venv && .venv/bin/pip install -U pip pytest pytest-asyncio httpx pydantic fastapi uvicorn cryptography python-dotenv sqlalchemy && (.venv/bin/pip install git+https://github.com/alexberardi/jarvis-log-client.git || echo "no jarvis-log-client; the tests fall back to mocks") && (.venv/bin/pip install git+https://github.com/alexberardi/jarvis-command-sdk.git || echo "no jarvis-command-sdk; the tests fall back to mocks")
+```
+
+The last two installs are what its own CI runs (`.github/workflows/test.yml`), behind the same
+`|| echo` fallback — the tests fall back to mocks when either is unavailable, so the step still
+succeeds — and they are there so the verify imports what CI imports. `git+https://github.com/…`
+needs GitHub, which the sandbox's network already allows.
 
 The `group` is only shown to triage and in the brief (`groupNote`); hold rules key on the slug, so
 a configured `group: server` never gave jarvis-node-setup jarvis-server's rules.

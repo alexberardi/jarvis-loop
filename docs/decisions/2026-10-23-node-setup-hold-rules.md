@@ -25,12 +25,21 @@ run as root on a user's Pi.
 
 | Rule | What |
 |---|---|
-| `release-config` | `.github/workflows/release.yml`, `Dockerfile`, `Dockerfile.*`, `.dockerignore`, `docker-compose*.yaml`, `compose/**`, `pyproject.toml`, `*requirements*.txt`, `build/**` |
+| `release-config` | `.github/workflows/release.yml`, `Dockerfile`, `Dockerfile.*`, `.dockerignore`, `**/docker-compose*.y*ml`, `compose/**`, `pyproject.toml`, `**/*requirements*.txt`, `**/requirements*/**/*`, `build/**` |
 | `ci` | `.github/**` |
 | `auth` | the node's own authentication, secrets and K1/K2 keys: `core/ijarvis_authentication.py`, `core/ijarvis_secret.py`, `services/command_auth_service.py`, `services/secret_service.py`, `repositories/secrets_repository.py`, `models/secret.py`, `models/command_auth.py`, `agents/token_refresh_agent.py`, `utils/set_secret.py`, `utils/encryption_utils.py`, `utils/authorize_node.py`, `utils/generate_dev_k2.py` |
 | `pairing` | `provisioning/**`, `services/bluetooth_pair_agent.py`, `services/camera_credentials_handler.py`, `utils/mqtt_credentials.py`, `scripts/run_provisioning.py`, `scripts/setup_mode.py` |
 | `install-scripts` | `install.sh`, `setup.sh`, `setup_*.sh`, `setup/**` (the systemd units and the overlay), `scripts/jarvis-*` (the `jarvis-deploy.sudoers` drop-in, `jarvis-self-update`, the post-install and apt helpers), `services/post_install_dropins.py`, `services/update_service.py`, `services/package_install_handler.py`, `scripts/install_command.py`, `scripts/verify_package.py` |
 | `deleted-test` | `tests/**`, `**/test_*.py` (`pyTestRules`), plus `**/test_*.sh` on D/R: node-setup's one shell test checks the release signature verification |
+
+The release globs are `**`-prefixed because `*` does not cross `/`: the repo writes
+`docker-compose.*.yaml` and `requirements-*.txt` at the root today, and a compose file or
+requirements list added in a subdirectory, or with the other YAML extension, should not slip the
+release hold (#549 review). On the real tree that already catches one more file,
+`tools/wake_model_training/requirements-remote.txt` (79 of 556 blobs held on `M`, up from 78).
+`**/requirements*/**/*` is the one glob with no file behind it yet: it is the `requirements/`
+directory form the review asked for, and `**/*requirements*.txt` cannot see a `base.txt` inside
+it.
 
 **jarvis-command-sdk** is the SDK every command package and the Python node import, and
 node-setup's CI installs it straight from git main (`pip install
@@ -75,3 +84,19 @@ change there would rewrite the lists earlier loopds shipped.
   three slugs, so exercising a rule keyed on jarvis-node-setup's slug would mean adding a fourth
   sandbox repo. The hold path itself is already covered (scenarios 17, 23); what is new here is
   which paths match, which the table tests prove.
+
+## Also in this PR: the race step gets 20 minutes per test binary
+
+CI (`ci/check`) failed on the first commit of this branch with `panic: test timed out after 12m0s`
+in `internal/runner` and **no failing test** — the binary was 88% of the way through its 286 tests
+(by the elapsed times it reports here) when the alarm fired. `go test ./...` runs the packages
+`GOMAXPROCS` at a time, so on a 4-core GitHub runner the slowest binary shares a core with three
+other heavy ones (`internal/sandbox` 689 s, `internal/store` 585 s, `internal/slack` 432 s in that
+run), and 12m stopped being enough as the suite grew. This change is nothing the hold rules did:
+`internal/runner` takes 230.1 s with `holdrules.go` reset to `origin/main` and 228.1 s at this
+head, the same 286 tests either way.
+
+`-timeout 20m` keeps the point of the flag — a hung test prints its goroutines before the job's
+25-minute cap cuts the job off — and costs no wall time, since the step already runs ~14 minutes of
+work. If the suite keeps growing, the next step is splitting the slow packages into their own job
+so each binary gets the whole runner, not a longer budget.

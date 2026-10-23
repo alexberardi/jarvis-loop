@@ -253,10 +253,15 @@ func nodeSetupRules(r string) []HoldRule {
 		{Name: "release-config", Glob: "Dockerfile", Repo: r},
 		{Name: "release-config", Glob: "Dockerfile.*", Repo: r},
 		{Name: "release-config", Glob: ".dockerignore", Repo: r},
-		{Name: "release-config", Glob: "docker-compose*.yaml", Repo: r},
+		// `*` does not cross `/` and the repo writes `.yaml` today, so these are `**`-prefixed
+		// and extension-agnostic: a compose file or requirements list added in a subdirectory
+		// (`deploy/docker-compose.yml`, `requirements/base.txt`) is held too, not only the
+		// root-level ones that exist now.
+		{Name: "release-config", Glob: "**/docker-compose*.y*ml", Repo: r},
 		{Name: "release-config", Glob: "compose/**", Repo: r},
 		{Name: "release-config", Glob: "pyproject.toml", Repo: r},
-		{Name: "release-config", Glob: "*requirements*.txt", Repo: r},
+		{Name: "release-config", Glob: "**/*requirements*.txt", Repo: r},
+		{Name: "release-config", Glob: "**/requirements*/**/*", Repo: r},
 		{Name: "release-config", Glob: "build/**", Repo: r},
 		{Name: "ci", Glob: ".github/**", Repo: r},
 		{Name: "auth", Glob: "core/ijarvis_authentication.py", Repo: r},

@@ -46,7 +46,11 @@ jobs:
         env:
           CGO_ENABLED: "1"
         # Under the job's cap, so a hung test prints its goroutines instead of the job being cut off.
-        run: go test -race -timeout 12m ./...
+        # 12m was below what the suite now needs (#549): go test runs the packages GOMAXPROCS at a
+        # time, so on a 4-core runner the slowest binary shares a core with three other heavy ones.
+        # internal/runner (230 s alone on the dev box) had run 88% of its 286 tests when it hit 12m,
+        # with nothing failing, and the step's wall time is unchanged by the longer budget.
+        run: go test -race -timeout 20m ./...
       - name: build (CGO off)
         env:
           CGO_ENABLED: "0"
