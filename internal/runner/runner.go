@@ -675,6 +675,9 @@ func (r *Runner) prepareAlive(ctx context.Context, ru *run) (string, error) {
 // prepare makes the working directory (per stage), the context files, the brief, the guard
 // config and the settings.
 func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
+	if err := r.emulatorRoute(ru); err != nil {
+		return "", err
+	}
 	os.RemoveAll(ru.dir)
 	if err := os.MkdirAll(ru.dir, 0o700); err != nil {
 		return "", err
@@ -684,6 +687,12 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 	if ru.hasHarness() {
 		info.Harness = ru.repo.Harness
 		info.HarnessBin = filepath.Join(r.cfgOf(ru).harnessBinDir(), "loop-harness")
+		if key := ru.repo.Harness.Repo; key != "" {
+			info.HarnessDir, info.HarnessRepo = r.harnessDir(ru), key
+			if slug := r.cfgOf(ru).Repos[key].Slug; slug != "" {
+				info.HarnessRepo = slug
+			}
+		}
 	}
 	if ru.stage == StageBuild {
 		for _, v := range ru.repo.Verify {
@@ -1126,6 +1135,23 @@ func (ru *run) hasHarness() bool {
 	return ru.repo.Harness != nil && (ru.stage == StageBuild || ru.stage == StageReview)
 }
 
+// emulatorRoute refuses a build of an item that needs the emulator when this run has no way to
+// one. No agent sandbox has /dev/kvm or the Android tooling and adb is denied outright, so the
+// routes are the harness through the runner (harness.go) and the runner's own verify steps, both
+// of which run in the fence, which has the host's devices. Without either the agent would spend
+// the whole run discovering that wall (#523, #542), so the run fails here instead and the item
+// goes to the user with what to add (#546). Review and triage only get the brief's note: their
+// work does not need the emulator, and triage has no route by design.
+func (r *Runner) emulatorRoute(ru *run) error {
+	if ru.stage != StageBuild || !slices.Contains(ru.item.Resources, pipeline.ResourceEmulator) ||
+		ru.repo.Harness != nil || len(ru.repo.Verify) > 0 {
+		return nil
+	}
+	return fmt.Errorf("item #%d needs the emulator, which no agent's sandbox can reach (no /dev/kvm, no emulator, maestro or adb), "+
+		"and %s has neither a harness for its agents (repos.%s.harness in the runner's config, its \"repo\" the checkout holding the "+
+		"emulator scripts) nor a verify step that would run the flows after the agent", ru.item.ID, ru.repo.Slug, ru.repoKey)
+}
+
 // prependPath puts dir first on env's PATH.
 func prependPath(env []string, dir string) []string {
 	out := append([]string(nil), env...)
@@ -1142,7 +1168,7 @@ func prependPath(env []string, dir string) []string {
 // agent runs, ended as soon as it stops (lease lost and shutdown too), before the runner's own
 // verify, which starts the harness itself.
 func (r *Runner) runAgentHarness(ctx context.Context, ru *run, brief string) outcome {
-	hs, err := r.startHarness(ru)
+	hs, err := r.startHarness(ctx, ru)
 	if err != nil {
 		return outcome{reason: endStartFailed, exitCode: -1, detail: "the harness session: " + err.Error()}
 	}

@@ -102,7 +102,7 @@ func (g *rig) harnessSession() (*harnessSession, string) {
 	os.MkdirAll(filepath.Join(wt, ".loop", "evidence"), 0o755)
 	ru := &run{item: Item{ID: 5}, stage: StageBuild, repoKey: "demo", repo: g.r.Cfg.Repos["demo"], wt: wt,
 		scratch: filepath.Join(wt, ".loop", "scratch"), sandbox: "loop-5", dir: g.runGuard(wt)}
-	s, err := g.r.startHarness(ru)
+	s, err := g.r.startHarness(g.ctx, ru)
 	if err != nil || s == nil {
 		g.t.Fatalf("session %v %v", s, err)
 	}
@@ -495,4 +495,132 @@ func TestHarnessServe(t *testing.T) {
 		}
 	}
 	t.Logf("harness logs:\n%s", g.read(filepath.Join(wt, ".loop", "scratch", "harness", "1.log")))
+}
+
+// A repo whose harness lives in another repo (harness.repo: jarvis-server's scripts/e2e for a
+// jarvis-node-mobile agent): the runner checks that repo out fresh at its base, every command of
+// the session runs there with the agent's worktree writable and its path in $LOOP_WORKTREE, the
+// guard still binds the worktree's protected files, and the checkout goes with the session.
+func TestHarnessInAnotherRepo(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	lock := g.harnessRepo("")
+	rc := g.r.Cfg.Repos["demo"]
+	rc.Harness.Repo = "other"
+	// The worktree is not the working directory any more, so down writes through $LOOP_WORKTREE.
+	rc.Harness.Down = `echo "down for $LOOP_SANDBOX" >> "$LOOP_WORKTREE/.loop/scratch/down.log"`
+	g.r.Cfg.Repos["demo"] = rc
+	s, wt := g.harnessSession()
+	dir := filepath.Join(g.r.Cfg.WorkRoot, "5-harness-other")
+	if s.dir != dir {
+		t.Fatalf("the session runs in %q, not the checkout %q", s.dir, dir)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "README.md")); err != nil {
+		t.Fatalf("the checkout of other: %v", err)
+	}
+	code, out, err := call(t, harness.OpRun, `pwd; echo "dir=$LOOP_HARNESS_DIR"; echo "wt=$LOOP_WORKTREE"
+echo report > report.json && echo wrote-the-checkout
+echo from-the-harness > "$LOOP_WORKTREE/.loop/evidence/shot.txt"`)
+	for _, want := range []string{dir + "\n", "dir=" + dir, "wt=" + wt, "wrote-the-checkout"} {
+		if err != nil || code != 0 || !strings.Contains(out, want) {
+			t.Fatalf("run: %d %q %v (want %q)", code, out, err, want)
+		}
+	}
+	if got := g.read(filepath.Join(wt, ".loop", "evidence", "shot.txt")); got != "from-the-harness\n" {
+		t.Fatalf("the worktree is not writable from the harness: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "report.json")); err != nil {
+		t.Fatalf("the checkout is not writable from the harness: %v", err)
+	}
+	// The guard reads the command as the agent's own: the worktree's protected files stay so.
+	if _, _, err := call(t, harness.OpRun, `echo x > "$LOOP_WORKTREE/.git/config"`); err == nil || !strings.Contains(err.Error(), "loop-guard refused") {
+		t.Fatalf("a write to the worktree's .git: %v", err)
+	}
+	// up's keeper runs in the checkout too, and down (through $LOOP_WORKTREE) after it.
+	if code, out, err := call(t, harness.OpUp, ""); code != 0 || err != nil || !strings.Contains(out, "up for loop-5") {
+		t.Fatalf("up: %d %q %v", code, out, err)
+	}
+	if code, out, _ := call(t, harness.OpRun, "pwd; cat /tmp/keeper-mark"); code != 0 || !strings.Contains(out, dir) || !strings.Contains(out, "keeper") {
+		t.Fatalf("a run in the keeper: %d %q", code, out)
+	}
+	if code, out, _ := call(t, harness.OpStatus, ""); code != 0 || !strings.Contains(out, "commands run in "+dir) {
+		t.Fatalf("status: %d %q", code, out)
+	}
+	s.end(context.Background())
+	if held(lock) {
+		t.Fatal("up's process outlived the session")
+	}
+	if got := g.read(filepath.Join(wt, ".loop", "scratch", "down.log")); got != "down for loop-5\n" {
+		t.Fatalf("down.log %q", got)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("the checkout was left behind: %v", err)
+	}
+	if out := gitT(t, g.r.mirrorPath("other"), "worktree", "list"); strings.Contains(out, "harness") {
+		t.Fatalf("still registered:\n%s", out)
+	}
+}
+
+// A harness repo that is not configured is a runner error, before the agent starts.
+func TestHarnessRepoNotConfigured(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	g.harnessRepo("")
+	rc := g.r.Cfg.Repos["demo"]
+	rc.Harness.Repo = "nowhere"
+	g.r.Cfg.Repos["demo"] = rc
+	wt := filepath.Join(g.r.Cfg.WorkRoot, "5-build")
+	os.MkdirAll(filepath.Join(wt, ".loop", "scratch"), 0o755)
+	ru := &run{item: Item{ID: 5}, stage: StageBuild, repoKey: "demo", repo: g.r.Cfg.Repos["demo"], wt: wt,
+		scratch: filepath.Join(wt, ".loop", "scratch"), sandbox: "loop-5", dir: g.runGuard(wt)}
+	if s, err := g.r.startHarness(context.Background(), ru); err == nil || !strings.Contains(err.Error(), `repo "nowhere", which is not configured`) {
+		t.Fatalf("session %v %v", s, err)
+	}
+}
+
+// toBuildNeeding is toBuild for an item triage tagged with resources.
+func (g *rig) toBuildNeeding(title, resources string) int64 {
+	g.t.Helper()
+	it, err := g.st.AddItem(g.ctx, "user:alex", store.NewItem{Title: title, Ask: "Run the flows.", Repo: "demo"})
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	if c, err := g.st.Claim(g.ctx, "devbox", pipeline.ClaimRequest{Runner: "devbox", Agent: "triager", Stages: []pipeline.Stage{pipeline.Triage}}); err != nil || c == nil {
+		g.t.Fatalf("triage claim %v %v", c, err)
+	}
+	if _, err := g.st.AddEvidence(g.ctx, "devbox", it.ID, "repro", "repro.txt", strings.NewReader("seen")); err != nil {
+		g.t.Fatal(err)
+	}
+	if _, err := g.st.Advance(g.ctx, "devbox", it.ID, pipeline.Reproduced,
+		map[string]string{"area": "demo", "size": "S", "risk": "normal", "resources": resources}, nil); err != nil {
+		g.t.Fatal(err)
+	}
+	return it.ID
+}
+
+// A build of an item that needs the emulator on a repo with no route to one (no harness for its
+// agents, no verify step) is a runner error naming what is missing: the agent never starts, since
+// its sandbox cannot reach an emulator at all (#546).
+func TestEmulatorItemWithoutARoute(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	g.r.Cfg.Capabilities = []string{pipeline.ResourceEmulator}
+	id := g.toBuildNeeding("Run the Maestro flows", pipeline.ResourceEmulator)
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.NeedsYou || !strings.Contains(d.Item.Question, "needs the emulator") ||
+		!strings.Contains(d.Item.Question, "repos.demo.harness") {
+		t.Fatalf("stage %s question %q", d.Item.Stage, d.Item.Question)
+	}
+	if n := len(g.prs.created); n != 0 {
+		t.Fatalf("%d PRs opened", n)
+	}
+	// A verify step is a route (it runs in the fence after the agent), so the build runs.
+	g.verifyRepo(VerifyStep{Name: "flows", Run: "echo flows: 4 passed"})
+	id2 := g.toBuildNeeding("Run them again", pipeline.ResourceEmulator)
+	g.runOnce()
+	if d := g.item(id2); d.Item.Stage != pipeline.Review {
+		t.Fatalf("stage %s (question %q); log:\n%s", d.Item.Stage, d.Item.Question, g.logs.String())
+	}
+	brief := g.read(filepath.Join(g.lastRun(id2, StageBuild), "brief.md"))
+	if !strings.Contains(brief, "**The emulator**: this item needs it") || !strings.Contains(brief, "the runner's verify steps (above) run in that fence after you") {
+		t.Error("the build's brief does not say how to reach the emulator")
+	}
 }

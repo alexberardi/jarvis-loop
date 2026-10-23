@@ -1,0 +1,33 @@
+{
+  "name": "emulator-claim",
+  "about": "#546: an item triage tagged with resources=[emulator] reaches a runner that has the capability, and the run finally says what that means. The agent's own sandbox can never reach an emulator (no /dev/kvm, no Android tooling, adb denied), so the build's brief names the item's resources and the route it does have: here the mobile repo's verify steps, which run in the runner's fence after the agent. An emulator item on a repo with no route at all (no harness for its agents, no verify step) does not start an agent: the run fails with what to add to the runner's config and the item goes to the user.",
+  "capabilities": ["emulator"],
+  "stages": ["build"],
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "the four Maestro flows", "text": "[mobile] verify the pairing flow on the emulator"},
+    {"do": "triage", "item": "a", "resources": "emulator"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review"},
+     "run_files": [
+       {"item": "a", "stage": "build", "run": 1, "file": "brief.md",
+        "text": "- What this item needs from a runner \\(triage set it; this runner was claimed for it\\): `emulator`\n- \\*\\*The emulator\\*\\*: this item needs it, and your own sandbox cannot reach it"},
+       {"item": "a", "stage": "build", "run": 1, "file": "brief.md",
+        "text": "the runner's verify steps \\(above\\) run in that fence after you"}
+     ]},
+
+    {"do": "add", "item": "b", "title": "emulator work with no way to one", "repo_as": "jarvis-loop"},
+    {"do": "triage", "item": "b", "resources": "emulator"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "review", "b": "needs_you"},
+    "question": {"b": "needs the emulator, which no agent's sandbox can reach .*has neither a harness for its agents \\(repos\\.jarvis-loop\\.harness"},
+    "agent_runs": {"build": 1},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner", "count": 1},
+      {"item": "b", "kind": "advanced", "outcome": "failed", "actor": "runner", "count": 1}
+    ]
+  }
+}

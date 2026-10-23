@@ -115,3 +115,63 @@ func TestBriefsSayForeground(t *testing.T) {
 		}
 	}
 }
+
+// An item that needs the emulator is told so, and told its route to one: the harness through the
+// runner, the runner's verify steps after the build, or nothing (#546). A triage run is told it
+// has none.
+func TestBriefSaysWhatTheItemNeeds(t *testing.T) {
+	it := Item{ID: 12, Title: "Verify the Maestro flows", Resources: []string{"emulator", "gpu"}}
+	base := RunInfo{Slug: "a/b", Base: "main", Branch: "loop/12-x", Worktree: "/w", Scratch: "/s", Sandbox: "loop-12"}
+	withHarness := base
+	withHarness.Harness, withHarness.HarnessBin = &HarnessConfig{Up: "scripts/sandbox up", Down: "scripts/sandbox down"}, "/bin/loop-harness"
+	withVerify := base
+	withVerify.Verify = []string{"mobile flows"}
+	for _, c := range []struct {
+		what  string
+		brief string
+		want  string
+	}{
+		{"with a harness", BuildBrief(it, withHarness), "`loop-harness` (just below)"},
+		{"with verify steps", BuildBrief(it, withVerify), "the runner's verify steps (above) run in that fence after you"},
+		{"with neither", BuildBrief(it, base), "Say that in `not_verified`"},
+		{"a triage run", Brief(StageTriage, it, base), "A triage run has no way to it at all"},
+	} {
+		if !strings.Contains(c.brief, "- What this item needs from a runner (triage set it; this runner was claimed for it): `emulator`, `gpu`") {
+			t.Errorf("%s: the brief does not name the item's resources", c.what)
+		}
+		for _, want := range []string{"**The emulator**: this item needs it", "no `/dev/kvm`", c.want} {
+			if !strings.Contains(c.brief, want) {
+				t.Errorf("%s: the brief lacks %q", c.what, want)
+			}
+		}
+	}
+	// Nothing for an item that needs nothing, and the note stays out of the cacheable prefix.
+	plain := BuildBrief(Item{ID: 12, Title: "Fix the timer"}, base)
+	if strings.Contains(plain, "The emulator") || strings.Contains(plain, "needs from a runner") {
+		t.Error("an item with no resources is told about them anyway")
+	}
+	cut := strings.Index(plain, "## The item")
+	if BuildBrief(it, withHarness)[:cut] != plain[:cut] {
+		t.Error("the resources note belongs after the static part")
+	}
+}
+
+// A harness that lives in another repo (harness.repo) says so: where its commands run, and that
+// the agent's own worktree is writable beside it, in $LOOP_WORKTREE.
+func TestBriefHarnessInAnotherRepo(t *testing.T) {
+	info := RunInfo{Slug: "a/mobile", Base: "main", Branch: "loop/12-x", Worktree: "/w", Scratch: "/s", Sandbox: "loop-12",
+		Harness: &HarnessConfig{Up: "scripts/sandbox up", Down: "scripts/sandbox down"}, HarnessBin: "/bin/loop-harness",
+		HarnessDir: "/work/12-harness-jarvis-server", HarnessRepo: "alex/jarvis-server"}
+	b := BuildBrief(Item{ID: 12, Title: "Flows"}, info)
+	for _, want := range []string{"the harness scripts are in `alex/jarvis-server`", "(`/work/12-harness-jarvis-server`, also `$LOOP_HARNESS_DIR`)",
+		"its path is `$LOOP_WORKTREE`", "one command in that checkout"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("brief lacks %q", want)
+		}
+	}
+	info.HarnessDir, info.HarnessRepo = "", ""
+	own := BuildBrief(Item{ID: 12, Title: "Flows"}, info)
+	if !strings.Contains(own, "one command in this worktree") || strings.Contains(own, "$LOOP_HARNESS_DIR") {
+		t.Error("a harness in the worktree is described as one")
+	}
+}

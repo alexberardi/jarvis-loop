@@ -2,6 +2,7 @@ package runner
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -136,9 +137,13 @@ type RunInfo struct {
 	// sent the item back for red CI), relative to the working directory.
 	CILog *TriageFile
 	// Harness is the repo's harness when the agent has a session (build, review), and HarnessBin
-	// the loop-harness on its PATH.
-	Harness    *HarnessConfig
-	HarnessBin string
+	// the loop-harness on its PATH. HarnessDir and HarnessRepo are the checkout its commands run
+	// in and that repo's slug, when the harness names a repo of its own (harness.repo); "" when
+	// they run in the agent's worktree.
+	Harness     *HarnessConfig
+	HarnessBin  string
+	HarnessDir  string
+	HarnessRepo string
 	// PR and HeadSHA are the PR a review run reviews, at that commit.
 	PR      int
 	HeadSHA string
@@ -402,8 +407,43 @@ func Brief(stage string, it Item, r RunInfo) string {
 		}
 	}
 	fmt.Fprintf(&b, "- Scratch dir (temp files, GOTMPDIR): `%s`\n- Sandbox name for the harness: `%s`\n", r.Scratch, r.Sandbox)
+	if len(it.Resources) > 0 {
+		fmt.Fprintf(&b, "- What this item needs from a runner (triage set it; this runner was claimed for it): %s\n", codeList(it.Resources))
+	}
+	if slices.Contains(it.Resources, pipeline.ResourceEmulator) {
+		b.WriteString(emulatorNote(stage, r))
+	}
 	if r.Harness != nil {
 		b.WriteString(harnessNote(stage, r))
+	}
+	return b.String()
+}
+
+// codeList is the strings as a comma-separated list in backticks.
+func codeList(v []string) string {
+	out := make([]string, len(v))
+	for i, s := range v {
+		out[i] = "`" + s + "`"
+	}
+	return strings.Join(out, ", ")
+}
+
+// emulatorNote tells an agent of an item that needs the emulator what it can reach. Its own
+// sandbox never can: no /dev/kvm, no Android tooling, and adb is denied outright. The routes are
+// the harness through the runner and the runner's own verify steps, both in the fence, which has
+// the host's devices (#546).
+func emulatorNote(stage string, r RunInfo) string {
+	b := strings.Builder{}
+	b.WriteString("- **The emulator**: this item needs it, and your own sandbox cannot reach it — no `/dev/kvm`, no `emulator`, `maestro` or `adb` on PATH, and `adb` is refused outright (emulator work goes through the harness scripts, which pass the serial themselves). ")
+	switch {
+	case r.Harness != nil:
+		b.WriteString("Your way to it is `loop-harness` (just below): what it runs happens in the runner's fence, which has the host's devices, the Android SDK and the emulator.\n")
+	case stage == StageTriage:
+		b.WriteString("A triage run has no way to it at all (the harness through the runner is build and review only), so do not try: say in your notes what could not be reproduced and name the commands a build would have to run.\n")
+	case len(r.Verify) > 0:
+		b.WriteString("Nothing you run reaches it, but the runner's verify steps (above) run in that fence after you: make the change and the flows, and say in the PR body that the emulator run is the runner's, not yours.\n")
+	default:
+		b.WriteString("Nothing in this run reaches it: this repo has no harness through the runner and no verify step that would run after you. Say that in `not_verified` (or return `question`) rather than claiming a run you could not do.\n")
 	}
 	return b.String()
 }
@@ -413,8 +453,16 @@ func harnessNote(stage string, r RunInfo) string {
 	var b strings.Builder
 	b.WriteString("\n## The harness, through the runner\n\n")
 	fmt.Fprintf(&b, "Your sandbox cannot run this repo's harness (no loopback, no harness credentials, no `/dev/kvm`, and what a command starts dies with it), so the runner runs it for you with `loop-harness` (on your PATH; `%s`), in the fence its own verify steps use: the host's network, the harness's credentials (the user's other credentials stay hidden), this worktree writable. Run it from this worktree:\n\n", r.HarnessBin)
+	if r.HarnessDir != "" {
+		fmt.Fprintf(&b, "Its commands do not run here: the harness scripts are in `%s`, which the runner checked out fresh at its base branch for this run (`%s`, also `$LOOP_HARNESS_DIR`). That checkout is the working directory of every `loop-harness` command; your own worktree is writable beside it and its path is `$LOOP_WORKTREE`, so pass it to a script that needs your change (as the regression run passes `--mobile-repo`). Call `loop-harness` itself from this worktree.\n\n", r.HarnessRepo, r.HarnessDir)
+	}
 	fmt.Fprintf(&b, "- `loop-harness up`: runs `%s` and keeps what it starts running until your run ends.\n", oneLine(r.Harness.Up))
-	b.WriteString("- `loop-harness run '<command>'`: one command in this worktree, next to the running harness (e.g. `go run ./tools/pipeline say ...`, `scripts/mobile-shot --sandbox $LOOP_SANDBOX ...`). Its output streams back and its exit code is `loop-harness`'s; files it writes here (screenshots) you can Read. Without `up` it runs alone in a fresh fence.\n")
+	where := "this worktree"
+	if r.HarnessDir != "" {
+		where = "that checkout"
+	}
+	fmt.Fprintf(&b, "- `loop-harness run '<command>'`: one command in %s, next to the running harness", where)
+	b.WriteString(" (e.g. `go run ./tools/pipeline say ...`, `scripts/mobile-shot --sandbox $LOOP_SANDBOX ...`). Its output streams back and its exit code is `loop-harness`'s; files it writes under `$LOOP_EVIDENCE_DIR` (screenshots) you can Read. Without `up` it runs alone in a fresh fence.\n")
 	fmt.Fprintf(&b, "- `loop-harness down`: runs `%s`. `loop-harness status`: is it up.\n", oneLine(r.Harness.Down))
 	fmt.Fprintf(&b, "\nEach command may take %s; `$LOOP_SANDBOX` is `%s`. Every command's full log is in `.loop/scratch/harness/<n>.log`. The runner ends the harness when your run ends", r.Harness.Timeout(), r.Sandbox)
 	if stage == StageBuild {
