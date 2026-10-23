@@ -321,6 +321,84 @@ func TestBashCommands(t *testing.T) {
 	}
 }
 
+// The protected prefixes (.git, .claude, .mcp.json, .loop/brief.md and the repo's deny_write)
+// bind every write path, not only the file tools (#537: two bash-channel writes landed under a
+// protected dir while Write/Edit there were refused). A redirection's target and a write-shaped
+// command's destination are refused; reading or running the same files stays allowed, as do
+// writes anywhere else (the worktree, the scratch dir, $TMPDIR).
+func TestBashWriteProtected(t *testing.T) {
+	f := newFixture(t)
+	cases := []struct {
+		cmd  string
+		rule string
+	}{
+		// The #512 repro: all slipped past on the bash channel.
+		{"echo '{}' > scripts/sandbox/probe.json", RuleWriteProtected},
+		{"printf '{}' > scripts/sandbox/toolsets.json", RuleWriteProtected},
+		{"cat > scripts/sandbox/probe.json <<'EOF'\n{}\nEOF", RuleWriteProtected},
+		{"cp /tmp/x scripts/sandbox/probe.json", RuleWriteProtected},
+		{"tee scripts/sandbox/probe.json < /dev/null", RuleWriteProtected},
+		{"touch .git/hooks/pre-commit", RuleWriteProtected},
+		{"echo hook > .claude/settings.json", RuleWriteProtected},
+		{"mkdir -p scripts/sandbox/sub && mv /tmp/x scripts/sandbox/sub/x", RuleWriteProtected},
+
+		// More write spellings.
+		{"echo x >> scripts/sandbox/run", RuleWriteProtected},
+		{"echo x > " + filepath.Join(f.wt, "scripts", "sandbox", "run"), RuleWriteProtected},
+		{"echo x > internal/../scripts/sandbox/run", RuleWriteProtected},
+		{"echo x > .loop/brief.md", RuleWriteProtected},
+		{"echo x > .mcp.json", RuleWriteProtected},
+		{"sed -i 's/a/b/' scripts/sandbox/run", RuleWriteProtected},
+		{"dd if=/dev/zero of=scripts/sandbox/run count=1", RuleWriteProtected},
+		{"truncate -s 0 scripts/sandbox/run", RuleWriteProtected},
+		{"install -m 755 /tmp/x scripts/sandbox/run", RuleWriteProtected},
+		{"ln -sf /tmp/x scripts/sandbox/link", RuleWriteProtected},
+		{"tee -a scripts/sandbox/run", RuleWriteProtected},
+		{"cp a b scripts/sandbox/", RuleWriteProtected},
+		{"cp -t scripts/sandbox x", RuleWriteProtected},
+		{"bash -c 'echo x > scripts/sandbox/run'", RuleWriteProtected},
+		{"echo $(echo x > .git/config)", RuleWriteProtected},
+		{"echo x > $WT/.git/config", RuleWriteProtected},   // unresolvable, but its text names .git
+		{"cd internal && echo x > hooks.json", RuleWriteProtected}, // after cd a relative target is unknowable
+		{"cd internal && touch hooks.json", RuleWriteProtected},
+
+		// Reading and running protected files stays theirs.
+		{"cat scripts/sandbox/run", ""},
+		{"sh scripts/sandbox/run", ""},
+		{"grep x < scripts/sandbox/run", ""},
+		{"sed 's/a/b/' scripts/sandbox/run", ""},
+		{"cp scripts/sandbox/run /tmp/x", ""},
+		{"git log -- scripts/sandbox", ""},
+
+		// Writes anywhere else stay the permission system's.
+		{"echo x > notes.txt", ""},
+		{"echo x > .loop/scratch/f", ""},
+		{"echo x > .gitignore", ""},
+		{"echo x > .github/workflows/ci.yml", ""},
+		{"echo x > /tmp/x", ""},
+		{"echo x > $TMPDIR/f", ""},
+		{"echo x > $WT/notes.txt", ""},
+		{"tee $TMPDIR/log", ""},
+		{"go test ./... > .loop/scratch/t.log 2>&1", ""},
+		{"cd internal && go test ./... 2>&1", ""},
+		{"touch README.md", ""},
+		{"mkdir -p .loop/scratch", ""},
+		{"sed -i 's/a/b/' notes.txt", ""},
+		{"truncate -s 0 .loop/scratch/t.log", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.cmd, func(t *testing.T) {
+			d := f.cfg.Check(bash(f, c.cmd))
+			if d.Rule != c.rule {
+				t.Fatalf("rule = %q (%s), want %q", d.Rule, d.Reason, c.rule)
+			}
+			if d.Deny != (c.rule != "") {
+				t.Fatalf("deny = %v", d.Deny)
+			}
+		})
+	}
+}
+
 func TestPushRefusalSaysWhoPushes(t *testing.T) {
 	f := newFixture(t)
 	d := f.cfg.Check(bash(f, "git push origin loop/12-fix-x"))
