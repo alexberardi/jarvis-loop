@@ -1,0 +1,71 @@
+{
+  "name": "freeze-no-twin-p1",
+  "about": "#558: two consecutive red merges with a hand unfreeze between them. a's merge turns main red, so loopd files the P1 #2 and freezes sandbox/demo; the user lifts the freeze by hand and #2's own build is running when b's merge turns main red again. The second red does not file a byte-identical-titled twin P1 that triage would only close as a duplicate (the incident's root cause): it takes the repo's open #2 over (reused), freezes again on it, and #2's result still applies, reaches land and merges, which turns main green and lifts the freeze.",
+  "stages": ["triage", "build", "review", "land"],
+  "slots": 2,
+  "steps": [
+    {"do": "ci", "main": {"build": "pass", "test": "pass"}, "main_head": true},
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"build": "pending", "test": "pending"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "expect", "stage": {"a": "done"}, "leased": {"a": false}},
+
+    {"do": "ci", "main": {"build": "pass", "test": "fail"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "clock", "advance": "30s"},
+    {"do": "wait", "events": [{"kind": "frozen", "actor": "loopd", "data": {"repo": "^sandbox/demo$", "item": "^2$"}, "count": 1}]},
+
+    {"do": "unfreeze"},
+    {"do": "script", "item": "#2", "play": "wait_release", "file": "internal/mainfix.go"},
+    {"do": "runner", "claims": "#2"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"#2": "build"}},
+    {"do": "runner", "claims": "#2"},
+    {"do": "agent_running", "item": "#2"},
+
+    {"do": "add", "item": "b", "title": "Tidy the digest footer"},
+    {"do": "triage", "item": "b"},
+    {"do": "script", "item": "b", "play": "good", "file": "internal/footer.go"},
+    {"do": "runner", "claims": "b"},
+    {"do": "wait", "stage": {"b": "review"}, "leased": {"b": false}},
+    {"do": "ci", "item": "b", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "b"},
+    {"do": "wait", "stage": {"b": "land"}, "leased": {"b": false}},
+    {"do": "runner", "claims": "b"},
+    {"do": "wait", "stage": {"b": "done"}, "leased": {"b": false}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "clock", "advance": "30s"},
+    {"do": "wait", "events": [{"item": "b", "kind": "main_ci", "actor": "runner", "data": {"result": "^red$", "p1_item": "^2$", "reused": "^true$"}, "count": 1},
+      {"kind": "frozen", "actor": "loopd", "data": {"repo": "^sandbox/demo$", "item": "^2$", "reused": "^true$"}, "count": 1}]},
+
+    {"do": "release", "item": "#2"},
+    {"do": "wait", "stage": {"#2": "review"}, "leased": {"#2": false}},
+    {"do": "ci", "item": "#2", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "#2"},
+    {"do": "runner_idle"},
+    {"do": "ci", "main": {"build": "pending", "test": "pending"}},
+    {"do": "runner", "claims": "#2"},
+    {"do": "wait", "stage": {"#2": "done"}, "leased": {"#2": false}},
+    {"do": "ci", "main": {"build": "pass", "test": "pass"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done", "b": "done", "#2": "done"},
+    "remote": {"main": "#2"},
+    "events": [
+      {"kind": "created", "data": {"title": "^main red in sandbox/demo: test$", "source": "^finding$"}, "count": 1},
+      {"kind": "freeze_handover", "count": 0},
+      {"kind": "unfrozen", "actor": "loopd", "data": {"repo": "^sandbox/demo$", "item": "^2$", "reason": "^main green on [0-9a-f]{7} after #2's merge$"}, "count": 1}
+    ],
+    "messages": [
+      {"channel": "loop", "text": "^:rotating_light: \\*main is red in sandbox/demo\\* \\(failing: test, still red after a re-run\\): \\*frozen\\*\\."}
+    ]
+  }
+}

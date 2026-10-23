@@ -258,6 +258,10 @@ func (b *Bot) handleEvent(ctx context.Context, e store.Event) {
 		}
 		return
 	}
+	if e.Kind == store.KindFreezeHandover {
+		// Who moves while a repo is frozen is repo news (#loop), and the item's thread says it too.
+		b.post(ctx, "freeze", b.freezeMessage(ctx, e))
+	}
 	d, err := b.c.Store.GetItem(ctx, e.ItemID)
 	if err != nil {
 		b.c.Log.Error("slack: load item", "item", e.ItemID, "err", err.Error())

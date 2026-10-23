@@ -43,7 +43,7 @@
 <p class="runners">Runner <strong>{{.Name}}</strong> is {{.State}} since {{stamp .Since}}: it claims nothing new and restarts once its runs end.</p>
 {{- end}}
 {{- range .Freezes}}
-<div class="frozen" role="alert"><strong>Main is red in {{.Repo}}</strong>{{with .Jobs}} (failing: {{join . ", "}}){{end}}: frozen since {{stamp .Since}}. Nothing else in it moves stages until main is green; <a href="/items/{{.ItemID}}">#{{.ItemID}} {{.ItemTitle}}</a> goes first.{{if .Queued}} {{.Queued}} finished run(s) wait to apply.{{end}} Lift by hand: <code>loop unfreeze {{.Repo}}</code></div>
+<div class="frozen" role="alert"><strong>Main is red in {{.Repo}}</strong>{{with .Jobs}} (failing: {{join . ", "}}){{end}}: frozen since {{stamp .Since}}. Nothing else in it moves stages until main is green; <a href="/items/{{.ItemID}}">#{{.ItemID}} {{.ItemTitle}}</a> goes first, as does any other main-red P1 of the repo.{{if .Queued}} {{.Queued}} finished run(s) wait to apply.{{end}} Lift by hand: <code>loop unfreeze {{.Repo}}</code></div>
 {{- end}}
 {{- template "working-section" .Working}}
 {{- with .Orch}}{{if .Show}}

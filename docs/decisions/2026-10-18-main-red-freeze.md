@@ -15,14 +15,18 @@ scenario:
   loopd files "main red in `<repo>`: `<jobs>`" (P1, source finding) with an ask naming the first
   red commit, the last green one, the likely culprit (the merge between them) and that a revert of
   it is fine when the fix is not obvious (`pipeline.MainRedAsk`). While a freeze's P1 is open, a
-  second red reuses it (`reused`); a red after the P1 is done (its fix did not fix it) files a new
-  P1 for the same freeze (`again`). The P1's triage still gets the failing log (`MainRedCommit`
+  second red reuses it (`reused`); so does a red with no live freeze when the repo still has an
+  open main-red P1 of its own, rather than filing a same-titled twin (#558); a red after the P1 is
+  done (its fix did not fix it) files a new P1 for the same freeze (`again`). The P1's triage still gets the failing log (`MainRedCommit`
   reads the ask; it knows both titles). A runner older than this change still files its own P1 and
   sends `p1_item`, which loopd drops, so mixed versions file two; deploy runner and loopd together.
 - **The freeze** (`repo_freezes`, migration 0019; events `frozen`/`unfrozen`, no item) holds the
   repo's P1 and `red_since`, when the culprit merged. In a frozen repo:
   - **No claims** (`pipeline.Frozen`, `Choose`/`ChooseWork`): its items are skipped; items with no
-    repo yet (triage) and other repos keep going.
+    repo yet (triage) and other repos keep going. The repo's **other** main-red P1s, if it has
+    any, are not skipped: a freeze lets every one of them through, not only the id it names
+    (`pipeline.IsMainRed`), so it cannot deadlock the repo when that id closes
+    ([#558](2026-10-23-freeze-without-one-item.md)).
   - **The P1 goes first**, through every stage (`chooseFix`): before any other item and before the
     orchestrate turn, and over the active-agents number and its stage's limit ("it may take a held
     slot": the frozen repo's own runs keep theirs). A stop, 0 active agents, resource limits and
@@ -59,6 +63,13 @@ scenario:
   to lift it) and on unfreeze (what applied, what was dropped, what was rebuilt); an item thread
   gets a line when its result waits, when its land run stops, and when a waiting result is
   dropped. The board shows a red banner per frozen repo; `loop status` a FROZEN line.
+
+- **A settled P1 hands the freeze on, it does not lift it** (#558,
+  [2026-10-23](2026-10-23-freeze-without-one-item.md)): when the item a freeze names is closed or
+  dropped while main is still red, the freeze goes to the item a duplicate closure names, else to
+  another open main-red P1 of the repo, else to a P1 re-filed from the closed one (event
+  `freeze_handover`, posted in #loop and in the new mover's thread). It lifts only when that
+  re-filed one settles too, saying so.
 
 **Not done:** red from a direct push to main (not a loop merge) is still not seen: only merges the
 loop watched freeze a repo. A periodic check of each repo's main head is the follow-up; until then

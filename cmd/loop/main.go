@@ -496,7 +496,7 @@ func cmdStatus(c *client, _ []string, f map[string][]string) error {
 		return err
 	}
 	for _, f := range fz {
-		fmt.Fprintf(c.out, "FROZEN %s: main is red (%s); only #%d moves, %d result(s) waiting; lift with: loop unfreeze %s\n",
+		fmt.Fprintf(c.out, "FROZEN %s: main is red (%s); #%d goes first (as does any other main-red P1 of the repo), %d result(s) waiting; lift with: loop unfreeze %s\n",
 			f.Repo, strings.Join(f.Jobs, ", "), f.ItemID, f.Queued, f.Repo)
 	}
 	if len(board.Items) == 0 {
