@@ -49,6 +49,16 @@ steps use. The real gap was narrower: **the brokered path could not reach anothe
   worktree's protected files stay protected through `$LOOP_WORKTREE/...`), and the fence still
   masks the user's credentials and gives no git credentials. `adb` stays denied in both places, so
   the route is the repo's harness scripts, which pass the serial themselves.
+- **The purge runs where the scripts are, or says it cannot.** Before each verify step the runner
+  takes down the agent's and verify's sandbox homes with the harness's `down` (#327), and it ran
+  that fenced in the agent's worktree. With `harness.repo` the scripts are not there, so the
+  command exited non-zero and the miss was logged as `harness down failed (nothing to take down?)`
+  — which reads like success — and the "purge and retry once" repeated the step with nothing
+  purged. Now the down runs in the directory that holds the scripts: the worktree for a
+  worktree-scoped harness, and for a repo-scoped one the step's **own** checkout, which exists when
+  the step's `repo` is the harness's. For any other step there is no copy to run, so the purge is
+  skipped with a warning naming the `repo:` to add, and an environment failure is not retried with
+  nothing purged. (`canPurge`/`harnessDownDir` in `verify.go`.)
 - **A runner-side verify step stays the gate.** `VerifyStep.Repo` already runs
   `scripts/e2e`/`mobile-shot` from a jarvis-server checkout outside the agent's sandbox, after the
   build (route B, the worked example in `2026-10-15-all-repos.md`). It needs no code: it is the
@@ -69,6 +79,12 @@ steps use. The real gap was narrower: **the brokered path could not reach anothe
   neither a harness for its agents nor a verify step ends before the agent starts, with a runner
   error naming what to add to `runner.json`; the item goes to the user. Better the user adds one
   line than an agent spends a run finding out, as #523's and #542's did.
+- **A review run is told the route is the build's, not that there is none.** The brief's list of
+  verify steps is built for the build stage only, so a review of an emulator item on a repo that
+  does have steps would have been told "this repo has no harness through the runner and no verify
+  step" — true of the run, misleading about the repo. A review with no harness now reads that a
+  verify step runs after the build rather than after it, and to judge the build's evidence of the
+  emulator run instead of repeating it.
 - **Triage keeps no route, and is told so.** The harness through the runner stays build and review
   only (`hasHarness`): a triage run has no repo worktree to run a harness in, and widening it
   would start a sandbox for every triage of a harness repo. An emulator item's triage brief says

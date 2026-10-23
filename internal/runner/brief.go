@@ -444,6 +444,10 @@ func emulatorNote(stage string, r RunInfo) string {
 		b.WriteString("Your way to it is `loop-harness` (just below): what it runs happens in the runner's fence, which has the host's devices, the Android SDK and the emulator.\n")
 	case stage == StageTriage:
 		b.WriteString("A triage run has no way to it at all (the harness through the runner is build and review only), so do not try: say in your notes what could not be reproduced and name the commands a build would have to run.\n")
+	case stage == StageReview:
+		// Verify is the build's: a review of an emulator item has no route of its own even on a
+		// repo that has steps, so say that rather than "this repo has none" (#546).
+		b.WriteString("Nothing in this run reaches it: a verify step runs after the build, not after you, and this run has no harness through the runner. Judge the build's own evidence of the emulator run instead of repeating it, and say in your notes what you could not check.\n")
 	case len(r.Verify) > 0:
 		b.WriteString("Nothing you run reaches it, but the runner's verify steps (above) run in that fence after you: make the change and the flows, and say in the PR body that the emulator run is the runner's, not yours.")
 		if r.VerifyConditional {

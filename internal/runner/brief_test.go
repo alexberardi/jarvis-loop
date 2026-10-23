@@ -138,6 +138,7 @@ func TestBriefSaysWhatTheItemNeeds(t *testing.T) {
 		{"with a when_changed verify step", BuildBrief(it, conditional), "it is skipped and nothing runs on the emulator this time"},
 		{"with neither", BuildBrief(it, base), "Say that in `not_verified`"},
 		{"a triage run", Brief(StageTriage, it, base), "A triage run has no way to it at all"},
+		{"a review run", Brief(StageReview, it, withVerify), "a verify step runs after the build, not after you"},
 	} {
 		if !strings.Contains(c.brief, "- What this item needs from a runner (triage set it; this runner was claimed for it): `emulator`, `gpu`") {
 			t.Errorf("%s: the brief does not name the item's resources", c.what)
@@ -147,6 +148,10 @@ func TestBriefSaysWhatTheItemNeeds(t *testing.T) {
 				t.Errorf("%s: the brief lacks %q", c.what, want)
 			}
 		}
+	}
+	// A review run is not told the repo has no verify step just because Verify is the build's.
+	if rev := Brief(StageReview, it, withVerify); strings.Contains(rev, "this repo has no harness through the runner and no verify step") {
+		t.Error("a review run is told the repo has no verify step")
 	}
 	// A step that always runs is a route without that caveat.
 	if strings.Contains(BuildBrief(it, withVerify), "is no route on its own") {

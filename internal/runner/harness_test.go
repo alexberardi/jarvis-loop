@@ -535,6 +535,21 @@ echo from-the-harness > "$LOOP_WORKTREE/.loop/evidence/shot.txt"`)
 	if _, _, err := call(t, harness.OpRun, `echo x > "$LOOP_WORKTREE/.git/config"`); err == nil || !strings.Contains(err.Error(), "loop-guard refused") {
 		t.Fatalf("a write to the worktree's .git: %v", err)
 	}
+	// A relative write is judged where the command now runs - the checkout - and not against the
+	// worktree it used to resolve against, so the checkout's own .loop/brief.md is writable while
+	// the agent's stays the runner's. With the guard's cwd back at s.wt this run is refused.
+	if err := os.WriteFile(filepath.Join(wt, ".loop", "brief.md"), []byte("the runner's\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, err := call(t, harness.OpRun, "mkdir -p .loop && echo the-checkouts > .loop/brief.md && echo wrote-the-checkouts-brief"); err != nil || code != 0 || !strings.Contains(out, "wrote-the-checkouts-brief") {
+		t.Fatalf("a relative write in the checkout: %d %q %v", code, out, err)
+	}
+	if got := g.read(filepath.Join(dir, ".loop", "brief.md")); got != "the-checkouts\n" {
+		t.Fatalf("the checkout's .loop/brief.md %q", got)
+	}
+	if got := g.read(filepath.Join(wt, ".loop", "brief.md")); got != "the runner's\n" {
+		t.Fatalf("the agent's brief was written through the harness: %q", got)
+	}
 	// up's keeper runs in the checkout too, and down (through $LOOP_WORKTREE) after it.
 	if code, out, err := call(t, harness.OpUp, ""); code != 0 || err != nil || !strings.Contains(out, "up for loop-5") {
 		t.Fatalf("up: %d %q %v", code, out, err)
