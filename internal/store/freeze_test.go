@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -327,4 +329,234 @@ func TestMergedAppliesInAFrozenRepo(t *testing.T) {
 	if fz, _ := s.Freezes(ctx); len(fz) != 0 {
 		t.Fatalf("main green on a merge after the red one, still frozen: %+v", fz)
 	}
+}
+
+// #558: a freeze must not depend on one item id staying open
+// (docs/decisions/2026-10-23-freeze-without-one-item.md).
+
+// addMainRed files a main-red P1 the way loopd does (source finding, MainRedTitle).
+func addMainRed(t *testing.T, s *Store, repo string) pipeline.Item {
+	t.Helper()
+	it, err := s.AddItem(context.Background(), "loopd", NewItem{Title: pipeline.MainRedTitle(repo, []string{"test"}),
+		Ask: "main's CI failed", Repo: repo, Priority: "P1", Source: "finding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return it
+}
+
+// freezeOf is repo's live freeze (nil: it is not frozen).
+func freezeOf(t *testing.T, s *Store, repo string) *Freeze {
+	t.Helper()
+	all, err := s.Freezes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range all {
+		if all[i].Repo == repo {
+			return &all[i]
+		}
+	}
+	return nil
+}
+
+// redP1 merges an item, reports a red main on it and returns the repo and the P1 loopd filed.
+func redP1(t *testing.T, s *Store) (string, int64) {
+	t.Helper()
+	culprit := merged(t, s)
+	ev, err := s.MainCI(context.Background(), runner, culprit.ID, redData())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p1, ok := ev.Data["p1_item"].(float64)
+	if !ok {
+		t.Fatalf("main_ci: %+v", ev.Data)
+	}
+	return culprit.Repo, int64(p1)
+}
+
+func eventsOfKind(t *testing.T, s *Store, kind string) []Event {
+	t.Helper()
+	rows, err := s.r.Query(`SELECT `+eventCols+` FROM events WHERE kind = ? ORDER BY id`, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs, err := scanEvents(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evs
+}
+
+// The incident: triage closes the freeze's P1 as a duplicate of the item already fixing the same
+// red main. The freeze hands over to that item instead of deadlocking the repo.
+func TestFreezeHandsOverWhenItsItemClosesAsADuplicate(t *testing.T) {
+	s, _ := open(t)
+	repo, p1 := redP1(t, s)
+	// The item the P1 duplicates: #539 in the incident, filed for the same red main and already
+	// in flight. Frozen, it cannot move while the freeze names the P1.
+	live := addIn(t, s, pipeline.MainRedTitle(repo, []string{"test"}), repo, "P1")
+	closeNotReproducible(t, s, p1, fmt.Sprintf("duplicate of #%d / PR #133: the same ask is already in flight.", live.ID))
+
+	if got := item(t, s, p1).Stage; got != pipeline.Closed {
+		t.Fatalf("P1 #%d is %s", p1, got)
+	}
+	f := freezeOf(t, s, repo)
+	if f == nil || f.ItemID != live.ID {
+		t.Fatalf("freeze: %+v, want it on #%d", f, live.ID)
+	}
+	evs := eventsOfKind(t, s, KindFreezeHandover)
+	if len(evs) != 1 || evID(evs[0].Data["from"]) != p1 || evID(evs[0].Data["to"]) != live.ID || evs[0].ItemID != live.ID {
+		t.Fatalf("handover events: %+v", evs)
+	}
+	if evs[0].Data["refiled"] == true {
+		t.Errorf("a duplicate closure should hand over, not re-file: %+v", evs[0].Data)
+	}
+	// The repo moves again: the live item is claimable, and nothing else of the repo is.
+	blocked := addIn(t, s, "something else", repo, "P2")
+	c := claim(t, s, "triager")
+	if c == nil || c.Item.ID != live.ID {
+		t.Fatalf("claim: %+v, want #%d", c, live.ID)
+	}
+	if c := claim(t, s, "triager-2"); c != nil && c.Item.ID == blocked.ID {
+		t.Fatalf("claimed #%d: the repo is still frozen", blocked.ID)
+	}
+}
+
+// Closed for any other reason, with another open main-red P1 of the repo: that one takes it over.
+func TestFreezeHandsOverToTheReposOtherMainRedP1(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	repo, p1 := redP1(t, s)
+	c := claim(t, s, "triager")
+	if c == nil || c.Item.ID != p1 {
+		t.Fatalf("claim of the P1: %+v", c)
+	}
+	other := addMainRed(t, s, repo)
+	evidence(t, s, p1)
+	if _, err := s.Advance(ctx, runner, p1, pipeline.NotReproducible,
+		map[string]string{"summary": "works on main; the failure was the check's environment."}, nil); err != nil {
+		t.Fatal(err)
+	}
+	f := freezeOf(t, s, repo)
+	if f == nil || f.ItemID != other.ID {
+		t.Fatalf("freeze: %+v, want it on #%d", f, other.ID)
+	}
+	evs := eventsOfKind(t, s, KindFreezeHandover)
+	if len(evs) != 1 || evID(evs[0].Data["to"]) != other.ID || evs[0].Data["refiled"] == true {
+		t.Fatalf("handover events: %+v", evs)
+	}
+	if n := titled(t, s, pipeline.MainRedTitle(repo, []string{"test"})); n != 2 {
+		t.Errorf("%d items with the P1's title: a fresh one was filed though the repo had one", n)
+	}
+}
+
+// Dropped, with nothing else to hand the freeze to: the P1 is re-filed, main stays protected, and
+// the repo moves again. A second drop of the fresh one lifts the freeze instead of re-filing for
+// ever.
+func TestDroppingTheFreezeItemRefilesItThenLifts(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	repo, p1 := redP1(t, s)
+	before := freezeOf(t, s, repo)
+	if _, err := s.Drop(ctx, user, p1, "reverting by hand"); err != nil {
+		t.Fatal(err)
+	}
+	f := freezeOf(t, s, repo)
+	if f == nil {
+		t.Fatal("the freeze lifted: merges resume onto a main that is still red")
+	}
+	fresh := f.ItemID
+	if fresh == p1 {
+		t.Fatalf("the freeze still names the dropped #%d", p1)
+	}
+	if !f.RedSince.Equal(before.RedSince) || len(f.Jobs) != 1 || f.Jobs[0] != "test" {
+		t.Errorf("freeze lost the red window: %+v, was %+v", f, before)
+	}
+	it := item(t, s, fresh)
+	if !pipeline.IsMainRed(it) || it.Stage != pipeline.Triage || it.Ask != item(t, s, p1).Ask {
+		t.Fatalf("re-filed P1: %+v", it)
+	}
+	evs := eventsOfKind(t, s, KindFreezeHandover)
+	if len(evs) != 1 || evID(evs[0].Data["from"]) != p1 || evID(evs[0].Data["to"]) != fresh || evs[0].Data["refiled"] != true {
+		t.Fatalf("handover events: %+v", evs)
+	}
+	if c := claim(t, s, "triager"); c == nil || c.Item.ID != fresh {
+		t.Fatalf("claim: %+v, want the re-filed #%d", c, fresh)
+	}
+	// The user drops that one too: the loop stops re-filing and lifts, saying why.
+	if _, err := s.Drop(ctx, user, fresh, "reverted main by hand"); err != nil {
+		t.Fatal(err)
+	}
+	if f := freezeOf(t, s, repo); f != nil {
+		t.Fatalf("still frozen on #%d after the re-filed P1 was dropped too", f.ItemID)
+	}
+	if n := titled(t, s, pipeline.MainRedTitle(repo, []string{"test"})); n != 2 {
+		t.Errorf("%d items with the P1's title, want 2 (the original and one re-file)", n)
+	}
+	un := eventsOfKind(t, s, KindUnfrozen)
+	if len(un) != 1 || !strings.Contains(str(un[0].Data, "reason"), "re-filed") {
+		t.Fatalf("unfrozen events: %+v", un)
+	}
+}
+
+// A second red main after a hand unfreeze takes the repo's open P1 over instead of filing a
+// byte-identical twin that triage would only close as a duplicate (#558's root cause).
+func TestSecondRedTakesTheReposOpenP1(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	repo, p1 := redP1(t, s)
+	if _, err := s.Unfreeze(ctx, user, repo); err != nil {
+		t.Fatal(err)
+	}
+	n := 6
+	if _, err := s.SetControl(ctx, user, ControlPatch{ActiveAgents: &n, Limits: map[string]int{"triage": 4, "review": 4, "land": 4}}); err != nil {
+		t.Fatal(err)
+	}
+	// Park the P1 on a live lease, as its fix would be, so the next merge's claims leave it alone.
+	if c := claim(t, s, "triager"); c == nil || c.Item.ID != p1 {
+		t.Fatalf("claim of the P1: %+v", c)
+	}
+	second := merged(t, s)
+	ev, err := s.MainCI(ctx, runner, second.ID, redData())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := int64(ev.Data["p1_item"].(float64)); got != p1 {
+		t.Fatalf("second red filed #%d, want the open #%d reused", got, p1)
+	}
+	if ev.Data["reused"] != true {
+		t.Errorf("main_ci data: %+v", ev.Data)
+	}
+	if f := freezeOf(t, s, repo); f == nil || f.ItemID != p1 {
+		t.Fatalf("freeze: %+v, want it on #%d", f, p1)
+	}
+	if n := titled(t, s, pipeline.MainRedTitle(repo, []string{"test"})); n != 1 {
+		t.Errorf("%d items with the main-red title, want 1", n)
+	}
+	// The second freeze is a fresh row (the first was lifted by hand) on the P1 it took over.
+	fz := eventsOfKind(t, s, KindFrozen)
+	if len(fz) != 2 || fz[1].Data["reused"] != true || evID(fz[1].Data["item"]) != p1 {
+		t.Fatalf("frozen events: %+v", fz)
+	}
+}
+
+func titled(t *testing.T, s *Store, title string) int {
+	t.Helper()
+	var n int
+	if err := s.w.QueryRow(`SELECT COUNT(*) FROM items WHERE title = ?`, title).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// evID is an id out of an event's data (JSON numbers come back as float64).
+func evID(v any) int64 {
+	switch n := v.(type) {
+	case float64:
+		return int64(n)
+	case int64:
+		return n
+	}
+	return 0
 }
