@@ -362,7 +362,9 @@ func (r *Runner) landFacts(ctx context.Context, lr *landRun) (LandFacts, error) 
 }
 
 // landAdvance reports a land outcome with the changed paths; it says whether loopd took it. A
-// merge loopd refuses (it should not: land checked the same rules first) goes to the user.
+// merge loopd refuses (it should not: land checked the same rules first) goes to the user — except
+// a 409 approval_required on a merged head, which parks the item in held at that head (#535): in
+// needs_you `loop approve` is refused wrong_stage, and every answer would just replay the 409.
 func (r *Runner) landAdvance(ctx context.Context, lr *landRun, d Decision, paths []string) bool {
 	fields := map[string]string{}
 	for k, v := range d.Fields {
@@ -385,6 +387,22 @@ func (r *Runner) landAdvance(ctx context.Context, lr *landRun, d Decision, paths
 	}
 	lr.log.Error("land advance", "outcome", d.Outcome, "err", err)
 	if d.Outcome == "merged" {
+		var ae *APIError
+		if errors.As(err, &ae) && ae.Code == pipeline.CodeApprovalRequired && fields["head_sha"] != "" {
+			// The PR was merged by hand at a head the user never approved: held is where the
+			// Approve button binds the approval to that head; the next land run records the merge.
+			hold := map[string]string{
+				"reason": fmt.Sprintf("PR #%d is already merged on GitHub as `%s`; approve the merged head `%s` to record it",
+					lr.item.PR, short7(fields["merge_sha"]), short7(fields["head_sha"])),
+				"head_sha": fields["head_sha"], "runner_agent": lr.agent,
+			}
+			if err2 := r.Client.Advance(ctx, lr.item.ID, "hold", hold, paths); err2 == nil {
+				lr.log.Info("land reported", "outcome", "hold", "head", short7(fields["head_sha"]))
+				return false
+			} else {
+				lr.log.Error("land advance hold", "err", err2)
+			}
+		}
 		msg := fmt.Sprintf("PR #%d is merged on GitHub as `%s`, but loopd refused to record it: %s", lr.item.PR, short7(fields["merge_sha"]), clip(err.Error(), 600))
 		if err2 := r.Client.Advance(ctx, lr.item.ID, "failed", map[string]string{"error": msg, "runner_agent": lr.agent}, nil); err2 != nil {
 			lr.log.Error("land advance failed", "err", err2)
