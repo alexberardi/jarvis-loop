@@ -795,6 +795,9 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		text = fmt.Sprintf("Reply approval cancelled by %s; still held.", by)
 	case "land_waiting":
 		return Message{}, false // pending CI does not post; the parent's stage line says it
+	case "land_update":
+		text = fmt.Sprintf("Land merged the base into the branch (the PR was behind and the repo requires up-to-date heads): `%s` → `%s`.",
+			short(str(e.Data, "old_head")), short(str(e.Data, "new_head")))
 	case "ci_rerun":
 		if str(e.Data, "jobs") == "" {
 			text = fmt.Sprintf("Land could not re-run the failed CI jobs on `%s`: GitHub refused.", short(str(e.Data, "head_sha")))

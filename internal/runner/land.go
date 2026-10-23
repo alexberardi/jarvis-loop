@@ -124,10 +124,13 @@ const (
 	ActConflict
 	// ActMerge squash-merges the PR at the head the gates checked.
 	ActMerge
+	// ActUpdate merges the base into a branch GitHub calls BEHIND (the base requires up-to-date
+	// heads, so the merge would be refused) and runs the gates again on the new head.
+	ActUpdate
 )
 
 func (a Action) String() string {
-	return [...]string{"advance", "wait", "conflict", "merge"}[a]
+	return [...]string{"advance", "wait", "conflict", "merge", "update"}[a]
 }
 
 // Decision is one pass of the gates.
@@ -231,6 +234,12 @@ func Decide(f LandFacts) Decision {
 		return advance("back_to_build", map[string]string{"reason": p.why(f.FollowedBy) +
 			": finish the ask in this PR, or return a question asking for the remaining parts to be filed as items after this one (loop add --after)."})
 	}
+	// 3d. Behind a base that requires up-to-date heads: GitHub answers BEHIND only when the repo's
+	// protection requires the head to be up to date, so the merge would be refused (#521); update
+	// the branch before waiting on CI that cannot merge. Every later gate re-runs on the new head.
+	if pr.MergeStateStatus == "BEHIND" {
+		return Decision{Action: ActUpdate}
+	}
 	// 4. CI on this head.
 	var fails, pending []string
 	for _, c := range pr.Checks {
@@ -272,7 +281,7 @@ func Decide(f LandFacts) Decision {
 	}
 	// 7. Mergeable.
 	if pr.Mergeable == "MERGEABLE" {
-		return Decision{Action: ActMerge} // behind but clean merges as is; main's CI catches the rest
+		return Decision{Action: ActMerge} // a BEHIND head was updated at 3d; main's CI catches the rest
 	}
 	return Decision{Action: ActWait, Wait: "GitHub's mergeability check"}
 }

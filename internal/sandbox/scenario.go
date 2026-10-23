@@ -126,10 +126,13 @@ type Step struct {
 	Branch string `json:"branch,omitempty"`
 	Slug   string `json:"slug,omitempty"`
 	// github: GitHub refuses the next RefuseMerges merges; MergeByHand merges the item's PR
-	// outside the loop, CloseByHand closes it
-	RefuseMerges *int `json:"refuse_merges,omitempty"`
-	MergeByHand  bool `json:"merge_by_hand,omitempty"`
-	CloseByHand  bool `json:"close_by_hand,omitempty"`
+	// outside the loop, CloseByHand closes it; RequireUpToDate turns the demo repo's (or Slug's)
+	// require-up-to-date protection on or off (a clean head behind the base is BEHIND and its
+	// merge refused, #521)
+	RefuseMerges    *int  `json:"refuse_merges,omitempty"`
+	RequireUpToDate *bool `json:"require_up_to_date,omitempty"`
+	MergeByHand     bool  `json:"merge_by_hand,omitempty"`
+	CloseByHand     bool  `json:"close_by_hand,omitempty"`
 	// github: ForeignPR ("owner/name#444") is a PR the loop did not open (a fix someone else
 	// lands), put in PRState: OPEN files it, MERGED or CLOSED moves it.
 	ForeignPR string `json:"foreign_pr,omitempty"`
@@ -781,6 +784,13 @@ func (p *player) step(st Step) error {
 	case "github":
 		if st.RefuseMerges != nil {
 			s.GitHub.RefuseMerges(*st.RefuseMerges)
+		}
+		if st.RequireUpToDate != nil {
+			slug := RepoSlug
+			if st.Slug != "" {
+				slug = st.Slug
+			}
+			s.GitHub.SetRequireUpToDate(slug, *st.RequireUpToDate)
 		}
 		if st.CloseByHand {
 			r, err := p.ref(st.Item)

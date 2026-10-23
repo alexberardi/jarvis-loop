@@ -38,7 +38,7 @@ func TestDecide(t *testing.T) {
 		field   string // key=substring of a field the outcome must carry
 	}{
 		{"all gates pass", func(f *LandFacts) {}, ActMerge, "", ""},
-		{"behind but clean merges as is", func(f *LandFacts) { f.PR.MergeStateStatus = "BEHIND" }, ActMerge, "", ""},
+		{"behind is updated first", func(f *LandFacts) { f.PR.MergeStateStatus = "BEHIND" }, ActUpdate, "", ""},
 		// 1. the PR
 		{"merged by hand", func(f *LandFacts) { f.PR.State, f.PR.MergeCommit = "MERGED", mergeM }, ActAdvance, "merged", "merge_sha=" + mergeM},
 		{"merged by hand, head recorded", func(f *LandFacts) { f.PR.State, f.PR.MergeCommit = "MERGED", mergeM }, ActAdvance, "merged", "head_sha=" + headA},
@@ -114,6 +114,21 @@ func TestDecide(t *testing.T) {
 			f.PR.Checks = []Check{{Name: "check", Bucket: BucketPending}}
 		}, ActAdvance, "back_to_build", "reason=part 1 of 2"},
 		{"a conflict beats a part", func(f *LandFacts) { f.PR.Title, f.PR.Mergeable = "part 1 of 2", "CONFLICTING" }, ActConflict, "", ""},
+		// 3d. behind a base that requires up-to-date heads: update before waiting on CI that cannot merge
+		{"a conflict beats an update", func(f *LandFacts) { f.PR.Mergeable, f.PR.MergeStateStatus = "CONFLICTING", "BEHIND" }, ActConflict, "", ""},
+		{"a part beats an update", func(f *LandFacts) { f.PR.Title, f.PR.MergeStateStatus = "part 1 of 2", "BEHIND" }, ActAdvance, "back_to_build", "reason=part 1 of 2"},
+		{"moved head beats an update", func(f *LandFacts) { f.PR.HeadRefOid, f.PR.MergeStateStatus = headB, "BEHIND" }, ActAdvance, "back_to_review", ""},
+		{"an update beats CI red", func(f *LandFacts) {
+			f.PR.MergeStateStatus = "BEHIND"
+			f.PR.Checks = []Check{{Name: "check", Bucket: BucketFail}}
+		}, ActUpdate, "", ""},
+		{"an update beats CI pending", func(f *LandFacts) {
+			f.PR.MergeStateStatus = "BEHIND"
+			f.PR.Checks = []Check{{Name: "check", Bucket: BucketPending}}
+		}, ActUpdate, "", ""},
+		{"an update beats hold, even approved at this head", func(f *LandFacts) {
+			f.PR.MergeStateStatus, f.Hold, f.ApprovedHead = "BEHIND", true, headA
+		}, ActUpdate, "", ""},
 		// 4. CI
 		{"CI failed", func(f *LandFacts) {
 			f.PR.Checks = []Check{{Name: "check", Bucket: BucketPass}, {Name: "lint", Bucket: BucketFail, URL: "https://ci/lint"}}
