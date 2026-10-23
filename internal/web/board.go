@@ -733,6 +733,7 @@ var lanes = []struct {
 	{"Triage", "", []string{"intake", "triage"}},
 	{"Build", "", []string{"ready", "build"}},
 	{"Review", "", []string{"review (queued)", "review", "land (queued)", "land"}},
+	{"Waiting", "Nothing is parked.", []string{"waiting"}},
 	{"Needs you", "", []string{"needs-you"}},
 	{"Approval", "", []string{"held"}},
 	{"QA", "Nothing waits for a check.", []string{"qa"}},
@@ -782,6 +783,9 @@ func boardViewVerify(items []store.BoardItem, plans []store.PlanRow, now time.Ti
 				SlackURL: slackURL(slackBase, it.SlackChannel, it.SlackTS), Reason: it.Question}
 			if it.Display == "held" {
 				c.Reason = it.HoldReason
+			}
+			if it.Display == "waiting" {
+				c.Reason = "waiting on " + it.WaitsOn + ", then back to " + it.ReturnStage
 			}
 			if len(l.displays) > 1 {
 				c.Label = it.Display

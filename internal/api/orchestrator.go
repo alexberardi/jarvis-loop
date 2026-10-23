@@ -95,6 +95,23 @@ func (s *server) orchLink(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, it)
 }
 
+func (s *server) orchWait(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body waitBody
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.OrchWait(r.Context(), actor(r), id, body.On, body.PRs, body.Reason)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
 // orchProof is the proof sweep's action: the proof of a qa item that has none
 // (docs/decisions/2026-10-18-qa-proofs.md).
 func (s *server) orchProof(w http.ResponseWriter, r *http.Request) {

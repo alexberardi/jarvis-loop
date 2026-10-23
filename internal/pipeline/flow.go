@@ -109,6 +109,8 @@ func WaitReason(c Control, pace Pace, it Item, deps map[int64]Stage, live []Live
 		return WaitHeld
 	case QA:
 		return WaitQA
+	case Waiting:
+		return WaitDeps
 	}
 	claimed, inUse := usage(live)
 	if !it.Stage.IsWork() || claimed[it.ID] {

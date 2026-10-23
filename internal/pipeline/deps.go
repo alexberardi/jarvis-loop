@@ -131,6 +131,8 @@ func WaitRoot(st Stage, claimed bool) string {
 		return "queued to land"
 	case QA:
 		return "in qa"
+	case Waiting:
+		return "waiting"
 	}
 	return string(st)
 }
@@ -203,7 +205,12 @@ func ApplyDependencyClosed(it Item, dep int64) (Transition, bool) {
 	data := map[string]any{"dependency": dep}
 	if from != NeedsYou {
 		q := DependencyClosedQuestion(dep)
-		it = toNeedsYou(it, from, q)
+		ret := from
+		if from == Waiting {
+			// The question goes back to the stage the item was waiting to return to.
+			ret, it = it.ReturnStage, unpark(it)
+		}
+		it = toNeedsYou(it, ret, q)
 		data["question"] = q
 	}
 	return Transition{Item: it, From: from, To: it.Stage, Kind: "dependency_closed", Data: data}, true
