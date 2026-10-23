@@ -131,8 +131,8 @@ type Step struct {
 	// merge refused, #521)
 	RefuseMerges    *int  `json:"refuse_merges,omitempty"`
 	RequireUpToDate *bool `json:"require_up_to_date,omitempty"`
-	MergeByHand  bool `json:"merge_by_hand,omitempty"`
-	CloseByHand  bool `json:"close_by_hand,omitempty"`
+	MergeByHand     bool  `json:"merge_by_hand,omitempty"`
+	CloseByHand     bool  `json:"close_by_hand,omitempty"`
 	// github: ForeignPR ("owner/name#444") is a PR the loop did not open (a fix someone else
 	// lands), put in PRState: OPEN files it, MERGED or CLOSED moves it.
 	ForeignPR string `json:"foreign_pr,omitempty"`
