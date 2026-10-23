@@ -55,6 +55,14 @@ Everything is re-derived from GitHub and git, never from an agent's words.
    *As built (2026-10-20, item #353): then, before CI, a PR whose title (or own body text) says
    "part N of M" with N<M goes `back_to_build` unless M−N open items are filed after the item; one
    merged by hand that way is `failed` (`docs/decisions/2026-10-20-partial-prs.md`).*
+   *As built (2026-10-22, item #521): then, still before CI, a PR whose `mergeStateStatus` is
+   `BEHIND` (the repo requires up-to-date heads: merging as-is would be refused, and waiting on CI
+   of a head that cannot merge wastes the wait) gets `origin/<base>` merged into the branch, as the
+   conflict path does, and the gates re-run from the top on the new head (a `land_update` event
+   records old and new head); the review approval carries over when the heads differ only by clean
+   merges of the base — pure git facts, no conflicts at all — and `merged` then names
+   `review_carried_from`. A conflict in the update goes `back_to_build`; at most 3 updates per run,
+   then `failed` (`docs/decisions/2026-10-22-land-updates-behind.md`).*
 4. **CI:** every check on the head (`gh pr checks <n> --json name,state,bucket` or the status
    rollup; *as built:* the rollup, in the same `gh pr view` as the head, bucketed as gh does;
    the failing checks go in `back_to_build`'s `reason`, which loopd requires). All `pass` → go on. Any `fail`/`cancel` → `back_to_build` with the failing check names
@@ -94,8 +102,10 @@ Everything is re-derived from GitHub and git, never from an agent's words.
    resolves it (`-X` is not used; a real conflict anywhere → `back_to_build`; *as built: a
    conflict only under `docs/` is resolved by git's union driver, both sides kept*), push the branch
    (the runner's push rules: only `loop/<item>-…`, never forced), and report `back_to_review`
-   (new head). `UNKNOWN` → poll like CI. Behind but clean → merge as is (no required up-to-date
-   branch in these repos; main's CI after the merge catches semantic breaks).
+   (new head). `UNKNOWN` → poll like CI. ~~Behind but clean → merge as is (no required up-to-date
+   branch in these repos; main's CI after the merge catches semantic breaks).~~ *As built
+   (2026-10-22, item #521): jarvis-node-mobile now requires up-to-date heads, so a `BEHIND` head is
+   updated at gate 3 and never reaches this gate behind.*
 
 ## Merge
 

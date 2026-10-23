@@ -151,6 +151,8 @@ type fakeLand struct {
 	// refuses every re-run. A run with a pending check is refused too, as GitHub does.
 	commits  map[string][]WorkflowRun
 	rerunErr error
+	// view, when set, shapes the PR before each LandView answer (a test tracking the live remote).
+	view func(*LandPR)
 }
 
 func (f *fakeLand) RerunFailed(_ context.Context, _ string, id int64) error {
@@ -172,6 +174,9 @@ func (f *fakeLand) LandView(_ context.Context, slug string, pr int) (LandPR, err
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.views++
+	if f.view != nil {
+		f.view(&f.pr)
+	}
 	return f.pr, nil
 }
 

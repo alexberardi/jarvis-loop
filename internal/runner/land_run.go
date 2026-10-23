@@ -25,6 +25,10 @@ var errNotLanding = errors.New("the item is no longer in land")
 // can merge, and loopd ends its lease (the item waits in land until the freeze lifts).
 var errFrozen = errors.New("main is red in the item's repo: frozen")
 
+// MaxLandUpdates is how many times one land run brings a BEHIND branch up to date (ActUpdate)
+// before it stops chasing a base that keeps moving and fails to the user.
+const MaxLandUpdates = 3
+
 // landRun is one land claim.
 type landRun struct {
 	item    Item
@@ -37,6 +41,9 @@ type landRun struct {
 	// mainTip is main's head at the last pass of the gates: the merge's base, which watchMain
 	// names as the last green commit when main goes red and it was green.
 	mainTip string
+	// reviewCarriedFrom is the reviewed head a pass of landFacts carried the review approval
+	// from, when the PR's head moved past it only by clean merges of the base ("" otherwise).
+	reviewCarriedFrom string
 }
 
 // ciGiveUp is land_ci_give_up: how long CI may stay pending on one head over all land runs.
@@ -109,7 +116,7 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 	}
 
 	var waitSince time.Time
-	noted, reran, refusals := false, false, 0
+	noted, reran, refusals, updates := false, false, 0, 0
 	for {
 		f, err := r.landFacts(ctx, lr)
 		if ctx.Err() != nil {
@@ -204,6 +211,20 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 			d, paths := r.landConflict(ctx, lr, f)
 			r.landAdvance(report, lr, d, paths)
 			return
+		case ActUpdate:
+			if updates >= MaxLandUpdates {
+				r.landAdvance(report, lr, failed("PR #%d is still behind %s after %d updates of the branch: the base keeps moving under it",
+					f.PR.Number, lr.repo.Base, updates), f.Paths)
+				return
+			}
+			updates++
+			if d, done := r.landUpdate(ctx, lr, f); done {
+				r.landAdvance(report, lr, d, f.Paths)
+				return
+			}
+			// The gates again, from the top: the new head gets its own facts and a fresh CI wait.
+			waitSince, noted = time.Time{}, false
+			continue
 		case ActMerge:
 			head := f.PR.HeadRefOid
 			if err := r.Land.Merge(ctx, lr.repo.Slug, f.PR.Number, head); err != nil {
@@ -227,6 +248,9 @@ func (r *Runner) land(ctx context.Context, cl *Claim, agent string) {
 				return
 			}
 			d := advance("merged", map[string]string{"merge_sha": after.MergeCommit, "head_sha": head, "main_ci": "watching"})
+			if lr.reviewCarriedFrom != "" {
+				d.Fields["review_carried_from"] = lr.reviewCarriedFrom
+			}
 			if r.landAdvance(report, lr, d, f.Paths) {
 				r.startMainWatch(ctx, lr, after.MergeCommit, lr.mainTip)
 			}
@@ -289,6 +313,22 @@ func (r *Runner) landFacts(ctx context.Context, lr *landRun) (LandFacts, error) 
 			f.ReviewedHead, _ = e.Data["head_sha"].(string)
 		case string(pipeline.PROpened):
 			buildLease, _ = e.Data["lease"].(string)
+		}
+	}
+	// A head that moved past the reviewed one only by clean merges of the base (land's own
+	// update, or anyone merging the base in) keeps the review approval: the new content is git's
+	// own merge of what was reviewed and the base — pure git facts, never an agent's words
+	// (docs/decisions/2026-10-22-land-updates-behind.md). Stricter than Carryable: no conflicts
+	// at all, since nobody reviewed a resolution.
+	lr.reviewCarriedFrom = ""
+	if f.ReviewedHead != "" && f.ReviewedHead != pr.HeadRefOid {
+		unlock := r.lockMirror(lr.mirror)
+		delta := r.Git.ApprovalDelta(ctx, lr.mirror, lr.repo.Base, f.ReviewedHead, pr.HeadRefOid)
+		unlock()
+		if delta.Problem == "" && len(delta.Changed) == 0 && len(delta.Conflicts) == 0 && len(delta.Merges) > 0 {
+			lr.log.Info("land: the review approval carries over clean merges of the base",
+				"from", short7(f.ReviewedHead), "to", short7(pr.HeadRefOid))
+			lr.reviewCarriedFrom, f.ReviewedHead = f.ReviewedHead, pr.HeadRefOid
 		}
 	}
 	for _, ev := range d.Evidence {

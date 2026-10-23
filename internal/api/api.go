@@ -539,11 +539,12 @@ func (s *server) advance(w http.ResponseWriter, r *http.Request) {
 // RunnerEventKinds are the events a runner may record on an item it holds the lease on, besides
 // stage moves: what happened inside a run that the user should see in the item's history
 // (land_waiting: the land script has waited on CI or GitHub's mergeability for a while;
+// land_update: land merged the base into a branch GitHub called BEHIND, with the old and new head;
 // ci_rerun: land re-ran the PR's failed CI jobs once, after the orchestrator's first red_ci answer;
 // builder_fallback: a qwen item built with claude on a runner with no qwen config;
 // branch_rewritten: the runner pushed a reviewed rebase over the PR's recorded head, with a lease;
 // second_opinion: Gemini's findings on an approved review and Claude's verdicts, as counts).
-var RunnerEventKinds = []string{"guard_refused", "low_cache_hit", "land_waiting", "ci_rerun", "builder_fallback", "branch_rewritten", "second_opinion"}
+var RunnerEventKinds = []string{"guard_refused", "low_cache_hit", "land_waiting", "land_update", "ci_rerun", "builder_fallback", "branch_rewritten", "second_opinion"}
 
 // KindMainCI is main's CI on an item's merge commit: recorded after the merge (the lease has
 // ended), only by the runner that merged it (store.MainCI).

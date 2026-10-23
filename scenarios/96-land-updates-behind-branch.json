@@ -1,0 +1,42 @@
+{
+  "name": "land-updates-behind-branch",
+  "about": "#521: the repo requires branches to be up to date before merging, so GitHub answers mergeStateStatus BEHIND once main moves (as jarvis-node-mobile did on #496) and refuses the merge as-is. Land updates the branch (merges main in, as it does for conflicts), carries the review approval over the clean merge (pure git facts), waits for CI on the new head and merges — no needs_you, no second review.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "github", "require_up_to_date": true},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "push", "branch": "main", "file": "docs/elsewhere.md", "text": "someone else's change\n"},
+    {"do": "runner", "claims": "a"},
+    {"do": "wait", "events": [{"item": "a", "kind": "land_update", "count": 1}]},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "pr": {"a": {"state": "MERGED", "merge_calls": 1}},
+    "remote": {"main": "a", "only": true},
+    "events": [
+      {"item": "a", "kind": "land_update", "actor": "runner",
+       "data": {"old_head": "^[0-9a-f]{40}$", "new_head": "^[0-9a-f]{40}$", "how": "^git merged it cleanly$"}, "count": 1},
+      {"item": "a", "kind": "advanced", "outcome": "merged", "actor": "runner",
+       "data": {"review_carried_from": "^[0-9a-f]{40}$"}, "count": 1},
+      {"item": "a", "kind": "main_ci", "data": {"result": "^green$"}, "count": 1}
+    ],
+    "no_events": [
+      {"item": "a", "kind": "advanced", "outcome": "back_to_review"},
+      {"item": "a", "kind": "advanced", "outcome": "failed"}
+    ],
+    "messages": [
+      {"thread": "a", "text": "^Land merged the base into the branch \\(the PR was behind and the repo requires up-to-date heads\\): `[0-9a-f]{7}` → `[0-9a-f]{7}`\\.$"},
+      {"thread": "a", "text": "^Merged <"}
+    ]
+  }
+}

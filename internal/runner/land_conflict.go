@@ -34,6 +34,28 @@ func (r *Runner) landConflict(ctx context.Context, lr *landRun, f LandFacts) (De
 		"notes": fmt.Sprintf("Land merged %s into the branch (%s); the new head `%s` needs a review.", lr.repo.Base, how, short7(head))}), paths
 }
 
+// landUpdate brings a PR GitHub calls BEHIND up to date (#521: the base requires up-to-date
+// heads, so merging as-is would be refused): it merges the base into the branch (mergeBase, as
+// landConflict and the held watch do) and pushes. done is false on success — the caller re-runs
+// the gates on the new head; a conflict goes back to build (a real conflict escalates), and a git
+// failure fails the run.
+func (r *Runner) landUpdate(ctx context.Context, lr *landRun, f LandFacts) (Decision, bool) {
+	wt := filepath.Join(r.Config().WorkRoot, fmt.Sprintf("%d-land", lr.item.ID))
+	head, how, conflict, err := r.mergeBase(ctx, lr.mirror, lr.repo, wt, f.PR.HeadRefOid, f.Branch, f.PR.Number, "loop land")
+	if err != nil {
+		return failed("land: %s", err.Error()), true
+	}
+	if conflict != "" {
+		return advance("back_to_build", map[string]string{"reason": conflict}), true
+	}
+	if err := r.Client.Event(ctx, lr.item.ID, "land_update", map[string]any{
+		"old_head": f.PR.HeadRefOid, "new_head": head, "how": how}); err != nil {
+		lr.log.Warn("land_update event", "err", err)
+	}
+	lr.log.Info("land: updated the behind branch with the base", "old", short7(f.PR.HeadRefOid), "new", short7(head), "how", how)
+	return Decision{}, false
+}
+
 // mergeBase merges origin/<base> into prHead in the scratch worktree wt of mirror, under the
 // mirror's lock. A merge git does cleanly, or one whose conflicts are all under docs/ (resolved by
 // git's union driver, both sides kept; no -X strategy option), is pushed to branch (only
