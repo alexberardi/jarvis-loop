@@ -1,7 +1,7 @@
 # The loop's agents run on the subscription only (2026-10-23)
 
 Item #548, phase 9 §10. Subscription auth was true by omission: nothing set `ANTHROPIC_API_KEY`,
-so the OAuth login was used. But `scrubEnv` (`internal/runner/runner.go`) dropped only `LOOP_TOKEN`,
+so the OAuth login was used. But `ScrubEnv` (`internal/runner/runner.go`) dropped only `LOOP_TOKEN`,
 `LOOP_URL` and `SLACK_*`, so a stray `ANTHROPIC_API_KEY` in the runner's own environment — exported
 in a shell profile, inherited from a parent process, set for an unrelated tool — would have been
 handed to every agent run and silently billed every build to that key. The runner also never read
@@ -12,13 +12,15 @@ check.
 
 Two absolute rules, neither configurable:
 
-1. **No Anthropic variable reaches anything the runner starts.** `scrubEnv` drops every
+1. **No Anthropic variable reaches anything the runner starts.** `ScrubEnv` drops every
    `ANTHROPIC_*` variable (key, token, base URL, model, headers — the prefix, not a list), plus
    `CLAUDE_CODE_USE_BEDROCK` and `CLAUDE_CODE_USE_VERTEX`, which redirect billing the same way.
    The runner needs none of them, so there is no exception to keep in step with the CLI's variable
-   list. `scrubEnv` is the one chokepoint: the agent's own environment (`agentEnv`), the helper git
+   list. `ScrubEnv` is the one chokepoint: the agent's own environment (`agentEnv`), the helper git
    and `gh` commands, and the fenced setup/verify/proof/regression/harness commands (`fencedEnv`
-   on top of it) all come through it.
+   on top of it) all come through it. It is exported so the loop's own harness
+   (`internal/sandbox`), which builds the fake claude's environment itself, applies the same rule
+   instead of a second list of names.
 2. **A session that is not on the subscription dies.** The init event's `apiKeySource` is recorded
    on every advance (`api_key_source`) and asserted against `wantAPIKeySource` = `"none"`: anything
    else ends the run as `auth_mismatch`, which is handled exactly where `mode_mismatch` is (item
@@ -42,7 +44,10 @@ the ones that name a source (`ANTHROPIC_API_KEY`, `apiKeyHelper`, `temporary`, �
 An empty or missing reading also fails the assertion. That is deliberate: "the CLI stopped telling
 us" is not evidence that the run is on the subscription, and the failure is loud (one item in
 needs-you, claims paused) rather than silent. A CLI upgrade that renames the field will be noticed
-on the first run, which is the behaviour the `permissionMode` check already has.
+on the first run, which is the behaviour the `permissionMode` check already has. That case gets
+its own needs-you advice (`mismatchFix`): an empty reading is the one auth mismatch an `ANTHROPIC_*`
+variable may not have caused, so it says to check the environment *and* whether the CLI still
+reports the field, which would need a code change here rather than an environment one.
 
 ## Not configurable
 

@@ -567,12 +567,14 @@ func SandboxHoldRules() []pipeline.HoldRule {
 }
 
 // agentEnv is the environment the fake claude (and the runner's helper commands) start with: the
-// runner's own minus anything that names real credentials, plus the fake's script dir.
+// runner's own minus anything that names real credentials, plus the fake's script dir. The
+// Anthropic variables (and the Bedrock/Vertex switches) go with the runner's own rule,
+// runner.ScrubEnv, so the harness has no second list of names to keep in step with it.
 func agentEnv(scripts string, extra []string) []string {
 	var out []string
-	for _, kv := range os.Environ() {
+	for _, kv := range runner.ScrubEnv(os.Environ()) {
 		k, _, _ := strings.Cut(kv, "=")
-		if k == "GH_TOKEN" || k == "GITHUB_TOKEN" || k == "ANTHROPIC_API_KEY" || strings.HasPrefix(k, "SLACK_") ||
+		if k == "GH_TOKEN" || k == "GITHUB_TOKEN" || strings.HasPrefix(k, "SLACK_") ||
 			strings.HasPrefix(k, "LOOP_") || strings.HasPrefix(k, "FAKE_CLAUDE_") {
 			continue
 		}

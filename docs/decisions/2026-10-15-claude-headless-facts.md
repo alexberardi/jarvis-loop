@@ -129,7 +129,7 @@ the version it needs. **What the spec got wrong or left open is in bold.**
 
 ## Environment variables used
 
-**Not** used, and scrubbed from every environment the runner hands out (`scrubEnv`): every
+**Not** used, and scrubbed from every environment the runner hands out (`ScrubEnv`): every
 `ANTHROPIC_*` variable, and `CLAUDE_CODE_USE_BEDROCK` / `CLAUDE_CODE_USE_VERTEX`. The agents
 authenticate with the OAuth login only; see `2026-10-23-subscription-auth-only.md`.
 

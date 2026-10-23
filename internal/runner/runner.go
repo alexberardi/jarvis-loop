@@ -928,20 +928,21 @@ func (r *Runner) shell(ctx context.Context, dir, command string, limit time.Dura
 
 // agentEnv is the environment for the agent and the runner's helper commands: no loopd or Slack
 // secret, and no Anthropic variable.
-func (r *Runner) agentEnv() []string { return scrubEnv(r.Env) }
+func (r *Runner) agentEnv() []string { return ScrubEnv(r.Env) }
 
 // billingRedirect are the variables outside ANTHROPIC_* that take a run off the subscription:
 // either sends claude to a cloud provider's credentials instead of the OAuth login.
 var billingRedirect = map[string]bool{"CLAUDE_CODE_USE_BEDROCK": true, "CLAUDE_CODE_USE_VERTEX": true}
 
-// scrubEnv is src (nil: the runner's own environment) without loopd's and Slack's secrets, and
+// ScrubEnv is src (nil: the runner's own environment) without loopd's and Slack's secrets, and
 // without anything that could move an agent run off the user's subscription: every ANTHROPIC_*
 // variable (key, token, base URL, model) and the Bedrock/Vertex switches. The rule is absolute
 // because the runner needs none of them — the agents authenticate with the OAuth login
 // (docs/decisions/2026-10-15-claude-headless-facts.md) — while a stray ANTHROPIC_API_KEY in the
 // runner's own environment would silently bill every run to that key. Every command the runner
-// starts goes through here, fenced ones through fencedEnv on top.
-func scrubEnv(src []string) []string {
+// starts goes through here, fenced ones through fencedEnv on top; it is exported so the loop's own
+// harness applies the same rule rather than a second list of names to keep in step.
+func ScrubEnv(src []string) []string {
 	if src == nil {
 		src = os.Environ()
 	}
@@ -964,6 +965,26 @@ func scrubEnv(src []string) []string {
 // report "none" and nothing else. Anything else (an API key, an apiKeyHelper, an empty reading from
 // a CLI that stopped saying) ends the run as auth_mismatch and pauses the runner.
 const wantAPIKeySource = "none"
+
+// mismatchFix is what the user has to change before restarting the runner, on a boundary check
+// that paused it. The cause outlives the run either way, which is why the runner stops claiming:
+// auto mode being unavailable, or an Anthropic variable in its environment. A session that reported
+// no auth source at all gets its own advice: an empty reading is also what a CLI that renamed or
+// dropped apiKeySource looks like, and that needs a code change, not an environment one
+// (docs/decisions/2026-10-23-subscription-auth-only.md).
+func mismatchFix(reason, source string) string {
+	switch {
+	case reason != endAuthMismatch:
+		return "Auto mode may be unavailable; the runner stopped claiming until it is restarted (use mode \"strict\" to run without it)."
+	case source == "":
+		return "The session reported no auth source at all, so the loop cannot tell it is the subscription's: check for an " +
+			"ANTHROPIC_* variable in the runner's environment, and that the CLI still reports apiKeySource on the init event " +
+			"(if it stopped, wantAPIKeySource needs a code change). The runner stopped claiming until it is restarted."
+	default:
+		return "The loop's agents run on the subscription only; the runner stopped claiming until it is restarted without " +
+			"any ANTHROPIC_* variable in its environment."
+	}
+}
 
 // Why a run ended.
 const (
@@ -1592,13 +1613,8 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 	case endModeMismatch, endAuthMismatch:
 		r.paused.Store(out.detail)
 		log.Error("pausing: the agent's session is not the one the runner asked for", "reason", out.reason, "detail", out.detail)
-		// The cause outlives the run either way — auto mode being unavailable, or an Anthropic
-		// variable in the runner's environment — so the runner stops claiming until it is restarted.
-		fix := "Auto mode may be unavailable; the runner stopped claiming until it is restarted (use mode \"strict\" to run without it)."
-		if out.reason == endAuthMismatch {
-			fix = "The loop's agents run on the subscription only; the runner stopped claiming until it is restarted without any ANTHROPIC_* variable in its environment."
-		}
-		r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{"error": "boundary check failed: " + out.detail + ". " + fix}), nil)
+		r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{
+			"error": "boundary check failed: " + out.detail + ". " + mismatchFix(out.reason, out.stats.initAuth)}), nil)
 		return
 	case endNotArmed, endStartFailed, endGitTampered:
 		r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{"error": "boundary check failed (" + out.reason + "): " + out.detail}), nil)

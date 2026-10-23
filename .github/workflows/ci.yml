@@ -18,8 +18,9 @@ jobs:
   check:
     runs-on: ubuntu-latest
     # The race tests plus the scenarios take about 9 minutes; at 10, a slow runner cancelled most PR
-    # runs and every one came back to the loop as a CI failure (#212).
-    timeout-minutes: 25
+    # runs and every one came back to the loop as a CI failure (#212). Raised again with the test
+    # timeout below (#548), so a 20-minute test binary still has room for the scenarios after it.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -46,7 +47,10 @@ jobs:
         env:
           CGO_ENABLED: "1"
         # Under the job's cap, so a hung test prints its goroutines instead of the job being cut off.
-        run: go test -race -timeout 12m ./...
+        # The timeout is per test binary, and internal/runner has outgrown 12m on a 2-vCPU runner
+        # while the other heavy packages run beside it: at the cap it was 6 of its 289 tests from
+        # the end (#548). 20m is the same kind of headroom 12m had when the whole suite took 7m.
+        run: go test -race -timeout 20m ./...
       - name: build (CGO off)
         env:
           CGO_ENABLED: "0"

@@ -756,6 +756,30 @@ func TestAdvanceRecordsTheAuthSource(t *testing.T) {
 	}
 }
 
+// The advice on a paused runner names the thing to change before restarting it. An auth source the
+// CLI did not report at all is the one case an ANTHROPIC_* variable may not be the cause, so it
+// does not get told to go looking for one and nothing else.
+func TestMismatchFixNamesTheCause(t *testing.T) {
+	for _, tc := range []struct {
+		reason, source string
+		want, notWant  string
+	}{
+		{reason: endModeMismatch, source: "none", want: "Auto mode may be unavailable", notWant: "ANTHROPIC_"},
+		{reason: endAuthMismatch, source: "ANTHROPIC_API_KEY", want: "the subscription only", notWant: "Auto mode"},
+		{reason: endAuthMismatch, source: "apiKeyHelper", want: "the subscription only", notWant: "Auto mode"},
+		{reason: endAuthMismatch, source: "", want: "the CLI still reports apiKeySource", notWant: "Auto mode"},
+	} {
+		got := mismatchFix(tc.reason, tc.source)
+		if !strings.Contains(got, tc.want) || strings.Contains(got, tc.notWant) {
+			t.Errorf("mismatchFix(%q, %q) = %q", tc.reason, tc.source, got)
+		}
+	}
+	// The mode mismatch's wording is what it always was: only the auth source's branch is new.
+	if !strings.Contains(mismatchFix(endModeMismatch, "none"), `(use mode "strict" to run without it).`) {
+		t.Error("the mode mismatch should still name the way to run without auto mode")
+	}
+}
+
 // No agent run, and no command the runner starts for it, may carry an Anthropic variable: the
 // runner needs none, and one stray key would bill every build to it. The rule has no exceptions,
 // so the table is "everything with that prefix", not a list to keep in step with the CLI's.
@@ -787,9 +811,9 @@ func TestScrubEnvDropsEveryAnthropicVariable(t *testing.T) {
 		{kv: "HOME=/h", keep: true},
 		{kv: "LOOP_ITEM=7", keep: true},
 	} {
-		got := scrubEnv([]string{"PATH=/bin", tc.kv})
+		got := ScrubEnv([]string{"PATH=/bin", tc.kv})
 		if kept := slices.Contains(got, tc.kv); kept != tc.keep {
-			t.Errorf("scrubEnv(%q): kept=%v, want %v (got %v)", tc.kv, kept, tc.keep, got)
+			t.Errorf("ScrubEnv(%q): kept=%v, want %v (got %v)", tc.kv, kept, tc.keep, got)
 		}
 	}
 	// The whole environment at once, with every caller's layer on top: the agent's own, and a
