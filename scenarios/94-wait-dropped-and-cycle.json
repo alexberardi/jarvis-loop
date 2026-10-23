@@ -1,0 +1,36 @@
+{
+  "name": "wait-dropped-and-cycle",
+  "about": "The waiting stage (docs/decisions/2026-10-22-waiting-stage.md). d's build agent finds it needs c merged first and returns the wait outcome: the runner reports it, and d waits on #1 instead of asking the user. Parking c on d would make a cycle: refused with the cycle, and c stays in build. Then the user drops c: loopd sends d to the user with the reason, as a dropped dependency does, and the answer sends it back to build, the stage it was waiting to return to.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "c", "title": "Plans table"},
+    {"do": "add", "item": "d", "title": "Plan turns", "priority": "P2"},
+    {"do": "triage", "item": "d"},
+    {"do": "script", "item": "d", "play": "park", "file": "1"},
+    {"do": "runner", "claims": "d"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"c": "triage", "d": "waiting"}, "leased": {"d": false},
+     "events": [{"item": "d", "kind": "waiting", "actor": "runner", "outcome": "wait", "data": {"waits_on": "^#1$", "return_stage": "^build$", "reason": "^the build needs that fix on main first$"}, "count": 1}],
+     "board": {"d": {"column": "Waiting", "card": "waiting on #1, then back to build"}},
+     "messages": [{"thread": "d", "from": "bot", "text": "^Waiting on #1, then back to build \\(.*\\): the build needs that fix on main first\\."}]},
+
+    {"do": "triage", "item": "c"},
+    {"do": "expect", "stage": {"c": "build"}},
+    {"do": "park", "item": "c", "after": ["d"], "refused": "depends_on makes a cycle: #1 → #2 → #1"},
+    {"do": "command", "as": "approver", "text": "wait 1 on #2", "answer": "depends_on makes a cycle: #1 → #2 → #1"},
+    {"do": "expect", "stage": {"c": "build", "d": "waiting"},
+     "events": [{"item": "c", "kind": "refused", "data": {"action": "^wait$", "message": "makes a cycle"}, "count": 2}]},
+
+    {"do": "command", "as": "approver", "text": "drop 1 not now", "answer": "^#1 Plans table dropped \\(closed\\)\\.$"},
+    {"do": "expect", "stage": {"c": "closed", "d": "needs_you"},
+     "question": {"d": "^#1 it depends on was dropped: keep, change or drop this one\\?$"},
+     "events": [{"item": "d", "kind": "dependency_closed", "actor": "loopd", "data": {"question": "^#1 it depends on"}, "count": 1}],
+     "messages": [{"thread": "d", "from": "bot", "text": "#2 Plan turns needs you: #1 it depends on was dropped: keep, change or drop this one\\?"}]},
+    {"do": "reply", "item": "d", "as": "approver", "text": "keep it, store the turns in a file for now"},
+    {"do": "expect", "stage": {"d": "build"}}
+  ],
+  "expect": {
+    "stage": {"c": "closed", "d": "build"},
+    "agent_runs": {"build": 1, "review": 0, "land": 0}
+  }
+}

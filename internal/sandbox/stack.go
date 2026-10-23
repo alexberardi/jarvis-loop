@@ -657,6 +657,9 @@ func (s *Stack) Poll(timeout time.Duration) (Claimed, error) {
 		if err := s.Runner.CloseDropped(s.ctx); err != nil {
 			s.log.Warn("close dropped PRs", "err", err)
 		}
+		if err := s.Runner.CheckWaitPRs(s.ctx); err != nil {
+			s.log.Warn("check waited-on PRs", "err", err)
+		}
 		if err := s.Runner.CheckHeld(s.ctx); err != nil {
 			s.log.Warn("check held PRs", "err", err)
 		}

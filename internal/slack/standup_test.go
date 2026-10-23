@@ -154,11 +154,16 @@ func TestStandup(t *testing.T) {
 	if loop, orch := e.orchCalls(); len(only(t, orch, "chat.postMessage")) != 0 || len(digestStandups(t, loop)) != 0 {
 		t.Fatalf("a second standup the same day: %+v %+v", orch, loop)
 	}
+	// Parked now, it has waited more than a day by the next standup.
+	if _, err := e.st.Wait(e.ctx, "user:alex", idB, []int64{idQ}, nil, "needs its answer"); err != nil {
+		t.Fatal(err)
+	}
 	e.clk.Advance(24 * time.Hour)
 	e.b.Tick(e.ctx)
 	_, orch = e.orchCalls()
 	if posts := only(t, orch, "chat.postMessage"); len(posts) != 1 || !strings.Contains(allText(posts[0]), "*Standup* · Thu Oct 15") ||
-		strings.Contains(allText(posts[0]), "Merged yesterday") {
+		strings.Contains(allText(posts[0]), "Merged yesterday") ||
+		!strings.Contains(allText(posts[0]), fmt.Sprintf("*Waiting over a day (1)*\n• #%d building one — parked, waiting on #%d · 24h\n", idB, idQ)) {
 		t.Fatalf("the next day's standup: %+v", posts)
 	}
 }

@@ -654,6 +654,28 @@ func (g *GitHub) ClosePR(_ context.Context, slug string, number int, comment str
 	return nil
 }
 
+// ForeignPR files (OPEN) or moves (MERGED, CLOSED) a PR the loop did not open: a fix someone
+// else lands, which a waiting item may wait on. Its merge does not move main (the scenario pushes
+// what it needs).
+func (g *GitHub) ForeignPR(slug string, number int, state string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	switch state {
+	case "OPEN", "MERGED", "CLOSED":
+	default:
+		return fmt.Errorf("pr_state must be OPEN, MERGED or CLOSED, not %q", state)
+	}
+	if i, ok := g.find(slug, number); ok {
+		g.prs[i].State = state
+		return nil
+	}
+	if state != "OPEN" {
+		return fmt.Errorf("no pull request %s#%d to move: file it OPEN first", slug, number)
+	}
+	g.prs = append(g.prs, PR{Number: number, Repo: slug, Head: fmt.Sprintf("fix-%d", number), Base: "main", Title: "a fix outside the loop", State: state})
+	return nil
+}
+
 // CloseByHand closes an item's open PR as someone on GitHub would, with no comment.
 func (g *GitHub) CloseByHand(slug, branch string) error {
 	g.mu.Lock()
