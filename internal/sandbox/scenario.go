@@ -146,6 +146,8 @@ type Step struct {
 	// PaceNormalUntil lifts claude's pacing (loop pace normal --until: a time, "reset" or "" to
 	// put it back on).
 	PaceNormalUntil *string `json:"pace_normal_until,omitempty"`
+	// RegressionNightly schedules the overnight regression every night (off by default).
+	RegressionNightly *bool `json:"regression_nightly,omitempty"`
 	// Builder is a builder step's: qwen, claude or auto.
 	Builder string `json:"builder,omitempty"`
 	// Size is the size triage gives (default S), and ChangeKind its change_kind (default none).
@@ -961,6 +963,9 @@ func (p *player) step(st Step) error {
 		}
 		if st.PaceNormalUntil != nil {
 			patch["pace_normal_until"] = *st.PaceNormalUntil
+		}
+		if st.RegressionNightly != nil {
+			patch["regression_nightly"] = *st.RegressionNightly
 		}
 		return s.user.do("PUT", "/control", patch, nil)
 	case "unfreeze":

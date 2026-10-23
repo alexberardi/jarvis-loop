@@ -1,0 +1,27 @@
+{
+  "name": "overnight-no-taker-silent",
+  "about": "An overnight run no runner can take expires at 07:00 without a note (#505; it was noted on every night it missed, #416). The approver schedules tonight's run; the only runner asks for regression runs but has no voice capability (the overnight suite needs emulator, gpu, voice), so the run is never claimed. At 07:00 nothing reaches #loop and there is no regression_missed: loopd cancels the run (via expired), so it does not carry over, and the next night is as quiet.",
+  "stages": ["regression"],
+  "capabilities": ["emulator", "gpu"],
+  "steps": [
+    {"do": "regression", "as": "approver", "text": "regression tonight"},
+    {"do": "add", "item": "a", "title": "Waits all night", "priority": "P3"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "16h"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "6h"},
+    {"do": "expect",
+     "no_messages": [{"channel": "loop", "from": "bot", "text": "has not started"}],
+     "events": [{"kind": "regression_cancelled", "count": 1, "actor": "loopd", "data": {"via": "^expired$"}}],
+     "no_events": [{"kind": "regression_missed"}]},
+    {"do": "clock", "advance": "23h"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "1h"},
+    {"do": "expect", "no_messages": [{"channel": "loop", "from": "bot", "text": "has not started"}]}
+  ],
+  "expect": {
+    "stage": {"a": "triage"},
+    "events": [{"kind": "regression_scheduled", "count": 1}, {"kind": "regression_cancelled", "count": 1}],
+    "no_events": [{"kind": "regression_claimed"}, {"kind": "regression_missed"}]
+  }
+}

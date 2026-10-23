@@ -116,7 +116,9 @@ func TestChooseWorkRegressionHeldSlot(t *testing.T) {
 	}
 }
 
-func TestNoRegressionTaker(t *testing.T) {
+// #505: a run no runner seen lately can take (none seen, none claims regression runs, or none has
+// every resource) is not scheduled nightly and expires unnoted.
+func TestRegressionTaker(t *testing.T) {
 	now := time.Date(2026, 10, 21, 7, 0, 0, 0, time.UTC)
 	res := SuiteResources(SuiteOvernight)
 	dev := RunnerSeen{Name: "dev", Capabilities: []string{"emulator", "gpu"}, Kinds: []string{WorkItem, WorkRegression}, LastSeen: now}
@@ -127,16 +129,16 @@ func TestNoRegressionTaker(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		runners []RunnerSeen
-		want    string
+		want    bool
 	}{
-		{"none seen", nil, ""},
-		{"one takes it", []RunnerSeen{dev, full}, ""},
-		{"lacks a resource", []RunnerSeen{dev}, "no runner takes it: it needs one that claims regression runs and has emulator, gpu, voice (seen: dev has emulator, gpu and takes item, regression)"},
-		{"does not claim regression runs", []RunnerSeen{noKind}, "no runner takes it: it needs one that claims regression runs and has emulator, gpu, voice (seen: nokind has emulator, gpu, voice and takes item)"},
-		{"the one that could is stale", []RunnerSeen{dev, stale}, "no runner takes it: it needs one that claims regression runs and has emulator, gpu, voice (seen: dev has emulator, gpu and takes item, regression)"},
+		{"none seen", nil, false},
+		{"one takes it", []RunnerSeen{dev, full}, true},
+		{"lacks a resource", []RunnerSeen{dev}, false},
+		{"does not claim regression runs", []RunnerSeen{noKind}, false},
+		{"the one that could is stale", []RunnerSeen{dev, stale}, false},
 	} {
-		if got := NoRegressionTaker(res, c.runners, now); got != c.want {
-			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)
+		if got := RegressionTaker(res, c.runners, now); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
 	}
 }

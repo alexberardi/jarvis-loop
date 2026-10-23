@@ -301,6 +301,10 @@ func TestRegressionUnstartedNote(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.clk.Advance(17*time.Hour + 6*time.Hour - time.Minute)
+	// A runner that could take it (#505: with none, the run expires unnoted).
+	if _, err := e.st.Claim(e.ctx, "devbox", pipeline.ClaimRequest{Runner: "devbox", Agent: "a1", Capabilities: []string{"emulator", "gpu", "voice"}, Kinds: []string{pipeline.WorkRegression}}); err != nil {
+		t.Fatal(err)
+	}
 	notes := func() []call {
 		var out []call
 		for _, p := range only(t, e.calls(), "chat.postMessage") {
@@ -324,5 +328,22 @@ func TestRegressionUnstartedNote(t *testing.T) {
 	want := fmt.Sprintf("*Overnight regression R1 has not started* (set for 01:00 on Thu Oct 15): the queue is busy: #%d waits in triage.", it.ID)
 	if txt := allText(posts[0]); !strings.Contains(txt, want) {
 		t.Fatalf("note %s\nwant %q", txt, want)
+	}
+}
+
+// #505: an overnight run no runner can take posts nothing at 07:00; it expires.
+func TestRegressionUnstartedNoTakerSilent(t *testing.T) {
+	e := newBotEnv(t)
+	e.mention(Approver, ChannelLoop, "<@U0BOT> regression tonight")
+	e.clk.Advance(17*time.Hour + 6*time.Hour)
+	e.b.Tick(e.ctx)
+	e.b.Tick(e.ctx)
+	for _, p := range only(t, e.calls(), "chat.postMessage") {
+		if strings.Contains(allText(p), "has not started") {
+			t.Fatalf("a note with no runner to take the run: %s", allText(p))
+		}
+	}
+	if r, err := e.st.ScheduledRegression(e.ctx); err != nil || r != nil {
+		t.Fatalf("still scheduled after 07:00: %+v %v", r, err)
 	}
 }

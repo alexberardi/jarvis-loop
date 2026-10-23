@@ -183,7 +183,7 @@ func TestOvernightNightly(t *testing.T) {
 		t.Fatalf("not claimed at 02:30, quiet all day: %+v", c)
 	}
 	// Claimed: the next poll schedules the next night's.
-	claimWith(t, s, pipeline.WorkItem)
+	claimWith(t, s, pipeline.WorkItem, pipeline.WorkRegression)
 	next, _ := s.ScheduledRegression(ctx)
 	if next == nil || !next.NotBefore.Equal(r.NotBefore.Add(24*time.Hour)) {
 		t.Fatalf("the next night's: %+v", next)
@@ -192,7 +192,7 @@ func TestOvernightNightly(t *testing.T) {
 	if _, err := s.SetControl(ctx, user, ControlPatch{RegressionNightly: &off}); err != nil {
 		t.Fatal(err)
 	}
-	claimWith(t, s, pipeline.WorkItem)
+	claimWith(t, s, pipeline.WorkItem, pipeline.WorkRegression)
 	if got, _ := s.ScheduledRegression(ctx); got != nil {
 		t.Fatalf("the nightly run stays scheduled with the setting off: %+v", got)
 	}
@@ -249,7 +249,7 @@ func TestOvernightNightlyOncePerSetTime(t *testing.T) {
 	if _, err := s.SetControl(ctx, user, ControlPatch{RegressionNightly: &on}); err != nil {
 		t.Fatal(err)
 	}
-	claimWith(t, s, pipeline.WorkItem)
+	claimWith(t, s, pipeline.WorkItem, pipeline.WorkRegression)
 	r1, _ := s.ScheduledRegression(ctx)
 	if r1 == nil || !r1.NotBefore.Equal(t0.Add(toOne)) {
 		t.Fatalf("tonight's: %+v", r1)
@@ -257,7 +257,7 @@ func TestOvernightNightlyOncePerSetTime(t *testing.T) {
 	if _, err := s.CancelScheduledRegression(ctx, "slack:U1", "slack"); err != nil {
 		t.Fatal(err)
 	}
-	claimWith(t, s, pipeline.WorkItem)
+	claimWith(t, s, pipeline.WorkItem, pipeline.WorkRegression)
 	r2, _ := s.ScheduledRegression(ctx)
 	if r2 == nil || !r2.NotBefore.Equal(r1.NotBefore.Add(24*time.Hour)) {
 		t.Fatalf("after cancelling tonight's (%v), the next poll scheduled %+v, want the next night", r1.NotBefore, r2)
@@ -267,7 +267,7 @@ func TestOvernightNightlyOncePerSetTime(t *testing.T) {
 	if c := claimWith(t, s, pipeline.WorkRegression); c == nil || c.Reg == nil || c.Reg.ID != r2.ID {
 		t.Fatalf("R2 not claimed in the afternoon: %+v", c)
 	}
-	claimWith(t, s, pipeline.WorkItem)
+	claimWith(t, s, pipeline.WorkItem, pipeline.WorkRegression)
 	r3, _ := s.ScheduledRegression(ctx)
 	if r3 == nil || !r3.NotBefore.Equal(r2.NotBefore.Add(24*time.Hour)) {
 		t.Fatalf("after a late run (set %v), the next is %+v, want the very next night", r2.NotBefore, r3)
@@ -317,6 +317,7 @@ func TestOvernightUnstartedNote(t *testing.T) {
 	}
 	it := add(t, s, "late work", "P3")
 	clk.Advance(toOne + 6*time.Hour - time.Minute)
+	claimWith(t, s, pipeline.WorkRegression) // a runner that could take it
 	if u, err := s.UnstartedOvernight(ctx); err != nil || u != nil {
 		t.Fatalf("a note at 06:59: %+v %v", u, err)
 	}
@@ -334,8 +335,8 @@ func TestOvernightUnstartedNote(t *testing.T) {
 	}
 }
 
-// #416: a run carried over to the next night gets a note on every night it misses, once each,
-// and a regression_missed event per night.
+// #416: a run carried over to the next night gets a note on every night it misses while a runner
+// can take it, once each, and a regression_missed event per night.
 func TestOvernightUnstartedNoteEveryNight(t *testing.T) {
 	s, clk := open(t)
 	ctx := context.Background()
@@ -346,6 +347,7 @@ func TestOvernightUnstartedNoteEveryNight(t *testing.T) {
 	add(t, s, "late work", "P3")
 	clk.Advance(toOne + 6*time.Hour)
 	for night := 1; night <= 3; night++ {
+		claimWith(t, s, pipeline.WorkRegression) // a runner that could take it, seen every night
 		u, err := s.UnstartedOvernight(ctx)
 		if err != nil || u == nil || u.Run.ID != r.ID {
 			t.Fatalf("night %d: no note at 07:00 (%+v %v)", night, u, err)
@@ -367,26 +369,66 @@ func TestOvernightUnstartedNoteEveryNight(t *testing.T) {
 	}
 }
 
-// #416: when the runners seen lately cannot take the overnight run (no regression kind, or not
-// every resource), the note says so instead of "it starts after 10m of quiet".
+// #505: when no runner seen lately can take the overnight run (none claims regression runs with
+// every resource), it expires at 07:00 after its set time without a note: cancelled by loopd, via
+// expired, and no regression_missed.
 func TestOvernightUnstartedNoRunnerTakesIt(t *testing.T) {
-	s, clk := open(t)
+	for _, seen := range []bool{false, true} {
+		s, clk := open(t)
+		ctx := context.Background()
+		r, err := s.ScheduleRegression(ctx, "slack:U1", "slack")
+		if err != nil {
+			t.Fatal(err)
+		}
+		clk.Advance(toOne)
+		for i := 0; seen && i < 40; i++ {
+			c, err := s.Claim(ctx, runner, pipeline.ClaimRequest{Runner: runner, Agent: "a1", Capabilities: []string{"gpu", "emulator"}, Kinds: []string{pipeline.WorkItem, pipeline.WorkRegression}})
+			if err != nil || c != nil {
+				t.Fatalf("claim: %+v %v", c, err)
+			}
+			clk.Advance(9 * time.Minute)
+		}
+		clk.Advance(toOne + 6*time.Hour - clk.Now().Sub(t0))
+		if u, err := s.UnstartedOvernight(ctx); err != nil || u != nil {
+			t.Fatalf("seen=%v: a note at 07:00 with no runner to take it: %+v %v", seen, u, err)
+		}
+		if got := mustReg(t, s, r.ID); got.Status != RegCancelled {
+			t.Fatalf("seen=%v: R%d is %s at 07:00, want cancelled", seen, r.ID, got.Status)
+		}
+		if sched, _ := s.ScheduledRegression(ctx); sched != nil {
+			t.Fatalf("seen=%v: still scheduled: %+v", seen, sched)
+		}
+		var via string
+		if err := s.w.QueryRow(`SELECT json_extract(data, '$.via') FROM events WHERE kind = ? AND actor = 'loopd'`, KindRegCancelled).Scan(&via); err != nil || via != "expired" {
+			t.Fatalf("seen=%v: regression_cancelled by loopd via %q (%v), want expired", seen, via, err)
+		}
+		if n := countEvents(t, s, KindRegMissed); n != 0 {
+			t.Fatalf("seen=%v: %d regression_missed events, want none", seen, n)
+		}
+	}
+}
+
+// #505: with regression_nightly on, a night no runner seen can take the overnight run is not
+// scheduled; it is once a runner that can take it polls.
+func TestOvernightNightlyNeedsATaker(t *testing.T) {
+	s, _ := open(t)
 	ctx := context.Background()
-	if _, err := s.ScheduleRegression(ctx, "slack:U1", "slack"); err != nil {
+	on := true
+	if _, err := s.SetControl(ctx, user, ControlPatch{RegressionNightly: &on}); err != nil {
 		t.Fatal(err)
 	}
-	clk.Advance(toOne)
-	for i := 0; i < 40; i++ {
-		c, err := s.Claim(ctx, runner, pipeline.ClaimRequest{Runner: runner, Agent: "a1", Capabilities: []string{"gpu", "emulator"}, Kinds: []string{pipeline.WorkItem, pipeline.WorkRegression}})
-		if err != nil || c != nil {
-			t.Fatalf("claim: %+v %v", c, err)
-		}
-		clk.Advance(9 * time.Minute)
+	if _, err := s.Claim(ctx, runner, pipeline.ClaimRequest{Runner: runner, Agent: "a1", Capabilities: []string{"gpu", "emulator"}, Kinds: []string{pipeline.WorkItem, pipeline.WorkRegression}}); err != nil {
+		t.Fatal(err)
 	}
-	u, err := s.UnstartedOvernight(ctx)
-	want := "no runner takes it: it needs one that claims regression runs and has emulator, gpu, voice (seen: devbox has emulator, gpu and takes item, regression)"
-	if err != nil || u == nil || u.Why != want {
-		t.Fatalf("note: %+v %v\nwant why %q", u, err, want)
+	if r, _ := s.ScheduledRegression(ctx); r != nil {
+		t.Fatalf("scheduled with no runner to take it: %+v", r)
+	}
+	if n := countEvents(t, s, KindRegScheduled); n != 0 {
+		t.Fatalf("%d regression_scheduled events, want none", n)
+	}
+	claimWith(t, s, pipeline.WorkRegression)
+	if r, _ := s.ScheduledRegression(ctx); r == nil || r.Via != "nightly" {
+		t.Fatalf("not scheduled once a runner can take it: %+v", r)
 	}
 }
 
