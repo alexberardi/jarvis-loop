@@ -23,6 +23,8 @@ const helpText = "*/loop commands*\n" +
 	"`/loop qa <id>` check it yourself once merged: it waits in qa after it lands\n" +
 	"`/loop verified <id>` your check passed (qa → done)\n" +
 	"`/loop reopen <id> <what is wrong>` your check failed: files a P2 item with your words (this one → done)\n" +
+	"`/loop wait <id> on #472 #483 [pr owner/name#444] [because …]` park an item in build, review or land (or on a question from one) until those items and PRs are merged; it goes back by itself (`#444-merge` is PR #444 of its repo)\n" +
+	"`/loop unwait <id>` end its wait now\n" +
 	"`/loop agents <0-10>` how many agents may run at once (0 = paused)\n" +
 	"`/loop stop` / `/loop resume` stop running agents / start again\n" +
 	"`/loop usage <N>%` record what /usage shows\n" +
@@ -70,10 +72,10 @@ func (b *Bot) runCommand(ctx context.Context, c command) string {
 	rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(c.Text), fields[0]))
 	actor := actorPrefix + c.UserID
 	approverOnly := map[string]bool{"add": true, "priority": true, "agents": true, "stop": true, "resume": true, "usage": true, "drop": true,
-		"qa": true, "verified": true, "reopen": true, "plan": true}
+		"qa": true, "verified": true, "reopen": true, "plan": true, "wait": true, "unwait": true}
 	if approverOnly[verb] && !IsApprover(c.UserID) {
 		var itemID int64
-		if (verb == "priority" || verb == "drop" || verb == "qa" || verb == "verified" || verb == "reopen") && len(args) > 0 {
+		if (verb == "priority" || verb == "drop" || verb == "qa" || verb == "verified" || verb == "reopen" || verb == "wait" || verb == "unwait") && len(args) > 0 {
 			itemID, _ = strconv.ParseInt(strings.TrimPrefix(args[0], "#"), 10, 64)
 			if _, err := b.c.Store.GetItem(ctx, itemID); err != nil {
 				itemID = 0
@@ -147,6 +149,30 @@ func (b *Bot) runCommand(ctx context.Context, c command) string {
 		return ref(it.ID, it.Title) + " dropped (closed)."
 	case "qa", "verified", "reopen":
 		return b.qaCommand(ctx, actor, verb, args, rest)
+	case "wait", "unwait":
+		if len(args) == 0 {
+			return helpText
+		}
+		id, err := strconv.ParseInt(strings.TrimPrefix(args[0], "#"), 10, 64)
+		if err != nil {
+			return helpText
+		}
+		if verb == "unwait" {
+			it, err := b.c.Store.Unwait(ctx, actor, id)
+			if err != nil {
+				return Escape(errMessage(err))
+			}
+			return fmt.Sprintf("%s is back in %s.", ref(it.ID, it.Title), it.Stage)
+		}
+		on, prs, reason, err := ParseWaitWords(args[1:])
+		if err != nil {
+			return Escape(err.Error())
+		}
+		it, err := b.c.Store.Wait(ctx, actor, id, on, prs, reason)
+		if err != nil {
+			return Escape(errMessage(err))
+		}
+		return fmt.Sprintf("%s is waiting, then back to %s.", ref(it.ID, it.Title), it.ReturnStage)
 	case "agents":
 		n, err := strconv.Atoi(strings.Join(args, ""))
 		if err != nil || n < 0 || n > pipeline.MaxActiveAgents {
@@ -176,6 +202,46 @@ func (b *Bot) runCommand(ctx context.Context, c command) string {
 		return fmt.Sprintf("Recorded: %d%% of the weekly limit used.", pct)
 	}
 	return fmt.Sprintf("Unknown command `%s`.\n", Escape(Clip(verb, 40, ""))) + helpText
+}
+
+// ParseWaitWords reads what a wait names, after the item: items ("#472", "472", "on #472 and
+// #483"), PRs ("pr owner/name#444", "owner/name#444", "#444-merge" for one of the item's repo),
+// and a reason after "because" (or "--").
+func ParseWaitWords(words []string) (on []int64, prs []string, reason string, err error) {
+	for i := 0; i < len(words); i++ {
+		w := strings.Trim(strings.ToLower(words[i]), ",;")
+		switch {
+		case w == "because" || w == "--" || w == "why:":
+			return on, prs, strings.Join(words[i+1:], " "), nil
+		case w == "on" || w == "and" || w == "":
+		case w == "pr" || w == "prs":
+			if i+1 >= len(words) {
+				return nil, nil, "", fmt.Errorf("`pr` needs the PR: `pr owner/name#444`")
+			}
+			i++
+			prs = append(prs, strings.Trim(words[i], ",;"))
+		case strings.Contains(w, "/") || strings.HasSuffix(w, "-merge"):
+			prs = append(prs, strings.Trim(words[i], ",;"))
+		default:
+			n, perr := strconv.ParseInt(strings.TrimPrefix(w, "#"), 10, 64)
+			if perr != nil || n <= 0 {
+				return nil, nil, "", fmt.Errorf("`%s` is not an item or a PR: `/loop wait 12 on #472 pr owner/name#444 because …`", Clip(words[i], 40, ""))
+			}
+			on = append(on, n)
+		}
+	}
+	return on, prs, "", nil
+}
+
+// WaitReply reads a thread reply that parks the item: "wait" followed by what it waits on
+// (ParseWaitWords), at least one item or PR. "wait, let me look" is no wait: it is an answer.
+func WaitReply(text string) (on []int64, prs []string, reason string, ok bool) {
+	words := strings.Fields(text)
+	if len(words) < 2 || strings.ToLower(words[0]) != "wait" {
+		return nil, nil, "", false
+	}
+	on, prs, reason, err := ParseWaitWords(words[1:])
+	return on, prs, reason, err == nil && len(on)+len(prs) > 0
 }
 
 // displayOrder is the board's order of display stages.
@@ -220,7 +286,11 @@ func (b *Bot) status(ctx context.Context) string {
 		fmt.Fprintf(&sb, "*%s* (%d)\n", g, len(groups[g]))
 		for _, r := range groups[g] {
 			open++
-			fmt.Fprintf(&sb, "• #%d %s %s\n", r.ID, r.Priority, b.field(r.Title, 120, r.ID))
+			fmt.Fprintf(&sb, "• #%d %s %s", r.ID, r.Priority, b.field(r.Title, 120, r.ID))
+			if r.WaitsOn != "" {
+				fmt.Fprintf(&sb, " — waiting on %s, then %s", Escape(r.WaitsOn), Escape(r.ReturnStage))
+			}
+			sb.WriteString("\n")
 		}
 	}
 	if open == 0 {

@@ -644,3 +644,34 @@ func TestCLIBuilder(t *testing.T) {
 		t.Fatalf("no builder: %d %q", code, errs)
 	}
 }
+
+// wait parks an item in build on another and a PR; status lists it under WAITING, show says
+// where it goes back to; unwait ends it. A cycle and a triage item are refused.
+func TestCLIWait(t *testing.T) {
+	c := testLoopd(t)
+	c.ok(userTok, "add", "a", "--repo", "o/r")
+	c.ok(userTok, "add", "b", "--repo", "o/r")
+	c.ok(runnerTok, "claim", "--agent", "triager")
+	c.ok(runnerTok, "advance", "1", "reproduced", "--field", "area=a", "--field", "size=S", "--field", "risk=normal", "--field", "resources=", "--evidence", evidenceFile(t))
+	if code, _, errs := c.run(userTok, "wait", "1"); code != 2 || !strings.Contains(errs, "wait needs --on") {
+		t.Fatalf("wait without what: %d %q", code, errs)
+	}
+	if code, _, errs := c.run(userTok, "wait", "2", "--on", "1"); code != 1 || !strings.Contains(errs, "in triage") {
+		t.Fatalf("wait in triage: %d %q", code, errs)
+	}
+	if out := c.ok(userTok, "wait", "1", "--on", "#2", "--pr", "o/other#444", "--reason", "main's test fix"); !strings.Contains(out, "#1 waiting on #2, o/other#444, then back to build") {
+		t.Fatalf("wait: %q", out)
+	}
+	if out := c.ok(userTok, "status"); !strings.Contains(out, "WAITING\n#1 waits on #2, o/other#444, then build (parked") {
+		t.Fatalf("status: %q", out)
+	}
+	if out := c.ok(userTok, "show", "1"); !strings.Contains(out, "parked:   waiting on #2, o/other#444, then back to build") {
+		t.Fatalf("show: %q", out)
+	}
+	if code, _, errs := c.run(runnerTok, "wait", "1", "--on", "2"); code != 1 || !strings.Contains(errs, "forbidden") {
+		t.Fatalf("runner's wait: %d %q", code, errs)
+	}
+	if out := c.ok(userTok, "unwait", "1"); !strings.Contains(out, "#1 back to build") {
+		t.Fatalf("unwait: %q", out)
+	}
+}

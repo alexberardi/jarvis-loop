@@ -733,6 +733,16 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 			}
 		}
 		text = fmt.Sprintf("Now waits on %s (%s).", strings.Join(refs, ", "), by)
+	case "waiting":
+		text = fmt.Sprintf("Waiting on %s, then back to %s (%s)", f("waits_on", 400), Escape(str(e.Data, "return_stage")), by)
+		if r := str(e.Data, "reason"); r != "" {
+			text += ": " + f("reason", 400)
+		}
+		text += ". It goes back by itself once they are done."
+	case "released":
+		text = "No longer waiting: " + f("note", 600) + "."
+	case "wait_pr_merged":
+		text = fmt.Sprintf("%s merged.", f("pr", 200))
 	case pipeline.KindUnlinked:
 		after, _ := e.Data["after"].(float64)
 		text = fmt.Sprintf("No longer waits on %s (%s).", b.refID(ctx, int64(after)), by)
@@ -889,6 +899,8 @@ func (b *Bot) orchestratorLine(ctx context.Context, e store.Event) string {
 		if after, ok := e.Data["after"].(float64); ok {
 			what = "now waits on " + b.refID(ctx, int64(after))
 		}
+	case "waiting":
+		what = fmt.Sprintf("parked it: waiting on %s, then back to %s", f("waits_on", 400), Escape(str(e.Data, "return_stage")))
 	case store.KindOrchAdded:
 		what = "filed this item"
 	case store.KindOrchSeenAgain:
@@ -1286,6 +1298,13 @@ func (b *Bot) onMessage(ctx context.Context, m slackEvent) {
 		}
 		if waitsForTrust(d.Item) && IsTrustReply(text) {
 			b.trustReply(ctx, m, d.Item)
+			return
+		}
+		if on, prs, reason, ok := WaitReply(text); ok && pipeline.Rebuildable(d.Item) {
+			// "wait on #472 …": parked until they are done, instead of answered now.
+			if _, err := b.c.Store.Wait(ctx, actorPrefix+m.User, id, on, prs, reason); err != nil {
+				b.threadReply(ctx, m.ThreadTS, "Could not park it: "+Escape(errMessage(err)))
+			}
 			return
 		}
 		if pipeline.Rebuildable(d.Item) && IsRebuildNote(text) {
