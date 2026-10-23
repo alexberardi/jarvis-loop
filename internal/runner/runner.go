@@ -696,7 +696,14 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 	}
 	if ru.stage == StageBuild {
 		for _, v := range ru.repo.Verify {
-			info.Verify = append(info.Verify, v.Name)
+			name := v.Name
+			if len(v.WhenChanged) > 0 {
+				// The agent cannot read the runner's config, so the globs come with the name:
+				// whether the step runs at all is decided by what the agent commits (#546).
+				name += " (only when a path you change matches " + strings.Join(v.WhenChanged, " or ") + ")"
+				info.VerifyConditional = true
+			}
+			info.Verify = append(info.Verify, name)
 		}
 	}
 	var err error

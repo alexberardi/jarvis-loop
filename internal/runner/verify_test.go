@@ -90,8 +90,9 @@ func TestVerifyPasses(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(g.r.Cfg.WorkRoot, "1-build", "should-not-run")); err == nil {
 		t.Error("a when_changed step ran without a matching path")
 	}
-	// The build brief named the steps; the agent did not run them.
-	if brief := g.read(filepath.Join(run, "brief.md")); !strings.Contains(brief, "the runner runs this repo's verify steps itself (outside your sandbox), before it pushes: unit tests; admin screenshots;") {
+	// The build brief named the steps, the when_changed one with what makes it run (#546); the
+	// agent did not run them.
+	if brief := g.read(filepath.Join(run, "brief.md")); !strings.Contains(brief, "the runner runs this repo's verify steps itself (outside your sandbox), before it pushes: unit tests; admin screenshots (only when a path you change matches web/**);") {
 		t.Errorf("brief:\n%s", brief[strings.Index(brief, ItemHeading):])
 	}
 }

@@ -126,6 +126,8 @@ func TestBriefSaysWhatTheItemNeeds(t *testing.T) {
 	withHarness.Harness, withHarness.HarnessBin = &HarnessConfig{Up: "scripts/sandbox up", Down: "scripts/sandbox down"}, "/bin/loop-harness"
 	withVerify := base
 	withVerify.Verify = []string{"mobile flows"}
+	conditional := base
+	conditional.Verify, conditional.VerifyConditional = []string{"mobile flows (only when a path you change matches app/**)"}, true
 	for _, c := range []struct {
 		what  string
 		brief string
@@ -133,6 +135,7 @@ func TestBriefSaysWhatTheItemNeeds(t *testing.T) {
 	}{
 		{"with a harness", BuildBrief(it, withHarness), "`loop-harness` (just below)"},
 		{"with verify steps", BuildBrief(it, withVerify), "the runner's verify steps (above) run in that fence after you"},
+		{"with a when_changed verify step", BuildBrief(it, conditional), "it is skipped and nothing runs on the emulator this time"},
 		{"with neither", BuildBrief(it, base), "Say that in `not_verified`"},
 		{"a triage run", Brief(StageTriage, it, base), "A triage run has no way to it at all"},
 	} {
@@ -144,6 +147,10 @@ func TestBriefSaysWhatTheItemNeeds(t *testing.T) {
 				t.Errorf("%s: the brief lacks %q", c.what, want)
 			}
 		}
+	}
+	// A step that always runs is a route without that caveat.
+	if strings.Contains(BuildBrief(it, withVerify), "is no route on its own") {
+		t.Error("an unconditional verify step is described as skippable")
 	}
 	// Nothing for an item that needs nothing, and the note stays out of the cacheable prefix.
 	plain := BuildBrief(Item{ID: 12, Title: "Fix the timer"}, base)
@@ -164,14 +171,20 @@ func TestBriefHarnessInAnotherRepo(t *testing.T) {
 		HarnessDir: "/work/12-harness-jarvis-server", HarnessRepo: "alex/jarvis-server"}
 	b := BuildBrief(Item{ID: 12, Title: "Flows"}, info)
 	for _, want := range []string{"the harness scripts are in `alex/jarvis-server`", "(`/work/12-harness-jarvis-server`, also `$LOOP_HARNESS_DIR`)",
-		"its path is `$LOOP_WORKTREE`", "one command in that checkout"} {
+		"its path is `$LOOP_WORKTREE`", "one command in that checkout",
+		// What a command writes outlives the run only under $LOOP_EVIDENCE_DIR.
+		"files it writes under `$LOOP_EVIDENCE_DIR` (screenshots) you can Read, and that is where screenshots have to go"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("brief lacks %q", want)
 		}
 	}
+	// A harness in the worktree is unchanged: files are simply here, and no checkout is mentioned.
 	info.HarnessDir, info.HarnessRepo = "", ""
 	own := BuildBrief(Item{ID: 12, Title: "Flows"}, info)
 	if !strings.Contains(own, "one command in this worktree") || strings.Contains(own, "$LOOP_HARNESS_DIR") {
 		t.Error("a harness in the worktree is described as one")
+	}
+	if !strings.Contains(own, "files it writes here (screenshots) you can Read") || strings.Contains(own, "$LOOP_EVIDENCE_DIR") {
+		t.Error("a harness in the worktree is told to write evidence somewhere else")
 	}
 }

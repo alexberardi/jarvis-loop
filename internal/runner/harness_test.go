@@ -612,8 +612,10 @@ func TestEmulatorItemWithoutARoute(t *testing.T) {
 	if n := len(g.prs.created); n != 0 {
 		t.Fatalf("%d PRs opened", n)
 	}
-	// A verify step is a route (it runs in the fence after the agent), so the build runs.
-	g.verifyRepo(VerifyStep{Name: "flows", Run: "echo flows: 4 passed"})
+	// A verify step is a route (it runs in the fence after the agent), so the build runs. The
+	// second one runs only for a change under app/, which the brief says in its own name.
+	g.verifyRepo(VerifyStep{Name: "flows", Run: "echo flows: 4 passed"},
+		VerifyStep{Name: "app flows", Run: "echo app flows", WhenChanged: []string{"app/**"}})
 	id2 := g.toBuildNeeding("Run them again", pipeline.ResourceEmulator)
 	g.runOnce()
 	if d := g.item(id2); d.Item.Stage != pipeline.Review {
@@ -622,5 +624,11 @@ func TestEmulatorItemWithoutARoute(t *testing.T) {
 	brief := g.read(filepath.Join(g.lastRun(id2, StageBuild), "brief.md"))
 	if !strings.Contains(brief, "**The emulator**: this item needs it") || !strings.Contains(brief, "the runner's verify steps (above) run in that fence after you") {
 		t.Error("the build's brief does not say how to reach the emulator")
+	}
+	for _, want := range []string{"app flows (only when a path you change matches app/**)",
+		"it is skipped and nothing runs on the emulator this time"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("the brief does not say a when_changed step may not run: %q", want)
+		}
 	}
 }

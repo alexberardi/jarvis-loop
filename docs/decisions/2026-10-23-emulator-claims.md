@@ -54,6 +54,12 @@ steps use. The real gap was narrower: **the brokered path could not reach anothe
   build (route B, the worked example in `2026-10-15-all-repos.md`). It needs no code: it is the
   user's `runner.json`, which no agent can read or write. A and B are complements — A lets the
   agent iterate, B proves the result before the push — and either one counts as a route below.
+  A step with `when_changed` globs counts as well, although what the agent commits decides whether
+  it runs: the runner cannot know the diff before the agent makes it, and refusing such a config
+  would refuse the natural one (`when_changed: ["app/**"]` for the mobile app). Instead the brief
+  names a conditional step with its globs and says it may be skipped, so an agent whose change
+  lands outside them reports an unrun flow in `not_verified` rather than assuming the runner ran
+  it.
 - **Every brief says what the item needs.** The "This run" section now names the item's
   `resources`, and an `emulator` item's brief says plainly that the agent's own sandbox cannot
   reach one (no `/dev/kvm`, no tooling, `adb` refused) and which route this run has: the harness
