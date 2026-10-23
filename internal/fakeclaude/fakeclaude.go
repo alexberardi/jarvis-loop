@@ -83,10 +83,12 @@ const (
 	// NoChange is good on a fresh branch; on a resumed one (a rerun after a bounce) it commits
 	// nothing and reports the same head, as an agent that found nothing to fix would.
 	NoChange = "no_change"
-	// TrustedChange changes the script's file with a shell command (the guard refuses Write and
-	// Edit there: it is one of the repo's deny_write paths) and commits it. On a rerun whose brief
-	// says the user OK'd that commit for verify, it commits nothing; on any other rerun it commits
-	// another change to the file (a new head, which needs a new OK).
+	// TrustedChange changes the script's file the way a build script or go generate would — a
+	// write the guard cannot see (since #537 it refuses the agent's own writes there on every
+	// channel it checks: Write/Edit, a redirection, a write-shaped command) — and commits it.
+	// Verify's trusted-files hold is the gate for such changes. On a rerun whose brief says the
+	// user OK'd that commit for verify, it commits nothing; on any other rerun it commits another
+	// change to the file (a new head, which needs a new OK).
 	TrustedChange = "trusted_change"
 	// TrustedChangeEager is TrustedChange by an agent that ignores the brief's line about the
 	// OK: every run commits another change to the file (#144, #142).
@@ -485,6 +487,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case Escape:
 		outside := filepath.Join(filepath.Dir(f.cwd), "escaped.txt")
 		f.write(outside, "I got out\n")
+		f.bash("echo tampered > .loop/brief.md") // a protected prefix on the bash channel (#537)
 		f.bash("git push origin main")
 	}
 	// An item filed from a plan: the brief points at the plan's approved blueprint for the
@@ -528,7 +531,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	} else if (scenario == RebaseTrusted || scenario == RebaseTrustedEdit) && resumed && exists(filepath.Join(f.cwd, ".loop", "review", "notes.md")) {
 		f.bash("git -c user.name=fake -c user.email=fake@example.com rebase -q origin/" + base)
 		if scenario == RebaseTrustedEdit {
-			f.bash("echo 'shoot --light' >> " + shellQuote(change) + " && git add " + shellQuote(change) +
+			f.appendRaw(change, "shoot --light\n")
+			f.bash("git add " + shellQuote(change) +
 				" && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'harness: shoot light mode too'")
 		}
 	} else if scenario == TrustedThenFix && resumed && exists(filepath.Join(f.cwd, ".loop", "review", "notes.md")) {
@@ -536,7 +540,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			" && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'fix: address the review'")
 	} else if scenario == TrustedChange || scenario == TrustedChangeEager || scenario == RebaseTrusted || scenario == RebaseTrustedEdit || scenario == TrustedThenFix {
 		if !resumed || scenario == TrustedChangeEager || !bytes.Contains(brief, []byte(trustedBrief)) {
-			f.bash("mkdir -p \"$(dirname " + shellQuote(change) + ")\" && echo 'shoot --dark' >> " + shellQuote(change) + " && git add " + shellQuote(change) +
+			f.appendRaw(change, "shoot --dark\n")
+			f.bash("git add " + shellQuote(change) +
 				" && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'harness: shoot dark mode too'")
 		}
 	} else if (scenario == MergeMain || scenario == MergeMainExtra) && resumed {
@@ -744,6 +749,28 @@ func (f *fake) write(path, content string) {
 		}
 		return "written", os.WriteFile(p, []byte(content), 0o644)
 	})
+}
+
+// appendRaw appends to a file without a tool call: what a build script or go generate does — a
+// write channel no PreToolUse hook sees. The trusted plays use it since #537 (the guard refuses
+// the agent's own writes to deny_write paths on every channel it checks); verify's trusted-files
+// hold is what gates these changes.
+func (f *fake) appendRaw(path, content string) {
+	p := path
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(f.cwd, p)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		panic(err)
+	}
+	fl, err := os.OpenFile(p, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	if err != nil {
+		panic(err)
+	}
+	defer fl.Close()
+	if _, err := fl.WriteString(content); err != nil {
+		panic(err)
+	}
 }
 
 func (f *fake) bash(command string) {

@@ -61,10 +61,12 @@ type script struct {
 }
 
 // segment is one simple command: its words (with substitution markers), the text its
-// redirections name (files, here-strings) and the bodies of its here-documents.
+// redirections name (files, here-strings), the targets of the redirections that write (>, >>,
+// >|, >&, <> — here-strings and < are reads) and the bodies of its here-documents.
 type segment struct {
 	words   []string
 	targets []string
+	writes  []string
 	bodies  []heredocBody
 }
 
@@ -80,13 +82,15 @@ func parseScript(s string) (script, error) {
 		return sc, errors.New("a NUL byte")
 	}
 	var (
-		subs    []string
-		words   []string
-		targets []string
-		cur     strings.Builder
-		inWord  bool
-		skipTgt bool // the next word is a redirection target
-		hasDoc  bool // the command being read has a here-document (so it is kept even without words)
+		subs     []string
+		words    []string
+		targets  []string
+		writes   []string
+		cur      strings.Builder
+		inWord   bool
+		skipTgt  bool // the next word is a redirection target
+		tgtWrite bool // ... of a redirection that writes
+		hasDoc   bool // the command being read has a here-document (so it is kept even without words)
 		// pending here-documents (the body starts after the newline): the delimiter, and the
 		// command whose input it is (an index into sc.segs)
 		heredoc []string
@@ -101,6 +105,9 @@ func parseScript(s string) (script, error) {
 		if skipTgt {
 			skipTgt = false
 			targets = append(targets, cur.String())
+			if tgtWrite {
+				writes = append(writes, cur.String())
+			}
 		} else {
 			words = append(words, cur.String())
 		}
@@ -110,9 +117,9 @@ func parseScript(s string) (script, error) {
 	endSeg := func() {
 		endWord()
 		if len(words) > 0 || len(targets) > 0 || hasDoc {
-			sc.segs = append(sc.segs, segment{words: words, targets: targets})
+			sc.segs = append(sc.segs, segment{words: words, targets: targets, writes: writes})
 		}
-		words, targets, hasDoc = nil, nil, false
+		words, targets, writes, hasDoc = nil, nil, nil, false
 	}
 	// closing finds the end of a $( ... ) starting after the "(" at i, honouring nesting and quotes.
 	closing := func(i int) (int, error) {
@@ -323,10 +330,12 @@ func parseScript(s string) (script, error) {
 				i = j - 1
 				continue
 			}
+			op := i
 			for i+1 < len(s) && strings.IndexByte("<>&|", s[i+1]) >= 0 {
 				i++
 			}
 			skipTgt = true
+			tgtWrite = strings.ContainsRune(s[op:i+1], '>')
 		case ch == ' ' || ch == '\t' || ch == '\r':
 			endWord()
 		default:

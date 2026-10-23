@@ -47,7 +47,7 @@ func TestParseScriptKeepsRedirectionsAndHeredocs(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []segment{
-		{words: []string{"cat"}, targets: []string{"out.md"}, bodies: []heredocBody{{text: "body a\n", quoted: true}}},
+		{words: []string{"cat"}, targets: []string{"out.md"}, writes: []string{"out.md"}, bodies: []heredocBody{{text: "body a\n", quoted: true}}},
 		{words: []string{"python3"}, bodies: []heredocBody{{text: "body b\n"}}},
 		{words: []string{"grep", "x"}, targets: []string{"in.txt", "here"}},
 		{words: []string{"true"}},

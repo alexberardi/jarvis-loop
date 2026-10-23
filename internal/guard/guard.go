@@ -1,8 +1,10 @@
 // Package guard is the policy behind cmd/loop-guard, the PreToolUse hook every loop agent runs
 // under (docs/phases/04-runner-build.md, boundary layer 3). It is a second line of defence that
 // does not depend on Claude Code's own rule matching: it refuses writes that resolve (through ..
-// and symlinks) outside the item's worktree, reads of secrets, shell commands that name the user's
-// checkouts or secrets or loopd's address, and the denied command families. It never approves
+// and symlinks) outside the item's worktree, writes to the protected prefixes inside it (.git,
+// .claude, the repo's deny_write) on every channel — the file tools, a shell redirection, a
+// write-shaped command — reads of secrets, shell commands that name the user's checkouts or
+// secrets or loopd's address, and the denied command families. It never approves
 // anything: a call it does not refuse goes on to the normal permission flow (rules, classifier,
 // sandbox).
 package guard
@@ -227,15 +229,8 @@ func (c *Config) checkWrite(path, cwd, scratchpad string) Decision {
 	if !ok {
 		return deny(RuleWriteOutside, p, "writes are limited to this item's worktree, its sandbox dir and the scratch dir "+c.Scratch)
 	}
-	wt := realRoot(c.Worktree)
-	if within(p, wt) {
-		rel, _ := filepath.Rel(wt, p)
-		rel = filepath.ToSlash(rel)
-		for _, pre := range append([]string{".git", ".claude", ".mcp.json", ".loop/brief.md"}, c.DenyWrite...) {
-			if rel == pre || strings.HasPrefix(rel, pre+"/") {
-				return deny(RuleWriteProtected, p, rel+" is not the agent's to change")
-			}
-		}
+	if rel := c.denyWriteRel(p); rel != "" {
+		return deny(RuleWriteProtected, p, rel+" is not the agent's to change")
 	}
 	for _, s := range c.Protected {
 		if within(p, realRoot(s)) {
@@ -243,6 +238,86 @@ func (c *Config) checkWrite(path, cwd, scratchpad string) Decision {
 		}
 	}
 	return Decision{}
+}
+
+// denyPrefixes are the worktree-relative prefixes no tool may change, on any channel.
+func (c *Config) denyPrefixes() []string {
+	return append([]string{".git", ".claude", ".mcp.json", ".loop/brief.md"}, c.DenyWrite...)
+}
+
+// denyWriteRel reports the worktree-relative name of p when it falls under a protected prefix,
+// or "" (p is the resolved absolute path).
+func (c *Config) denyWriteRel(p string) string {
+	wt := realRoot(c.Worktree)
+	if !within(p, wt) {
+		return ""
+	}
+	rel, _ := filepath.Rel(wt, p)
+	rel = filepath.ToSlash(rel)
+	for _, pre := range c.denyPrefixes() {
+		if rel == pre || strings.HasPrefix(rel, pre+"/") {
+			return rel
+		}
+	}
+	return ""
+}
+
+// checkWriteTarget judges one path a shell command writes: a redirection's target or a
+// write-shaped command's destination. The protected prefixes bind every write path (#537), not
+// just the file tools. A target the guard cannot resolve (an unexpanded variable or substitution)
+// is refused only when its own text names a protected prefix, so `> $TMPDIR/f` stays usable; a
+// relative target after cd cannot be resolved at all and is refused, as in checkRm. Writes that
+// resolve outside the worktree stay the OS sandbox's to stop, as before.
+func (c *Config) checkWriteTarget(t, cwd, target string, movedDir bool) Decision {
+	t = strings.TrimSpace(t)
+	if t == "" || fdLike(t) {
+		return Decision{}
+	}
+	e := c.expandHome(t)
+	if strings.ContainsAny(e, "$`") {
+		for _, pre := range c.denyPrefixes() {
+			if relMentions(e, pre) {
+				return deny(RuleWriteProtected, target, pre+" is not the agent's to change")
+			}
+		}
+		return Decision{}
+	}
+	if movedDir && !filepath.IsAbs(e) {
+		return deny(RuleWriteProtected, target, "a write to a relative path after cd cannot be checked; use an absolute path")
+	}
+	if rel := c.denyWriteRel(c.resolve(e, cwd)); rel != "" {
+		return deny(RuleWriteProtected, target, rel+" is not the agent's to change")
+	}
+	return Decision{}
+}
+
+// fdLike reports a redirection target that is a file descriptor (2>&1) or stdin (-), not a path.
+func fdLike(t string) bool {
+	if t == "-" {
+		return true
+	}
+	for _, r := range t {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return t != ""
+}
+
+// relMentions reports whether t contains the worktree-relative prefix pre on path-component
+// boundaries (so `$WT/.git/config` names .git, and `.gitignore` does not).
+func relMentions(t, pre string) bool {
+	for i := 0; ; {
+		j := strings.Index(t[i:], pre)
+		if j < 0 {
+			return false
+		}
+		start, end := i+j, i+j+len(pre)
+		if (start == 0 || t[start-1] == '/') && (end == len(t) || t[end] == '/') {
+			return true
+		}
+		i = start + 1
+	}
 }
 
 func (c *Config) checkRead(path, cwd string) Decision {
@@ -335,6 +410,11 @@ func (c *Config) checkScript(script, cwd, target string, depth int) Decision {
 	}
 	movedDir := false
 	for _, sg := range sc.segs {
+		for _, w := range sg.writes {
+			if d := c.checkWriteTarget(unmark(w), cwd, target, movedDir); d.Deny {
+				return d
+			}
+		}
 		raw := sg.words
 		// kill -0 is judged on the raw words (which word came from which substitution), and only
 		// when nothing wraps it: a wrapper would run /bin/kill, not the shell's builtin.
@@ -523,8 +603,99 @@ func (c *Config) checkArgv(name string, argv []string, cwd, target string, moved
 		return checkGH(argv[1:], target)
 	case "rm", "rmdir":
 		return c.checkRm(argv[1:], cwd, target, movedDir)
+	case "tee", "touch", "mkdir", "truncate", "cp", "mv", "install", "ln", "dd", "sed":
+		for _, dst := range writeDests(name, argv[1:]) {
+			if d := c.checkWriteTarget(dst, cwd, target, movedDir); d.Deny {
+				return d
+			}
+		}
 	}
 	return Decision{}
+}
+
+// writeDests are the paths a write-shaped command changes: a short explicit list, like never and
+// checkRm, not a heuristic. Sources are left alone on purpose: protected files are legitimately
+// read, run and copied out (cat scripts/sandbox/run, go run ./tools/pipeline/x), so only the
+// write-shaped positions may refuse (#537).
+func writeDests(name string, args []string) []string {
+	switch name {
+	case "tee", "touch", "mkdir":
+		return nonFlags(args)
+	case "truncate":
+		var out []string
+		for i := 0; i < len(args); i++ {
+			a := args[i]
+			if (a == "-s" || a == "-r" || a == "--size" || a == "--reference") && i+1 < len(args) {
+				i++
+				continue
+			}
+			if strings.HasPrefix(a, "-") && a != "-" {
+				continue
+			}
+			out = append(out, a)
+		}
+		return out
+	case "cp", "mv", "install", "ln":
+		// -t names the destination directory; otherwise it is the last path argument.
+		for i, a := range args {
+			if (a == "-t" || a == "--target-directory") && i+1 < len(args) {
+				return []string{args[i+1]}
+			}
+			if v, ok := strings.CutPrefix(a, "--target-directory="); ok {
+				return []string{v}
+			}
+		}
+		if ps := nonFlags(args); len(ps) > 1 {
+			return ps[len(ps)-1:]
+		}
+		return nil
+	case "dd":
+		var out []string
+		for _, a := range args {
+			if v, ok := strings.CutPrefix(a, "of="); ok {
+				out = append(out, v)
+			}
+		}
+		return out
+	case "sed":
+		inPlace := false
+		for _, a := range args {
+			if a == "--in-place" || strings.HasPrefix(a, "--in-place=") || (strings.HasPrefix(a, "-i") && !strings.HasPrefix(a, "--")) {
+				inPlace = true
+			}
+		}
+		if !inPlace {
+			return nil
+		}
+		// The file arguments; without -e or -f the first non-flag argument is the script.
+		ps := nonFlags(args)
+		for _, a := range args {
+			if strings.HasPrefix(a, "-e") || strings.HasPrefix(a, "-f") || strings.HasPrefix(a, "--expression") || strings.HasPrefix(a, "--file") {
+				return ps
+			}
+		}
+		if len(ps) > 0 {
+			ps = ps[1:]
+		}
+		return ps
+	}
+	return nil
+}
+
+// nonFlags are the arguments that are not options (everything after -- is kept).
+func nonFlags(args []string) []string {
+	var out []string
+	opts := true
+	for _, a := range args {
+		switch {
+		case opts && a == "--":
+			opts = false
+		case opts && strings.HasPrefix(a, "-") && a != "-":
+		default:
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // ---- git ----
