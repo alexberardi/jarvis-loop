@@ -48,6 +48,10 @@ func (s *Store) Drop(ctx context.Context, actor string, id int64, words string) 
 		if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
 			return err
 		}
+		// A dropped item that was its repo's freeze mover hands the freeze on (#558).
+		if err := s.freezeItemSettled(tx, tr.Item, now); err != nil {
+			return err
+		}
 		if err := s.dependencyClosed(tx, id); err != nil {
 			return err
 		}

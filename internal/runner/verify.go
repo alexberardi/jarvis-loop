@@ -328,7 +328,7 @@ func (r *Runner) runVerify(ctx context.Context, ru *run, head string, changed []
 // convention for "the harness did not come up", as in PipelineCommand) or envFailure.
 func verifyEnvFailure(v VerifyResult) bool {
 	return v.Skipped == "" && v.Err == "" && !v.TimedOut && v.Masked == "" &&
-		(v.ExitCode == 3 || v.ExitCode != 0 && envFailure(v.ExitCode, v.Log))
+		(v.ExitCode == 3 || v.ExitCode != 0 && envFailure(v.ExitCode, v.Log, time.Duration(v.Seconds)*time.Second))
 }
 
 // verifyEnv is a verify step's (and its purge's) environment, with sandbox as LOOP_SANDBOX.
