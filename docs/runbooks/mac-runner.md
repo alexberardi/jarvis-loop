@@ -11,7 +11,14 @@ everything else. Why it works this way: [the decision](../decisions/2026-10-17-m
 Each Mac has its own token, its own `work_root` and its own mirrors. Nothing is shared across
 machines: no NFS or synced work root, no copied runner config.
 
-## 1. On the dev box: open loopd to the LAN for runners
+## 1. Reaching loopd
+
+**Since 2026-10-23 (#550) loopd runs on fly.io** and serves one TLS port, so there is nothing to
+open: a Mac runner points `loopd_url` at `https://<app>.fly.dev` and steps 1 and 2 below do not
+apply. The routes a runner may call are the same — a runner token is refused on the user's and the
+orchestrator's routes — and the token now travels over TLS instead of in clear on the LAN. The rest
+of this runbook (the token, the config, launchd, the checks) is unchanged. What follows is how it
+worked while loopd was on the dev box, kept for a rollback.
 
 1. Start loopd with the remote runners' listener (next to its usual flags; the main API stays on
    127.0.0.1):
@@ -134,8 +141,8 @@ machines: no NFS or synced work root, no copied runner config.
 ## 3. Check that it claims
 
 - `tail -f ~/Library/Logs/loop-runner.log` on the Mac: the fence probe passes and the runner polls.
-  A 401 or 403 is the token (wrong, or not a runner token); connection refused is loopd's
-  `--runner-addr` or ufw.
+  A 401 or 403 is the token (wrong, or not a runner token); connection refused is `loopd_url` (or,
+  while loopd was on the dev box, its `--runner-addr` or ufw).
 - On the dev box, `loop status` or the board's "working now": a macos item (#61, #63) gets a lease
   held by `mbp` (or `mini`), and its "no runner offers macos" flag clears with a `servable` event.
 - Ordinary items keep going to the dev box's runner.

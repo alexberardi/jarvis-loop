@@ -91,8 +91,10 @@ One Go binary with SQLite and a small embedded web page, in this repo. It owns t
 | `POST /items/{id}/edit`, `/link`, `/unlink`, `/resources` | *since 2026-10-18*, the user's corrections to a filed item, each an event with what it replaced: the title and ask before build starts, the items it waits for, the resources after triage ([decision](decisions/2026-10-18-item-corrections.md)) |
 | `POST /items/{id}/qa`, `/verified`, `/reopen` | the QA lane: mark an item for the user's check before it lands; the check passed (qa → done) or failed (qa → done, and a new P2 item with the words) |
 | `GET`, `PUT /control` | the active-agents number, stop and resume, the usage budgets |
+| `GET /healthz` | **the one route with no token**: `ok` and nothing else, for fly.io's health check ([decision](decisions/2026-10-23-loopd-on-fly.md)) |
+| `GET /version` | the build loopd itself is running, which the runner reads to tell which qa items are deployed ([decision](decisions/2026-10-23-loopd-on-fly.md)) |
 | `GET /usage` | claude's 5h window and week against their budgets, the pace, the forecast, the last days, the costliest items |
-| `GET /board`, `/board/items/{id}`, `/board/items/{id}/evidence/{n}` | the swim-lane web board (HTML, read-only), also on the optional LAN listener `--board-addr`, which serves nothing else ([decision](decisions/2026-10-15-board.md)) |
+| `GET /board`, `/board/items/{id}`, `/board/items/{id}/evidence/{n}` | the swim-lane web board (HTML, read-only), on the same port as everything else since loopd moved to fly.io ([decision](decisions/2026-10-15-board.md), [decision](decisions/2026-10-23-loopd-on-fly.md)) |
 
 The `loop` CLI wraps the same API: `loop add` (`--json` or `-q` for scripts), `loop status`, `loop show`, `loop answer`, `loop edit`, `loop link`/`unlink`, `loop resources`, `loop feature`, `loop rebuild`, `loop agents <n>`; its flags go anywhere on the line.
 
