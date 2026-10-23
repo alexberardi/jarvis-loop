@@ -162,7 +162,7 @@ func nightCase(tx *sql.Tx, esc Event) (pipeline.Item, pipeline.NightCase, error)
 	}
 	c := pipeline.NightCase{Item: it, Esc: pipeline.NightEscalation{
 		Class: str(esc.Data, "class"), Recommendation: str(esc.Data, "recommendation"), Deferred: str(esc.Data, "deferred"),
-		At: esc.At, Approval: esc.Data["approval"] == true, Night: esc.Data["night"] == true}}
+		Step: str(esc.Data, "step"), At: esc.At, Approval: esc.Data["approval"] == true, Night: esc.Data["night"] == true}}
 	if last, ok := lastNeedsYou(evs); ok {
 		c.NeedsYouOutcome = pipeline.Outcome(last.Outcome)
 		c.NewQuestion = last.ID > esc.ID

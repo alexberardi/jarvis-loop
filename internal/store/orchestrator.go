@@ -342,13 +342,16 @@ func (s *Store) OrchAdd(ctx context.Context, actor string, n NewItem, signature,
 // is what it needs, recommendation what it recommends. At most one per pipeline.OrchEscalateEvery,
 // except about an approval (an item held for one). id may be 0 (not about one item).
 func (s *Store) OrchEscalate(ctx context.Context, actor string, id int64, text, recommendation, reason string) (Event, error) {
-	return s.OrchEscalateNight(ctx, actor, id, text, recommendation, reason, "", "")
+	return s.OrchEscalateNight(ctx, actor, id, text, recommendation, reason, "", "", "")
 }
 
 // OrchEscalateNight is OrchEscalate with a night class (pipeline.EscalationClasses; "": none) and,
 // for a scope choice, the part it defers: the night shift acts on the recommendation after
 // pipeline.NightGrace when the escalation is made while it is on (data.night, data.act_at).
-func (s *Store) OrchEscalateNight(ctx context.Context, actor string, id int64, text, recommendation, reason, class, deferred string) (Event, error) {
+// step ("": none) is a hand step the user must do before the recommendation can be the answer:
+// Accept then holds the item until they confirm the step (AcceptPending, AcceptRecommendation),
+// and the night shift never acts on it.
+func (s *Store) OrchEscalateNight(ctx context.Context, actor string, id int64, text, recommendation, reason, class, deferred, step string) (Event, error) {
 	var out Event
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		r, err := pipeline.NeedReason(reason)
@@ -360,6 +363,9 @@ func (s *Store) OrchEscalateNight(ctx context.Context, actor string, id int64, t
 		}
 		if err := pipeline.CheckEscalationClass(class, recommendation, deferred); err != nil {
 			return err
+		}
+		if strings.TrimSpace(step) != "" && strings.TrimSpace(recommendation) == "" {
+			return errf(pipeline.CodeMissingField, "step goes with a recommendation: it is what Accept holds for until the step is done")
 		}
 		if class != "" && id == 0 {
 			return errf(pipeline.CodeMissingField, "a night class needs item_id: the night shift acts on an item")
@@ -387,6 +393,9 @@ func (s *Store) OrchEscalateNight(ctx context.Context, actor string, id int64, t
 			}
 		}
 		data := map[string]any{"text": strings.TrimSpace(text), "recommendation": strings.TrimSpace(recommendation), "reason": r, "approval": approval}
+		if st := strings.TrimSpace(step); st != "" {
+			data["step"] = clipText(st, 400)
+		}
 		if class != "" {
 			set, err := s.nightSetting(tx)
 			if err != nil {

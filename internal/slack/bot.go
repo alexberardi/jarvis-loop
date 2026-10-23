@@ -686,6 +686,9 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 		if e.Data["accepted"] != nil {
 			text = fmt.Sprintf("Answered by %s, accepting the orchestrator's recommendation: %s → %s.", by, f("answer", 600), e.To)
 		}
+	case store.KindOrchAcceptPending:
+		text = fmt.Sprintf("Recommendation accepted by %s — waiting for the step (%s); 'Done — re-queue' on its message then records the answer.",
+			by, f("step", 400))
 	case "approved":
 		text = fmt.Sprintf("Approved by %s for `%s`: '%s' → land.", by, short(str(e.Data, "head_sha")), f("words", 300))
 	case "trusted":

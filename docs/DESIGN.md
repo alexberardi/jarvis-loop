@@ -161,7 +161,7 @@ Slack is the user's whole interface: add work, answer questions and approve merg
 | --- | --- |
 | add work | `/loop add <what>`, or mention `@jarvis-loop` anywhere; name the repo with `[mobile] …`, `nest: …` or `… in docs` (aliases, phase 6b), or leave it to triage |
 | follow an item | its one thread in `#loop`: every stage change, the PR, CI, the merge |
-| answer a question | reply in the item's thread; the bot @mentions the user when it asks |
+| answer a question | reply in the item's thread; the bot @mentions the user when it asks. The orchestrator's escalations come with **Accept** (its recommendation as the answer); one whose recommendation needs the user's hand first (its `step`) holds on Accept, in needs-you, until **Done — re-queue** confirms the step ([decision](decisions/2026-10-23-accept-step.md)) |
 | decide a held merge | **Approve merge** / **Keep holding** buttons, or a plain reply (Landing) |
 | drop an item | **Drop** on a held or needs-you message, or `/loop drop <id> [why]` (`loop drop <id>` on the CLI); its PR is closed, the branch stays |
 | check a merged change yourself | `/loop qa <id>` before it lands (or a repo's `qa: true`); then **Verified** / **Reopen** on the "Merged — waiting for your check" message, or `/loop verified <id>`, `/loop reopen <id> <what is wrong>` |

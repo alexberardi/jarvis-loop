@@ -65,7 +65,7 @@ func escalateNight(t *testing.T, s *Store, clk *clock.Fake, id int64, class, rec
 	t.Helper()
 	clk.Advance(pipeline.OrchEscalateEvery) // past the escalation rate
 	e, err := s.OrchEscalateNight(context.Background(), orch, id, "verify failed on a scenario this PR cannot reach", rec,
-		"the scenario's area is not in the diff", class, deferred)
+		"the scenario's area is not in the diff", class, deferred, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,18 +327,50 @@ func TestNightNeverList(t *testing.T) {
 	}
 }
 
+// An escalation whose recommendation needs the user's hand first (step) is never acted on at
+// night: no act_at when it is made, and the sweep leaves it to the user.
+func TestNightStepStays(t *testing.T) {
+	s, clk := open(t)
+	nightMode(t, s, pipeline.NightAlways)
+	it := toNeedsYou(t, s, pipeline.VerifyFailed)
+	clk.Advance(pipeline.OrchEscalateEvery)
+	esc, err := s.OrchEscalateNight(context.Background(), orch, it.ID, "verify failed on a scenario this PR cannot reach",
+		"grep the runner log, then re-run verify", "the log is on your box", pipeline.ClassVerifyFlake, "", "grep the runner log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if esc.Data["step"] != "grep the runner log" || esc.Data["night"] != true {
+		t.Fatalf("escalation %+v", esc.Data)
+	}
+	if esc.Data["act_at"] != nil {
+		t.Fatalf("a step escalation says when the night shift acts: %+v", esc.Data)
+	}
+	clk.Advance(pipeline.NightGrace + time.Minute)
+	tick(t, s)
+	if st := stage(t, s, it.ID); st != pipeline.NeedsYou {
+		t.Fatalf("acted on a step escalation: %s", st)
+	}
+	stayed := nightEvents(t, s, it.ID, KindOrchNightStayed)
+	if len(stayed) != 1 || !strings.Contains(str(stayed[0].Data, "why"), "your hand first") {
+		t.Fatalf("stayed %+v", stayed)
+	}
+	if n := len(nightEvents(t, s, it.ID, KindOrchNightAction)); n != 0 {
+		t.Fatalf("%d night actions", n)
+	}
+}
+
 // An escalation's class is checked when it is made.
 func TestNightEscalationClassChecked(t *testing.T) {
 	s, _ := open(t)
 	ctx := context.Background()
 	it := add(t, s, "x", "")
-	if _, err := s.OrchEscalateNight(ctx, orch, it.ID, "t", "r", "why", pipeline.ClassTicketLimit, ""); code(err) != pipeline.CodeInvalidField {
+	if _, err := s.OrchEscalateNight(ctx, orch, it.ID, "t", "r", "why", pipeline.ClassTicketLimit, "", ""); code(err) != pipeline.CodeInvalidField {
 		t.Fatalf("ticket_limit: %v", err)
 	}
-	if _, err := s.OrchEscalateNight(ctx, orch, 0, "t", "r", "why", pipeline.ClassVerifyFlake, ""); code(err) != pipeline.CodeMissingField {
+	if _, err := s.OrchEscalateNight(ctx, orch, 0, "t", "r", "why", pipeline.ClassVerifyFlake, "", ""); code(err) != pipeline.CodeMissingField {
 		t.Fatalf("no item: %v", err)
 	}
-	if _, err := s.OrchEscalateNight(ctx, orch, it.ID, "t", "r", "why", pipeline.ClassScopeChoice, ""); code(err) != pipeline.CodeMissingField {
+	if _, err := s.OrchEscalateNight(ctx, orch, it.ID, "t", "r", "why", pipeline.ClassScopeChoice, "", ""); code(err) != pipeline.CodeMissingField {
 		t.Fatalf("scope without deferred: %v", err)
 	}
 }

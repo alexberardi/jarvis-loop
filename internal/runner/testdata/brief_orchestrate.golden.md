@@ -166,6 +166,12 @@ button that records your recommendation as their answer. So:
 - **`recommendation`** is what you would do, with a **because**: "Open the PR without the
   screenshots, listed as not verified; the runner's verify takes them. Because the code and its
   tests pass, and #67 will let agents run it." It must be something the user can accept as is.
+- **`step`** marks the hand step the user must do before the recommendation can be the answer
+  ("file the follow-up as a loop item", "grep the runner log for item 7", "edit runner.json").
+  Set it whenever your recommendation starts with something only the user can do: Accept then
+  holds the item in needs_you until they press 'Done — re-queue' after the step, so the next run
+  does not ask the same question again. Word the recommendation as the post-step answer; `step`
+  is only the step itself. Without a `step`, Accept records the answer at once.
 - **One decision per escalation.** Several items that need the user in the same turn go in the
   same turn (the Slack layer batches them); do not repeat an open escalation (the snapshot lists
   them) unless something changed.
@@ -211,7 +217,8 @@ While the night shift is on (the control's `night_shift`: `on`, or `auto` from 2
 York, or after the user's "@orchestrator night" until 08:00), loopd itself acts on your
 recommendation for an escalation you mark with one of these classes, 15 minutes after it, unless
 the user answers first. Mark one only when it fits exactly; with no class it waits for the user
-as always.
+as always. An escalation with a `step` is never acted on at night, whatever its class: the
+recommendation needs the user's hand first.
 
 | `class` | When | What loopd does |
 |---|---|---|

@@ -1,0 +1,40 @@
+{
+  "name": "orchestrator-accept-step",
+  "about": "An escalation whose recommendation needs the user's hand first (step, #533): Accept records a pending accept and the item stays in needs_you while the buttons give way to 'Done — re-queue'; Done records the recommendation as the answer and re-queues the item once, so the agent never asks again before the step is done.",
+  "stages": ["build"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Round the timer display"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "question"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "needs_you"}},
+
+    {"do": "orchestrator", "item": "a", "action": "POST /orchestrator/escalations",
+     "body": {"item_id": "{id}", "text": "the runner log needs a look before the retry", "recommendation": "grep the runner log, then retry the run", "reason": "the log is on your box", "step": "grep the runner log for item 1"}},
+    {"do": "clock", "advance": "2m"},
+    {"do": "expect", "messages": [{"thread": "a", "from": "orchestrator",
+      "text": "\\*Recommend:\\* grep the runner log, then retry the run.*\\n\\*First:\\* grep the runner log for item 1",
+      "buttons": ["Accept — step first", "Other…"]}]},
+
+    {"do": "press", "as": "approver", "item": "a", "button": "orch_accept"},
+    {"do": "expect", "stage": {"a": "needs_you"},
+     "events": [{"item": "a", "kind": "orchestrator.accept_pending", "actor": "approver", "count": 1}],
+     "messages": [
+       {"thread": "a", "from": "orchestrator", "buttons": ["Done — re-queue", "Other…"]},
+       {"thread": "a", "from": "bot", "text": "^Recommendation accepted by you — waiting for the step \\(grep the runner log for item 1\\)"}
+     ]},
+
+    {"do": "press", "as": "approver", "item": "a", "button": "orch_done"},
+    {"do": "expect", "stage": {"a": "build"},
+     "events": [{"item": "a", "kind": "answered", "actor": "approver", "data": {"answer": "^grep the runner log, then retry the run$", "accepted": "^[0-9]+$"}, "count": 1}],
+     "messages": [
+       {"thread": "a", "from": "orchestrator", "text": "Accepted by you\\."},
+       {"thread": "a", "from": "bot", "text": "^Answered by you, accepting the orchestrator's recommendation: grep the runner log, then retry the run → build\\.$"}
+     ]}
+  ],
+  "expect": {
+    "stage": {"a": "build"},
+    "events": [{"item": "a", "kind": "answered", "actor": "approver", "count": 1}]
+  }
+}

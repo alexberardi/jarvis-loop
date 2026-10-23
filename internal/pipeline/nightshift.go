@@ -197,7 +197,10 @@ func OrchAddCap(set NightSetting, now time.Time, loc *time.Location, process boo
 // NightEscalation is an escalation as the night shift sees it.
 type NightEscalation struct {
 	Class, Recommendation, Deferred string
-	At                              time.Time
+	// Step is the hand step the user must do before the recommendation can be the answer: the
+	// night shift never acts on one.
+	Step string
+	At   time.Time
 	// Approval: about an item held for the user's approval.
 	Approval bool
 	// Night: made while the night shift was on. Only those are acted on: one from the day was
@@ -292,6 +295,9 @@ func DecideNight(c NightCase, set NightSetting, now time.Time, loc *time.Locatio
 	}
 	if e.Approval {
 		return NightStay, "approvals are yours"
+	}
+	if e.Step != "" {
+		return NightStay, "its recommendation needs your hand first (" + e.Step + ")"
 	}
 	if it.Trust != nil && it.Trust.By == "" {
 		return NightStay, "it waits on your OK of its trusted files"
