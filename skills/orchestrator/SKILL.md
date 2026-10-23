@@ -37,6 +37,7 @@ repeated trouble into tickets against the loop, and write down what you are watc
 | `retry` | a run that failed on the runner or the environment | backoff 2, then 10 minutes; the third failure on one head is escalated by loopd |
 | `priority` | an item's urgency changed (a blocker of others, a process ticket) | P1 to P5 |
 | `link` | an item must wait for another open item | only to an existing open item, no cycles |
+| `wait` | an item in build, review or land (or on a question from one) cannot go on until other work merges: an open item (`on`) or a PR that is not a loop item (`prs`, owner/name#444), e.g. red verify until main's test fix lands | parks it in the waiting stage instead of escalating: loopd moves it back to its stage once they are all merged; a dropped one, or a cycle, goes to the user |
 | `add` | a process ticket or a follow-up | at most 5 a day (10 for process tickets while the night shift is on); an open item with the same signature gets your evidence instead of a new item |
 | `escalate` | a decision that is the user's | one ping per 10 minutes outside approvals; an optional night `class` (below) |
 | `agents` | every run fails the same way, or usage is running out | down only, never above the user's number; always with an escalate |

@@ -17,10 +17,13 @@ type Stage string
 
 // The stages (docs/phases/02-loopd-core.md, Stages and outcomes).
 const (
-	Triage   Stage = "triage"
-	Build    Stage = "build"
-	Review   Stage = "review"
-	Land     Stage = "land"
+	Triage Stage = "triage"
+	Build  Stage = "build"
+	Review Stage = "review"
+	Land   Stage = "land"
+	// Waiting is an item parked until the items and PRs it waits on are done (wait.go): nothing
+	// claims it; loopd moves it back to its ReturnStage (build, review or land) once they are.
+	Waiting  Stage = "waiting"
 	NeedsYou Stage = "needs_you"
 	Held     Stage = "held"
 	// QA is a merged item waiting for the user's own check (docs/decisions/2026-10-15-qa.md):
@@ -31,7 +34,7 @@ const (
 )
 
 // AllStages lists every stage, in pipeline order.
-var AllStages = []Stage{Triage, Build, Review, Land, NeedsYou, Held, QA, Done, Closed}
+var AllStages = []Stage{Triage, Build, Review, Land, Waiting, NeedsYou, Held, QA, Done, Closed}
 
 // IsWork reports whether runners can claim items in this stage.
 func (s Stage) IsWork() bool {
@@ -182,6 +185,10 @@ type Item struct {
 	CIMainFixed string `json:"ci_main_fixed,omitempty"`
 	// DependsOn are the items this one waits for: claim skips it until they are all merged (qa or done).
 	DependsOn []int64 `json:"depends_on"`
+	// WaitPRs are the PRs a waiting item waits on besides its dependencies (wait.go), and
+	// WaitingSince when it was parked (zero: not waiting).
+	WaitPRs      []WaitPR  `json:"wait_prs,omitempty"`
+	WaitingSince time.Time `json:"waiting_since,omitzero"`
 	// PlanID and PlanPiece link an item filed from a plan to its piece (docs/phases/07-planning.md).
 	PlanID    int64 `json:"plan_id,omitempty"`
 	PlanPiece int   `json:"plan_piece,omitempty"`
@@ -814,6 +821,7 @@ func ApplyDrop(it Item, words string) (Transition, error) {
 		return Transition{}, errf(CodeWrongStage, "item is %s", it.Stage)
 	}
 	from := it.Stage
+	it = unpark(it)
 	it.Stage, it.ReturnStage, it.Question = Closed, "", ""
 	return Transition{Item: it, From: from, To: Closed, Kind: "dropped",
 		Data: map[string]any{"reason": DropReason, "words": strings.TrimSpace(words)}}, nil

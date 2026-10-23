@@ -65,6 +65,9 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /items/{id}/edit", user, s.edit)
 	route("POST /items/{id}/link", user, s.link)
 	route("POST /items/{id}/unlink", user, s.unlink)
+	route("POST /items/{id}/wait", user, s.wait)
+	route("POST /items/{id}/unwait", user, s.unwait)
+	route("POST /items/{id}/wait-pr", runner, s.waitPR)
 	route("POST /items/{id}/resources", user, s.setResources)
 	route("POST /items/{id}/feature", user, s.setFeature)
 	route("POST /items/{id}/builder", user, s.setBuilder)
@@ -92,6 +95,7 @@ func (s *server) routes() *http.ServeMux {
 	route("POST /orchestrator/items/{id}/retry", orch, s.orchRetry)
 	route("POST /orchestrator/items/{id}/priority", orch, s.orchPriority)
 	route("POST /orchestrator/items/{id}/link", orch, s.orchLink)
+	route("POST /orchestrator/items/{id}/wait", orch, s.orchWait)
 	route("POST /orchestrator/items/{id}/proof", orch, s.orchProof)
 	route("POST /orchestrator/escalations", orch, s.orchEscalate)
 	route("POST /orchestrator/agents", orch, s.orchAgents)
@@ -805,6 +809,68 @@ func (s *server) link(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, err := s.st.Link(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.After)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// waitBody is a wait's request: the items and PRs to wait on, and why.
+type waitBody struct {
+	On     []int64  `json:"on"`
+	PRs    []string `json:"prs"`
+	Reason string   `json:"reason"`
+}
+
+// wait parks an item on items and PRs (store.Wait).
+func (s *server) wait(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body waitBody
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.Wait(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.On, body.PRs, body.Reason)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// unwait ends an item's wait by hand (store.Unwait).
+func (s *server) unwait(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	it, err := s.st.Unwait(r.Context(), PrincipalFrom(r.Context()).Actor(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// waitPR records a runner seeing a PR a waiting item waits on merged or closed (store.WaitPR). It
+// holds no lease, as the held watch's reports: only a waiting item's PR list moves, and a merge
+// that ends its wait sends it back to the stage it left.
+func (s *server) waitPR(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		PR    string `json:"pr"`
+		State string `json:"state"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	it, err := s.st.WaitPR(r.Context(), PrincipalFrom(r.Context()).Actor(), id, body.PR, body.State)
 	if err != nil {
 		s.fail(w, err)
 		return

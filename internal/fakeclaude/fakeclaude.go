@@ -447,6 +447,10 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f.write(".loop/result.json", `{"outcome":"question","question":"Should the timer round up or down?"}`)
 		f.result("Asked a question.")
 		return 0
+	case Park:
+		f.write(".loop/result.json", `{"outcome":"wait","on":[`+sc.File+`],"reason":"the build needs that fix on main first"}`)
+		f.result("Parked it.")
+		return 0
 	case WrongMode:
 		f.say("hello from manual mode")
 		f.result("nothing done")
@@ -750,6 +754,10 @@ func (f *fake) bash(command string) {
 		return string(out), err
 	})
 }
+
+// Park is a build's wait outcome (the waiting stage) on the items whose ids the script's file
+// names, comma-separated ("1,2").
+const Park = "park"
 
 // script is one item's play in the harness: <item>-<stage>.json for a stage, or <item>.json for
 // its build runs.

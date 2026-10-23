@@ -130,6 +130,14 @@ type Step struct {
 	RefuseMerges *int `json:"refuse_merges,omitempty"`
 	MergeByHand  bool `json:"merge_by_hand,omitempty"`
 	CloseByHand  bool `json:"close_by_hand,omitempty"`
+	// github: ForeignPR ("owner/name#444") is a PR the loop did not open (a fix someone else
+	// lands), put in PRState: OPEN files it, MERGED or CLOSED moves it.
+	ForeignPR string `json:"foreign_pr,omitempty"`
+	PRState   string `json:"pr_state,omitempty"`
+	// park: the user's loop wait on Item: the items it waits on (After, aliases), the PRs (WaitPRs:
+	// owner/name#444), and Reason (land's field); with Refused it must be refused (a regexp on
+	// the error). unpark: loop unwait.
+	WaitPRs []string `json:"wait_prs,omitempty"`
 	// deploy: the runner restarts on a loop build, "base" (jarvis-loop's main when the stack
 	// started) or "main" (its main now)
 	Build string `json:"build,omitempty"`
@@ -785,6 +793,13 @@ func (p *player) step(st Step) error {
 			}
 			return s.GitHub.CloseByHand(d.Item.Repo, ItemBranch(r.id, r.title))
 		}
+		if st.ForeignPR != "" {
+			slug, n, ok := pipeline.SplitWaitPR(st.ForeignPR)
+			if !ok {
+				return fmt.Errorf("foreign_pr %q: want owner/name#444", st.ForeignPR)
+			}
+			return s.GitHub.ForeignPR(slug, n, st.PRState)
+		}
 		if st.MergeByHand {
 			r, err := p.ref(st.Item)
 			if err != nil {
@@ -934,6 +949,37 @@ func (p *player) step(st Step) error {
 			return err
 		}
 		return s.user.do("POST", fmt.Sprintf("/items/%d/resources", r.id), map[string]any{"resources": strings.Split(st.Resources, ",")}, nil)
+	case "park":
+		// The user's loop wait: park the item on items and PRs.
+		r, err := p.ref(st.Item)
+		if err != nil {
+			return err
+		}
+		on := []int64{}
+		for _, a := range st.After {
+			d, err := p.ref(a)
+			if err != nil {
+				return err
+			}
+			on = append(on, d.id)
+		}
+		err = s.user.do("POST", fmt.Sprintf("/items/%d/wait", r.id), map[string]any{"on": on, "prs": st.WaitPRs, "reason": st.Reason}, nil)
+		if st.Refused == "" {
+			return err
+		}
+		if err == nil {
+			return fmt.Errorf("park: not refused, want /%s/", st.Refused)
+		}
+		if re, rerr := regexp.Compile(st.Refused); rerr != nil || !re.MatchString(err.Error()) {
+			return fmt.Errorf("park: refused with %q, want /%s/", err, st.Refused)
+		}
+		return nil
+	case "unpark":
+		r, err := p.ref(st.Item)
+		if err != nil {
+			return err
+		}
+		return s.user.do("POST", fmt.Sprintf("/items/%d/unwait", r.id), map[string]any{}, nil)
 	case "builder":
 		// The user's loop builder: who builds the item (qwen, claude, auto).
 		r, err := p.ref(st.Item)

@@ -32,6 +32,7 @@ repeated trouble into tickets against the loop, and write down what you are watc
 | `retry` | a run that failed on the runner or the environment | backoff 2, then 10 minutes; the third failure on one head is escalated by loopd |
 | `priority` | an item's urgency changed (a blocker of others, a process ticket) | P1 to P5 |
 | `link` | an item must wait for another open item | only to an existing open item, no cycles |
+| `wait` | an item in build, review or land (or on a question from one) cannot go on until other work merges: an open item (`on`) or a PR that is not a loop item (`prs`, owner/name#444), e.g. red verify until main's test fix lands | parks it in the waiting stage instead of escalating: loopd moves it back to its stage once they are all merged; a dropped one, or a cycle, goes to the user |
 | `add` | a process ticket or a follow-up | at most 5 a day (10 for process tickets while the night shift is on); an open item with the same signature gets your evidence instead of a new item |
 | `escalate` | a decision that is the user's | one ping per 10 minutes outside approvals; an optional night `class` (below) |
 | `agents` | every run fails the same way, or usage is running out | down only, never above the user's number; always with an escalate |
@@ -262,6 +263,7 @@ Every turn, write `out/result.json` as your last step:
   {"action": "answer", "item_id": 14, "kind": "harness", "text": "list it under not verified; the runner's verify runs it", "reason": "the standing answer"},
   {"action": "priority", "item_id": 15, "priority": "P2", "reason": "…"},
   {"action": "link", "item_id": 16, "after": 12, "reason": "…"},
+  {"action": "wait", "item_id": 16, "on": [12], "prs": ["owner/name#444"], "reason": "verify fails until main's test fix merges"},
   {"action": "add", "title": "…", "ask": "…", "repo": "owner/name", "priority": "P1", "depends_on": [], "signature": "the normalised failure", "reason": "…"},
   {"action": "escalate", "item_id": 17, "text": "what needs the user", "recommendation": "what you would do, and why", "reason": "…"},
   {"action": "escalate", "item_id": 19, "text": "scope: the parser too, or docs only?", "recommendation": "docs only now", "class": "scope_choice", "deferred": "the parser change", "reason": "…"},
@@ -275,5 +277,5 @@ Every turn, write `out/result.json` as your last step:
 
 Every action needs a reason (it is recorded with the action and shown to the user). Each takes only
 its own fields. `answer`'s kind is one of history, harness, bounce, red_ci, loop. An empty list is
-a fine turn. An `escalate`'s optional class (verify_flake, bounce_limit, scope_choice; `deferred` only with scope_choice) lets the night shift act on your recommendation (the skill's "Night shift"). A `reply` takes the channel and thread_ts its message trigger names. A result with an unknown action or field is refused once with the reason, and you are
+a fine turn. An `escalate`'s optional class (verify_flake, bounce_limit, scope_choice; `deferred` only with scope_choice) lets the night shift act on your recommendation (the skill's "Night shift"). A `wait` parks an item in build, review or land (or on a question from one) until those items and PRs are merged, instead of escalating it: loopd moves it back by itself, and sends it to the user if one is dropped. A `reply` takes the channel and thread_ts its message trigger names. A result with an unknown action or field is refused once with the reason, and you are
 asked again.

@@ -1,0 +1,46 @@
+{
+  "name": "wait-released",
+  "about": "The waiting stage (docs/decisions/2026-10-22-waiting-stage.md). b is built and queued for review, but its review needs a's fix merged first: the user parks it (loop wait --on a). It moves to the Waiting column with what it waits on, its thread says so, and the runner never claims it while a goes through build, review and land. When a is done, loopd moves b back to review with a note in its thread, and the runner claims it for review.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the flaky clock test"},
+    {"do": "add", "item": "b", "title": "Show the waiting column", "priority": "P2"},
+    {"do": "triage", "item": "b"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "good", "file": "internal/clock_test.go"},
+    {"do": "script", "item": "b", "play": "good", "file": "internal/board.go"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "build", "b": "review"}},
+
+    {"do": "park", "item": "b", "after": ["a"], "reason": "its review needs main's clock fix"},
+    {"do": "expect", "stage": {"b": "waiting"},
+     "board": {"b": {"column": "Waiting", "card": "waiting on #1, then back to review"}},
+     "events": [{"item": "b", "kind": "waiting", "actor": "user", "data": {"waits_on": "^#1$", "return_stage": "^review$", "reason": "^its review needs main's clock fix$"}, "count": 1}],
+     "messages": [{"thread": "b", "from": "bot", "text": "^Waiting on #1, then back to review \\(you \\(sandbox, CLI\\)\\): its review needs main's clock fix\\. It goes back by itself once they are done\\.$"}]},
+    {"do": "command", "text": "status", "as": "approver", "answer": "#2 P2 Show the waiting column — waiting on #1, then review"},
+
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review", "b": "waiting"}, "leased": {"b": false}},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "done", "b": "review"},
+     "events": [{"item": "b", "kind": "released", "actor": "loopd", "data": {"note": "^#1 done: back to review$", "return_stage": "^review$"}, "count": 1}],
+     "messages": [{"thread": "b", "from": "bot", "text": "^No longer waiting: #1 done: back to review\\.$"}]},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"b": "land"}}
+  ],
+  "expect": {
+    "stage": {"a": "done", "b": "land"},
+    "agent_runs": {"build": 2, "review": 2},
+    "messages": [
+      {"thread": "b", "text": "^Claimed for review\\.$"}
+    ]
+  }
+}

@@ -95,6 +95,9 @@ func (s *Store) orch(ctx context.Context, actor string, id int64, action, reason
 		if err := s.event(tx, transitionEvent(id, actor, tr)); err != nil {
 			return err
 		}
+		if err := s.releaseWaiting(tx, s.clock.Now()); err != nil {
+			return err
+		}
 		return s.planItemSettled(tx, tr.Item)
 	})
 	if err != nil {

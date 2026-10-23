@@ -1627,6 +1627,13 @@ func (r *Runner) reportBuild(ctx context.Context, ru *run, out outcome, raw []by
 		r.advance(ctx, ru, "question", r.metrics(ru, out, map[string]string{"question": clip(v.Question, 2000)}), nil)
 		return
 	}
+	if v.Outcome == OutcomeWait {
+		// Parked until other work is done: the work so far stays on the branch for the build
+		// that follows.
+		r.saveWIP(ctx, ru, "waiting", r.Log.With("item", ru.item.ID))
+		r.advance(ctx, ru, OutcomeWait, r.metrics(ru, out, WaitFields(v.Result)), nil)
+		return
+	}
 	files, err := r.evidence(ru, v.Result)
 	if err != nil {
 		r.reject(ctx, ru, out, "evidence: "+err.Error())

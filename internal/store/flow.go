@@ -505,7 +505,7 @@ func (f *Flow) features(tx *sql.Tx, since, _ int64) error {
 // its pace too) and the builders the runners seen by now offer.
 func (f *Flow) waiting(tx *sql.Tx, cs claimState, now time.Time) error {
 	items := slices.Clone(cs.waiting)
-	rows, err := tx.Query(`SELECT ` + itemCols + ` FROM items WHERE stage IN ('needs_you', 'held', 'qa')`)
+	rows, err := tx.Query(`SELECT ` + itemCols + ` FROM items WHERE stage IN ('needs_you', 'held', 'qa', 'waiting')`)
 	if err != nil {
 		return err
 	}

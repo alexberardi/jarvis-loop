@@ -97,5 +97,15 @@ func (s *Store) BoardItems(ctx context.Context) ([]BoardItem, error) {
 		out[i].WaitingOn = waitingOn(pipeline.Item{Stage: pipeline.Stage(out[i].Stage), DependsOn: deps[i]}, stages)
 		out[i].Waits = pipeline.WaitChains(out[i].ID, nodes)
 	}
+	rows2 := make([]BoardRow, len(out))
+	for i := range out {
+		rows2[i] = out[i].BoardRow
+	}
+	if err := s.addWaits(ctx, rows2); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].BoardRow = rows2[i]
+	}
 	return out, nil
 }

@@ -1,0 +1,54 @@
+{
+  "name": "wait-on-pr",
+  "about": "The waiting stage (docs/decisions/2026-10-22-waiting-stage.md) on a PR that is not a loop item, from Slack. e is queued for review but fails until a fix someone else is landing (sandbox/demo#444) merges: /loop wait parks it on '#444-merge'. The runner, which holds the GitHub login loopd lacks, checks the PR every poll: while it is open nothing moves; once merged, loopd moves e back to review with a note. f's build asked a question; the user answers in its thread with 'wait pr sandbox/demo#445 …' instead: f waits; that PR is closed without merging, so f goes back to the user with the reason.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "e", "title": "Use the new clock API"},
+    {"do": "add", "item": "f", "title": "Show turn costs", "priority": "P2"},
+    {"do": "triage", "item": "f"},
+    {"do": "triage", "item": "e"},
+    {"do": "script", "item": "e", "play": "good", "file": "internal/clock.go"},
+    {"do": "script", "item": "f", "play": "question"},
+    {"do": "runner", "claims": "f"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "e"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"e": "review", "f": "needs_you"}},
+
+    {"do": "github", "foreign_pr": "sandbox/demo#444", "pr_state": "OPEN"},
+    {"do": "command", "as": "other", "text": "wait 1 #444-merge", "answer": "only the approver"},
+    {"do": "command", "as": "approver", "text": "wait 1 #444-merge because review fails until the clock fix lands", "answer": "^#1 Use the new clock API is waiting, then back to review\\.$"},
+    {"do": "expect", "stage": {"e": "waiting"},
+     "events": [{"item": "e", "kind": "waiting", "actor": "approver", "data": {"waits_on": "^sandbox/demo#444$", "reason": "^review fails until the clock fix lands$"}, "count": 1}],
+     "messages": [{"thread": "e", "from": "bot", "text": "^Waiting on sandbox/demo#444, then back to review \\(.*\\): review fails until the clock fix lands\\."}]},
+    {"do": "command", "as": "approver", "text": "status", "answer": "waiting on sandbox/demo#444, then review"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"e": "waiting"}},
+
+    {"do": "github", "foreign_pr": "sandbox/demo#444", "pr_state": "MERGED"},
+    {"do": "runner", "claims": "e"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"e": "land"},
+     "events": [{"item": "e", "kind": "wait_pr_merged", "actor": "runner", "data": {"pr": "^sandbox/demo#444$", "state": "^MERGED$"}, "count": 1},
+                {"item": "e", "kind": "released", "actor": "loopd", "data": {"note": "^sandbox/demo#444 merged: back to review$"}, "count": 1}],
+     "messages": [{"thread": "e", "from": "bot", "text": "^No longer waiting: sandbox/demo#444 merged: back to review\\.$"}]},
+
+    {"do": "github", "foreign_pr": "sandbox/demo#445", "pr_state": "OPEN"},
+    {"do": "reply", "item": "f", "as": "approver", "text": "wait pr sandbox/demo#445 because the costs come from that API change"},
+    {"do": "expect", "stage": {"f": "waiting"},
+     "events": [{"item": "f", "kind": "waiting", "actor": "approver", "data": {"waits_on": "^sandbox/demo#445$", "return_stage": "^build$", "question": "^Should the timer"}, "count": 1}]},
+    {"do": "github", "foreign_pr": "sandbox/demo#445", "pr_state": "CLOSED"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "ci", "item": "e", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "e"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"f": "needs_you"},
+     "question": {"f": "^sandbox/demo#445 it waits on was closed without merging: keep, change or drop this one\\?$"},
+     "events": [{"item": "f", "kind": "wait_pr_closed", "actor": "runner", "count": 1}],
+     "messages": [{"thread": "f", "from": "bot", "text": "#2 Show turn costs needs you: sandbox/demo#445 it waits on was closed without merging"}]}
+  ],
+  "expect": {
+    "stage": {"e": "done", "f": "needs_you"},
+    "agent_runs": {"build": 2, "review": 1}
+  }
+}

@@ -37,6 +37,11 @@ type OrchSnapItem struct {
 	Unservable []string `json:"unservable,omitempty"`
 	// ReopenedDeps is its dependencies that failed the user's check, while the fix is open.
 	ReopenedDeps []ReopenedDependency `json:"reopened_deps,omitempty"`
+	// A waiting item's: what it waits on (items and PRs not merged yet), the stage it goes back
+	// to, and its PRs.
+	WaitsOn     string            `json:"waits_on,omitempty"`
+	ReturnStage string            `json:"return_stage,omitempty"`
+	WaitPRs     []pipeline.WaitPR `json:"wait_prs,omitempty"`
 }
 
 // OrchSnapRunner is a runner's health.
@@ -163,6 +168,10 @@ func (s *Store) OrchSnapshot(ctx context.Context) (OrchSnapshot, error) {
 			Leased: leased[it.ID], DependsOn: it.DependsOn, WaitingOn: waitingOn(it, deps), BounceCount: it.BounceCount,
 			AgeInStage: int64(now.Sub(it.UpdatedAt) / time.Second), Question: it.Question, HoldReason: it.HoldReason, PR: it.PR, HeadSHA: it.HeadSHA, Resources: it.Resources,
 			Unservable: flagged[it.ID], ReopenedDeps: reopened[it.ID]})
+		if it.Stage == pipeline.Waiting {
+			last := &snap.Items[len(snap.Items)-1]
+			last.WaitsOn, last.ReturnStage, last.WaitPRs = pipeline.WaitsOn(it, deps), string(it.ReturnStage), it.WaitPRs
+		}
 	}
 
 	// The runners.

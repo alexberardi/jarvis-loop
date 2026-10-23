@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -37,6 +38,12 @@ type Result struct {
 	// Proof (build's ready_for_pr) is how the loop can tell, once merged, that the change works:
 	// a list of checks (pipeline.ParseProof; docs/decisions/2026-10-18-qa-proofs.md).
 	Proof json.RawMessage `json:"proof,omitempty"`
+
+	// Wait's (build or review): the items (On) and PRs (owner/name#444) its next step needs done
+	// first, and why (docs/decisions/2026-10-22-waiting-stage.md).
+	On     []int64  `json:"on,omitempty"`
+	PRs    []string `json:"prs,omitempty"`
+	Reason string   `json:"reason,omitempty"`
 
 	// Triage's.
 	Repo      string   `json:"repo,omitempty"`
@@ -168,12 +175,19 @@ const OutcomeReadyForPR = "ready_for_pr"
 // reports loopd's routed, and the item is triaged again with that repo checked out.
 const OutcomeRouted = "routed"
 
+// OutcomeWait is a build or review agent parking its item until other work is done: the runner
+// reports loopd's wait, and loopd moves the item back once that work is merged.
+const OutcomeWait = "wait"
+
+// MaxWaits is the most items and PRs one wait may name.
+const MaxWaits = 20
+
 // StageOutcomes are the outcomes an agent may return per stage (the runner itself reports
 // pr_opened, failed and usage_limit).
 var StageOutcomes = map[string][]string{
 	StageTriage: {"reproduced", OutcomeRouted, "not_reproducible", "question"},
-	StageBuild:  {OutcomeReadyForPR, "question"},
-	StageReview: {"approved", "bounce"},
+	StageBuild:  {OutcomeReadyForPR, "question", OutcomeWait},
+	StageReview: {"approved", "bounce", OutcomeWait},
 }
 
 // outcomeFields are the fields each outcome may carry (besides "outcome"): a field of another
@@ -183,6 +197,7 @@ var outcomeFields = map[string][]string{
 	OutcomeReadyForPR:  {"pr_title", "pr_body", "head_sha", "summary", "not_verified", "evidence", "needs_review", "proof"},
 	"reproduced":       {"repo", "area", "size", "risk", "resources", "change_kind", "builder", "summary", "notes", "evidence", "not_verified", "needs_qa"},
 	OutcomeRouted:      {"repo", "why"},
+	OutcomeWait:        {"on", "prs", "reason"},
 	"not_reproducible": {"summary", "notes", "evidence", "not_verified"},
 	"approved":         {"summary", "review", "head_sha", "evidence", "not_verified", "needs_review", "needs_qa", "ask_steps"},
 	"bounce":           {"notes", "review", "head_sha", "evidence", "ask_steps"},
@@ -231,6 +246,38 @@ const (
 	MaxPRBody        = 60000
 )
 
+// validWait checks a wait: at least one item or PR, at most MaxWaits, and a one-line reason.
+func validWait(r Result) error {
+	switch {
+	case len(r.On)+len(r.PRs) == 0:
+		return fmt.Errorf("outcome wait names nothing to wait on: give on (item ids) or prs (owner/name#444)")
+	case len(r.On)+len(r.PRs) > MaxWaits:
+		return fmt.Errorf("outcome wait names more than %d items and PRs", MaxWaits)
+	case !oneLineOK(r.Reason, MaxWhy):
+		return fmt.Errorf("reason must be one line of 1 to %d characters: why it waits", MaxWhy)
+	}
+	for _, n := range r.On {
+		if n <= 0 {
+			return fmt.Errorf("on: %d is not an item id", n)
+		}
+	}
+	for _, p := range r.PRs {
+		if strings.TrimSpace(p) == "" || strings.ContainsAny(p, " ,\r\n") || len(p) > 200 {
+			return fmt.Errorf("prs: %q is not a PR (owner/name#444)", p)
+		}
+	}
+	return nil
+}
+
+// WaitFields are a wait's fields for loopd's wait outcome.
+func WaitFields(r Result) map[string]string {
+	on := make([]string, len(r.On))
+	for i, n := range r.On {
+		on[i] = strconv.FormatInt(n, 10)
+	}
+	return map[string]string{"on": strings.Join(on, ","), "prs": strings.Join(r.PRs, ","), "reason": strings.TrimSpace(r.Reason)}
+}
+
 // ValidateResult parses and checks a result against the stage and git. loopDir is the worktree's
 // .loop directory.
 func ValidateResult(raw []byte, want Expect, facts GitFacts, loopDir string) (Valid, error) {
@@ -243,6 +290,9 @@ func ValidateResult(raw []byte, want Expect, facts GitFacts, loopDir string) (Va
 			return Valid{}, fmt.Errorf("outcome question but the question is empty")
 		}
 		return Valid{Result: r}, nil
+	}
+	if r.Outcome == OutcomeWait {
+		return Valid{Result: r}, validWait(r)
 	}
 	title := strings.TrimSpace(r.PRTitle)
 	switch {
@@ -484,6 +534,9 @@ func ValidateReview(raw []byte, head string) (Result, error) {
 		return r, fmt.Errorf("head_sha %q is not the reviewed commit %s", r.HeadSHA, head)
 	}
 	r.HeadSHA = head
+	if r.Outcome == OutcomeWait {
+		return r, validWait(r)
+	}
 	if err := checkAskSteps(r.AskSteps); err != nil {
 		return r, err
 	}

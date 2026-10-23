@@ -93,11 +93,14 @@ func (r *Runner) CloseDropped(ctx context.Context) error {
 	return nil
 }
 
-// closeDroppedLoop runs CloseDropped every poll until ctx ends.
+// closeDroppedLoop runs CloseDropped and CheckWaitPRs (with the same gh) every poll until ctx ends.
 func (r *Runner) closeDroppedLoop(ctx context.Context) {
 	for ctx.Err() == nil {
 		if err := r.CloseDropped(ctx); err != nil {
 			r.Log.Warn("close dropped PRs", "err", err)
+		}
+		if err := r.CheckWaitPRs(ctx); err != nil {
+			r.Log.Warn("check waited-on PRs", "err", err)
 		}
 		t := r.Clock.NewTimer(time.Duration(r.Config().PollSeconds) * time.Second)
 		select {

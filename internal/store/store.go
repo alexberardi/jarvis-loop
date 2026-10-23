@@ -374,7 +374,7 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
 	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of, ci_red_sha, ci_main_fixed,
 	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust, proof, not_before, ci_pending_since, ci_pending_sha, verify, verify_reason, feature,
-	built_by, qwen_failures, change_kind`
+	built_by, qwen_failures, change_kind, wait_prs, waiting_since`
 
 type scanner interface{ Scan(...any) error }
 
@@ -387,14 +387,22 @@ func scanItem(row scanner) (pipeline.Item, error) {
 		dependsOn           string
 		created, updated    int64
 		notBefore, ciSince  int64
+		waitPRs             string
+		waitingSince        int64
 	)
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
 		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf, &it.CIRedSHA, &it.CIMainFixed,
 		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust, &proof, &notBefore, &ciSince, &it.CIPendingSHA, &it.Verify, &it.VerifyReason, &it.Feature,
-		&it.BuiltBy, &it.QwenFailures, &it.ChangeKind)
+		&it.BuiltBy, &it.QwenFailures, &it.ChangeKind, &waitPRs, &waitingSince)
 	if err != nil {
 		return it, err
+	}
+	it.WaitingSince = optNanos(waitingSince)
+	if waitPRs != "" {
+		if err := json.Unmarshal([]byte(waitPRs), &it.WaitPRs); err != nil {
+			return it, err
+		}
 	}
 	it.NotBefore, it.CIPendingSince = optNanos(notBefore), optNanos(ciSince)
 	it.Stage, it.ReturnStage = pipeline.Stage(stage), pipeline.Stage(ret)
@@ -503,16 +511,24 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 		}
 		proof = string(b)
 	}
+	waitPRs := ""
+	if len(it.WaitPRs) > 0 {
+		b, err := json.Marshal(it.WaitPRs)
+		if err != nil {
+			return err
+		}
+		waitPRs = string(b)
+	}
 	_, err := tx.Exec(`UPDATE items SET title=?, ask=?, repo=?, source=?, priority=?, stage=?, return_stage=?, question=?,
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
 		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, ci_main_fixed=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=?, trust=?, proof=?,
 		not_before=?, ci_pending_since=?, ci_pending_sha=?, verify=?, verify_reason=?, feature=?,
-		built_by=?, qwen_failures=?, change_kind=? WHERE id=?`,
+		built_by=?, qwen_failures=?, change_kind=?, wait_prs=?, waiting_since=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
 		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, it.CIMainFixed, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, trust, proof,
 		toOptNanos(it.NotBefore), toOptNanos(it.CIPendingSince), it.CIPendingSHA, it.Verify, it.VerifyReason, it.Feature,
-		it.BuiltBy, it.QwenFailures, it.ChangeKind, it.ID)
+		it.BuiltBy, it.QwenFailures, it.ChangeKind, waitPRs, toOptNanos(it.WaitingSince), it.ID)
 	return err
 }
 
@@ -591,6 +607,12 @@ type BoardRow struct {
 	ClaimedBy  string    `json:"claimed_by,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	AgeSeconds int64     `json:"age_seconds"`
+	// A waiting item's: what it waits on ("#472, owner/name#444"), the PRs not seen merged yet
+	// (which runners watch), and since when.
+	WaitsOn      string    `json:"waits_on,omitempty"`
+	ReturnStage  string    `json:"return_stage,omitempty"`
+	WaitPRs      []string  `json:"wait_prs,omitempty"`
+	WaitingSince time.Time `json:"waiting_since,omitzero"`
 }
 
 // ListFilter selects board rows. Empty fields match everything.
@@ -653,7 +675,31 @@ func (s *Store) ListItemsFilter(ctx context.Context, f ListFilter) ([]BoardRow, 
 		b.Display = pipeline.Display(pipeline.Stage(b.Stage), b.ClaimedBy != "")
 		out = append(out, b)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, s.addWaits(ctx, out)
+}
+
+// addWaits fills in the waiting rows' waits.
+func (s *Store) addWaits(ctx context.Context, rows []BoardRow) error {
+	if !slices.ContainsFunc(rows, func(b BoardRow) bool { return b.Stage == string(pipeline.Waiting) }) {
+		return nil
+	}
+	ws, err := s.Waiting(ctx)
+	if err != nil {
+		return err
+	}
+	by := map[int64]WaitRow{}
+	for _, w := range ws {
+		by[w.ID] = w
+	}
+	for i := range rows {
+		if w, ok := by[rows[i].ID]; ok {
+			rows[i].WaitsOn, rows[i].WaitPRs, rows[i].WaitingSince, rows[i].ReturnStage = w.WaitsOn, w.PRs, w.Since, w.Return
+		}
+	}
+	return nil
 }
 
 // Lease is a runner's hold on an item at a stage.
@@ -839,6 +885,10 @@ func (s *Store) humanTx(ctx context.Context, actor string, id int64, action stri
 			if err := then(tx); err != nil {
 				return err
 			}
+		}
+		// An unlink, or a PR seen merged, may leave a waiting item nothing to wait on.
+		if err := s.releaseWaiting(tx, s.clock.Now()); err != nil {
+			return err
 		}
 		return s.planItemSettled(tx, tr.Item)
 	})
@@ -1161,7 +1211,14 @@ func (s *Store) Sweep(ctx context.Context) error {
 	s.tickMu.Unlock()
 	if tick {
 		// Unservable first, so the orchestrator's idle trigger skips what it already flagged.
-		if err := s.tx(ctx, func(tx *sql.Tx) error { return s.checkUnservable(tx, now) }); err != nil {
+		if err := s.tx(ctx, func(tx *sql.Tx) error {
+			if err := s.checkUnservable(tx, now); err != nil {
+				return err
+			}
+			// Waiting items are released after every transition; the tick catches any other way
+			// a dependency got done.
+			return s.releaseWaiting(tx, now)
+		}); err != nil {
 			return err
 		}
 		if err := s.OrchTick(ctx); err != nil {
@@ -1398,6 +1455,28 @@ func (s *Store) Advance(ctx context.Context, runnerName string, id int64, outcom
 		if err != nil {
 			return err
 		}
+		if outcome == pipeline.Wait {
+			// An agent's wait: not a stage outcome (pipeline.ApplyAdvance), it parks the item as
+			// the user's wait does, and applies now even in a frozen repo (it changes no code).
+			if l.Stage != pipeline.Build && l.Stage != pipeline.Review {
+				return errf(pipeline.CodeWrongStage, "wait is not an outcome of %s", l.Stage)
+			}
+			tr, err := s.agentWait(tx, it, l, fields)
+			if err != nil {
+				return err
+			}
+			if u, ok := usageRunFrom(id, string(l.Stage), fields, now); ok {
+				if err := insertUsageRun(tx, u); err != nil {
+					return err
+				}
+			}
+			tr.Item.UpdatedAt = now
+			if err := s.applyAdvance(tx, actor, id, l.ID, tr, fields, now); err != nil {
+				return err
+			}
+			out = tr.Item
+			return nil
+		}
 		adv := pipeline.Advance{Outcome: outcome, Fields: fields, Evidence: n, Agent: l.Agent,
 			ChangedPaths: changedPaths, HoldRules: ctl.HoldRules, Repos: s.Repos()}
 		tr, err := pipeline.ApplyAdvance(it, adv, now)
@@ -1482,6 +1561,10 @@ func (s *Store) applyAdvance(tx *sql.Tx, actor string, id int64, leaseID string,
 		}
 	}
 	if err := s.checkUnservable(tx, now); err != nil {
+		return err
+	}
+	// A merge may be the last thing waiting items wait on.
+	if err := s.releaseWaiting(tx, now); err != nil {
 		return err
 	}
 	if err := s.planItemSettled(tx, tr.Item); err != nil {

@@ -45,6 +45,8 @@ type standupData struct {
 	// At is the 09:00 it is for; the window is the 24 hours before it.
 	At                                time.Time
 	Merged, InFlight, Waiting, NeedsU []standupLine
+	// WaitLong is the items parked in waiting for more than a day (pipeline.WaitLongAfter).
+	WaitLong []standupLine
 	// Did is what the orchestrator did in the window: a count per action, and its lines.
 	Did      map[string]int
 	DidLines []string
@@ -105,8 +107,9 @@ func standupText(d standupData, loc *time.Location) string {
 	section("Merged yesterday", d.Merged)
 	section("In flight", d.InFlight)
 	section("Waiting", d.Waiting)
+	section("Waiting over a day", d.WaitLong)
 	section("Needs you", d.NeedsU)
-	if len(d.Merged)+len(d.InFlight)+len(d.Waiting)+len(d.NeedsU) == 0 {
+	if len(d.Merged)+len(d.InFlight)+len(d.Waiting)+len(d.WaitLong)+len(d.NeedsU) == 0 {
 		sb.WriteString("\nNothing open, nothing merged.\n")
 	}
 	if d.Done.Total > 0 {
@@ -288,6 +291,14 @@ func (b *Bot) standupData(ctx context.Context, at time.Time) (standupData, error
 			l.Note = "merged, waiting for your check"
 			d.NeedsU = append(d.NeedsU, l)
 		case st == pipeline.Done || st == pipeline.Closed:
+		case st == pipeline.Waiting:
+			waited := now.Sub(it.WaitingSince)
+			l.Note = "parked, waiting on " + it.WaitsOn + " · " + ageText(waited)
+			if it.WaitingSince.IsZero() || waited < pipeline.WaitLongAfter {
+				d.Waiting = append(d.Waiting, l)
+			} else {
+				d.WaitLong = append(d.WaitLong, l)
+			}
 		case len(it.Waits) > 0:
 			waits := make([]string, len(it.Waits))
 			for i, c := range it.Waits {

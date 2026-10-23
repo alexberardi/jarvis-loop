@@ -604,6 +604,10 @@ func (r *Runner) reportReview(ctx context.Context, ru *run, out outcome, raw []b
 		r.reject(ctx, ru, out, err.Error())
 		return
 	}
+	if v.Outcome == OutcomeWait {
+		r.advance(ctx, ru, OutcomeWait, r.metrics(ru, out, WaitFields(v)), nil)
+		return
+	}
 	if r.VerifyPR != nil {
 		info, err := r.VerifyPR(ctx, ru.repo.Slug, it.PR)
 		if err != nil {

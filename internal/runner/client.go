@@ -401,6 +401,8 @@ type BoardRow struct {
 	Display  string `json:"display"`
 	Repo     string `json:"repo"`
 	PR       int    `json:"pr"`
+	// WaitPRs are a waiting item's PRs not seen merged yet (owner/name#444).
+	WaitPRs []string `json:"wait_prs,omitempty"`
 }
 
 // OpenItems lists the open items (GET /items?open=1).
@@ -447,6 +449,21 @@ func (c *Client) Held(ctx context.Context) ([]BoardRow, error) {
 	}
 	_, err := c.json(ctx, "GET", "/items?stage=held", nil, &out)
 	return out.Items, err
+}
+
+// Waiting lists the waiting items (GET /items?stage=waiting).
+func (c *Client) Waiting(ctx context.Context) ([]BoardRow, error) {
+	var out struct {
+		Items []BoardRow `json:"items"`
+	}
+	_, err := c.json(ctx, "GET", "/items?stage=waiting", nil, &out)
+	return out.Items, err
+}
+
+// WaitPR reports a PR a waiting item waits on merged or closed (POST /items/{id}/wait-pr).
+func (c *Client) WaitPR(ctx context.Context, id int64, pr, state string) error {
+	_, err := c.json(ctx, "POST", fmt.Sprintf("/items/%d/wait-pr", id), map[string]string{"pr": pr, "state": state}, nil)
+	return err
 }
 
 // Rebuild sends a held item back to build with notes for the builder (POST /items/{id}/rebuild).

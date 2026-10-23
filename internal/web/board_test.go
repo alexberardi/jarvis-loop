@@ -343,7 +343,7 @@ func TestBoardColumns(t *testing.T) {
 	if !slicesEqual(plans, []int64{3, 2, 1}) || v.PlanCount != 3 {
 		t.Errorf("plans %v (count %d), want [3 2 1]", plans, v.PlanCount)
 	}
-	if strings.Join(names, ",") != "Planning,Triage,Build,Review,Needs you,Approval,QA,Done" {
+	if strings.Join(names, ",") != "Planning,Triage,Build,Review,Waiting,Needs you,Approval,QA,Done" {
 		t.Errorf("columns %v", names)
 	}
 	want := map[string][]int64{"Triage": {1, 2, 12}, "Build": {3, 4, 13, 14}, "Review": {5, 6}, "Needs you": {7}, "Approval": {8}, "QA": {18, 19, 21, 20}, "Done": {9}}

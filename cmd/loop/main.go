@@ -45,6 +45,10 @@ const usage = `usage: loop <command> [args]
   edit <id> [--title TEXT] [--ask TEXT]   before build starts (in triage or on its question)
   link <id> --after 12,13     make it wait for those items too
   unlink <id> <after id>      stop it waiting for that item
+  wait <id> [--on 472,483] [--pr owner/name#444 ...] [--reason TEXT]
+                              park it (from build, review, land or a question from one) until
+                              those items are merged and those PRs merged; it goes back by itself
+  unwait <id>                 end its wait now: back to the stage it left
   resources <id> <macos,voice,...|none>   after triage; applies from the next claim
   feature <id> <name|none>    put it in that feature, or in none
   builder <id> <qwen|claude|auto>   who builds it, before its build starts (auto: routing decides)
@@ -240,6 +244,8 @@ var commands = map[string]command{
 	"edit":      {1, 1, []string{"title", "ask"}, cmdEdit},
 	"link":      {1, 1, []string{"after"}, cmdLink},
 	"unlink":    {2, 2, nil, cmdUnlink},
+	"wait":      {1, 1, []string{"on", "pr", "reason"}, cmdWait},
+	"unwait":    {1, 1, nil, cmdUnwait},
 	"resources": {2, 2, nil, cmdResources},
 	"feature":   {2, 2, nil, cmdFeature},
 	"builder":   {2, 2, nil, cmdBuilder},
@@ -315,32 +321,36 @@ func (c *client) json(method, path string, in, out any) (int, error) {
 // ---- shapes ----
 
 type item struct {
-	ID          int64     `json:"id"`
-	Title       string    `json:"title"`
-	Ask         string    `json:"ask"`
-	Repo        string    `json:"repo"`
-	Source      string    `json:"source"`
-	Priority    string    `json:"priority"`
-	Stage       string    `json:"stage"`
-	ReturnStage string    `json:"return_stage"`
-	Question    string    `json:"question"`
-	Area        string    `json:"area"`
-	Size        string    `json:"size"`
-	Risk        string    `json:"risk"`
-	HoldReason  string    `json:"hold_reason"`
-	Resources   []string  `json:"resources"`
-	BounceCount int       `json:"bounce_count"`
-	PR          int       `json:"pr"`
-	Branch      string    `json:"branch"`
-	HeadSHA     string    `json:"head_sha"`
-	MergeSHA    string    `json:"merge_sha"`
-	NeedsQA     bool      `json:"needs_qa"`
-	ReopenOf    int64     `json:"reopen_of"`
-	DependsOn   []int64   `json:"depends_on"`
-	Feature     string    `json:"feature"`
-	Builder     string    `json:"builder"`
-	CreatedAt   time.Time `json:"created_at"`
-	Approval    *struct {
+	ID          int64    `json:"id"`
+	Title       string   `json:"title"`
+	Ask         string   `json:"ask"`
+	Repo        string   `json:"repo"`
+	Source      string   `json:"source"`
+	Priority    string   `json:"priority"`
+	Stage       string   `json:"stage"`
+	ReturnStage string   `json:"return_stage"`
+	Question    string   `json:"question"`
+	Area        string   `json:"area"`
+	Size        string   `json:"size"`
+	Risk        string   `json:"risk"`
+	HoldReason  string   `json:"hold_reason"`
+	Resources   []string `json:"resources"`
+	BounceCount int      `json:"bounce_count"`
+	PR          int      `json:"pr"`
+	Branch      string   `json:"branch"`
+	HeadSHA     string   `json:"head_sha"`
+	MergeSHA    string   `json:"merge_sha"`
+	NeedsQA     bool     `json:"needs_qa"`
+	ReopenOf    int64    `json:"reopen_of"`
+	DependsOn   []int64  `json:"depends_on"`
+	WaitPRs     []struct {
+		Ref    string `json:"ref"`
+		Merged bool   `json:"merged"`
+	} `json:"wait_prs"`
+	Feature   string    `json:"feature"`
+	Builder   string    `json:"builder"`
+	CreatedAt time.Time `json:"created_at"`
+	Approval  *struct {
 		By      string    `json:"by"`
 		Words   string    `json:"words"`
 		HeadSHA string    `json:"head_sha"`
@@ -467,6 +477,10 @@ func cmdStatus(c *client, _ []string, f map[string][]string) error {
 			Display    string `json:"display"`
 			ClaimedBy  string `json:"claimed_by"`
 			AgeSeconds int64  `json:"age_seconds"`
+			WaitsOn    string `json:"waits_on"`
+			Return     string `json:"return_stage"`
+			// WaitingSince is when a waiting item was parked.
+			WaitingSince time.Time `json:"waiting_since"`
 		} `json:"items"`
 	}
 	if _, err := c.json("GET", path, nil, &board); err != nil {
@@ -494,7 +508,26 @@ func cmdStatus(c *client, _ []string, f map[string][]string) error {
 	for _, r := range board.Items {
 		fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\t%s\t%s\n", r.ID, r.Priority, r.Display, age(r.AgeSeconds), r.Title, r.ClaimedBy)
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	// The waiting column: what each parked item waits on, and where it goes back to.
+	first := true
+	for _, r := range board.Items {
+		if r.Display != string(pipeline.Waiting) {
+			continue
+		}
+		if first {
+			fmt.Fprintln(c.out, "\nWAITING")
+			first = false
+		}
+		line := fmt.Sprintf("#%d waits on %s, then %s", r.ID, r.WaitsOn, r.Return)
+		if !r.WaitingSince.IsZero() {
+			line += fmt.Sprintf(" (parked %s ago)", age(int64(time.Since(r.WaitingSince)/time.Second)))
+		}
+		fmt.Fprintln(c.out, line)
+	}
+	return nil
 }
 
 func age(secs int64) string {
@@ -556,6 +589,9 @@ func cmdShow(c *client, pos []string, _ map[string][]string) error {
 	w := c.out
 	fmt.Fprintf(w, "#%d %s\n", it.ID, it.Title)
 	fmt.Fprintf(w, "stage:    %s (%s)\n", it.Stage, d.Display)
+	if it.Stage == string(pipeline.Waiting) {
+		fmt.Fprintf(w, "parked:   waiting on %s, then back to %s\n", waitList(item{DependsOn: d.WaitingOn, WaitPRs: it.WaitPRs}), it.ReturnStage)
+	}
 	if len(d.WaitingOn) > 0 {
 		fmt.Fprintf(w, "blocked:  waiting on %s\n", ids(d.WaitingOn))
 	}
@@ -854,6 +890,62 @@ func cmdLink(c *client, pos []string, f map[string][]string) error {
 		return err
 	}
 	c.waits(it)
+	return nil
+}
+
+// cmdWait parks an item on items (--on, comma lists, repeatable) and PRs (--pr, repeatable).
+func cmdWait(c *client, pos []string, f map[string][]string) error {
+	id, err := itemID(pos[0])
+	if err != nil {
+		return err
+	}
+	on, err := afterIDs(map[string][]string{"after": f["on"]})
+	if err != nil {
+		return err
+	}
+	var prs []string
+	for _, p := range f["pr"] {
+		for _, s := range strings.Split(p, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				prs = append(prs, s)
+			}
+		}
+	}
+	if len(on) == 0 && len(prs) == 0 {
+		return usageError("wait needs --on (items) or --pr (a PR to merge): what it waits on")
+	}
+	var it item
+	if _, err := c.json("POST", "/items/"+id+"/wait", map[string]any{"on": on, "prs": prs, "reason": last(f, "reason")}, &it); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "#%d waiting on %s, then back to %s\n", it.ID, waitList(item{DependsOn: on, WaitPRs: it.WaitPRs}), it.ReturnStage)
+	return nil
+}
+
+// waitList is what a waiting item waits on, as the CLI knows it: its items and its PRs not merged.
+func waitList(it item) string {
+	parts := []string{}
+	if len(it.DependsOn) > 0 {
+		parts = append(parts, ids(it.DependsOn))
+	}
+	for _, p := range it.WaitPRs {
+		if !p.Merged {
+			parts = append(parts, p.Ref)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func cmdUnwait(c *client, pos []string, _ map[string][]string) error {
+	id, err := itemID(pos[0])
+	if err != nil {
+		return err
+	}
+	var it item
+	if _, err := c.json("POST", "/items/"+id+"/unwait", map[string]any{}, &it); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "#%d back to %s\n", it.ID, it.Stage)
 	return nil
 }
 
