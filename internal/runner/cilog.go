@@ -48,7 +48,11 @@ var (
 	goFailRe       = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
 	scenarioFailRe = regexp.MustCompile(`Scenario (\S+) \(FAIL\b`)
 	sandboxFailRe  = regexp.MustCompile(`^FAIL +(\S+) +[0-9.]+s$`)
-	runIDRe        = regexp.MustCompile(`/actions/runs/(\d+)`)
+	// Failures with no --- FAIL line of their own: a failed package (a "[build failed]" or
+	// "[setup failed]" one has nothing else naming it) and a crash or deadlock (#531).
+	goFailPkgRe = regexp.MustCompile(`^FAIL\t(\S+)( \[(?:build|setup) failed\])?`)
+	goPanicRe   = regexp.MustCompile(`^(?:panic: |fatal error: )`)
+	runIDRe     = regexp.MustCompile(`/actions/runs/(\d+)`)
 )
 
 // Token-like strings: GitHub, Slack and Anthropic tokens, bearer credentials, key=value secrets,
@@ -81,10 +85,35 @@ func RedactTokens(s string) string {
 	})
 }
 
+// failLine tells whether a line marks a failure worth keeping the lines around it for, and the
+// test, scenario or package it names, when it names one.
+func failLine(l string) (name string, ok bool) {
+	if m := goFailRe.FindStringSubmatch(l); m != nil {
+		return m[1], true
+	}
+	if m := scenarioFailRe.FindStringSubmatch(l); m != nil {
+		return m[1], true
+	}
+	if m := sandboxFailRe.FindStringSubmatch(l); m != nil {
+		return m[1], true
+	}
+	if m := goFailPkgRe.FindStringSubmatch(l); m != nil {
+		if m[2] != "" {
+			return m[1], true // only this line names a package that never built or set up
+		}
+		return "", true // a test above names it; keep the window, name nothing new
+	}
+	if goPanicRe.MatchString(l) {
+		return "", true
+	}
+	return "", false
+}
+
 // ExtractCIFailure cuts a failed run's log (gh run view --log-failed) down to the failures: ANSI
 // stripped, gh's job, step and timestamp prefix dropped, grouped by job; for each job the lines
-// around each failing Go test (--- FAIL) or scenario, or its tail when none is recognized; tokens
-// redacted; capped in size.
+// around each failure (failLine: a failing Go test, scenario, package, or a panic), or its tail
+// when none is recognized; tokens redacted; capped in size. It reads a plain log too (all lines
+// land under job ""): the runner's verify uses it the same way (#531).
 func ExtractCIFailure(raw string) CIFailure {
 	var jobs []string
 	lines := map[string][]string{}
@@ -112,19 +141,12 @@ func ExtractCIFailure(raw string) CIFailure {
 		}
 		var hits []int
 		for i, l := range ls {
-			name := ""
-			if m := goFailRe.FindStringSubmatch(l); m != nil {
-				name = m[1]
-			} else if m := scenarioFailRe.FindStringSubmatch(l); m != nil {
-				name = m[1]
-			} else if m := sandboxFailRe.FindStringSubmatch(l); m != nil {
-				name = m[1]
-			}
-			if name == "" {
+			name, ok := failLine(l)
+			if !ok {
 				continue
 			}
 			hits = append(hits, i)
-			if !seen[name] {
+			if name != "" && !seen[name] {
 				seen[name] = true
 				out.Tests = append(out.Tests, name)
 			}
@@ -267,7 +289,7 @@ func (r *Runner) ciFailureFile(ctx context.Context, slug, sha string, runs []CIR
 	if len(tests) > 0 {
 		fmt.Fprintf(&b, "Failing tests: %s\n", RedactTokens(strings.Join(tests, ", ")))
 	} else {
-		b.WriteString("Failing tests: none recognized (no Go --- FAIL or scenario FAIL line); each job's tail is below.\n")
+		b.WriteString("Failing tests: none recognized (no Go --- FAIL, failed package, scenario or panic line); each job's tail is below.\n")
 	}
 	b.WriteString("Cut from gh run view --log-failed: the lines around each failure, ANSI and token-like strings removed.\n")
 	b.WriteString(body.String())

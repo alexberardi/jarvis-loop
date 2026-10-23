@@ -3,6 +3,7 @@ package runner
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -142,6 +143,54 @@ func TestVerifyFailsBackToBuild(t *testing.T) {
 	}
 	if g.remoteHead(branch) != "" || g.prs.calls() != 0 {
 		t.Fatal("pushed after the second failed verify")
+	}
+}
+
+// A verify whose FAIL lines come early (go test streams per package: the failing one finishes
+// first, later packages' ok lines fill the end): the uploaded log evidence keeps the lines around
+// the failure, and the requeue event's log_tail starts at it, so the next build sees what failed
+// instead of a tail of ok lines (#531).
+func TestVerifyFailKeepsFailWindow(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	g.verifyRepo(VerifyStep{Name: "race tests", Run: `echo "--- FAIL: TestSIPBind (0.01s)"
+echo "    sip_test.go:42: bind 127.0.0.66: operation not permitted"
+i=1; while [ $i -le 120 ]; do printf 'ok  \tgithub.com/alexberardi/jarvis-server/internal/modules/longish/package/path/number%03d\t(cached) with some extra -race flags making the line long\n' $i; i=$((i+1)); done
+exit 1`})
+	id := g.toBuild("Add a feature")
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.Build || d.Item.BounceCount != 1 {
+		t.Fatalf("stage %s bounces %d; log:\n%s", d.Item.Stage, d.Item.BounceCount, g.logs.String())
+	}
+	n := 0
+	for _, e := range d.Evidence {
+		if e.Name == "verify-1-race-tests.log" {
+			n = e.N
+		}
+	}
+	if n == 0 {
+		t.Fatalf("no verify log in the evidence: %+v", d.Evidence)
+	}
+	_, f, err := g.st.OpenEvidence(g.ctx, id, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	b, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(b)
+	if !strings.Contains(log, "--- FAIL: TestSIPBind") || !strings.Contains(log, "sip_test.go:42: bind 127.0.0.66") {
+		t.Fatalf("the verify log evidence lost the FAIL lines:\n%s", clip(log, 600))
+	}
+	if !strings.Contains(log, "number120\t") {
+		t.Errorf("the verify log evidence lost the tail:\n…%s", log[max(0, len(log)-300):])
+	}
+	ev := g.advanced(id)
+	logTail, _ := ev.Data["log_tail"].(string)
+	if !strings.HasPrefix(logTail, "--- FAIL: TestSIPBind") || !strings.Contains(logTail, "sip_test.go:42: bind 127.0.0.66") {
+		t.Fatalf("log_tail does not start at the failure:\n%s", clip(logTail, 600))
 	}
 }
 

@@ -473,6 +473,7 @@ func (r *Runner) verifyStep(ctx context.Context, ru *run, n int, st VerifyStep, 
 	b, _ := os.ReadFile(logPath)
 	res.Log = logTail(string(b))
 	if !res.Passed() {
+		res.Log = verifyFailLog(string(b))
 		res.Masked = maskedRead(string(b), r.cfgOf(ru).VerifyMask)
 	}
 	tailPath := filepath.Join(dir, tag+".log")
@@ -572,6 +573,19 @@ func maskedRead(log string, mask []string) string {
 	return ""
 }
 
+// verifyFailLog is a failed step's log evidence: the lines around every failure the output marks
+// (failLine: --- FAIL, a failed package, a scenario, a panic), redacted and capped as a CI log
+// is, plus the plain tail when the last window did not reach the end. go test streams per
+// package, so the failing one's FAIL lines often come long before the end: a tail alone was all
+// ok lines and the next build could not see what failed (#531).
+func verifyFailLog(s string) string {
+	text := ExtractCIFailure(s).Text
+	if strings.HasSuffix(text, "...\n") {
+		text += RedactTokens(logTail(s))
+	}
+	return text
+}
+
 // logTail is the end of a step's output: at most verifyLogLines lines and verifyLogBytes bytes.
 func logTail(s string) string {
 	s = tail(s, verifyLogLines)
@@ -614,8 +628,18 @@ func VerifyMaskedReason(v VerifyResult) string {
 		"so this is the runner's config, not the change; nothing was pushed", v.Name, v.Masked)
 }
 
-// VerifyLogTail is the end of a failed step's output for the next build run.
-func VerifyLogTail(v VerifyResult) string { return clip(tail(v.Log, 40), 3000) }
+// VerifyLogTail is what of a failed step's output goes in the next build run's notes: from the
+// first line that marks a failure when the log has one — the plain end cut the FAIL lines off
+// (#531) — and the end otherwise.
+func VerifyLogTail(v VerifyResult) string {
+	lines := strings.Split(strings.TrimRight(v.Log, "\n"), "\n")
+	for i, l := range lines {
+		if _, ok := failLine(l); ok {
+			return clip(strings.Join(lines[i:min(len(lines), i+40)], "\n"), 3000)
+		}
+	}
+	return clip(tail(v.Log, 40), 3000)
+}
 
 // maxTrustedDiff caps the trusted files' diff the runner attaches for the user.
 const maxTrustedDiff = 1 << 20

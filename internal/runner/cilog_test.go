@@ -81,6 +81,52 @@ func TestExtractCIFailureTail(t *testing.T) {
 	}
 }
 
+// A crash has no --- FAIL line: the panic (or deadlock) and its backtrace are kept, not reduced
+// to a tail of ok lines (#531).
+func TestExtractCIFailurePanic(t *testing.T) {
+	var ok strings.Builder
+	for i := range 300 {
+		fmt.Fprintf(&ok, "ok  \tgithub.com/alexberardi/jarvis-loop/internal/pkg%d\t0.1s\n", i)
+	}
+	log := "panic: runtime error: invalid memory address or nil pointer dereference [recovered]\n" +
+		"goroutine 7 [running]:\ntesting.tRunner.func1.2({0x1a2b, 0xc000})\n" + ok.String()
+	f := ExtractCIFailure(log)
+	if len(f.Tests) != 0 || !strings.Contains(f.Text, "panic: runtime error") ||
+		!strings.Contains(f.Text, "goroutine 7 [running]:") {
+		t.Fatalf("panic lost: tests %q, text:\n%s", f.Tests, clip(f.Text, 400))
+	}
+	if f := ExtractCIFailure(ok.String() + "fatal error: all goroutines are asleep - deadlock!\ngoroutine 1 [chan receive]:\n"); !strings.Contains(f.Text, "deadlock!") {
+		t.Fatalf("deadlock lost:\n%s", clip(f.Text, 400))
+	}
+}
+
+// A package that never built has no --- FAIL either: its FAIL line names it and the compile
+// error near it is kept; a plain FAIL\tpkg line keeps its window but names nothing new.
+func TestExtractCIFailureBuildFailed(t *testing.T) {
+	var b strings.Builder
+	for i := range 150 {
+		fmt.Fprintf(&b, "ok  \tgithub.com/alexberardi/jarvis-loop/internal/pkg%d\t0.1s\n", i)
+	}
+	b.WriteString("# github.com/alexberardi/jarvis-loop/internal/broken\ninternal/broken/x.go:3:1: undefined: y\n" +
+		"FAIL\tgithub.com/alexberardi/jarvis-loop/internal/broken [build failed]\n")
+	for i := 150; i < 300; i++ {
+		fmt.Fprintf(&b, "ok  \tgithub.com/alexberardi/jarvis-loop/internal/pkg%d\t0.1s\n", i)
+	}
+	b.WriteString("FAIL\n")
+	f := ExtractCIFailure(b.String())
+	if want := []string{"github.com/alexberardi/jarvis-loop/internal/broken"}; !slices.Equal(f.Tests, want) {
+		t.Fatalf("tests %q, want %q", f.Tests, want)
+	}
+	for _, want := range []string{"undefined: y", "FAIL\tgithub.com/alexberardi/jarvis-loop/internal/broken [build failed]"} {
+		if !strings.Contains(f.Text, want) {
+			t.Errorf("excerpt lacks %q", want)
+		}
+	}
+	if strings.Contains(f.Text, "internal/pkg0\t") || strings.Contains(f.Text, "internal/pkg299\t") {
+		t.Errorf("excerpt kept ok lines far from the failure:\n%s", clip(f.Text, 400))
+	}
+}
+
 func TestRedactTokens(t *testing.T) {
 	for in, want := range map[string]string{
 		"token ghp_0123456789abcdefABCDEF here":                 "token [redacted] here",
