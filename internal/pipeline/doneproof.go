@@ -2,6 +2,8 @@ package pipeline
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -113,11 +115,35 @@ func ApplyReopenNotReproducible(it Item, reopenID int64, summary string) (Transi
 		return Transition{}, errf(CodeWrongStage, "item is %s (%s), not a failed done item", it.Stage, it.Verify)
 	}
 	summary = strings.TrimSpace(summary)
-	if strings.HasPrefix(strings.ToLower(summary), "duplicate") {
+	if _, dup := DuplicateOf(summary); dup {
 		return Transition{}, errf(CodeWrongStage, "reopen #%d closed as a duplicate: the failure stands", reopenID)
 	}
 	it.Verify, it.Proof = DoneUnproven, nil
 	it.VerifyReason = clipRunes(fmt.Sprintf("reopen #%d closed not reproducible: %s", reopenID, firstLine(summary)), 400)
 	return Transition{Item: it, From: Done, To: Done, Kind: KindDoneReproof,
 		Data: map[string]any{"verify": it.Verify, "reason": it.VerifyReason, "reopen_item": reopenID}}, nil
+}
+
+// dupOfRe reads the item a duplicate closure names out of its summary ("duplicate of #545, ...",
+// as the triage brief asks for it).
+var dupOfRe = regexp.MustCompile(`(?i)^duplicate\s+(?:of\s+)?#(\d+)`)
+
+// DuplicateOf reads a closing summary: whether it closes the item as a duplicate (its first word,
+// which is what the triage brief asks for) and, when it names one, the item it duplicates (0 when
+// it names none). A duplicate closure is not the same as "not reproducible": the ask stands, it is
+// just tracked elsewhere, so a freeze hands over to that item instead of lifting (#558).
+func DuplicateOf(summary string) (int64, bool) {
+	summary = strings.TrimSpace(summary)
+	if !strings.HasPrefix(strings.ToLower(summary), "duplicate") {
+		return 0, false
+	}
+	m := dupOfRe.FindStringSubmatch(summary)
+	if m == nil {
+		return 0, true
+	}
+	id, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return 0, true
+	}
+	return id, true
 }

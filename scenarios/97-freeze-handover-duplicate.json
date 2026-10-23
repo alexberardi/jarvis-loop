@@ -1,0 +1,60 @@
+{
+  "name": "freeze-handover-duplicate",
+  "about": "#558: main goes red after a's merge, so loopd files the P1 (#3) and freezes sandbox/demo. #2, filed earlier for the same red main, is frozen behind it. Triage of #3 closes it as a duplicate of #2 (the incident: a duplicate closure, not a 'main is green' finding). The freeze does not deadlock the repo on a closed item: it hands over to #2 (freeze_handover, posted in #loop and in #2's thread), #2 goes first through every stage while nothing else moves, and its merge turns main green, which lifts the freeze.",
+  "stages": ["triage", "build", "review", "land"],
+  "slots": 2,
+  "steps": [
+    {"do": "ci", "main": {"build": "pass", "test": "pass"}, "main_head": true},
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"build": "pending", "test": "pending"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "expect", "stage": {"a": "done"}, "leased": {"a": false}},
+
+    {"do": "add", "item": "live", "title": "main red in sandbox/demo: test", "priority": "P1", "repo_as": "demo"},
+
+    {"do": "ci", "main": {"build": "pass", "test": "fail"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "clock", "advance": "30s"},
+    {"do": "wait", "events": [{"item": "a", "kind": "main_ci", "actor": "runner", "data": {"result": "^red$", "p1_item": "^3$"}, "count": 1},
+      {"kind": "frozen", "actor": "loopd", "data": {"repo": "^sandbox/demo$", "item": "^3$", "jobs": "^\\[\"test\"\\]$"}, "count": 1}]},
+    {"do": "expect", "stage": {"live": "triage"}, "leased": {"live": false}},
+
+    {"do": "script", "item": "#3", "for": "triage", "play": "duplicate"},
+    {"do": "runner", "claims": "#3"},
+    {"do": "runner_idle"},
+    {"do": "wait", "stage": {"#3": "closed"},
+     "events": [{"item": "#3", "kind": "advanced", "outcome": "not_reproducible", "actor": "runner", "data": {"summary": "^duplicate of #2"}, "count": 1},
+       {"item": "live", "kind": "freeze_handover", "actor": "loopd", "data": {"repo": "^sandbox/demo$", "from": "^3$", "to": "^2$", "reason": "^#3 closed as a duplicate of it$"}, "count": 1}]},
+
+    {"do": "triage", "item": "live"},
+    {"do": "runner", "claims": "live"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "live", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "live"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "live"},
+    {"do": "wait", "stage": {"live": "done"}, "leased": {"live": false}},
+    {"do": "ci", "main": {"build": "pass", "test": "pass"}},
+    {"do": "clock", "advance": "30s"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done", "#3": "closed", "live": "done"},
+    "remote": {"main": "live"},
+    "events": [
+      {"item": "live", "kind": "main_ci", "data": {"result": "^green$"}, "count": 1},
+      {"kind": "unfrozen", "actor": "loopd", "data": {"repo": "^sandbox/demo$", "item": "^2$", "reason": "^main green on [0-9a-f]{7} after #2's merge$"}, "count": 1},
+      {"kind": "created", "data": {"title": "^main red in sandbox/demo: test$", "source": "^finding$"}, "count": 1}
+    ],
+    "messages": [
+      {"channel": "loop", "text": "^:arrows_counterclockwise: \\*sandbox/demo stays frozen\\*, now with #2 main red in sandbox/demo: test as the item that moves \\(#3 main red in sandbox/demo: test is closed\\)\\. A freeze never waits on one item id: it hands over to the item that tracks the same red main\\. Nothing else in sandbox/demo moves stages until main is green\\. Lift it by hand: `loop unfreeze sandbox/demo`\\.$"},
+      {"thread": "live", "text": "^This is now the item that moves while main is red in sandbox/demo \\(#3 closed as a duplicate of it\\): it goes first, through every stage, and nothing else in the repo moves until main is green\\.$"}
+    ]
+  }
+}

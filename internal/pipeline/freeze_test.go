@@ -107,3 +107,56 @@ func TestMainRedAsk(t *testing.T) {
 		t.Errorf("title %q", got)
 	}
 }
+
+// mainRed is a repo's main-red P1 as loopd files it (source finding, MainRedTitle).
+func mainRed(id int64, stage Stage, repo string) Item {
+	it := inRepo(waiting(id, stage, "P1", 0), repo)
+	it.Title, it.Source = MainRedTitle(repo, []string{"test"}), "finding"
+	return it
+}
+
+// #558: the freeze names one item, but it lets through every main-red P1 of the repo, so closing
+// or dropping the one it names cannot deadlock the repo.
+func TestFrozenAdmitsEveryMainRedP1(t *testing.T) {
+	frozen := Frozen{"o/a": 9}
+	notFinding := mainRed(7, Build, "o/a")
+	notFinding.Source = "user"
+	notP1 := mainRed(7, Build, "o/a")
+	notP1.Priority = "P2"
+	noRepo := mainRed(7, Triage, "")
+	noRepo.Repo = ""
+	cases := []struct {
+		name          string
+		it            Item
+		blocks, fixes bool
+	}{
+		{"the item the freeze names", mainRed(9, Build, "o/a"), false, true},
+		{"another main-red P1 of the frozen repo", mainRed(7, Triage, "o/a"), false, true},
+		{"an ordinary P1 of the frozen repo", inRepo(waiting(7, Build, "P1", 0), "o/a"), true, false},
+		{"a main-red title from somewhere other than a finding", notFinding, true, false},
+		{"a main-red finding below P1", notP1, true, false},
+		{"a main-red P1 of another repo", mainRed(7, Build, "o/b"), false, false},
+		{"a main-red P1 with no repo yet", noRepo, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := frozen.Blocks(tc.it); got != tc.blocks {
+				t.Errorf("Blocks = %v, want %v", got, tc.blocks)
+			}
+			if got := frozen.Fixes(tc.it); got != tc.fixes {
+				t.Errorf("Fixes = %v, want %v", got, tc.fixes)
+			}
+		})
+	}
+	if !IsMainRed(mainRed(1, Build, "o/a")) || IsMainRed(notFinding) || IsMainRed(notP1) {
+		t.Error("IsMainRed")
+	}
+	// The deadlock of #558: the item the freeze names is closed, and the repo's live P1 moves.
+	live := mainRed(7, Triage, "o/a")
+	if it, ok := Choose(DefaultControl(), []Item{live}, nil, nil, ClaimRequest{Runner: "r", Agent: "a"}, frozen); !ok || it.ID != 7 {
+		t.Fatalf("the live main-red P1 is not claimable while the freeze names a closed item: %+v, %v", it, ok)
+	}
+	if r := WaitReason(DefaultControl(), Pace{}, live, nil, nil, nil, frozen, nil, nil); r == WaitFrozen {
+		t.Errorf("wait reason %q", r)
+	}
+}
