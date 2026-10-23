@@ -203,7 +203,8 @@ func (r *Runner) fenceWith(dir, script string, env []string, o fenceOpts) (*exec
 	return r.fencedWith(dir, script, env, o)
 }
 
-// venvEnv is env with dir's Python venv (the .venv the repo's setup made) active, when there is
+// venvEnv is env with dir's Python venv (the .venv the repo's setup — or, for a python proof
+// command, the runner — made) active, when there is
 // one: VIRTUAL_ENV and its bin first on PATH, appended so they win over env's own (#461). Without
 // it a proof or verify command's python3 is the system's, which has none of the repo's packages.
 func venvEnv(env []string, dir string) []string {
