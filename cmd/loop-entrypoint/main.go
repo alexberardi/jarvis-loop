@@ -4,6 +4,10 @@
 // shell to bridge the two. This writes each secret that is set to a file under /run/loop at 0600,
 // drops it from the environment, and execs loopd with the paths it wrote.
 //
+// It also unpacks a restore archive left on the data volume, which is how the data gets onto an
+// empty volume at all: with no shell in the image there is nothing on the machine that could untar
+// one (restore.go).
+//
 // It never prints a secret's value: an error names the variable or the file, never the contents.
 package main
 
@@ -59,6 +63,13 @@ func run(args []string, dir string, exec func(string, []string, []string) error)
 	// A directory that already exists keeps its old mode, which may be the image's 0755.
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
+	}
+	// Before loopd opens the database: an archive left on the volume is the data move, and the
+	// only way onto an empty volume with no shell in the image (restore.go).
+	if data := dataDir(args); data != "" {
+		if err := restore(data); err != nil {
+			return err
+		}
 	}
 	argv := append([]string{loopdPath}, args...)
 	for _, s := range secrets {

@@ -31,6 +31,14 @@ deploys new binaries, so there was nothing to check yet. Extends the QA lane
   `def5678`." A second report (another runner, or the user already checked) is `wrong_stage` and is
   not recorded as a refusal.
 
+  **Changed 2026-10-23 (#550).** "loopd and the runner are deployed together, so the runner's build
+  stands for the loop's" stopped being true when loopd moved to fly.io. The runner now asks loopd
+  for *its* build (`GET /version`, once per poll) and reports `deployed` only for items whose merge
+  **both** builds contain; either revision unknown reports nothing, said once. The revision in the
+  event and in the thread is loopd's, the build the user is being asked to check, and
+  `build.Revision` moved out of `internal/runner` to `internal/build`
+  ([decision](2026-10-23-loopd-on-fly.md)).
+
 ## Why this design
 
 - **Ancestry, not equality or time.** A build made from a later commit contains the merge too, and
