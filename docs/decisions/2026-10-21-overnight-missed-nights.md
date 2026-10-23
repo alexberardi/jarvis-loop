@@ -1,5 +1,8 @@
 # An overnight run gets a note every night it misses, and says when no runner can take it (2026-10-21)
 
+**Superseded in part 2026-10-22** ([2026-10-22-drop-overnight-regression.md](2026-10-22-drop-overnight-regression.md)):
+a run no runner can take no longer gets a note; it expires at 07:00. The other notes stay.
+
 **Context (#416, reopening #317).** Overnight regression R1 (set for 01:00 on Oct 20) was never
 claimed and carried over to the next night. Its 07:00 note went once, at deploy time (the first
 07:00 after its set time had already passed, so it went at once), and never again: the note was one

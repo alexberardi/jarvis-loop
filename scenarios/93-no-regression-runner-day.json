@@ -1,0 +1,24 @@
+{
+  "name": "no-regression-runner-day",
+  "about": "A day with no regression runner schedules no overnight run and posts no missed-night note (#505: the overnight run was dropped 2026-10-22, #416, since per-PR verify runs the pipeline scenarios). The runner takes items only. With the control as it comes (regression_nightly off) two days pass with no regression_scheduled; with regression_nightly turned on, the nightly scheduler still schedules nothing, since no runner seen can take the run, and #loop never hears of one.",
+  "stages": ["triage", "build", "review"],
+  "capabilities": ["emulator", "gpu", "voice"],
+  "steps": [
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "23h"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "24h"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "no_events": [{"kind": "regression_scheduled"}, {"kind": "regression_missed"}]},
+    {"do": "control", "regression_nightly": true},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "12h"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "12h"},
+    {"do": "runner", "claims": "none"}
+  ],
+  "expect": {
+    "no_events": [{"kind": "regression_scheduled"}, {"kind": "regression_missed"}, {"kind": "regression_claimed"}],
+    "no_messages": [{"channel": "loop", "from": "bot", "text": "(?i)regression"}]
+  }
+}

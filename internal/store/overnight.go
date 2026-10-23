@@ -137,8 +137,8 @@ func (s *Store) cancelScheduled(tx *sql.Tx, actor, via string, r Regression) (Re
 }
 
 // overnight is the claim path's part (Claim, every runner's poll): it schedules tonight's run when
-// the control's regression_nightly is on and none is (and cancels the nightly one when it was
-// turned off), keeps since when the queue was quiet on the scheduled run, and gives it as the
+// the control's regression_nightly is on, none is and a runner seen can take it (#505: a night no
+// runner can is not scheduled), and cancels the nightly one when the setting was turned off; it keeps since when the queue was quiet on the scheduled run, and gives it as the
 // candidate when it may start (no other run open, OvernightReady).
 func (s *Store) overnight(tx *sql.Tx, cs claimState, turns []pipeline.TurnCandidate, now time.Time) (*pipeline.RegCandidate, error) {
 	sched, err := scheduledRegression(tx)
@@ -146,7 +146,7 @@ func (s *Store) overnight(tx *sql.Tx, cs claimState, turns []pipeline.TurnCandid
 		return nil, err
 	}
 	switch {
-	case sched == nil && cs.ctl.RegressionNightly:
+	case sched == nil && cs.ctl.RegressionNightly && pipeline.RegressionTaker(pipeline.SuiteResources(pipeline.SuiteOvernight), cs.runners, now):
 		r, err := s.schedule(tx, "loopd", "nightly", cs.ctl)
 		if err != nil {
 			return nil, err
@@ -262,7 +262,7 @@ func (s *Store) MarkRegressionReported(ctx context.Context, id int64) error {
 
 // UnstartedRun is a scheduled overnight run still not started at pipeline.UnstartedNoteAt after its
 // set time, and why it waits (#317). Night is the UnstartedNoteAt it is the note for: a run carried
-// over gets one on every night it misses (#416).
+// over gets one on every night it misses (#416) while a runner seen can take it.
 type UnstartedRun struct {
 	Run   Regression
 	Why   string
@@ -271,9 +271,10 @@ type UnstartedRun struct {
 
 // UnstartedOvernight is the scheduled overnight run whose note is due and not yet posted
 // (MarkUnstartedNoted), or nil: its set time has passed, so has the next UnstartedNoteAt, and no
-// note went since the latest one (one note a night, #416). Why says what keeps it: no runner seen
-// can take it (pipeline.NoRegressionTaker), the queue's work (pipeline.QueueBusy), claude's pace,
-// another open run, or a quiet queue no runner has polled since.
+// note went since the latest one (one note a night, #416). Why says what keeps it: the queue's work
+// (pipeline.QueueBusy), claude's pace, another open run, or a quiet queue no runner has polled
+// since. A run no runner seen can take (pipeline.RegressionTaker) gets no note: it expires then
+// (cancelled by loopd, via expired; #505), so a loop with no regression runner says nothing.
 func (s *Store) UnstartedOvernight(ctx context.Context) (*UnstartedRun, error) {
 	var out *UnstartedRun
 	err := s.tx(ctx, func(tx *sql.Tx) error {
@@ -294,6 +295,10 @@ func (s *Store) UnstartedOvernight(ctx context.Context) (*UnstartedRun, error) {
 		if err != nil {
 			return err
 		}
+		if !pipeline.RegressionTaker(pipeline.SuiteResources(sched.Suite), cs.runners, now) {
+			_, err := s.cancelScheduled(tx, "loopd", "expired", *sched)
+			return err
+		}
 		turns, err := turnCandidates(tx)
 		if err != nil {
 			return err
@@ -307,17 +312,11 @@ func (s *Store) UnstartedOvernight(ctx context.Context) (*UnstartedRun, error) {
 			return err
 		}
 		var why []string
-		noTaker := pipeline.NoRegressionTaker(pipeline.SuiteResources(sched.Suite), cs.runners, now)
-		if noTaker != "" {
-			why = append(why, noTaker)
-		}
 		switch busy := pipeline.QueueBusy(cs.ctl, cs.pace, cs.waiting, cs.deps, cs.live, turns, orch != nil, cs.frozen, cs.runners, now); {
 		case busy != "":
 			why = append(why, "the queue is busy: "+busy)
 		case open != nil:
 			why = append(why, fmt.Sprintf("R%d (%s) is still open", open.ID, open.Suite))
-		case noTaker != "":
-			// A quiet queue does not start it.
 		case sched.QuietSince != nil:
 			why = append(why, "the queue has been quiet since "+s.clockText(*sched.QuietSince)+"; it starts after "+pipeline.OvernightQuiet.String()+" of quiet")
 		default:
