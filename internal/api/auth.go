@@ -138,10 +138,13 @@ func PrincipalFrom(ctx context.Context) Principal {
 // CodeRunnersOnly refuses a token that is not a runner's on the remote runners' listener.
 const CodeRunnersOnly = "runners_only"
 
-// NewRunners is the API for remote runners only: what loopd's LAN listener (--runner-addr)
-// serves, so the main API, the status page and the board stay on their own listeners. A token of
-// any other kind (user, board, orchestrator) is refused on every route before routing, which also
-// rules out acting for the user; a runner token then meets New's routes and rules.
+// NewRunners is the API for remote runners only: a listener serving this takes remote runners
+// without exposing the status page, the board, or the user's and the orchestrator's routes. A
+// token of any other kind (user, board, orchestrator) is refused on every route before routing,
+// which also rules out acting for the user; a runner token then meets New's routes and rules.
+// loopd itself serves one port since it moved to fly.io, where the per-route token rules are what
+// separate a runner from the user; this stays for the loop's harness and for anyone who wants a
+// listener of its own (docs/decisions/2026-10-17-mac-runners.md).
 func NewRunners(st *store.Store, tokens *Tokens, log *slog.Logger, b *build.Build) http.Handler {
 	s := &server{st: st, tokens: tokens, log: log, build: b}
 	mux := s.routes()

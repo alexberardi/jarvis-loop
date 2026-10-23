@@ -43,14 +43,18 @@ func (r *Runner) ReportDeployed(ctx context.Context) error {
 	if len(mine) == 0 {
 		return nil
 	}
-	loopdRev, err := r.loopdRevision(ctx)
-	if err != nil {
-		return err
-	}
-	// Either build unknown: report nothing, said once, as the runner's own missing stamp always
-	// has. The user falls back to /loop verified.
-	if loopdRev == "" || r.Revision == "" {
+	// Either build unknown: report nothing, said once rather than every poll, as the runner's own
+	// missing stamp always has. The user falls back to /loop verified.
+	if r.Revision == "" {
+		if !r.noOwnRev.Swap(true) {
+			r.Log.Warn("this runner's build revision is unknown: no deployed reports for qa_after_deploy repos (use /loop verified)")
+		}
 		return nil
+	}
+	r.noOwnRev.Store(false)
+	loopdRev, err := r.loopdRevision(ctx)
+	if err != nil || loopdRev == "" {
+		return err
 	}
 	for _, row := range mine {
 		repo, key := repos[row.Repo], keys[row.Repo]
@@ -83,8 +87,7 @@ func (r *Runner) ReportDeployed(ctx context.Context) error {
 }
 
 // loopdRevision is the commit the running loopd was built from (GET /version), or "" when it has
-// none. The "no revision" warnings are logged once each, not every poll: without a revision there
-// is nothing to do until loopd or the runner is redeployed.
+// none, said once rather than every poll: until loopd is redeployed there is nothing to do.
 func (r *Runner) loopdRevision(ctx context.Context) (string, error) {
 	b, err := r.Client.Version(ctx)
 	if err != nil {
@@ -97,13 +100,6 @@ func (r *Runner) loopdRevision(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	r.noLoopdRev.Store(false)
-	if r.Revision == "" {
-		if !r.noOwnRev.Swap(true) {
-			r.Log.Warn("this runner's build revision is unknown: no deployed reports for qa_after_deploy repos (use /loop verified)")
-		}
-		return "", nil
-	}
-	r.noOwnRev.Store(false)
 	return b.Revision, nil
 }
 

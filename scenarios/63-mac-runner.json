@@ -1,6 +1,6 @@
 {
   "name": "mac-runner",
-  "about": "#94: a Mac runner works over loopd's remote runners' listener (--runner-addr), which takes runner tokens only: the user's, the orchestrator's and the board's are refused there, and so is no token. With capabilities and only_resources [macos] it claims the item that needs macos and leaves the P1 item that needs nothing to the dev box, which builds it. (Each item's first hand claim is its triage, on the main listener.)",
+  "about": "#94: a Mac runner works over a listener serving loopd.RunnerHandler, which takes runner tokens only: the user's, the orchestrator's and the board's are refused there, and so is no token. With capabilities and only_resources [macos] it claims the item that needs macos and leaves the P1 item that needs nothing to the dev box, which builds it. (Each item's first hand claim is its triage, on the main listener.)",
   "stages": ["build"],
   "steps": [
     {"do": "add", "item": "mac", "title": "Mac server app progress window", "priority": "P4"},

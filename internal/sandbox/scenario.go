@@ -74,7 +74,8 @@ type Step struct {
 	Resources string `json:"resources,omitempty"`
 	// hand_claim: what the hand runner offers when it claims (comma-separated), and the only
 	// resources it takes (only_resources, as a Mac runner's); with Via "runner_listener" it claims
-	// on the remote runners' listener (--runner-addr), and Claims "none" says it must get nothing.
+	// on the remote runners' listener (loopd.RunnerHandler), and Claims "none" says it must get
+	// nothing.
 	// RunnerStages: the stages the hand runner takes (runner_stages) and claims in (default build).
 	// runner_listener: As ("user", "orchestrator", "board", "none" or "hand", the hand runner)
 	// reads GET /items on that listener; with Refused it must be refused (a regexp on the error).
