@@ -1,0 +1,33 @@
+{
+  "name": "generated-files",
+  "about": "The mobile repo's runner trusts tools/toolset.txt (deny_write), but it is generated from tools.txt (generated: run regenerates it). Item a adds a tool and commits the toolset its generator makes: verify regenerates it at the head, finds the same bytes, and runs without the user's OK, so the PR opens and no Trust button is asked for. Item b writes the toolset by hand, bytes the generator does not make: verify refuses it as any trusted-file change and the item goes to the user with a Trust button (#593).",
+  "stages": ["build"],
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "a dark shot tool", "text": "[mobile] a dark shot tool"},
+    {"do": "triage", "item": "a"},
+    {"do": "script", "item": "a", "play": "generated_change", "file": "tools/toolset.txt"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "review"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "pr_opened", "actor": "runner"}],
+     "no_events": [{"item": "a", "kind": "advanced", "outcome": "failed"}]},
+    {"do": "add", "item": "b", "via": "slack", "title": "a hand-made toolset", "text": "[mobile] a hand-made toolset"},
+    {"do": "triage", "item": "b"},
+    {"do": "script", "item": "b", "play": "trusted_change", "file": "tools/toolset.txt"},
+    {"do": "runner", "claims": "b"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"b": "needs_you"},
+     "events": [{"item": "b", "kind": "advanced", "outcome": "failed", "actor": "runner",
+                 "data": {"trust_sha": "^[0-9a-f]{40}$", "trusted_paths": "^tools/toolset\\.txt$"}}]}
+  ],
+  "expect": {
+    "stage": {"a": "review", "b": "needs_you"},
+    "no_events": [
+      {"item": "a", "kind": "advanced", "outcome": "failed"},
+      {"item": "a", "kind": "trusted"}
+    ],
+    "messages": [
+      {"thread": "b", "text": "needs you: verify did not run `[0-9a-f]{7}`, because it changes files the runner trusts \\(deny_write\\)(?s:.*)\\[Trust this commit\\]"}
+    ]
+  }
+}
