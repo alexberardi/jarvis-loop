@@ -10,8 +10,10 @@ import (
 	"github.com/alexberardi/jarvis-loop/internal/pipeline"
 )
 
-// QA after deploy (docs/decisions/2026-10-16-qa-after-deploy.md): the runner reports deployed
-// for a qa item awaiting a deploy only when its own build contains the merge commit.
+// QA after deploy (docs/decisions/2026-10-16-qa-after-deploy.md): the runner reports deployed for
+// a qa item awaiting a deploy only when BOTH the running loopd's build (GET /version) and its own
+// contain the merge commit. loopd is deployed on its own since it moved to fly.io
+// (docs/decisions/2026-10-23-loopd-on-fly.md), so one of the two being behind reports nothing.
 func TestReportDeployed(t *testing.T) {
 	g := newRig(t, fakeclaude.Good)
 	id, _ := g.toLand("Loop change")
@@ -42,9 +44,12 @@ func TestReportDeployed(t *testing.T) {
 	if !awaiting() {
 		t.Fatal("not awaiting a deploy after merged")
 	}
-	report := func(rev string, deployAfter bool) {
+	// report sets loopd's build (GET /version) and the runner's own, then asks the runner to
+	// report. Both have to contain the merge.
+	report := func(loopdRev, runnerRev string, deployAfter bool) {
 		t.Helper()
-		g.r.Revision = rev
+		g.loopdBuild.Set(loopdRev, "")
+		g.r.Revision = runnerRev
 		rc := g.r.Cfg.Repos["demo"]
 		rc.QAAfterDeploy = deployAfter
 		g.r.Cfg.Repos["demo"] = rc
@@ -54,26 +59,31 @@ func TestReportDeployed(t *testing.T) {
 	}
 	for _, c := range []struct {
 		name        string
-		rev         string
+		loopdRev    string
+		runnerRev   string
 		deployAfter bool
 	}{
-		{"unknown revision", "", true},
-		{"repo without qa_after_deploy here", after, false},
-		{"build before the merge", before, true},
-		{"build the remote does not have", strings.Repeat("e", 40), true},
+		{"neither revision known", "", "", true},
+		{"loopd's revision unknown", "", after, true},
+		{"the runner's revision unknown", after, "", true},
+		{"repo without qa_after_deploy here", after, after, false},
+		{"both builds before the merge", before, before, true},
+		{"loopd has it, the runner is behind", after, before, true},
+		{"the runner has it, loopd is behind", before, after, true},
+		{"a build the remote does not have", strings.Repeat("e", 40), after, true},
 	} {
-		report(c.rev, c.deployAfter)
+		report(c.loopdRev, c.runnerRev, c.deployAfter)
 		if !awaiting() || len(g.events(id, "deployed")) != 0 {
 			t.Fatalf("%s: reported deployed; log:\n%s", c.name, g.logs.String())
 		}
 	}
-	report(after, true)
+	report(after, after, true)
 	evs := g.events(id, "deployed")
 	if awaiting() || len(evs) != 1 || evs[0].Data["revision"] != after || evs[0].Actor != "runner:devbox" {
 		t.Fatalf("build after the merge: awaiting %v, events %+v; log:\n%s", awaiting(), evs, g.logs.String())
 	}
 	// Nothing left to report; the merge commit itself as the build counts too.
-	report(merge, true)
+	report(merge, merge, true)
 	if len(g.events(id, "deployed")) != 1 {
 		t.Fatal("reported twice")
 	}

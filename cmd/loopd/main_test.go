@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +35,10 @@ func TestCheckAddr(t *testing.T) {
 		{"0.0.0.0:7780", false, false},
 		{"192.168.1.10:7780", false, false},
 		{"192.168.1.10:7780", true, true},
+		// What loopd listens on, on fly.io: all interfaces inside the machine, which the one TLS
+		// port in front of it reaches (docs/decisions/2026-10-23-loopd-on-fly.md).
+		{"0.0.0.0:7780", true, true},
+		{":7780", true, true},
 		{"nonsense", true, false},
 	}
 	for _, c := range cases {
@@ -49,7 +56,7 @@ func TestHandlerRouting(t *testing.T) {
 	}
 	defer st.Close()
 	toks, _ := api.ParseTokens(strings.NewReader("user-token-0123456789abcdef\tuser\talex\n"))
-	srv := httptest.NewServer(handler(st, toks, slog.New(slog.DiscardHandler), web.BoardConfig{}))
+	srv := httptest.NewServer(handler(st, toks, slog.New(slog.DiscardHandler), web.BoardConfig{}, nil))
 	defer srv.Close()
 	for path, want := range map[string]string{"/": "Basic", "/items": "Bearer", "/control": "Bearer", "/board": "", "/board/items/1": ""} {
 		resp, err := http.Get(srv.URL + path)
@@ -60,6 +67,29 @@ func TestHandlerRouting(t *testing.T) {
 		if resp.StatusCode != 401 || !strings.HasPrefix(resp.Header.Get("WWW-Authenticate"), want) {
 			t.Errorf("%s: %d %q, want 401 %s", path, resp.StatusCode, resp.Header.Get("WWW-Authenticate"), want)
 		}
+	}
+	// /healthz is the only route with no token, and tells a reader nothing else
+	// (docs/decisions/2026-10-23-loopd-on-fly.md). Anything but GET is 405 with no body.
+	resp, err := http.Get(srv.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || string(body) != "ok\n" {
+		t.Errorf("GET /healthz: %d %q", resp.StatusCode, body)
+	}
+	if ct, cc := resp.Header.Get("Content-Type"), resp.Header.Get("Cache-Control"); !strings.HasPrefix(ct, "text/plain") || cc != "no-store" {
+		t.Errorf("GET /healthz: Content-Type %q, Cache-Control %q", ct, cc)
+	}
+	resp, err = http.Post(srv.URL+"/healthz", "text/plain", strings.NewReader("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 405 || len(body) != 0 {
+		t.Errorf("POST /healthz: %d %q", resp.StatusCode, body)
 	}
 }
 
@@ -86,7 +116,7 @@ func TestBoardHandlerRouting(t *testing.T) {
 		resp.Body.Close()
 		return resp.StatusCode
 	}
-	for _, path := range []string{"/", "/items", "/items/1", "/control", "/claim", "/ui/control"} {
+	for _, path := range []string{"/", "/items", "/items/1", "/control", "/claim", "/ui/control", "/healthz"} {
 		for _, method := range []string{"GET", "POST", "PUT"} {
 			if got := do(method, path); got != 404 && got != 405 {
 				t.Errorf("%s %s on the board listener: %d", method, path, got)
@@ -101,50 +131,93 @@ func TestBoardHandlerRouting(t *testing.T) {
 	}
 }
 
-// --board-addr starts a second listener; both stop when loopd does.
-func TestRunWithBoardAddr(t *testing.T) {
+// loopd serves one listener (docs/decisions/2026-10-23-loopd-on-fly.md): the health check with no
+// token, every other route behind one, and the two dropped flags refused. This replaces
+// TestRunWithBoardAddr and TestRunWithRunnerAddr, which covered the --board-addr and --runner-addr
+// listeners this change dropped.
+func TestRunServesOneListener(t *testing.T) {
 	dir := t.TempDir()
 	tokens := filepath.Join(dir, "tokens")
 	os.WriteFile(tokens, []byte("user-token-0123456789abcdef\tuser\talex\n"), 0o600)
-	args := []string{"--addr", "127.0.0.1:0", "--data", filepath.Join(dir, "data"), "--tokens", tokens}
+	// A port the test can reach while run serves it.
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	probe.Close()
+	args := []string{"--addr", addr, "--data", filepath.Join(dir, "data"), "--tokens", tokens,
+		"--slack-workspace", "https://jarvis.slack.com"}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stderr syncWriter
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, args, &stderr) }()
+
+	base := "http://" + addr
+	var status int
+	var body string
+	for range 200 {
+		resp, err := http.Get(base + "/healthz")
+		if err == nil {
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			status, body = resp.StatusCode, string(b)
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The health check is the only route with no token, and says nothing but that loopd serves.
+	if status != 200 || body != "ok\n" {
+		t.Fatalf("GET /healthz: %d %q; log:\n%s", status, body, stderr.String())
+	}
+	// Everything else on the same listener still needs one: the API, the board and the page.
+	for path, want := range map[string]string{"/items": "Bearer", "/board": "", "/": "Basic"} {
+		resp, err := http.Get(base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 401 || !strings.HasPrefix(resp.Header.Get("WWW-Authenticate"), want) {
+			t.Errorf("%s: %d %q, want 401 %s", path, resp.StatusCode, resp.Header.Get("WWW-Authenticate"), want)
+		}
+	}
 	cancel()
-	var stderr strings.Builder
-	if err := run(ctx, append(args, "--board-addr", "127.0.0.1:0", "--slack-workspace", "https://jarvis.slack.com"), &stderr); err != nil {
+	if err := <-done; err != nil {
 		t.Fatalf("run: %v\n%s", err, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), `"msg":"board listening"`) {
-		t.Errorf("no board listener in the log: %s", stderr.String())
-	}
-	for _, bad := range [][]string{{"--board-addr", "nonsense"}, {"--slack-workspace", "jarvis.slack.com"}, {"--slack-workspace", "http://jarvis.slack.com"}} {
-		if err := run(ctx, append(args[:len(args):len(args)], bad...), &stderr); err == nil {
+
+	// The dropped flags are gone, and a bad --slack-workspace is still refused.
+	stopped, stop := context.WithCancel(context.Background())
+	stop()
+	for _, bad := range [][]string{{"--board-addr", "127.0.0.1:0"}, {"--runner-addr", "127.0.0.1:0"},
+		{"--slack-workspace", "jarvis.slack.com"}, {"--slack-workspace", "http://jarvis.slack.com"}} {
+		if err := run(stopped, append(args[:len(args):len(args)], bad...), io.Discard); err == nil {
 			t.Errorf("run accepted %v", bad)
 		}
 	}
 }
 
-// --runner-addr starts the remote runners' listener (runner tokens only, internal/api's
-// TestRunnersListenerTakesRunnerTokensOnly) beside the others, with no --lan; all stop together.
-func TestRunWithRunnerAddr(t *testing.T) {
-	dir := t.TempDir()
-	tokens := filepath.Join(dir, "tokens")
-	os.WriteFile(tokens, []byte("user-token-0123456789abcdef\tuser\talex\n"), 0o600)
-	args := []string{"--addr", "127.0.0.1:0", "--data", filepath.Join(dir, "data"), "--tokens", tokens}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	var stderr strings.Builder
-	if err := run(ctx, append(args, "--runner-addr", "127.0.0.1:0", "--board-addr", "127.0.0.1:0"), &stderr); err != nil {
-		t.Fatalf("run: %v\n%s", err, stderr.String())
-	}
-	if !strings.Contains(stderr.String(), `"msg":"runner listener listening"`) {
-		t.Errorf("no runner listener in the log: %s", stderr.String())
-	}
-	if err := run(ctx, append(args[:len(args):len(args)], "--runner-addr", "nonsense"), &stderr); err == nil {
-		t.Error("run accepted --runner-addr nonsense")
-	}
+// syncWriter is run's log where a test reads it while run writes it.
+type syncWriter struct {
+	mu sync.Mutex
+	b  strings.Builder
 }
 
-// The runner listener serves the API and nothing else: no status page, no board.
+func (w *syncWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.Write(p)
+}
+
+func (w *syncWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.String()
+}
+
+// loopd.RunnerHandler serves the API and nothing else: no status page, no board. loopd itself no
+// longer puts it on a listener of its own, but the loop's harness still wires it (scenario 63).
 func TestRunnerHandlerRouting(t *testing.T) {
 	st, err := store.Open(t.TempDir(), clock.NewFake(time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)))
 	if err != nil {
@@ -153,7 +226,7 @@ func TestRunnerHandlerRouting(t *testing.T) {
 	defer st.Close()
 	const runnerTok = "runner-token-0123456789abcdef"
 	toks, _ := api.ParseTokens(strings.NewReader(runnerTok + "\trunner\tmbp\n"))
-	srv := httptest.NewServer(loopd.RunnerHandler(st, toks, slog.New(slog.DiscardHandler)))
+	srv := httptest.NewServer(loopd.RunnerHandler(st, toks, slog.New(slog.DiscardHandler), nil))
 	defer srv.Close()
 	for path, want := range map[string]int{"/": 404, "/board": 404, "/ui/control": 404, "/items": 200, "/control": 200} {
 		req, _ := http.NewRequest("GET", srv.URL+path, nil)

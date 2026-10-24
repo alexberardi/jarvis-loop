@@ -55,7 +55,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	logs := &bytes.Buffer{}
-	srv := httptest.NewServer(New(st, toks, slog.New(slog.NewJSONHandler(logs, nil))))
+	srv := httptest.NewServer(New(st, toks, slog.New(slog.NewJSONHandler(logs, nil)), testBuild))
 	t.Cleanup(srv.Close)
 	return &env{t: t, srv: srv, clock: clk, store: st, logs: logs}
 }
@@ -82,13 +82,23 @@ func (e *env) do(tok, method, path string, body any, wantStatus int, out any) {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != wantStatus {
-		e.t.Fatalf("%s %s: status %d, want %d: %s", method, path, resp.StatusCode, wantStatus, raw)
+		e.t.Fatalf("%s %s: status %d, want %d: %s", method, path, resp.StatusCode, wantStatus, clip(raw))
 	}
 	if out != nil {
 		if err := json.Unmarshal(raw, out); err != nil {
 			e.t.Fatalf("%s %s: decode %s: %v", method, path, raw, err)
 		}
 	}
+}
+
+// clip keeps a failure message readable when the body is not JSON: GET /backup answering a
+// refused token with 200 would otherwise print the whole archive.
+func clip(b []byte) []byte {
+	const max = 512
+	if len(b) <= max {
+		return b
+	}
+	return append(b[:max:max], fmt.Sprintf("… (%d bytes)", len(b))...)
 }
 
 type apiErr struct {
@@ -868,7 +878,7 @@ func TestBoardTokenRefusedByAPI(t *testing.T) {
 	if pr, ok := toks.Lookup(boardTok); !ok || pr.Kind != KindBoard || pr.Actor() != "board:phone" {
 		t.Fatalf("lookup: %+v %v", pr, ok)
 	}
-	srv := httptest.NewServer(New(st, toks, slog.New(slog.DiscardHandler)))
+	srv := httptest.NewServer(New(st, toks, slog.New(slog.DiscardHandler), nil))
 	t.Cleanup(srv.Close)
 	e := &env{t: t, srv: srv, store: st}
 	var it struct{ ID int64 }
@@ -878,7 +888,7 @@ func TestBoardTokenRefusedByAPI(t *testing.T) {
 		{"POST", "/claim"}, {"POST", "/leases/x/heartbeat"}, {"POST", "/items/1/advance"},
 		{"POST", "/items/1/evidence"}, {"POST", "/items/1/events"}, {"GET", "/items/1/evidence/1"},
 		{"POST", "/items/1/answer"}, {"POST", "/items/1/approve"}, {"POST", "/items/1/hold"}, {"POST", "/items/1/drop"},
-		{"GET", "/control"}, {"PUT", "/control"},
+		{"GET", "/control"}, {"PUT", "/control"}, {"GET", "/version"}, {"GET", "/backup"},
 	} {
 		e.refused(boardTok, r.method, r.path, nil, 403, "forbidden")
 	}

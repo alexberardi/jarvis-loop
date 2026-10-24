@@ -6,43 +6,64 @@ package loopd
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/api"
+	"github.com/alexberardi/jarvis-loop/internal/build"
 	"github.com/alexberardi/jarvis-loop/internal/clock"
 	"github.com/alexberardi/jarvis-loop/internal/slack"
 	"github.com/alexberardi/jarvis-loop/internal/store"
 	"github.com/alexberardi/jarvis-loop/internal/web"
 )
 
-// Handler serves the API, plus the status page at / and its form at /ui/control, and the board
-// at /board.
-func Handler(st *store.Store, toks *api.Tokens, log *slog.Logger, board web.BoardConfig) http.Handler {
+// Handler serves the API, plus the status page at / and its form at /ui/control, the board at
+// /board, and the unauthenticated health check at /healthz.
+func Handler(st *store.Store, toks *api.Tokens, log *slog.Logger, board web.BoardConfig, bld *build.Build) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/", api.New(st, toks, log))
+	mux.Handle("/", api.New(st, toks, log, bld))
 	page := api.Logged(log, web.New(st, toks, log))
 	mux.Handle("GET /{$}", page)
 	mux.Handle("POST /ui/control", page)
 	b := BoardHandler(st, toks, log, board)
 	mux.Handle("/board", b)
 	mux.Handle("/board/", b)
+	mux.Handle("/healthz", api.Logged(log, http.HandlerFunc(healthz)))
 	return mux
 }
 
+// healthz is the health check fly.io's http_service calls (docs/decisions/2026-10-23-loopd-on-fly.md).
+// It is the one route with no token, so it says only that this process is serving: no version, no
+// schema version, no counts, nothing about the data or the host. Anything but GET is 405 with no
+// body. It is registered here and not in api.New's routes, every one of which needs a token.
+func healthz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	io.WriteString(w, "ok\n")
+}
+
 // BoardHandler serves the board's read routes and nothing else (404 elsewhere, 405 for anything
-// but GET): it is what loopd's LAN listener (--board-addr) serves, so the API stays on loopback.
+// but GET): a listener serving only this exposes the board without the API
+// (docs/decisions/2026-10-15-board.md). loopd itself serves the board on its one port, under the
+// board token's route rules.
 func BoardHandler(st *store.Store, toks *api.Tokens, log *slog.Logger, board web.BoardConfig) http.Handler {
 	return api.Logged(log, web.NewBoard(st, toks, log, board))
 }
 
-// RunnerHandler serves the API to runner tokens only, and no status page or board: it is what
-// loopd's LAN listener for remote runners (--runner-addr) serves, so the main API stays on
-// loopback (docs/decisions/2026-10-17-mac-runners.md).
-func RunnerHandler(st *store.Store, toks *api.Tokens, log *slog.Logger) http.Handler {
-	return api.NewRunners(st, toks, log)
+// RunnerHandler serves the API to runner tokens only, and no status page or board: a listener
+// serving only this takes remote runners without exposing the rest of the API
+// (docs/decisions/2026-10-17-mac-runners.md). loopd itself serves one port, where the per-route
+// token rules are what separate a runner from the user.
+func RunnerHandler(st *store.Store, toks *api.Tokens, log *slog.Logger, bld *build.Build) http.Handler {
+	return api.NewRunners(st, toks, log, bld)
 }
 
 // Slack configures the Slack layer.

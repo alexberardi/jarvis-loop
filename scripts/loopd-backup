@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Pull loopd's nightly backup off the machine (docs/decisions/2026-10-23-loopd-on-fly.md,
+# docs/runbooks/loopd-on-fly.md).
+#
+# A fly volume snapshot is not a database backup: it is a point-in-time copy of three WAL files
+# that are only consistent together between writes. So this fetches GET /backup, which is a
+# gzipped tar of a `VACUUM INTO` snapshot of loop.db plus evidence/ and regressions/, checks the
+# archive before keeping it, and prunes the old ones. It runs where the user already has storage
+# (a systemd timer on the dev box), so the fly app holds no credentials that can write anywhere.
+#
+#   LOOP_URL     loopd's base address, e.g. https://jarvis-loopd.fly.dev (required)
+#   LOOP_TOKEN   a user token, or LOOP_TOKEN_FILE naming a file holding one (0600)
+#   LOOP_BACKUP_DIR   where to keep them (default ~/backups/jarvis-loop)
+#   LOOP_BACKUP_KEEP  how many days to keep (default 30)
+#
+# Exits non-zero, and keeps nothing, when the fetch or the check fails, so the timer's failure is
+# the alarm. It never prints the token.
+set -euo pipefail
+
+die() { echo "loopd-backup: $*" >&2; exit 1; }
+
+url="${LOOP_URL:-}"
+[ -n "$url" ] || die "LOOP_URL is not set"
+url="${url%/}"
+
+token="${LOOP_TOKEN:-}"
+if [ -z "$token" ] && [ -n "${LOOP_TOKEN_FILE:-}" ]; then
+  [ -r "$LOOP_TOKEN_FILE" ] || die "cannot read LOOP_TOKEN_FILE"
+  token="$(cat "$LOOP_TOKEN_FILE")"
+fi
+[ -n "$token" ] || die "set LOOP_TOKEN or LOOP_TOKEN_FILE (a user token)"
+
+dir="${LOOP_BACKUP_DIR:-$HOME/backups/jarvis-loop}"
+keep="${LOOP_BACKUP_KEEP:-30}"
+mkdir -p "$dir"
+chmod 700 "$dir"
+
+stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+out="$dir/loop-backup-$stamp.tar.gz"
+part="$out.part"
+
+# The token goes in a header file (mktemp makes it 0600) so it never appears in this process's
+# argv, where any other user on the box could read it.
+hdr="$(mktemp)"
+trap 'rm -f "$part" "$hdr"' EXIT
+chmod 600 "$hdr"
+printf 'Authorization: Bearer %s\n' "$token" > "$hdr"
+curl --fail-with-body --silent --show-error --location \
+     --max-time "${LOOP_BACKUP_TIMEOUT:-1800}" \
+     --header @"$hdr" \
+     --output "$part" \
+     "$url/backup" || die "fetching $url/backup failed"
+
+# The stream can end mid-archive (loopd cannot change the status once the body has begun), so
+# check it before keeping it: gzip integrity, then that the tar lists loop.db.
+gzip --test "$part" || die "the archive is not valid gzip"
+names="$(tar --list --file "$part")" || die "the archive is not a readable tar"
+# A here-string, not a pipe into grep -q: under pipefail, grep closing the pipe early would make
+# the whole pipeline fail.
+grep --quiet '^loop\.db$' <<< "$names" || die "the archive has no loop.db"
+
+chmod 600 "$part"
+mv "$part" "$out"
+echo "loopd-backup: $out ($(du -h "$out" | cut -f1))"
+
+# Prune: anything older than $keep days, and never the one just written.
+find "$dir" -maxdepth 1 -name 'loop-backup-*.tar.gz' -type f -mtime "+$keep" -print -delete

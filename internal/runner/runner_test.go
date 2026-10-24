@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/api"
+	"github.com/alexberardi/jarvis-loop/internal/build"
 	"github.com/alexberardi/jarvis-loop/internal/clock"
 	"github.com/alexberardi/jarvis-loop/internal/fakeclaude"
 	"github.com/alexberardi/jarvis-loop/internal/guard"
@@ -72,6 +73,8 @@ type rig struct {
 	localRef string // its HEAD before the run
 	logs     *syncBuffer
 	scripts  string // the fake claude's per-item scripts
+	// loopdBuild is what the rig's loopd reports at GET /version; the deploy tests set it.
+	loopdBuild *build.Build
 }
 
 // syncBuffer is the runner's log in the tests: a test may read it while a run writes it.
@@ -179,7 +182,8 @@ func newRig(t *testing.T, scenario string) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	loopdBuild := build.New("", "the rig's loopd has no stamp")
+	srv := httptest.NewServer(api.New(st, toks, slog.New(slog.NewTextHandler(io.Discard, nil)), loopdBuild))
 	t.Cleanup(srv.Close)
 
 	self, _ := os.Executable()
@@ -221,7 +225,8 @@ func newRig(t *testing.T, scenario string) *rig {
 		return PRInfo{HeadRefName: spec.Head, HeadRefOid: strings.TrimSpace(string(out)), State: "OPEN"}, nil
 	}
 	return &rig{t: t, ctx: ctx, st: st, loopdClk: loopdClk, clk: clk, r: r, prs: prs, remote: remote, local: local,
-		localRef: gitT(t, local, "rev-parse", "HEAD"), logs: logs, scripts: filepath.Join(root, "scripts")}
+		localRef: gitT(t, local, "rev-parse", "HEAD"), logs: logs, scripts: filepath.Join(root, "scripts"),
+		loopdBuild: loopdBuild}
 }
 
 // fakePRs is GitHub's PRs for the tests: it records what the runner asked for.

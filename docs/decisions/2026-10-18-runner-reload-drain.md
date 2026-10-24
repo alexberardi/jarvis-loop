@@ -30,8 +30,8 @@ lost. On 2026-10-17 a restart to add three repos killed about 45 agent-minutes (
   still ends them.
 - **The board shows a draining runner** ("Runner devbox is draining since …: it claims nothing new
   and restarts once its runs end"), and the orchestrator's snapshot carries its `state`. The runner
-  says so with `POST /runners/self/state` (a runner-token route, so a Mac runner on
-  `--runner-addr` can too); the runner's next claim, after the restart, clears it. The `runners`
+  says so with `POST /runners/self/state` (a runner-token route, so a remote Mac runner can too);
+  the runner's next claim, after the restart, clears it. The `runners`
   table gained `state` and `state_at` (migration 0021).
 - **loopd reloads its repos on SIGHUP**: `--repos-file` is read again and added to `--repos` as at
   start, then given to the store (triage's choices, the CLI's `--repo`) and the Slack bot (`/loop

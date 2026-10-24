@@ -1,0 +1,51 @@
+# loopd on fly.io (docs/decisions/2026-10-23-loopd-on-fly.md, docs/runbooks/loopd-on-fly.md).
+#
+# EXACTLY ONE MACHINE. loopd is a single SQLite writer and a fly volume belongs to one machine, so
+# a second machine would either have no data or a second writer. That is why auto_start_machines is
+# off, min_machines_running is 1, and the deploy strategy is immediate: a rolling deploy needs a
+# second machine to shift traffic to, and that machine cannot have the volume. `fly scale count 1`
+# and nothing else.
+#
+# The app name and the org are the user's to set (`fly apps create -o <org>`); the org is not a
+# field here. Region ewr unless the user says otherwise.
+app = "jarvis-loopd"
+primary_region = "ewr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 7780
+  force_https = true
+  # One machine, always: see the note above.
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+  # /healthz is the one route loopd serves without a token, and it says only that the process is
+  # serving (internal/loopd/loopd.go).
+  [[http_service.http_checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/healthz"
+
+# The data: loop.db (one writer), evidence/ and regressions/. store.Open creates and tightens what
+# it needs under here, so loopd takes --data /data and no more.
+[mounts]
+  source = "loop_data"
+  destination = "/data"
+
+[deploy]
+  # Replace the one machine in place. Here and not only in the deploy command, so a `fly deploy`
+  # by hand cannot roll into a second machine that has no volume.
+  strategy = "immediate"
+
+# Secrets (`fly secrets set`), which the entrypoint writes to /run/loop at 0600 because loopd
+# refuses a secret file any wider than that (api.LoadTokens, slack.LoadEnv):
+#   LOOP_TOKENS                  the tokens file: token<TAB>kind<TAB>name per line (required)
+#   LOOP_SLACK_ENV               SLACK_BOT_TOKEN and SLACK_APP_TOKEN (Slack is off without it)
+#   LOOP_ORCHESTRATOR_SLACK_ENV  the @orchestrator app's own two tokens (off without it)
+# Never put any of them in [env], which is plain text in this file and in `fly config show`.
+# There is no [env] here: loopd's own flags are the Dockerfile's CMD.

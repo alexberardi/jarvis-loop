@@ -32,7 +32,7 @@ func newRunnersEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	logs := &bytes.Buffer{}
-	srv := httptest.NewServer(NewRunners(st, toks, slog.New(slog.NewJSONHandler(logs, nil))))
+	srv := httptest.NewServer(NewRunners(st, toks, slog.New(slog.NewJSONHandler(logs, nil)), nil))
 	t.Cleanup(srv.Close)
 	return &env{t: t, srv: srv, clock: clk, store: st, logs: logs}
 }

@@ -73,6 +73,10 @@ type Store struct {
 	// tickMu guards tickAt, when Sweep last ran OrchTick.
 	tickMu sync.Mutex
 	tickAt time.Time
+
+	// bkMu lets one Backup run at a time: they share the snapshot's path, and one VACUUM at a
+	// time is all the single writer connection would allow anyway (backup.go).
+	bkMu sync.Mutex
 }
 
 // SetRepos sets the repo slugs (owner/name) loopd is configured with (loopd's --repos): the only

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/alexberardi/jarvis-loop/internal/api"
+	"github.com/alexberardi/jarvis-loop/internal/build"
 	"github.com/alexberardi/jarvis-loop/internal/clock"
 	"github.com/alexberardi/jarvis-loop/internal/loopd"
 	"github.com/alexberardi/jarvis-loop/internal/slack"
@@ -46,8 +47,6 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	data := fs.String("data", "~/.local/share/jarvis-loop", "data directory (database and evidence)")
 	tokensPath := fs.String("tokens", "~/.config/jarvis-loop/tokens", "tokens file, 0600: token<TAB>kind<TAB>name per line")
 	lan := fs.Bool("lan", false, "allow listening on a non-loopback address")
-	boardAddr := fs.String("board-addr", "", "a second listener serving only the read-only board at /board (e.g. 0.0.0.0:7790, the LAN); off when empty")
-	runnerAddr := fs.String("runner-addr", "", "a listener for remote runners (e.g. 0.0.0.0:7781, the LAN): the API for runner tokens only, every other token refused; off when empty")
 	slackWorkspace := fs.String("slack-workspace", "", "the Slack workspace's address (https://<team>.slack.com), for the board's links to item threads; none without it")
 	slackEnv := fs.String("slack-env", "", "Slack env file, 0600, with SLACK_BOT_TOKEN and SLACK_APP_TOKEN; Slack is off without it")
 	orchEnv := fs.String("orchestrator-slack-env", "", "the @orchestrator Slack app's env file (docs/slack/orchestrator-manifest.yml), 0600, like --slack-env's; default: "+orchestratorEnvName+" next to --slack-env's file, the app off when it is absent; \"off\" turns it off")
@@ -59,16 +58,6 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	}
 	if err := checkAddr(*addr, *lan); err != nil {
 		return err
-	}
-	if *boardAddr != "" {
-		if _, _, err := net.SplitHostPort(*boardAddr); err != nil {
-			return fmt.Errorf("--board-addr: %w", err)
-		}
-	}
-	if *runnerAddr != "" {
-		if _, _, err := net.SplitHostPort(*runnerAddr); err != nil {
-			return fmt.Errorf("--runner-addr: %w", err)
-		}
 	}
 	if *slackWorkspace != "" {
 		if u, err := url.Parse(*slackWorkspace); err != nil || u.Scheme != "https" || u.Host == "" {
@@ -112,10 +101,14 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	st.SetRepos(repos)
 	st.SetAliases(aliases)
 
+	// The commit this loopd runs, which it serves at GET /version: since loopd is deployed on its
+	// own (fly.io) the runner asks for this rather than taking its own build for the loop's
+	// (docs/decisions/2026-10-23-loopd-on-fly.md).
+	bld := build.Current()
 	boardCfg := web.BoardConfig{SlackWorkspace: *slackWorkspace, Clock: clock.Real{}}
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           handler(st, toks, log, boardCfg),
+		Handler:           handler(st, toks, log, boardCfg, bld),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       5 * time.Minute, // evidence uploads
 		WriteTimeout:      5 * time.Minute,
@@ -126,49 +119,11 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	log.Info("loopd listening", "addr", ln.Addr().String(), "data", expand(*data))
-	var boardSrv *http.Server
-	var boardLn net.Listener
-	if *boardAddr != "" {
-		// The board's own listener, for the LAN: read-only routes only, so it needs no --lan.
-		boardSrv = &http.Server{
-			Addr:              *boardAddr,
-			Handler:           loopd.BoardHandler(st, toks, log, boardCfg),
-			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       time.Minute,
-			WriteTimeout:      5 * time.Minute, // evidence downloads
-			IdleTimeout:       2 * time.Minute,
-			MaxHeaderBytes:    64 << 10,
-		}
-		if boardLn, err = net.Listen("tcp", *boardAddr); err != nil {
-			ln.Close()
-			return fmt.Errorf("--board-addr: %w", err)
-		}
-		log.Info("board listening", "addr", boardLn.Addr().String())
+	bi := bld.Info()
+	log.Info("loopd listening", "addr", ln.Addr().String(), "data", expand(*data), "revision", bi.Revision)
+	if bi.Revision == "" {
+		log.Warn("build revision unknown: no deployed reports for qa_after_deploy repos (use /loop verified)", "why", bi.Why)
 	}
-	var runnerSrv *http.Server
-	var runnerLn net.Listener
-	if *runnerAddr != "" {
-		// The remote runners' listener, for the LAN: runner tokens only, so it needs no --lan.
-		runnerSrv = &http.Server{
-			Addr:              *runnerAddr,
-			Handler:           loopd.RunnerHandler(st, toks, log),
-			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       5 * time.Minute, // evidence uploads
-			WriteTimeout:      5 * time.Minute,
-			IdleTimeout:       2 * time.Minute,
-			MaxHeaderBytes:    64 << 10,
-		}
-		if runnerLn, err = net.Listen("tcp", *runnerAddr); err != nil {
-			ln.Close()
-			if boardLn != nil {
-				boardLn.Close()
-			}
-			return fmt.Errorf("--runner-addr: %w", err)
-		}
-		log.Info("runner listener listening", "addr", runnerLn.Addr().String())
-	}
-
 	var bg sync.WaitGroup
 	defer bg.Wait()
 	sctx, stopSlack := context.WithCancel(ctx) // ends the Slack goroutines however run returns
@@ -178,12 +133,6 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		if bot, err = loopd.StartSlack(sctx, &bg, st, loopd.Slack{BaseURL: slack.DefaultBaseURL, Tokens: slackToks,
 			LinkBase: *slackLink, Repos: repos, Aliases: aliases, Clock: clock.Real{}, Log: log, Orchestrator: orchToks}); err != nil {
 			ln.Close()
-			if boardLn != nil {
-				boardLn.Close()
-			}
-			if runnerLn != nil {
-				runnerLn.Close()
-			}
 			return err
 		}
 	}
@@ -219,18 +168,11 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		}
 	}()
 
-	// Any server failing stops them all: loopd is up with all its listeners or not at all.
-	servers := []*http.Server{srv}
-	errc := make(chan error, 3)
+	// One listener, since loopd moved to fly.io: everything arrives on the one TLS port and the
+	// per-route token rules are what separate the board, the runners and the user
+	// (docs/decisions/2026-10-23-loopd-on-fly.md).
+	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
-	if boardSrv != nil {
-		servers = append(servers, boardSrv)
-		go func() { errc <- boardSrv.Serve(boardLn) }()
-	}
-	if runnerSrv != nil {
-		servers = append(servers, runnerSrv)
-		go func() { errc <- runnerSrv.Serve(runnerLn) }()
-	}
 	var serveErr error
 	select {
 	case serveErr = <-errc:
@@ -240,29 +182,21 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	shutCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	var errs []error
-	for _, s := range servers {
-		if err := s.Shutdown(shutCtx); err != nil {
-			errs = append(errs, err)
-		}
+	if err := srv.Shutdown(shutCtx); err != nil {
+		errs = append(errs, err)
 	}
-	pending := len(servers)
-	if serveErr != nil {
-		pending--
-		if !errors.Is(serveErr, http.ErrServerClosed) {
-			errs = append(errs, serveErr)
-		}
+	if serveErr == nil {
+		serveErr = <-errc
 	}
-	for range pending {
-		if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
-			errs = append(errs, err)
-		}
+	if !errors.Is(serveErr, http.ErrServerClosed) {
+		errs = append(errs, serveErr)
 	}
 	return errors.Join(errs...)
 }
 
 // handler serves the API, plus the status page at / and its form at /ui/control, and the board.
-func handler(st *store.Store, toks *api.Tokens, log *slog.Logger, board web.BoardConfig) http.Handler {
-	return loopd.Handler(st, toks, log, board)
+func handler(st *store.Store, toks *api.Tokens, log *slog.Logger, board web.BoardConfig, b *build.Build) http.Handler {
+	return loopd.Handler(st, toks, log, board, b)
 }
 
 // orchestratorEnvName is the @orchestrator app's env file, next to the loop bot's.

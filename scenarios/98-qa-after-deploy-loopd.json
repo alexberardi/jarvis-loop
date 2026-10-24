@@ -1,0 +1,41 @@
+{
+  "name": "qa-after-deploy-loopd",
+  "about": "#550: loopd is deployed on its own (fly.io), so a qa_after_deploy item is deployed only once BOTH running builds contain its merge. loopd alone on the new build reports nothing, the runner alone on it reports nothing, and the item reaches the usual Deployed ask only when both are on it. The revision in the event and the thread is loopd's, which is the build the user is asked to check.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "via": "slack", "title": "Loop change", "text": "jarvis-loop: make the digest shorter"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "qa"},
+     "events": [{"item": "a", "kind": "advanced", "outcome": "merged", "data": {"awaiting_deploy": "^true$"}, "count": 1}]},
+    {"do": "deploy", "build": "main", "component": "loopd"},
+    {"do": "expect", "stage": {"a": "qa"}, "no_events": [{"item": "a", "kind": "deployed"}],
+     "no_messages": [{"thread": "a", "text": "Deployed"}]},
+    {"do": "deploy", "build": "base", "component": "loopd"},
+    {"do": "deploy", "build": "main", "component": "runner"},
+    {"do": "expect", "stage": {"a": "qa"}, "no_events": [{"item": "a", "kind": "deployed"}],
+     "no_messages": [{"thread": "a", "text": "Deployed"}]},
+    {"do": "deploy", "build": "main", "component": "loopd"},
+    {"do": "expect", "stage": {"a": "qa"},
+     "events": [{"item": "a", "kind": "deployed", "actor": "runner", "data": {"revision": "^[0-9a-f]{40}$", "merge_sha": "^[0-9a-f]{40}$"}, "count": 1}],
+     "messages": [{"thread": "a", "from": "bot", "text": "#[0-9]+ make the digest shorter: Deployed — waiting for your check\\. <https://github.com/sandbox/jarvis-loop/pull/101\\|sandbox/jarvis-loop#101> \\(merged as `[0-9a-f]{7}`\\) is running in the build `[0-9a-f]{7}`\\.\\nPress Verified when it works", "buttons": ["Verified", "Reopen"]}]},
+    {"do": "press", "item": "a", "button": "qa_verified", "as": "approver"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "events": [
+      {"item": "a", "kind": "deployed", "count": 1},
+      {"item": "a", "kind": "verified", "actor": "approver", "count": 1}
+    ],
+    "no_events": [
+      {"item": "a", "kind": "refused"}
+    ]
+  }
+}

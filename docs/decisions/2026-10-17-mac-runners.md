@@ -13,6 +13,11 @@ offered `macos` (#92 made it visible). The user OK'd two Macs on the LAN, the Ma
   127.0.0.1, so the user's and the orchestrator's tokens never work from the LAN. Like
   `--board-addr` it needs no `--lan`. It is plain HTTP on the home LAN (the token is in clear);
   ufw allows port 7781 from the two Macs only.
+  **Dropped 2026-10-23 (#550):** `--runner-addr` is gone with loopd's move to fly.io. A Mac runner
+  now reaches loopd over its one TLS port, like every other client, and what keeps the user's and
+  the orchestrator's tokens out of a runner's hands is that the runner only ever holds a runner
+  token — the per-route rules are the same either way ([decision](2026-10-23-loopd-on-fly.md)).
+  `loopd.RunnerHandler` stays, and the loop's harness still wires it (scenario 63).
 - **Claim scope: `only_resources`.** The claim only checked `resources ⊆ capabilities`, so a Mac
   with `[macos]` and stages build/review would also have taken every ordinary item (no resources).
   A runner's `only_resources` (each one of its capabilities) goes in the claim, and loopd then
