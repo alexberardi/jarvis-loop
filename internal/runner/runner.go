@@ -59,6 +59,10 @@ type Runner struct {
 	// HeartbeatEvery and KillGrace default to 60 s and 10 s.
 	HeartbeatEvery time.Duration
 	KillGrace      time.Duration
+	// GoProbe says why the runner's Go cannot run go test ("" when it can); nil runs
+	// `go tool vet -h` (toolchain.go).
+	GoProbe func(ctx context.Context) string
+	goh     goHealth
 
 	fenceOnce sync.Once
 	fenceErr  error
@@ -278,8 +282,12 @@ func (r *Runner) claimAndRunIn(claimCtx, ctx context.Context, stages []string) (
 		stages = []string{StageLand}
 	}
 	cfg := r.Config()
+	repos, stages := r.claimRepos(claimCtx, cfg, stages)
+	if len(stages) == 0 {
+		return false, nil
+	}
 	agent := cfg.Name + "-" + randHex(4)
-	cl, err := r.Client.ClaimFor(claimCtx, agent, cfg, stages)
+	cl, err := r.Client.ClaimRepos(claimCtx, agent, cfg, stages, repos)
 	if err != nil || cl == nil {
 		return false, err
 	}

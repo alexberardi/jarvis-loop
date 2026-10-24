@@ -1,0 +1,33 @@
+{
+  "name": "proof-go-broken",
+  "about": "Proof commands on a runner whose Go is broken (#591: the mbp's mise go without $GOTOOLDIR/vet). The runner's Go probe fails, so it never runs the proof's go command: no 'could not run' evidence, no strike, the check stays pending for a runner whose Go works. Its non-go check runs and passes, and it still builds, reviews and lands the demo repo, which is not a Go repo.",
+  "stages": ["build", "review", "land"],
+  "go_broken": true,
+  "steps": [
+    {"do": "add", "item": "a", "title": "Chime volume"},
+    {"do": "command", "as": "approver", "text": "qa 1"},
+    {"do": "script", "item": "a", "proof": [{"kind": "command", "run": "go test ./..."}, {"kind": "command", "run": "true"}]},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "qa"}},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "30m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "30m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "qa"},
+     "events": [{"item": "a", "kind": "proof_checked", "actor": "runner", "data": {"status": "^pending$"}, "count": 3}],
+     "board": {"a": {"column": "QA", "card": "waits for: command: `go test \\./\\.\\.\\.`"}}}
+  ],
+  "expect": {
+    "stage": {"a": "qa"},
+    "no_events": [{"item": "a", "kind": "reopened"}, {"item": "a", "kind": "verified"}, {"item": "a", "kind": "refused"}]
+  }
+}

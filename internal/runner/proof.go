@@ -58,6 +58,13 @@ func (r *Runner) CheckProofs(ctx context.Context) error {
 			if c.Kind != pipeline.ProofCommand || c.State == pipeline.CheckPassed {
 				continue
 			}
+			if runsGo(c.Run) {
+				if why := r.goBroken(ctx); why != "" {
+					// Not run, not reported: the check stays pending for a runner whose Go works (#591).
+					log.Info("proof: go check left to another runner", "check", i, "go", why)
+					continue
+				}
+			}
 			res, err := r.proofCommand(ctx, key, repo, d.Item, i, c)
 			if ctx.Err() != nil {
 				return ctx.Err()

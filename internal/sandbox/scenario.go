@@ -49,9 +49,11 @@ type Scenario struct {
 	PipelineVerify bool `json:"pipeline_verify,omitempty"`
 	// SlowPrepare: the demo repo's Prepare command waits for a release_prepare step (a slow
 	// fetch); a preparing step waits until a build is in it.
-	SlowPrepare bool    `json:"slow_prepare,omitempty"`
-	Steps       []Step  `json:"steps"`
-	Final       *Expect `json:"expect,omitempty"`
+	SlowPrepare bool `json:"slow_prepare,omitempty"`
+	// GoBroken: the runner's Go probe fails as the mbp's did (#591: go: no such tool "vet").
+	GoBroken bool    `json:"go_broken,omitempty"`
+	Steps    []Step  `json:"steps"`
+	Final    *Expect `json:"expect,omitempty"`
 }
 
 // Step is one thing that happens. Do says what; the other fields are its arguments. An "expect"
