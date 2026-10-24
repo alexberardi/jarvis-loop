@@ -13,6 +13,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -64,6 +65,13 @@ type Config struct {
 	// DenyWrite are worktree-relative paths no tool may change (e.g. a harness entry point that
 	// runs outside the sandbox).
 	DenyWrite []string `json:"deny_write,omitempty"`
+	// Generated are worktree-relative globs (path.Match) under DenyWrite that the agent may write
+	// anyway: a generator's output, which verify regenerates and compares before it trusts it (#593).
+	Generated []string `json:"generated,omitempty"`
+	// NewOK are DenyWrite prefixes under which the agent may add a file the base branch lacks;
+	// BaseFiles are the base's files under them, which stay refused (#593).
+	NewOK     []string `json:"new_ok,omitempty"`
+	BaseFiles []string `json:"base_files,omitempty"`
 	// Report is the JSONL file refusals are appended to; Armed is touched on every invocation.
 	Report string `json:"report"`
 	Armed  string `json:"armed"`
@@ -255,11 +263,36 @@ func (c *Config) denyWriteRel(p string) string {
 	rel, _ := filepath.Rel(wt, p)
 	rel = filepath.ToSlash(rel)
 	for _, pre := range c.denyPrefixes() {
-		if rel == pre || strings.HasPrefix(rel, pre+"/") {
+		if (rel == pre || strings.HasPrefix(rel, pre+"/")) && !c.carvedOut(rel) {
 			return rel
 		}
 	}
 	return ""
+}
+
+// carvedOut reports whether rel, under a DenyWrite prefix, is one the agent may write anyway: a
+// generated file, or a new file under a NewOK prefix (judged against the base, so the agent can
+// keep editing a file it added).
+func (c *Config) carvedOut(rel string) bool {
+	if under(rel, []string{".git", ".claude", ".mcp.json", ".loop"}) {
+		return false
+	}
+	for _, g := range c.Generated {
+		if ok, _ := path.Match(g, rel); ok {
+			return true
+		}
+	}
+	return under(rel, c.NewOK) && !slices.Contains(c.BaseFiles, rel)
+}
+
+func under(rel string, pres []string) bool {
+	for _, pre := range pres {
+		pre = strings.TrimSuffix(pre, "/")
+		if strings.HasPrefix(rel, pre+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // checkWriteTarget judges one path a shell command writes: a redirection's target or a

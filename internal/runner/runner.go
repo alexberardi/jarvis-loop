@@ -773,6 +773,19 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 		LoopdAddrs: r.cfgOf(ru).LoopdAddrs(), DenyWrite: deny, ReadOnly: ru.stage != StageBuild,
 		Report: filepath.Join(ru.dir, "refusals.jsonl"), Armed: filepath.Join(ru.dir, "armed"),
 	}
+	if ru.stage == StageBuild {
+		if g := ru.repo.Generated; g != nil {
+			gc.Generated = g.Paths
+		}
+		if len(ru.repo.NewOK) > 0 {
+			// The base's own files there stay refused: only a file the base lacks is new.
+			out, err := r.Git.run(ctx, ru.wt, append([]string{"ls-tree", "-r", "--name-only", "refs/remotes/origin/" + ru.repo.Base, "--"}, ru.repo.NewOK...)...)
+			if err != nil {
+				return "", fmt.Errorf("the base's files under new_ok: %w", err)
+			}
+			gc.NewOK, gc.BaseFiles = ru.repo.NewOK, strings.Split(out, "\n")
+		}
+	}
 	b, _ := json.MarshalIndent(gc, "", "  ")
 	if err := os.WriteFile(filepath.Join(ru.dir, "guard.json"), b, 0o600); err != nil {
 		return "", err

@@ -103,6 +103,10 @@ const (
 	// RebaseTrustedEdit is RebaseTrusted whose rerun also changes the trusted file again after the
 	// rebase: a rewritten head with a new trusted diff, which needs a new OK (#277).
 	RebaseTrustedEdit = "rebase_trusted_edit"
+	// GeneratedChange adds a line to tools.txt and commits the script's file regenerated from it
+	// the way the stand-in mobile repo's generator does (sandbox.MobileGenerated): a generated
+	// deny_write file whose bytes are the generator's (#593).
+	GeneratedChange = "generated_change"
 	// TrustedThenFix is TrustedChange whose rerun after a bounce fixes the review in another file
 	// only: a new head whose trusted files' diff is unchanged, so the OK carries (#277).
 	TrustedThenFix = "trusted_then_fix"
@@ -551,6 +555,10 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	} else if scenario == TrustedThenFix && resumed && exists(filepath.Join(f.cwd, ".loop", "review", "notes.md")) {
 		f.bash("mkdir -p docs && echo 'addressed the review' >> docs/review.md && git add docs/review.md" +
 			" && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'fix: address the review'")
+	} else if scenario == GeneratedChange {
+		f.appendRaw("tools.txt", "shoot --dark\n")
+		f.bash("mkdir -p " + shellQuote(filepath.Dir(change)) + " && sed 's/^/tool: /' tools.txt > " + shellQuote(change) +
+			" && git add tools.txt " + shellQuote(change) + " && git -c user.name=fake -c user.email=fake@example.com commit -q -m 'feat: a dark shot tool'")
 	} else if scenario == TrustedChange || scenario == TrustedChangeEager || scenario == RebaseTrusted || scenario == RebaseTrustedEdit || scenario == TrustedThenFix {
 		if !resumed || scenario == TrustedChangeEager || !bytes.Contains(brief, []byte(trustedBrief)) {
 			f.appendRaw(change, "shoot --dark\n")
