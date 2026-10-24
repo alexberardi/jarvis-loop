@@ -36,6 +36,11 @@ import (
 // /tmp mean the same thing there). Without a keeper a command gets a fence of its own. When the
 // agent's run ends (or the lease is lost, or the runner stops) the keeper is killed, which takes
 // everything it started with it, and "down" runs in a fresh fence to remove what is left on disk.
+//
+// Commands run in the agent's worktree, or, when the repo's harness names a repo of its own
+// ("repo": the harness scripts live in another repo, as jarvis-server's scripts/e2e do for
+// jarvis-node-mobile), in a fresh checkout of it at its base, with the agent's worktree writable
+// beside it and its path in $LOOP_WORKTREE (docs/decisions/2026-10-23-emulator-claims.md).
 
 // harnessBinDir is the directory put first on a harness repo's agents' PATH: only loop-harness.
 func (c *Config) harnessBinDir() string { return filepath.Join(c.WorkRoot, "bin") }
@@ -47,14 +52,18 @@ type harnessBroker struct {
 }
 
 type harnessSession struct {
-	b      *harnessBroker
-	token  string
-	item   int64
-	wt     string
-	logDir string
-	cfg    HarnessConfig
-	env    []string
-	guard  *guard.Config // the run's guard (its hook's config): every run command passes it first
+	b     *harnessBroker
+	token string
+	item  int64
+	wt    string
+	// dir is where the session's commands run: the agent's worktree, or (cfg.Repo) the fresh
+	// checkout of that repo, with wt writable beside it. rmCheckout removes it at the end.
+	dir        string
+	rmCheckout func()
+	logDir     string
+	cfg        HarnessConfig
+	env        []string
+	guard      *guard.Config // the run's guard (its hook's config): every run command passes it first
 	// spool and logs are opened before the agent starts, so a symlink it puts in .loop later
 	// cannot send the runner's writes out of the worktree.
 	spool *os.Root
@@ -131,8 +140,9 @@ func (r *Runner) CloseHarness() {
 }
 
 // startHarness opens a session for a build or review run of a repo with a harness: a fresh
-// spool, and .loop/harness.json; nil when the repo has none.
-func (r *Runner) startHarness(ru *run) (*harnessSession, error) {
+// spool, .loop/harness.json, and (harness.repo) the checkout its commands run in; nil when the
+// repo has none.
+func (r *Runner) startHarness(ctx context.Context, ru *run) (*harnessSession, error) {
 	if !ru.hasHarness() {
 		return nil, nil
 	}
@@ -154,33 +164,48 @@ func (r *Runner) startHarness(ru *run) (*harnessSession, error) {
 	if p, err := filepath.EvalSymlinks(wt); err == nil {
 		wt = p
 	}
+	// A repo-scoped harness (harness.repo) runs in a checkout of that repo: made before the agent
+	// starts, removed with the session.
+	dir, rmCheckout := wt, func() {}
+	if ru.repo.Harness.Repo != "" {
+		if dir, rmCheckout, err = r.harnessCheckout(ctx, ru); err != nil {
+			return nil, err
+		}
+	}
 	s := &harnessSession{b: r.broker(), token: hex.EncodeToString(tok), item: ru.item.ID, wt: wt,
+		dir: dir, rmCheckout: rmCheckout,
 		logDir: filepath.Join(ru.scratch, "harness"), cfg: *ru.repo.Harness, fences: map[*fenceProc]bool{},
 		guard: gc, quit: make(chan struct{}),
 		env: append(r.agentEnv(), "LOOP_ITEM="+strconv.FormatInt(ru.item.ID, 10), "LOOP_WORKTREE="+ru.wt,
 			"LOOP_EVIDENCE_DIR="+filepath.Join(ru.wt, ".loop", "evidence"), "LOOP_SANDBOX="+ru.sandbox,
-			"LOOP_REPO="+ru.repo.Slug, "LOOP_BASE="+ru.repo.Base, "LOOP_MIRROR="+ru.mirror)}
+			"LOOP_REPO="+ru.repo.Slug, "LOOP_BASE="+ru.repo.Base, "LOOP_MIRROR="+ru.mirror,
+			"LOOP_HARNESS_DIR="+dir)}
+	// Anything that fails from here on takes the checkout with it.
+	fail := func(err error) (*harnessSession, error) {
+		rmCheckout()
+		return nil, err
+	}
 	spool := filepath.Join(wt, harness.SpoolRel)
 	if err := os.RemoveAll(spool); err != nil {
-		return nil, err
+		return fail(err)
 	}
 	for _, d := range []string{filepath.Join(spool, "req"), filepath.Join(spool, "out"), s.logDir} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
-			return nil, err
+			return fail(err)
 		}
 	}
 	if s.spool, err = os.OpenRoot(spool); err != nil {
-		return nil, err
+		return fail(err)
 	}
 	if s.logs, err = os.OpenRoot(s.logDir); err != nil {
 		s.spool.Close()
-		return nil, err
+		return fail(err)
 	}
 	f, _ := json.Marshal(harness.File{Spool: spool, Token: s.token})
 	if err := os.WriteFile(filepath.Join(ru.wt, harness.FileRel), append(f, '\n'), 0o600); err != nil {
 		s.spool.Close()
 		s.logs.Close()
-		return nil, err
+		return fail(err)
 	}
 	b := s.b
 	b.mu.Lock()
@@ -207,6 +232,55 @@ func (r *Runner) linkHarnessBin() error {
 		return err
 	}
 	return os.Rename(tmp, link)
+}
+
+// harnessCheckout makes the checkout a repo-scoped harness runs in: the configured repo at its
+// base branch under <work_root>/<item>-harness-<key>, as a verify step with its own repo does
+// (verify.go). The second return removes it; the agent's worktree is not touched.
+func (r *Runner) harnessCheckout(ctx context.Context, ru *run) (string, func(), error) {
+	key := ru.repo.Harness.Repo
+	cfg := r.cfgOf(ru)
+	rc, ok := cfg.Repos[key]
+	if !ok {
+		return "", nil, fmt.Errorf("the harness runs in repo %q, which is not configured (use its key)", key)
+	}
+	mirror := r.mirrorPath(key)
+	dir := r.harnessDir(ru)
+	unlock := r.lockMirror(mirror)
+	err := r.Git.EnsureMirror(ctx, mirror, rc)
+	if err == nil {
+		err = r.Git.AddDetached(ctx, mirror, dir, "refs/remotes/origin/"+rc.Base)
+	}
+	unlock()
+	if err != nil {
+		return "", nil, fmt.Errorf("checking out %s for the harness: %w", rc.Slug, err)
+	}
+	return dir, func() {
+		unlock := r.lockMirror(mirror)
+		r.Git.RemoveWorktree(context.WithoutCancel(ctx), mirror, dir)
+		unlock()
+	}, nil
+}
+
+// harnessDir is where a repo-scoped harness's commands run: this item's checkout of
+// harness.repo. It is a name, not a checkout: the brief uses it before harnessCheckout makes one.
+func (r *Runner) harnessDir(ru *run) string {
+	return filepath.Join(r.cfgOf(ru).WorkRoot, fmt.Sprintf("%d-harness-%s", ru.item.ID, Slug(ru.repo.Harness.Repo)))
+}
+
+// fenceOpts are what the session's fences get besides the defaults: with a repo-scoped harness
+// the agent's worktree is writable beside the checkout (as the regression run's mobile checkout
+// is), its git admin dir with it, and its plumbing read-only so a command cannot repoint it.
+func (s *harnessSession) fenceOpts() fenceOpts {
+	if s.dir == s.wt {
+		return fenceOpts{}
+	}
+	o := fenceOpts{Writable: []string{s.wt}}
+	if admin := gitAdminDir(s.wt); admin != "" {
+		o.Writable = append(o.Writable, admin)
+		o.ReadOnly = worktreePlumbing(s.wt, admin)
+	}
+	return o
 }
 
 // end ends the session: no more requests, every fence killed (the keeper takes what up started
@@ -251,6 +325,7 @@ func (s *harnessSession) end(ctx context.Context) {
 	s.logs.Close()
 	os.Remove(filepath.Join(s.wt, harness.FileRel))
 	os.RemoveAll(filepath.Join(s.wt, harness.SpoolRel))
+	s.rmCheckout() // after down, which runs in it
 }
 
 // poll takes the requests the client drops in req/ until the session ends.
@@ -372,7 +447,7 @@ func (s *harnessSession) serve(id string, req harness.Request, out io.Writer) (i
 			return 0, errors.New("run needs a command")
 		}
 		// The agent's guard, here too: a client of the agent's own can skip its hook.
-		if d := s.guard.Check(guard.Input{Event: "PreToolUse", ToolName: "Bash", ToolInput: map[string]any{"command": req.Cmd}, Cwd: s.wt}); d.Deny {
+		if d := s.guard.Check(guard.Input{Event: "PreToolUse", ToolName: "Bash", ToolInput: map[string]any{"command": req.Cmd}, Cwd: s.dir}); d.Deny {
 			s.guard.Record("loop-harness run", d, time.Now())
 			return 0, errors.New(d.Reason)
 		}
@@ -410,7 +485,7 @@ func (s *harnessSession) startFence(script string, atEnd bool) (*fenceProc, io.R
 	}
 	r := s.b.r
 	script += "\nexec " + shellQuote(r.Config().LoopHarness) + " serve-inner\n"
-	cmd, err := r.fence(s.wt, script, s.env, nil)
+	cmd, err := r.fenceWith(s.dir, script, s.env, s.fenceOpts())
 	if err != nil {
 		return nil, nil, fmt.Errorf("the fence: %w", err)
 	}
@@ -466,7 +541,7 @@ func (s *harnessSession) forget(f *fenceProc) {
 
 // exec runs cmd through f's serve-inner, writing its output to out; gone cancels it.
 func (s *harnessSession) exec(f *fenceProc, cmd string, out io.Writer, gone <-chan struct{}) (int, error) {
-	if err := f.send(harness.InnerRequest{Cmd: cmd, Env: f.env, Dir: s.wt, TimeoutMS: s.cfg.Timeout().Milliseconds()}); err != nil {
+	if err := f.send(harness.InnerRequest{Cmd: cmd, Env: f.env, Dir: s.dir, TimeoutMS: s.cfg.Timeout().Milliseconds()}); err != nil {
 		return 0, errors.New("the harness fence is gone")
 	}
 	stop := make(chan struct{})
@@ -666,10 +741,10 @@ func (s *harnessSession) status(out io.Writer) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.keeper == nil || !s.keeper.alive() {
-		fmt.Fprintf(out, "harness: not up (worktree %s)\n", s.wt)
+		fmt.Fprintf(out, "harness: not up (commands run in %s)\n", s.dir)
 		return 1, nil
 	}
-	fmt.Fprintf(out, "harness: up since %s (up exited %d), worktree %s; logs in %s\n",
-		s.upAt.Format(time.Kitchen), s.upRC, s.wt, s.logDir)
+	fmt.Fprintf(out, "harness: up since %s (up exited %d), commands run in %s; logs in %s\n",
+		s.upAt.Format(time.Kitchen), s.upRC, s.dir, s.logDir)
 	return 0, nil
 }

@@ -13,7 +13,10 @@ commands for the agent, in the fence its verify steps already use (`fence.go`).
   `"harness": {"up": "<bash>", "down": "<bash>", "timeout": "20m"}` (timeout per command, default
   20m). `loop_harness` (default: next to `loop-runner`) is the client binary. jarvis-server:
   `up` = `grep -q INSTALLED_LLM_LABEL scripts/sandbox && export JARVIS_HARNESS_ENV="$HOME/.config/jarvis-harness/prod-background.env"; scripts/fetch-sherpa-libs.sh >/dev/null && scripts/sandbox up --name $LOOP_SANDBOX`,
-  `down` = `scripts/sandbox down --name $LOOP_SANDBOX --purge`.
+  `down` = `scripts/sandbox down --name $LOOP_SANDBOX --purge`. Since
+  `2026-10-23-emulator-claims.md` it may also have `"repo": "<key>"`: the harness scripts live in
+  that repo, which the runner checks out fresh at its base, and the session's commands run there
+  with the agent's worktree writable beside it (`$LOOP_WORKTREE`, `$LOOP_HARNESS_DIR`).
 - **Spool and session.** For each agent run of a build or review of such a repo the runner opens
   a session with a random 32-byte token, makes a fresh spool `.loop/harness/{req,out}/` in the
   worktree, and writes `.loop/harness.json` `{spool, token}` (`.loop/` is never committed). The
@@ -24,7 +27,8 @@ commands for the agent, in the fence its verify steps already use (`fence.go`).
   removed then. `loop-runner` also ends any left when it stops.
 - **Who may call.** Only that run's agent can write in its worktree (other items' agents are
   sandboxed to their own), which is the caller check; the token must match too (constant-time
-  compare). Commands always run in the session's worktree; the client never names a directory.
+  compare). Commands run in the session's worktree, or in the checkout of its `repo`
+  (`2026-10-23-emulator-claims.md`); either way the client never names a directory.
 - **Protocol.** The client writes `req/<id>.json` (`{token, op, cmd}`, written to a temp name and
   renamed into place; `<id>` is 32 random hex digits) and keeps `req/<id>.alive` fresh (every
   second) while it waits. The broker polls `req/` (every 50 ms), removes the request, appends the

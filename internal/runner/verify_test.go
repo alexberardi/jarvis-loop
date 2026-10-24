@@ -90,8 +90,9 @@ func TestVerifyPasses(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(g.r.Cfg.WorkRoot, "1-build", "should-not-run")); err == nil {
 		t.Error("a when_changed step ran without a matching path")
 	}
-	// The build brief named the steps; the agent did not run them.
-	if brief := g.read(filepath.Join(run, "brief.md")); !strings.Contains(brief, "the runner runs this repo's verify steps itself (outside your sandbox), before it pushes: unit tests; admin screenshots;") {
+	// The build brief named the steps, the when_changed one with what makes it run (#546); the
+	// agent did not run them.
+	if brief := g.read(filepath.Join(run, "brief.md")); !strings.Contains(brief, "the runner runs this repo's verify steps itself (outside your sandbox), before it pushes: unit tests; admin screenshots (only when a path you change matches web/**);") {
 		t.Errorf("brief:\n%s", brief[strings.Index(brief, ItemHeading):])
 	}
 }
@@ -483,6 +484,54 @@ func TestVerifyPurgesTheSandboxesFirst(t *testing.T) {
 	if got, want := g.read(log), "down loop-1\ndown loop-1-verify\nstep loop-1-verify\n"; got != want {
 		t.Fatalf("calls:\n%s\nwant:\n%s", got, want)
 	}
+}
+
+// A repo-scoped harness (harness.repo) keeps its scripts in another repo, so the purge has to run
+// where they are: a step in that same repo has a checkout of them and purges in it, and a step
+// that is not in it has none, so the purge is skipped - and an environment failure is not retried
+// with nothing purged - instead of running a down where the scripts cannot be (#546).
+func TestVerifyPurgeWithARepoScopedHarness(t *testing.T) {
+	// repoScoped points demo's harness at the other repo. The log is absolute and in
+	// VerifyWritable, so down can append to it from any checkout; its cwd goes in the line.
+	repoScoped := func(g *rig) string {
+		log := g.verifyHarness()
+		rc := g.r.Cfg.Repos["demo"]
+		rc.Harness.Repo = "other"
+		rc.Harness.Down = `echo "down $LOOP_SANDBOX in $(basename "$(pwd)")" >> ` + log
+		g.r.Cfg.Repos["demo"] = rc
+		return log
+	}
+	t.Run("a step in the harness's repo purges in its own checkout", func(t *testing.T) {
+		g := newRig(t, fakeclaude.Good)
+		log := repoScoped(g)
+		g.verifyRepo(VerifyStep{Name: "flows", Repo: "other", Run: `echo "step $LOOP_SANDBOX" >> ` + log})
+		id := g.toBuild("Add a feature")
+		g.runOnce()
+		if d := g.item(id); d.Item.Stage != pipeline.Review {
+			t.Fatalf("stage %s (question %q); log:\n%s", d.Item.Stage, d.Item.Question, g.logs.String())
+		}
+		want := "down loop-1 in 1-verify-other\ndown loop-1-verify in 1-verify-other\nstep loop-1-verify\n"
+		if got := g.read(log); got != want {
+			t.Fatalf("calls:\n%s\nwant:\n%s", got, want)
+		}
+	})
+	t.Run("a step outside it does not purge and is not retried", func(t *testing.T) {
+		g := newRig(t, fakeclaude.Good)
+		log := repoScoped(g)
+		g.verifyRepo(VerifyStep{Name: "flows", Run: `echo step >> ` + log + `; exit 3`})
+		id := g.toBuild("Add a feature")
+		g.runOnce()
+		if d := g.item(id); d.Item.Stage != pipeline.Build {
+			t.Fatalf("stage %s; log:\n%s", d.Item.Stage, g.logs.String())
+		}
+		// One try and no down: the scripts are in other, which this step has no checkout of.
+		if got := g.read(log); got != "step\n" {
+			t.Fatalf("calls:\n%s\nwant one try and no down", got)
+		}
+		if !strings.Contains(g.logs.String(), "the harness down cannot purge here") {
+			t.Error("the skipped purge is not logged")
+		}
+	})
 }
 
 // A step that fails on its environment (exit 3: the harness did not come up; or envFailure) is

@@ -141,8 +141,14 @@ and land holds the PR. Details: `docs/decisions/2026-10-15-all-repos.md`,
 `docs/decisions/2026-10-16-trusted-files.md`, `docs/decisions/2026-10-19-trust-carries-an-unchanged-diff.md`. GitHub text reaches an agent only from **trusted authors** (the repo's owner and the runner's `trusted_authors`): other people's PR comments are counted, never quoted, and a PR a stranger opened has its title and body left out (`docs/decisions/2026-10-19-trusted-comment-authors.md`). While a build or review agent works,
 a repo with a `harness` lets it use the harness through the runner too: `loop-harness up | run | down`
 asks the runner, through a spool in the agent's own worktree (checked by the run's token and its guard), to run the command in the
-same fence, next to a keeper fence that holds the running sandbox until the agent ends. Details:
-`docs/decisions/2026-10-16-harness-broker.md`.
+same fence, next to a keeper fence that holds the running sandbox until the agent ends. A harness
+whose scripts are in another repo (`harness.repo`: jarvis-server's `scripts/e2e` for a
+jarvis-node-mobile agent) runs its commands in a fresh checkout of that repo, with the agent's
+worktree writable beside it (`$LOOP_WORKTREE`). That, and the runner's verify steps, are the only
+ways to the emulator: no agent sandbox has `/dev/kvm` or the Android tooling, so an item whose
+`resources` include `emulator` is told which of them its run has, and a build with neither fails
+before the agent starts. Details: `docs/decisions/2026-10-16-harness-broker.md`,
+`docs/decisions/2026-10-23-emulator-claims.md`.
 
 **Config and updates without lost work (2026-10-18):** SIGHUP (`loop-runner reload`) reloads the
 runner's config for the next claim while live runs keep theirs; a bad file is refused. A binary
