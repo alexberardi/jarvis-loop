@@ -133,8 +133,13 @@ type Step struct {
 	// merge refused, #521)
 	RefuseMerges    *int  `json:"refuse_merges,omitempty"`
 	RequireUpToDate *bool `json:"require_up_to_date,omitempty"`
-	MergeByHand     bool  `json:"merge_by_hand,omitempty"`
-	CloseByHand     bool  `json:"close_by_hand,omitempty"`
+	// github: RequireReview turns the demo repo's (or Slug's) required-review protection on or off
+	// (an unapproved PR is REVIEW_REQUIRED and its merge refused, #588); ApproveReview approves the
+	// item's PR on GitHub, as the user would
+	RequireReview *bool `json:"require_review,omitempty"`
+	ApproveReview bool  `json:"approve_review,omitempty"`
+	MergeByHand   bool  `json:"merge_by_hand,omitempty"`
+	CloseByHand   bool  `json:"close_by_hand,omitempty"`
 	// github: ForeignPR ("owner/name#444") is a PR the loop did not open (a fix someone else
 	// lands), put in PRState: OPEN files it, MERGED or CLOSED moves it.
 	ForeignPR string `json:"foreign_pr,omitempty"`
@@ -793,6 +798,24 @@ func (p *player) step(st Step) error {
 				slug = st.Slug
 			}
 			s.GitHub.SetRequireUpToDate(slug, *st.RequireUpToDate)
+		}
+		if st.RequireReview != nil {
+			slug := RepoSlug
+			if st.Slug != "" {
+				slug = st.Slug
+			}
+			s.GitHub.SetRequireReview(slug, *st.RequireReview)
+		}
+		if st.ApproveReview {
+			r, err := p.ref(st.Item)
+			if err != nil {
+				return err
+			}
+			d, err := s.Store.GetItem(p.ctx, r.id)
+			if err != nil {
+				return err
+			}
+			return s.GitHub.ApproveReview(d.Item.Repo, ItemBranch(r.id, r.title))
 		}
 		if st.CloseByHand {
 			r, err := p.ref(st.Item)

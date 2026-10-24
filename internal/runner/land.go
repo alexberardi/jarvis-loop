@@ -56,10 +56,13 @@ type LandPR struct {
 	BaseRefName      string
 	Mergeable        string // MERGEABLE, CONFLICTING, UNKNOWN
 	MergeStateStatus string // CLEAN, BEHIND, BLOCKED, DIRTY, ...
-	Title            string
-	Body             string
-	MergeCommit      string // set once merged
-	Checks           []Check
+	// ReviewDecision is GitHub's review state: REVIEW_REQUIRED when the base requires an approving
+	// review the PR lacks, APPROVED, CHANGES_REQUESTED, or "" when the base requires none.
+	ReviewDecision string
+	Title          string
+	Body           string
+	MergeCommit    string // set once merged
+	Checks         []Check
 }
 
 // WorkflowRun is one Actions run on a commit (main's CI after a merge).
@@ -177,7 +180,8 @@ func ciWaitEnded(d Decision, pr LandPR, it Item, runStart, now time.Time, giveUp
 }
 
 // Decide runs the gates in the spec's order (docs/phases/06-land.md): the PR, review approval
-// for this head, the changed paths, a conflict, CI, harness evidence, hold, mergeable. The first
+// for this head, the changed paths, a conflict, CI, harness evidence, hold, a GitHub review,
+// mergeable. The first
 // gate that does not pass decides.
 func Decide(f LandFacts) Decision {
 	pr := f.PR
@@ -279,6 +283,15 @@ func Decide(f LandFacts) Decision {
 	if f.Hold && f.ApprovedHead != pr.HeadRefOid {
 		return advance("hold", map[string]string{"reason": "on the hold list", "head_sha": pr.HeadRefOid})
 	}
+	// 6b. A GitHub review the base requires: the loop cannot give one, so the item waits in land
+	// for the user's approval on GitHub instead of a merge GitHub refuses (#588,
+	// docs/decisions/2026-10-24-land-waits-for-github-review.md).
+	switch pr.ReviewDecision {
+	case "REVIEW_REQUIRED":
+		return advance("review_pending", map[string]string{"review": pr.ReviewDecision, "head_sha": pr.HeadRefOid})
+	case "CHANGES_REQUESTED":
+		return failed("PR #%d: a GitHub review requested changes; address them, or dismiss the review on GitHub", pr.Number)
+	}
 	// 7. Mergeable.
 	if pr.Mergeable == "MERGEABLE" {
 		return Decision{Action: ActMerge} // a BEHIND head was updated at 3d; main's CI catches the rest
@@ -372,7 +385,7 @@ func outsideDocs(paths []string) []string {
 }
 
 // landViewFields are the PR fields LandView asks gh for.
-const landViewFields = "number,title,state,isDraft,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,body,mergeCommit,statusCheckRollup"
+const landViewFields = "number,title,state,isDraft,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,body,mergeCommit,statusCheckRollup"
 
 // ParseLandView reads gh pr view's JSON (landViewFields). The checks come from the status
 // rollup of the head commit: check runs and commit statuses, one per name (a re-run replaces
@@ -388,6 +401,7 @@ func ParseLandView(raw []byte) (LandPR, error) {
 		BaseRefName      string `json:"baseRefName"`
 		Mergeable        string `json:"mergeable"`
 		MergeStateStatus string `json:"mergeStateStatus"`
+		ReviewDecision   string `json:"reviewDecision"`
 		Body             string `json:"body"`
 		MergeCommit      *struct {
 			Oid string `json:"oid"`
@@ -412,7 +426,8 @@ func ParseLandView(raw []byte) (LandPR, error) {
 		return LandPR{}, fmt.Errorf("gh pr view: no PR in the answer")
 	}
 	pr := LandPR{Number: v.Number, Title: v.Title, State: v.State, IsDraft: v.IsDraft, HeadRefName: v.HeadRefName, HeadRefOid: v.HeadRefOid,
-		BaseRefName: v.BaseRefName, Mergeable: v.Mergeable, MergeStateStatus: v.MergeStateStatus, Body: v.Body}
+		BaseRefName: v.BaseRefName, Mergeable: v.Mergeable, MergeStateStatus: v.MergeStateStatus,
+		ReviewDecision: v.ReviewDecision, Body: v.Body}
 	if v.MergeCommit != nil {
 		pr.MergeCommit = v.MergeCommit.Oid
 	}

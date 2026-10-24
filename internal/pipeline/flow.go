@@ -30,6 +30,9 @@ const (
 	// WaitCIPending: land put it back after CI stayed pending (ci_pending); it is claimed again at
 	// its not-before time (Item.Deferred).
 	WaitCIPending = "CI pending, checking again later"
+	// WaitReviewPending: land put it back while its PR waits for an approving GitHub review
+	// (review_pending); it is claimed again at its not-before time.
+	WaitReviewPending = "waiting for a GitHub review"
 	// WaitReady: nothing holds it; it goes to the next runner that asks for its stage.
 	WaitReady = "ready"
 )

@@ -377,7 +377,7 @@ func (r *Runner) landAdvance(ctx context.Context, lr *landRun, d Decision, paths
 	if d.Outcome == "merged" && lr.repo.QAAfterDeploy {
 		fields["qa_after_deploy"] = "true" // and asks for the check once a build with it runs
 	}
-	if d.Outcome == "failed" || d.Outcome == "ci_pending" {
+	if d.Outcome == "failed" || d.Outcome == "ci_pending" || d.Outcome == "review_pending" {
 		paths = nil
 	}
 	err := r.Client.Advance(ctx, lr.item.ID, d.Outcome, fields, paths)

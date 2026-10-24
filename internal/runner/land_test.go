@@ -166,6 +166,19 @@ func TestDecide(t *testing.T) {
 		{"hold approved for this head", func(f *LandFacts) { f.Hold, f.ApprovedHead = true, headA }, ActMerge, "", ""},
 		{"a conflict beats hold", func(f *LandFacts) { f.Hold, f.PR.Mergeable = true, "CONFLICTING" }, ActConflict, "", ""},
 		{"approval without hold is harmless", func(f *LandFacts) { f.ApprovedHead = headB }, ActMerge, "", ""},
+		// 6b. a GitHub review the base requires (#588): the loop cannot give it, so it waits for one
+		{"review required", func(f *LandFacts) { f.PR.MergeStateStatus, f.PR.ReviewDecision = "BLOCKED", "REVIEW_REQUIRED" }, ActAdvance, "review_pending", "head_sha=" + headA},
+		{"review required: names it", func(f *LandFacts) { f.PR.MergeStateStatus, f.PR.ReviewDecision = "BLOCKED", "REVIEW_REQUIRED" }, ActAdvance, "review_pending", "review=REVIEW_REQUIRED"},
+		{"review approved on GitHub", func(f *LandFacts) { f.PR.ReviewDecision = "APPROVED" }, ActMerge, "", ""},
+		{"changes requested on GitHub", func(f *LandFacts) { f.PR.MergeStateStatus, f.PR.ReviewDecision = "BLOCKED", "CHANGES_REQUESTED" }, ActAdvance, "failed", "error=requested changes"},
+		{"CI pending beats review required", func(f *LandFacts) {
+			f.PR.ReviewDecision = "REVIEW_REQUIRED"
+			f.PR.Checks = []Check{{Name: "check", Bucket: BucketPending}}
+		}, ActWait, "", ""},
+		{"hold beats review required", func(f *LandFacts) { f.Hold, f.PR.ReviewDecision = true, "REVIEW_REQUIRED" }, ActAdvance, "hold", ""},
+		{"held and approved, review still required", func(f *LandFacts) {
+			f.Hold, f.ApprovedHead, f.PR.ReviewDecision = true, headA, "REVIEW_REQUIRED"
+		}, ActAdvance, "review_pending", ""},
 		// 7. mergeable
 		{"conflicting", func(f *LandFacts) { f.PR.Mergeable = "CONFLICTING" }, ActConflict, "", ""},
 		{"mergeability unknown", func(f *LandFacts) { f.PR.Mergeable = "UNKNOWN" }, ActWait, "", ""},
@@ -202,7 +215,7 @@ func TestParseLandView(t *testing.T) {
 		t.Fatal(err)
 	}
 	if pr.Number != 7 || pr.Title != "Show the repo" || pr.State != "OPEN" || pr.HeadRefName != "loop/7-show-the-repo" || pr.HeadRefOid != headA ||
-		pr.BaseRefName != "main" || pr.Mergeable != "MERGEABLE" || pr.MergeStateStatus != "BEHIND" || pr.MergeCommit != "" ||
+		pr.BaseRefName != "main" || pr.Mergeable != "MERGEABLE" || pr.MergeStateStatus != "BEHIND" || pr.ReviewDecision != "REVIEW_REQUIRED" || pr.MergeCommit != "" ||
 		!strings.Contains(pr.Body, VerificationTrailer) {
 		t.Fatalf("pr %+v", pr)
 	}

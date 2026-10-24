@@ -94,6 +94,10 @@ const (
 	// CIPending is land giving back its lease while the PR's CI is still pending (not failed): the
 	// item stays in land and is claimed again after LandRequeueAfter (cipending.go).
 	CIPending Outcome = "ci_pending"
+	// ReviewPending is land giving back its lease while the PR waits for an approving GitHub review
+	// its base requires (which the loop cannot give): the item stays in land and is checked again
+	// after ReviewRecheckAfter, with no give-up (reviewpending.go).
+	ReviewPending Outcome = "review_pending"
 )
 
 // Risk values set by triage.
@@ -220,8 +224,12 @@ type Item struct {
 	NotBefore      time.Time `json:"not_before,omitzero"`
 	CIPendingSince time.Time `json:"ci_pending_since,omitzero"`
 	CIPendingSHA   string    `json:"ci_pending_sha,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	// ReviewPendingSHA and ReviewPendingSince are the head that waits for a GitHub review, and
+	// since when (review_pending, reviewpending.go).
+	ReviewPendingSHA   string    `json:"review_pending_sha,omitempty"`
+	ReviewPendingSince time.Time `json:"review_pending_since,omitzero"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // ValidPriority reports whether p is P1–P5.
@@ -396,6 +404,9 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 
 	if a.Outcome != CIPending {
 		it.NotBefore, it.CIPendingSince, it.CIPendingSHA = time.Time{}, time.Time{}, ""
+	}
+	if a.Outcome != ReviewPending {
+		it.ReviewPendingSHA, it.ReviewPendingSince = "", time.Time{}
 	}
 
 	switch a.Outcome {
@@ -721,6 +732,10 @@ func ApplyAdvance(it Item, a Advance, now time.Time) (Transition, error) {
 		it = toNeedsYou(it, from, msg)
 	case CIPending:
 		if err := applyCIPending(&it, f, data, now); err != nil {
+			return Transition{}, err
+		}
+	case ReviewPending:
+		if err := applyReviewPending(&it, f, data, now); err != nil {
 			return Transition{}, err
 		}
 	}

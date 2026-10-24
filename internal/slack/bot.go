@@ -440,7 +440,7 @@ func itemRefs(ids []int64) string {
 }
 
 // landWaiting is what a land run has been waiting on for a while (its land_waiting event, or the
-// ci_pending that put it back in the land queue, while that is the item's latest), for the
+// ci_pending or review_pending that put it back in the land queue, while that is the item's latest), for the
 // parent's stage line: ", waiting for CI (check) since 14:05 UTC".
 func landWaiting(d store.Detail) string {
 	if d.Item.Stage != pipeline.Land || len(d.Events) == 0 {
@@ -448,8 +448,8 @@ func landWaiting(d store.Detail) string {
 	}
 	e := d.Events[len(d.Events)-1]
 	requeued := false // nobody holds it: the ci_pending's not-before is when it is checked next
-	if e.Kind == "claimed" && e.Data["ci_pending"] == true && len(d.Events) > 1 {
-		e = d.Events[len(d.Events)-2] // land again after ci_pending: still that wait
+	if e.Kind == "claimed" && (e.Data["ci_pending"] == true || e.Data["review_pending"] == true) && len(d.Events) > 1 {
+		e = d.Events[len(d.Events)-2] // land again after ci_pending or review_pending: still that wait
 	} else {
 		requeued = true
 	}
@@ -459,6 +459,8 @@ func landWaiting(d store.Detail) string {
 		out = ", waiting for " + Escape(Clip(str(e.Data, "waiting_for"), 120, ""))
 	case e.Kind == "advanced" && pipeline.Outcome(e.Outcome) == pipeline.CIPending:
 		out = ", waiting for " + Escape(Clip(str(e.Data, "wait"), 120, ""))
+	case e.Kind == "advanced" && pipeline.Outcome(e.Outcome) == pipeline.ReviewPending:
+		out = ", waiting for a GitHub review"
 	default:
 		return ""
 	}
@@ -658,8 +660,8 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 	var text string
 	switch e.Kind {
 	case "claimed":
-		if e.Data["ci_pending"] == true {
-			return Message{}, false // land again after ci_pending: the parent's stage line says it
+		if e.Data["ci_pending"] == true || e.Data["review_pending"] == true {
+			return Message{}, false // land again after ci_pending or review_pending: the parent's stage line says it
 		}
 		text = fmt.Sprintf("Claimed for %s.", e.From)
 		if str(e.Data, "routed") == pipeline.BuilderQwen {
@@ -880,6 +882,12 @@ func (b *Bot) describe(ctx context.Context, e store.Event, d store.Detail) (Mess
 			text = "Back to review: " + f("notes", 400)
 		case pipeline.CIPending:
 			return Message{}, false // still pending CI does not post; the parent's stage line says it
+		case pipeline.ReviewPending:
+			if e.Data["first"] != true {
+				return Message{}, false // still waiting on the same head: said once, the stage line says it
+			}
+			text = fmt.Sprintf("<@%s> %s waits for your GitHub review: %s (head `%s`) needs an approving review its base requires, which the loop cannot give. Approve it on GitHub; land checks again every %d minutes and merges it then.",
+				Approver, ref(id, it.Title), b.prLink(it), short(str(e.Data, "head_sha")), int(pipeline.ReviewRecheckAfter/time.Minute))
 		default:
 			text = fmt.Sprintf("%s → %s.", Escape(e.Outcome), e.To)
 		}
