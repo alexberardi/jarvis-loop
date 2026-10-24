@@ -25,7 +25,7 @@ type Git struct {
 func (g Git) env() []string {
 	src := g.Env
 	if src == nil {
-		src = scrubEnv(os.Environ())
+		src = ScrubEnv(os.Environ())
 	}
 	return append(append([]string{}, src...), "GIT_TERMINAL_PROMPT=0")
 }

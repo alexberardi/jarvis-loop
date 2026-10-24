@@ -453,7 +453,7 @@ func TestHarnessRealClaude(t *testing.T) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, claude, ClaudeArgs(AgentArgs{Mode: ModeAuto, Settings: sp})...)
 	cmd.Dir = wt
-	cmd.Env = append(prependPath(scrubEnv(nil), g.r.Cfg.harnessBinDir()), guard.ConfigEnv+"="+filepath.Join(dir, "guard.json"),
+	cmd.Env = append(prependPath(ScrubEnv(nil), g.r.Cfg.harnessBinDir()), guard.ConfigEnv+"="+filepath.Join(dir, "guard.json"),
 		"CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "ENABLE_CLAUDEAI_MCP_SERVERS=false")
 	cmd.Stdin = strings.NewReader("Run exactly one Bash command, with the sandbox on (do not ask to disable it): loop-harness run 'echo ok'\n" +
 		"Then reply with its output and exit code. Do nothing else.\n")

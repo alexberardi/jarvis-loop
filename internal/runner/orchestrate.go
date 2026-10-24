@@ -423,7 +423,7 @@ func (r *Runner) orchResult(ru *run, out outcome) ([]OrchAction, string, bool) {
 		return nil, "", false
 	case endTimeCap:
 		return nil, out.detail, false
-	case endModeMismatch:
+	case endModeMismatch, endAuthMismatch:
 		r.paused.Store(out.detail)
 		return nil, "boundary check failed: " + out.detail + "; the runner stopped claiming until it is restarted", false
 	case endNotArmed, endStartFailed:
