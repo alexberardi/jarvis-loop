@@ -82,13 +82,23 @@ func (e *env) do(tok, method, path string, body any, wantStatus int, out any) {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != wantStatus {
-		e.t.Fatalf("%s %s: status %d, want %d: %s", method, path, resp.StatusCode, wantStatus, raw)
+		e.t.Fatalf("%s %s: status %d, want %d: %s", method, path, resp.StatusCode, wantStatus, clip(raw))
 	}
 	if out != nil {
 		if err := json.Unmarshal(raw, out); err != nil {
 			e.t.Fatalf("%s %s: decode %s: %v", method, path, raw, err)
 		}
 	}
+}
+
+// clip keeps a failure message readable when the body is not JSON: GET /backup answering a
+// refused token with 200 would otherwise print the whole archive.
+func clip(b []byte) []byte {
+	const max = 512
+	if len(b) <= max {
+		return b
+	}
+	return append(b[:max:max], fmt.Sprintf("… (%d bytes)", len(b))...)
 }
 
 type apiErr struct {

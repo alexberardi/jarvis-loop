@@ -183,6 +183,10 @@ curl -fsS -H "Authorization: Bearer $LOOP_TOKEN" https://jarvis-loopd.fly.dev/it
 - **Slack**: `/loop status` in `#loop` answers, and only once (prod's loopd must be stopped).
 - **Disk**: `fly volumes list --app jarvis-loopd` — if the volume is over about 70% full, extend it
   now rather than at 100%, where SQLite starts failing writes.
+- **The used archive**: once all of the above passes, delete `/data/restore.tar.gz.done-<timestamp>`
+  (in `fly ssh sftp shell`, if its `rm` is there; otherwise leave it). It is a whole copy of the
+  pre-move data taking volume space; the nightly backup already leaves it out, so keeping it costs
+  disk and nothing else.
 
 ## 7. Point the clients at it
 

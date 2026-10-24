@@ -123,6 +123,44 @@ func TestBackupClearsALeftoverSnapshot(t *testing.T) {
 	}
 }
 
+// The restore archive loop-entrypoint unpacked, and one still waiting, stay out of the archive:
+// each is a copy of the data the archive already holds, and a used one is never deleted, so
+// otherwise it would be the largest entry in every nightly backup after the data move.
+func TestBackupLeavesOutRestoreArchives(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	s, err := Open(dir, clock.NewFake(time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, n := range []string{restoreArchive, restoreArchive + ".done-20261023T120000Z"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("the pre-move dataset"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A name that only starts like one is still data.
+	if err := os.WriteFile(filepath.Join(dir, "restore.tar.gz.notes"), []byte("kept"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := s.Backup(ctx, &buf); err != nil {
+		t.Fatal(err)
+	}
+	files := untar(t, buf.Bytes())
+	for _, gone := range []string{restoreArchive, restoreArchive + ".done-20261023T120000Z"} {
+		if _, ok := files[gone]; ok {
+			t.Errorf("the archive holds %s", gone)
+		}
+	}
+	if _, ok := files["restore.tar.gz.notes"]; !ok {
+		t.Errorf("restore.tar.gz.notes was left out: %v", keys(files))
+	}
+	if _, ok := files["loop.db"]; !ok {
+		t.Errorf("no loop.db in the archive: %v", keys(files))
+	}
+}
+
 func untar(t *testing.T, b []byte) map[string][]byte {
 	t.Helper()
 	gz, err := gzip.NewReader(bytes.NewReader(b))

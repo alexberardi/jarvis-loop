@@ -1,7 +1,11 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -19,6 +23,9 @@ import (
 // scripts/loopd-backup against a real loopd handler: the nightly pull off the machine
 // (docs/decisions/2026-10-23-loopd-on-fly.md). It keeps an archive it has checked, at 0600, and
 // prunes the old ones.
+//
+// The script is not a Go file, so `go test` caches this result across changes to it: run it with
+// -count=1 after editing scripts/loopd-backup.
 func TestBackupScript(t *testing.T) {
 	for _, bin := range []string{"bash", "curl", "tar", "gzip", "find"} {
 		if _, err := exec.LookPath(bin); err != nil {
@@ -150,6 +157,77 @@ func TestBackupScript(t *testing.T) {
 		after, _ := filepath.Glob(filepath.Join(out, "loop-backup-*"))
 		if len(after) != len(before) {
 			t.Errorf("%s: left %d archives, had %d", c.name, len(after), len(before))
+		}
+	}
+
+	// A 200 carrying a bad archive: loopd cannot change the status once the body has begun
+	// (internal/api/backup.go), so a Store.Backup that fails mid-stream reaches curl as a clean,
+	// complete 200. Only the script's own checks stand between that and a kept, corrupt backup, so
+	// each case is one of them, and asserts its message: with a check removed, the case is either
+	// kept or refused by a later check for a different reason, and fails either way.
+	var good bytes.Buffer
+	if err := st.Backup(t.Context(), &good); err != nil {
+		t.Fatal(err)
+	}
+	gz := func(b []byte) []byte {
+		var buf bytes.Buffer
+		w := gzip.NewWriter(&buf)
+		if _, err := w.Write(b); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	var noDB bytes.Buffer
+	tw := tar.NewWriter(&noDB)
+	body := []byte("not a png")
+	if err := tw.WriteHeader(&tar.Header{Name: "evidence/1/after.png", Mode: 0o600, Size: int64(len(body))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	listing := func() []string {
+		t.Helper()
+		es, err := os.ReadDir(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, e := range es {
+			names = append(names, e.Name())
+		}
+		return names
+	}
+	for _, c := range []struct {
+		name  string
+		serve []byte
+		want  string
+	}{
+		{"half an archive", good.Bytes()[:good.Len()/2], "not valid gzip"},
+		{"gzip that is not a tar", gz(bytes.Repeat([]byte("not a tar "), 200)), "not a readable tar"},
+		{"a tar with no loop.db", gz(noDB.Bytes()), "has no loop.db"},
+	} {
+		bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/gzip")
+			_, _ = w.Write(c.serve)
+		}))
+		before := listing()
+		log, err := run("LOOP_TOKEN="+userTok, "LOOP_URL="+bad.URL)
+		bad.Close()
+		if err == nil {
+			t.Errorf("%s: loopd-backup kept it\n%s", c.name, log)
+		}
+		if !strings.Contains(log, c.want) {
+			t.Errorf("%s: log does not say %q:\n%s", c.name, c.want, log)
+		}
+		if after := listing(); strings.Join(after, "\n") != strings.Join(before, "\n") {
+			t.Errorf("%s: the backup directory changed: %v, was %v", c.name, after, before)
 		}
 	}
 }

@@ -17,6 +17,12 @@ import (
 // somewhere the next Backup clears rather than in the image's ephemeral /tmp.
 const backupTmp = "backup.tmp"
 
+// restoreArchive is the archive loop-entrypoint unpacks onto an empty volume, and renames to
+// restoreArchive+".done-<stamp>" once it has (cmd/loop-entrypoint/restore.go). Neither is data: it
+// is a copy of what the archive already holds, already compressed, so Backup leaves both out
+// rather than carry the whole pre-move dataset in every nightly copy.
+const restoreArchive = "restore.tar.gz"
+
 // Backup writes a gzipped tar of everything worth keeping to w: loop.db, and every other file
 // under the data directory (evidence/, regressions/).
 //
@@ -59,7 +65,7 @@ func (s *Store) Backup(ctx context.Context, w io.Writer) error {
 	// Everything else under the data directory, by its path relative to it: the evidence and
 	// regression files the database's rows point at, and anything added later. The live database
 	// files are left out: loop.db is the snapshot above, and its -wal and -shm say nothing
-	// without the writer that owns them.
+	// without the writer that owns them. A restore archive, used or not, is left out too.
 	skip := map[string]bool{"loop.db": true, "loop.db-wal": true, "loop.db-shm": true, backupTmp: true}
 	err := filepath.WalkDir(s.dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -72,7 +78,7 @@ func (s *Store) Backup(ctx context.Context, w io.Writer) error {
 		if rel == "." {
 			return nil
 		}
-		if skip[rel] {
+		if skip[rel] || rel == restoreArchive || strings.HasPrefix(rel, restoreArchive+".done-") {
 			if d.IsDir() {
 				return fs.SkipDir
 			}
