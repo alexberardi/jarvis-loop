@@ -545,6 +545,9 @@ func (f *Flow) waiting(tx *sql.Tx, cs claimState, now time.Time) error {
 		}
 		if why != "" && it.Deferred(now) {
 			why = pipeline.WaitCIPending
+			if it.ReviewPendingSHA != "" {
+				why = pipeline.WaitReviewPending
+			}
 		}
 		if why == "" {
 			continue

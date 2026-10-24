@@ -1,0 +1,60 @@
+{
+  "name": "land-waits-for-github-review",
+  "about": "#588: the repo's base requires an approving GitHub review (as jarvis-server and jarvis-node-mobile do, #583 and #524), which the loop cannot give. CI is green, so before merging land reads reviewDecision REVIEW_REQUIRED: it does not call gh pr merge (which GitHub refuses with 'the base branch policy prohibits the merge'), and does not go to needs_you. It reports review_pending: the item stays in land, unleased; the thread gets the PR link once, asking the user to approve on GitHub. Land checks again every 10 minutes, quietly; once the user approves on GitHub, the next check merges it.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Fix the digest wording"},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "github", "require_review": true},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"}, "leased": {"a": false}, "pr": {"a": {"state": "OPEN", "merge_calls": 0}},
+     "messages": [
+       {"parent": "a", "text": "Stage \\*land( \\(queued\\))?, waiting for a GitHub review since \\d\\d:\\d\\d UTC, checking again at \\d\\d:\\d\\d UTC"},
+       {"thread": "a", "text": "waits for your GitHub review: <https://github.com/sandbox/demo/pull/101\\|sandbox/demo#101> \\(head `[0-9a-f]{7}`\\) needs an approving review its base requires, which the loop cannot give\\. Approve it on GitHub; land checks again every 10 minutes and merges it then\\.$"}
+     ],
+     "no_messages": [{"thread": "a", "text": "needs you|not mergeable|policy prohibits"}]},
+    {"do": "clock", "advance": "5m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "5m"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "land"}, "leased": {"a": false}, "pr": {"a": {"state": "OPEN", "merge_calls": 0}}},
+    {"do": "github", "item": "a", "approve_review": true},
+    {"do": "clock", "advance": "10m"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"}
+  ],
+  "expect": {
+    "stage": {"a": "done"},
+    "leased": {"a": false},
+    "pr": {"a": {"number": 101, "state": "MERGED", "merge_calls": 1}},
+    "events": [
+      {"item": "a", "kind": "advanced", "outcome": "review_pending", "actor": "runner",
+       "data": {"review": "^REVIEW_REQUIRED$", "head_sha": "^[0-9a-f]{40}$", "since": "Z$", "not_before": "Z$"}, "count": 2},
+      {"item": "a", "kind": "advanced", "outcome": "review_pending", "data": {"first": "^true$"}, "count": 1},
+      {"item": "a", "kind": "claimed", "data": {"review_pending": "^true$"}, "count": 2},
+      {"item": "a", "kind": "advanced", "outcome": "merged", "actor": "runner", "count": 1}
+    ],
+    "no_events": [
+      {"item": "a", "kind": "advanced", "outcome": "failed"},
+      {"item": "a", "kind": "advanced", "outcome": "hold"},
+      {"item": "a", "kind": "lease_expired"},
+      {"item": "a", "kind": "retried"}
+    ],
+    "messages": [
+      {"thread": "a", "text": "^Claimed for land\\.$"},
+      {"thread": "a", "text": "waits for your GitHub review"},
+      {"thread": "a", "text": "^Merged <https://github.com/sandbox/demo/pull/101\\|sandbox/demo#101> as `[0-9a-f]{7}`; watching main's CI\\.$"}
+    ],
+    "no_messages": [
+      {"thread": "a", "text": "needs you|review_pending|policy prohibits"}
+    ]
+  }
+}
