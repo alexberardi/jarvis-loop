@@ -132,7 +132,9 @@ func TestProbeGo(t *testing.T) {
 	if err := g.r.ProbeFence(); err != nil {
 		t.Fatalf("bubblewrap cannot run here (the runner needs it): %v", err)
 	}
-	bin := t.TempDir()
+	// Under the work root, which the fence binds in: it puts a private tmpfs over /tmp, where
+	// t.TempDir() is on CI.
+	bin := filepath.Join(g.r.Config().WorkRoot, "probe-go")
 	env := g.r.Env
 	for _, c := range []struct{ name, script, want string }{
 		{"no vet", "echo 'go: no such tool \"vet\"' >&2; exit 2", `go: no such tool "vet"`},
@@ -141,7 +143,9 @@ func TestProbeGo(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			path := filepath.Join(bin, c.name)
-			os.MkdirAll(path, 0o755)
+			if err := os.MkdirAll(path, 0o755); err != nil {
+				t.Fatal(err)
+			}
 			sh, err := exec.LookPath("bash") // the fence runs the command with bash
 			if err != nil {
 				t.Fatal(err)
