@@ -29,3 +29,29 @@ the `proof-toolchain-error` scenario.
   recorded on the item, never counted toward the reopen. **`[build failed]` still strikes**, and so
   does any fast failure without one of these signatures: the merged change may be exactly what the
   command tests for (2026-10-19 stands).
+
+## Addendum 2026-10-24: a runner checks its own Go (#591)
+
+`envFailure` keeps a broken toolchain from striking, but the mbp still ran every due Go proof,
+overwrote its evidence with "could not run: go: no such tool" each pass, and errored any Go verify
+it claimed. Now the runner checks its Go (`internal/runner/toolchain.go`): `go tool vet -h`
+(`go test` runs vet), fenced in the agent's environment as proofs run, judged by `envFailure`
+(exit 127, `no such tool`, no GOROOT, `mise ERROR`; vet's own usage exit is a working Go). It
+checks lazily, on the first proof pass or claim and again at most every `GoToolchainEvery` (an
+hour), and warns once when Go breaks. While it is broken:
+
+- **`CheckProofs` skips a command check that runs go** (`runsGo`: `go <word>` at a command
+  boundary, whatever the repo): not run, not reported, so it stays pending for a healthy runner,
+  like the missing-fence path. Its other checks run.
+- **A claim outside land names no Go repo** (`claimRepos`): one whose base has a `go.mod` in the
+  runner's mirror, or whose prepare, setup or verify commands run go. Filtering the claim's repos
+  (#467's `repos`) is the least invasive way: loopd gives the work to another runner, and builds,
+  reviews and triage (which run go too) are covered with verify. A land claim is unfiltered (it
+  runs no go). With no repo left, the runner claims only plan and orchestrate turns.
+
+Not chosen: retrying on another runner (a `CheckError` already leaves the check pending, and a
+healthy runner passes it), or marking the runner unhealthy in loopd (a server change for what the
+runner can decide alone). Reporting the runner's build revision in `loop runners` was left out:
+it touches loopd's runner table and the board, more than this item.
+Enforced by `TestGoBrokenRunnerLeavesGoProofs`, `TestGoBrokenRunnerClaimsNoGoRepoWork`,
+`TestProbeGo` and the `proof-go-broken` scenario.
