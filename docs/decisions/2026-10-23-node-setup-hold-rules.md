@@ -85,18 +85,11 @@ change there would rewrite the lists earlier loopds shipped.
   sandbox repo. The hold path itself is already covered (scenarios 17, 23); what is new here is
   which paths match, which the table tests prove.
 
-## Also in this PR: the race step gets 20 minutes per test binary
+## The CI timeout this branch hit: fixed on main by #539
 
 CI (`ci/check`) failed on the first commit of this branch with `panic: test timed out after 12m0s`
-in `internal/runner` and **no failing test** — the binary was 88% of the way through its 286 tests
-(by the elapsed times it reports here) when the alarm fired. `go test ./...` runs the packages
-`GOMAXPROCS` at a time, so on a 4-core GitHub runner the slowest binary shares a core with three
-other heavy ones (`internal/sandbox` 689 s, `internal/store` 585 s, `internal/slack` 432 s in that
-run), and 12m stopped being enough as the suite grew. This change is nothing the hold rules did:
-`internal/runner` takes 230.1 s with `holdrules.go` reset to `origin/main` and 228.1 s at this
-head, the same 286 tests either way.
-
-`-timeout 20m` keeps the point of the flag — a hung test prints its goroutines before the job's
-25-minute cap cuts the job off — and costs no wall time, since the step already runs ~14 minutes of
-work. If the suite keeps growing, the next step is splitting the slow packages into their own job
-so each binary gets the whole runner, not a longer budget.
+in `internal/runner` and **no failing test**: the binary was 88% of the way through its 286 tests
+when the alarm fired, and it takes the same time with `holdrules.go` reset to `origin/main`
+(230.1 s) as at this head (228.1 s). The branch raised the race step to `-timeout 20m`; main then
+made the same change in #539 (`-timeout 20m -p 2`, job cap 35 minutes), so the merge takes main's
+`ci.yml` and this PR no longer touches CI.
