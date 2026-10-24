@@ -1006,3 +1006,35 @@ func TestAddItemResolvesRepo(t *testing.T) {
 		t.Errorf("orchestrator add, unknown repo: %v", err)
 	}
 }
+
+// A host crash before the cap, swept hours later (#592): the lease expired (the item waits in its
+// stage again, with the run's last tool call on the event), not overtime (no needs_you).
+func TestOutageBeforeTheCapIsExpired(t *testing.T) {
+	s, clk := open(t)
+	ctx := context.Background()
+	it := add(t, s, "x", "")
+	c := claim(t, s, "a")
+	clk.Advance(time.Minute)
+	act := &pipeline.Activity{Phase: "triage agent", ToolCalls: 9, Recent: []string{"Read: go.mod", "Bash: go test -race ./internal/runner/"}}
+	if _, err := s.HeartbeatActivity(ctx, runner, c.Lease.ID, "agent running: 9 tool calls", act); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(7*time.Hour + 20*time.Minute)
+	if err := s.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := s.GetItem(ctx, it.ID)
+	if d.Lease != nil || d.Item.Stage != pipeline.Triage || d.Item.Question != "" {
+		t.Fatalf("after the outage: lease %+v item %+v", d.Lease, d.Item)
+	}
+	last := d.Events[len(d.Events)-1]
+	if last.Kind != "lease_expired" || last.Data["note"] != "agent running: 9 tool calls" ||
+		last.Data["last_tool"] != "Bash: go test -race ./internal/runner/" {
+		t.Fatalf("last event: %+v", last)
+	}
+	for _, e := range d.Events {
+		if e.Kind == "run_overtime" {
+			t.Fatalf("overtime after an outage: %+v", e)
+		}
+	}
+}

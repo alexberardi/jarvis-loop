@@ -162,7 +162,12 @@ func TestJudgeLease(t *testing.T) {
 		{"at expiry", t0, t0.Add(5 * time.Minute), t0.Add(5 * time.Minute), LeaseExpired},
 		{"heartbeats kept it alive", t0, t0.Add(44 * time.Minute), t0.Add(40 * time.Minute), LeaseLive},
 		{"past max run", t0, t0.Add(50 * time.Minute), t0.Add(45 * time.Minute), LeaseOvertime},
-		{"past max run and expired", t0, t0.Add(30 * time.Minute), t0.Add(46 * time.Minute), LeaseOvertime},
+		{"heartbeated past max run, then expired", t0, t0.Add(47 * time.Minute), t0.Add(50 * time.Minute), LeaseOvertime},
+		{"alive at max run", t0, t0.Add(45 * time.Minute), t0.Add(46 * time.Minute), LeaseOvertime},
+		// The runner went away before the cap (a host crash, #592): it is expired however late
+		// the sweep sees it, so the item goes back to its queue, not to the user.
+		{"expired before max run, swept after it", t0, t0.Add(30 * time.Minute), t0.Add(46 * time.Minute), LeaseExpired},
+		{"outage of hours", t0, t0.Add(6 * time.Minute), t0.Add(7*time.Hour + 20*time.Minute), LeaseExpired},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

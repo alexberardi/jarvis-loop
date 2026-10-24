@@ -68,7 +68,13 @@ func TestQwenOvertimeCounts(t *testing.T) {
 	if c == nil || c.Lease.Builder != pipeline.BuilderQwen {
 		t.Fatalf("claim %+v", c)
 	}
-	clk.Advance(46 * time.Minute)
+	for range 11 { // 44 minutes of heartbeats, then one past the cap
+		clk.Advance(4 * time.Minute)
+		if _, err := s.Heartbeat(ctx, runner, c.Lease.ID, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clk.Advance(2 * time.Minute)
 	if _, err := s.Heartbeat(ctx, runner, c.Lease.ID, ""); err != nil {
 		t.Fatal(err)
 	}

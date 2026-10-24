@@ -21,6 +21,10 @@
   overtime, stopped) also answers `stop: true` rather than an error, so a runner has one rule.
 - **Overtime beats expiry.** If a lease is both past the max run time and unrenewed, it goes to
   needs_you ("run exceeded N minutes"), because the user should hear about a run that long.
+  Only when it was still alive at the cap, though (2026-10-24, #592): a lease that expired
+  before the cap stopped because its runner went away (a host crash, a shutdown), so it is
+  expired however late loopd sweeps it, and the item waits in its stage again. Its
+  `lease_expired` event carries the run's last reported tool call (`last_tool`).
 
 **Why.** Each is the simplest reading of the spec that keeps one runner from acting for another,
 and keeps the evidence gate meaningful.

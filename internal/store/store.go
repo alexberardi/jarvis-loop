@@ -1259,8 +1259,13 @@ func (s *Store) sweep(tx *sql.Tx) error {
 			if err := endLease(tx, l.ID, now, "expired"); err != nil {
 				return err
 			}
+			data := map[string]any{"lease": l.ID, "runner": l.Runner, "agent": l.Agent, "note": l.Note}
+			// The last tool call the run reported: where it was when its runner went quiet (#592).
+			if a := l.Activity; a != nil && len(a.Recent) > 0 {
+				data["last_tool"] = a.Recent[len(a.Recent)-1]
+			}
 			if err := s.event(tx, Event{ItemID: l.ItemID, Actor: "loopd", Kind: "lease_expired", From: string(l.Stage), To: string(l.Stage),
-				Data: map[string]any{"lease": l.ID, "runner": l.Runner, "agent": l.Agent, "note": l.Note}}); err != nil {
+				Data: data}); err != nil {
 				return err
 			}
 		case pipeline.LeaseOvertime:
