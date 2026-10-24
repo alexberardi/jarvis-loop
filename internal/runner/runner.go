@@ -675,6 +675,9 @@ func (r *Runner) prepareAlive(ctx context.Context, ru *run) (string, error) {
 // prepare makes the working directory (per stage), the context files, the brief, the guard
 // config and the settings.
 func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
+	if err := r.emulatorRoute(ru); err != nil {
+		return "", err
+	}
 	os.RemoveAll(ru.dir)
 	if err := os.MkdirAll(ru.dir, 0o700); err != nil {
 		return "", err
@@ -684,10 +687,23 @@ func (r *Runner) prepare(ctx context.Context, ru *run) (string, error) {
 	if ru.hasHarness() {
 		info.Harness = ru.repo.Harness
 		info.HarnessBin = filepath.Join(r.cfgOf(ru).harnessBinDir(), "loop-harness")
+		if key := ru.repo.Harness.Repo; key != "" {
+			info.HarnessDir, info.HarnessRepo = r.harnessDir(ru), key
+			if slug := r.cfgOf(ru).Repos[key].Slug; slug != "" {
+				info.HarnessRepo = slug
+			}
+		}
 	}
 	if ru.stage == StageBuild {
 		for _, v := range ru.repo.Verify {
-			info.Verify = append(info.Verify, v.Name)
+			name := v.Name
+			if len(v.WhenChanged) > 0 {
+				// The agent cannot read the runner's config, so the globs come with the name:
+				// whether the step runs at all is decided by what the agent commits (#546).
+				name += " (only when a path you change matches " + strings.Join(v.WhenChanged, " or ") + ")"
+				info.VerifyConditional = true
+			}
+			info.Verify = append(info.Verify, name)
 		}
 	}
 	var err error
@@ -927,23 +943,63 @@ func (r *Runner) shell(ctx context.Context, dir, command string, limit time.Dura
 }
 
 // agentEnv is the environment for the agent and the runner's helper commands: no loopd or Slack
-// secret.
-func (r *Runner) agentEnv() []string { return scrubEnv(r.Env) }
+// secret, and no Anthropic variable.
+func (r *Runner) agentEnv() []string { return ScrubEnv(r.Env) }
 
-// scrubEnv is src (nil: the runner's own environment) without loopd's and Slack's secrets.
-func scrubEnv(src []string) []string {
+// billingRedirect are the variables outside ANTHROPIC_* that take a run off the subscription:
+// either sends claude to a cloud provider's credentials instead of the OAuth login.
+var billingRedirect = map[string]bool{"CLAUDE_CODE_USE_BEDROCK": true, "CLAUDE_CODE_USE_VERTEX": true}
+
+// ScrubEnv is src (nil: the runner's own environment) without loopd's and Slack's secrets, and
+// without anything that could move an agent run off the user's subscription: every ANTHROPIC_*
+// variable (key, token, base URL, model) and the Bedrock/Vertex switches. The rule is absolute
+// because the runner needs none of them — the agents authenticate with the OAuth login
+// (docs/decisions/2026-10-15-claude-headless-facts.md) — while a stray ANTHROPIC_API_KEY in the
+// runner's own environment would silently bill every run to that key. Every command the runner
+// starts goes through here, fenced ones through fencedEnv on top; it is exported so the loop's own
+// harness applies the same rule rather than a second list of names to keep in step.
+func ScrubEnv(src []string) []string {
 	if src == nil {
 		src = os.Environ()
 	}
 	var out []string
 	for _, kv := range src {
 		k, _, _ := strings.Cut(kv, "=")
-		if k == "LOOP_TOKEN" || k == "LOOP_URL" || strings.HasPrefix(k, "SLACK_") {
+		if k == "LOOP_TOKEN" || k == "LOOP_URL" || strings.HasPrefix(k, "SLACK_") ||
+			strings.HasPrefix(k, "ANTHROPIC_") || billingRedirect[k] {
 			continue
 		}
 		out = append(out, kv)
 	}
 	return out
+}
+
+// wantAPIKeySource is the init event's apiKeySource for subscription auth, the only auth the loop's
+// agents may run on: claude reports "none" when it used the OAuth login and no API key at all. The
+// value was open in docs/decisions/2026-10-15-claude-headless-facts.md until the runner's own saved
+// streams settled it — all 3334 real runs to 2026-10-23 (CLI 2.1.287, every stage, Opus and Sonnet)
+// report "none" and nothing else. Anything else (an API key, an apiKeyHelper, an empty reading from
+// a CLI that stopped saying) ends the run as auth_mismatch and pauses the runner.
+const wantAPIKeySource = "none"
+
+// mismatchFix is what the user has to change before restarting the runner, on a boundary check
+// that paused it. The cause outlives the run either way, which is why the runner stops claiming:
+// auto mode being unavailable, or an Anthropic variable in its environment. A session that reported
+// no auth source at all gets its own advice: an empty reading is also what a CLI that renamed or
+// dropped apiKeySource looks like, and that needs a code change, not an environment one
+// (docs/decisions/2026-10-23-subscription-auth-only.md).
+func mismatchFix(reason, source string) string {
+	switch {
+	case reason != endAuthMismatch:
+		return "Auto mode may be unavailable; the runner stopped claiming until it is restarted (use mode \"strict\" to run without it)."
+	case source == "":
+		return "The session reported no auth source at all, so the loop cannot tell it is the subscription's: check for an " +
+			"ANTHROPIC_* variable in the runner's environment, and that the CLI still reports apiKeySource on the init event " +
+			"(if it stopped, wantAPIKeySource needs a code change). The runner stopped claiming until it is restarted."
+	default:
+		return "The loop's agents run on the subscription only; the runner stopped claiming until it is restarted without " +
+			"any ANTHROPIC_* variable in its environment."
+	}
 }
 
 // Why a run ended.
@@ -953,6 +1009,7 @@ const (
 	endTimeCap      = "time_cap"
 	endShutdown     = "shutdown"
 	endModeMismatch = "mode_mismatch"
+	endAuthMismatch = "auth_mismatch"
 	endNotArmed     = "guard_not_armed"
 	endStartFailed  = "start_failed"
 	endGitTampered  = "git_tampered"
@@ -969,7 +1026,9 @@ type outcome struct {
 }
 
 type streamStats struct {
-	initMode    string
+	initMode string
+	// initAuth is the init event's apiKeySource: where claude got its credentials.
+	initAuth    string
 	sessionID   string
 	lastText    string
 	toolResults int
@@ -1023,6 +1082,7 @@ func (r *Runner) handle(ru *run, st *streamStats, line []byte) (string, string) 
 		Type           string     `json:"type"`
 		Subtype        string     `json:"subtype"`
 		PermissionMode string     `json:"permissionMode"`
+		APIKeySource   string     `json:"apiKeySource"`
 		SessionID      string     `json:"session_id"`
 		Model          string     `json:"model"`
 		RateLimit      *rateLimit `json:"rate_limit_info"`
@@ -1035,12 +1095,19 @@ func (r *Runner) handle(ru *run, st *streamStats, line []byte) (string, string) 
 	}
 	switch {
 	case ev.Type == "system" && ev.Subtype == "init":
+		// Record both boundary readings before asserting either, so a killed run still reports
+		// what it saw (metrics: permission_mode, api_key_source).
 		st.initMode = ev.PermissionMode
+		st.initAuth = ev.APIKeySource
 		st.sessionID = ev.SessionID
 		st.model = ev.Model
 		r.recordBuildSession(ru, ev.SessionID)
 		if want := PermissionMode(r.cfgOf(ru).Mode); ev.PermissionMode != want {
 			return endModeMismatch, fmt.Sprintf("the session started in %q, not %q", ev.PermissionMode, want)
+		}
+		if ev.APIKeySource != wantAPIKeySource {
+			return endAuthMismatch, fmt.Sprintf("the session's auth source is %q, not the subscription's %q",
+				ev.APIKeySource, wantAPIKeySource)
 		}
 	case ev.Type == "assistant" && ev.Message != nil:
 		var blocks []struct {
@@ -1126,6 +1193,23 @@ func (ru *run) hasHarness() bool {
 	return ru.repo.Harness != nil && (ru.stage == StageBuild || ru.stage == StageReview)
 }
 
+// emulatorRoute refuses a build of an item that needs the emulator when this run has no way to
+// one. No agent sandbox has /dev/kvm or the Android tooling and adb is denied outright, so the
+// routes are the harness through the runner (harness.go) and the runner's own verify steps, both
+// of which run in the fence, which has the host's devices. Without either the agent would spend
+// the whole run discovering that wall (#523, #542), so the run fails here instead and the item
+// goes to the user with what to add (#546). Review and triage only get the brief's note: their
+// work does not need the emulator, and triage has no route by design.
+func (r *Runner) emulatorRoute(ru *run) error {
+	if ru.stage != StageBuild || !slices.Contains(ru.item.Resources, pipeline.ResourceEmulator) ||
+		ru.repo.Harness != nil || len(ru.repo.Verify) > 0 {
+		return nil
+	}
+	return fmt.Errorf("item #%d needs the emulator, which no agent's sandbox can reach (no /dev/kvm, no emulator, maestro or adb), "+
+		"and %s has neither a harness for its agents (repos.%s.harness in the runner's config, its \"repo\" the checkout holding the "+
+		"emulator scripts) nor a verify step that would run the flows after the agent", ru.item.ID, ru.repo.Slug, ru.repoKey)
+}
+
 // prependPath puts dir first on env's PATH.
 func prependPath(env []string, dir string) []string {
 	out := append([]string(nil), env...)
@@ -1142,7 +1226,7 @@ func prependPath(env []string, dir string) []string {
 // agent runs, ended as soon as it stops (lease lost and shutdown too), before the runner's own
 // verify, which starts the harness itself.
 func (r *Runner) runAgentHarness(ctx context.Context, ru *run, brief string) outcome {
-	hs, err := r.startHarness(ru)
+	hs, err := r.startHarness(ctx, ru)
 	if err != nil {
 		return outcome{reason: endStartFailed, exitCode: -1, detail: "the harness session: " + err.Error()}
 	}
@@ -1424,6 +1508,9 @@ func (r *Runner) metrics(ru *run, out outcome, f map[string]string) map[string]s
 	if out.stats.initMode != "" {
 		f["permission_mode"] = out.stats.initMode
 	}
+	if out.stats.initAuth != "" {
+		f["api_key_source"] = out.stats.initAuth
+	}
 	if out.stats.sessionID != "" {
 		f["session_id"] = out.stats.sessionID
 	}
@@ -1556,11 +1643,11 @@ func (r *Runner) report(ctx context.Context, ru *run, out outcome, log *slog.Log
 		}
 		r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{"error": detail + ". Last output: " + out.lastOutput()}), nil)
 		return
-	case endModeMismatch:
+	case endModeMismatch, endAuthMismatch:
 		r.paused.Store(out.detail)
-		log.Error("pausing: the agent did not get the permission mode it was started with", "detail", out.detail)
-		r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{"error": "boundary check failed: " + out.detail +
-			". Auto mode may be unavailable; the runner stopped claiming until it is restarted (use mode \"strict\" to run without it)."}), nil)
+		log.Error("pausing: the agent's session is not the one the runner asked for", "reason", out.reason, "detail", out.detail)
+		r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{
+			"error": "boundary check failed: " + out.detail + ". " + mismatchFix(out.reason, out.stats.initAuth)}), nil)
 		return
 	case endNotArmed, endStartFailed, endGitTampered:
 		r.advance(ctx, ru, "failed", r.metrics(ru, out, map[string]string{"error": "boundary check failed (" + out.reason + "): " + out.detail}), nil)

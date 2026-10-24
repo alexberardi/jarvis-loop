@@ -89,7 +89,7 @@ func (g GH) run(ctx context.Context, args ...string) (string, error) {
 	cmd.Dir = g.Dir
 	env := g.Env
 	if env == nil {
-		env = scrubEnv(nil)
+		env = ScrubEnv(nil)
 	}
 	cmd.Env = append(append([]string{}, env...), "GH_PROMPT_DISABLED=1", "NO_COLOR=1")
 	var out, errb bytes.Buffer

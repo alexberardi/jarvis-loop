@@ -280,6 +280,12 @@ func (c RegressionConfig) Timeout() time.Duration {
 type HarnessConfig struct {
 	Up   string `json:"up"`
 	Down string `json:"down"`
+	// Repo, when set, runs up, down and every run in a fresh checkout of that configured repo
+	// (key) at its base branch instead of the agent's worktree, with the worktree writable and
+	// its path in $LOOP_WORKTREE (as the regression run passes --mobile-repo): jarvis-server's
+	// scripts/e2e for a jarvis-node-mobile agent, which has no checkout of it
+	// (docs/decisions/2026-10-23-emulator-claims.md).
+	Repo string `json:"repo,omitempty"`
 	// TimeoutText is a Go duration (default 20m): the limit of up, down and each run.
 	TimeoutText string `json:"timeout,omitempty"`
 
@@ -563,6 +569,14 @@ func (c *Config) normalize() error {
 		if h := r.Harness; h != nil {
 			if strings.TrimSpace(h.Up) == "" || strings.TrimSpace(h.Down) == "" {
 				return fmt.Errorf("config: repo %s: harness needs up and down", name)
+			}
+			if h.Repo != "" {
+				if _, ok := c.Repos[h.Repo]; !ok {
+					return fmt.Errorf("config: repo %s: harness runs in repo %q, which is not configured (use its key)", name, h.Repo)
+				}
+				if h.Repo == name {
+					return fmt.Errorf("config: repo %s: harness repo is the repo itself (leave it out: the harness runs in the agent's worktree)", name)
+				}
 			}
 			if h.TimeoutText != "" {
 				d, err := time.ParseDuration(h.TimeoutText)

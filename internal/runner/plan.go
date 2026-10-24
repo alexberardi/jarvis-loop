@@ -357,9 +357,9 @@ func (r *Runner) reportPlan(ctx context.Context, ru *run, out outcome, log *slog
 	case endTimeCap:
 		r.postTurn(ctx, ru, out, out.detail, log)
 		return
-	case endModeMismatch:
+	case endModeMismatch, endAuthMismatch:
 		r.paused.Store(out.detail)
-		log.Error("pausing: the agent did not get the permission mode it was started with", "detail", out.detail)
+		log.Error("pausing: the agent's session is not the one the runner asked for", "reason", out.reason, "detail", out.detail)
 		r.postTurn(ctx, ru, out, "boundary check failed: "+out.detail+"; the runner stopped claiming until it is restarted", log)
 		return
 	case endNotArmed, endStartFailed:

@@ -102,8 +102,13 @@ const (
 	RiskHold   = "hold"
 )
 
+// ResourceEmulator is the resource of work that needs the devbox's Android emulator: no agent
+// sandbox can reach one (no /dev/kvm, no Android tooling), so such an item's run reaches it
+// through the runner (docs/decisions/2026-10-23-emulator-claims.md).
+const ResourceEmulator = "emulator"
+
 // Resources a runner may offer and an item may need.
-var Resources = []string{"gpu", "voice", "emulator", "macos"}
+var Resources = []string{"gpu", "voice", ResourceEmulator, "macos"}
 
 // Sources an item may come from.
 var Sources = []string{"user", "finding", "nightly", "scout"}

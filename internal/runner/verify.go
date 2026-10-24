@@ -295,7 +295,7 @@ func (r *Runner) runVerify(ctx context.Context, ru *run, head string, changed []
 			}
 		}
 		res, err := r.verifyStep(ctx, ru, i+1, st, head, limit)
-		if err == nil && ru.repo.Harness != nil && verifyEnvFailure(res) {
+		if err == nil && canPurge(ru, st) && verifyEnvFailure(res) {
 			// The sandbox did not come up (a home left over, a seeding error): purge and try once
 			// more before blaming the change (#327).
 			r.Log.Warn("verify failed on its environment; purging and retrying once", "item", ru.item.ID, "step", st.Name, "status", res.Status())
@@ -328,7 +328,7 @@ func (r *Runner) runVerify(ctx context.Context, ru *run, head string, changed []
 // convention for "the harness did not come up", as in PipelineCommand) or envFailure.
 func verifyEnvFailure(v VerifyResult) bool {
 	return v.Skipped == "" && v.Err == "" && !v.TimedOut && v.Masked == "" &&
-		(v.ExitCode == 3 || v.ExitCode != 0 && envFailure(v.ExitCode, v.Log))
+		(v.ExitCode == 3 || v.ExitCode != 0 && envFailure(v.ExitCode, v.Log, time.Duration(v.Seconds)*time.Second))
 }
 
 // verifyEnv is a verify step's (and its purge's) environment, with sandbox as LOOP_SANDBOX.
@@ -339,13 +339,42 @@ func (r *Runner) verifyEnv(ru *run, head, evDir, sandbox string) []string {
 		"LOOP_MIRROR="+ru.mirror)
 }
 
-// purgeSandboxes runs the repo's harness down, fenced in the worktree, for the build agent's
-// sandbox name and for verify's, one after the other, and waits for each: a home left by the
-// agent's harness or an earlier verify would otherwise make the step's up re-seed it and fail
+// canPurge reports whether this verify step has the repo's harness scripts in a directory it can
+// run their down in. The worktree holds them, unless the harness is repo-scoped (harness.repo),
+// in which case only a step in that same repo has a checkout of them: for any other step there is
+// nothing to purge from, and no point retrying a step that failed on its environment (#546).
+func canPurge(ru *run, st VerifyStep) bool {
+	h := ru.repo.Harness
+	return h != nil && (h.Repo == "" || st.Repo == h.Repo)
+}
+
+// harnessDownDir is the directory canPurge's down runs in - the worktree, or the step's own
+// checkout (cwd) when it is the harness's repo - and "" when the step cannot purge at all.
+func harnessDownDir(ru *run, st VerifyStep, cwd string) string {
+	switch {
+	case !canPurge(ru, st):
+		return ""
+	case ru.repo.Harness.Repo == "":
+		return ru.wt
+	}
+	return cwd
+}
+
+// purgeSandboxes runs the repo's harness down in scriptDir (see harnessDownDir) for the build
+// agent's sandbox name and for verify's, one after the other, and waits for each: a home left by
+// the agent's harness or an earlier verify would otherwise make the step's up re-seed it and fail
 // (#327). A down that fails or times out is logged, not fatal (there may be nothing to take down).
-func (r *Runner) purgeSandboxes(ctx context.Context, ru *run, dir, head, evDir string, limit time.Duration) error {
+// An empty scriptDir means no directory in this run holds the scripts; it says so instead of
+// running a command that cannot be there, whose non-zero exit would read as "nothing to take
+// down" (#546).
+func (r *Runner) purgeSandboxes(ctx context.Context, ru *run, dir, head, evDir, scriptDir string, limit time.Duration) error {
 	h := ru.repo.Harness
 	if h == nil {
+		return nil
+	}
+	if scriptDir == "" {
+		r.Log.Warn("verify: the harness down cannot purge here (its scripts are in another repo; give this step repo: "+h.Repo+" to let it)",
+			"item", ru.item.ID, "harness_repo", h.Repo)
 		return nil
 	}
 	if t := h.Timeout(); limit <= 0 || t < limit {
@@ -358,7 +387,7 @@ func (r *Runner) purgeSandboxes(ctx context.Context, ru *run, dir, head, evDir s
 	defer logf.Close()
 	for _, name := range []string{ru.sandbox, ru.verifySandbox} {
 		fmt.Fprintf(logf, "[down %s]\n", name)
-		cmd, err := r.fence(ru.wt, h.Down, r.verifyEnv(ru, head, evDir, name), []string{dir})
+		cmd, err := r.fence(scriptDir, h.Down, r.verifyEnv(ru, head, evDir, name), []string{dir})
 		if err != nil {
 			return fmt.Errorf("the harness down cannot run fenced: %w", err)
 		}
@@ -443,7 +472,7 @@ func (r *Runner) verifyStep(ctx context.Context, ru *run, n int, st VerifyStep, 
 			unlock()
 		}()
 	}
-	if err := r.purgeSandboxes(ctx, ru, dir, head, evDir, limit); err != nil {
+	if err := r.purgeSandboxes(ctx, ru, dir, head, evDir, harnessDownDir(ru, st, cwd), limit); err != nil {
 		return res, err
 	}
 	logPath := filepath.Join(dir, "output.log")

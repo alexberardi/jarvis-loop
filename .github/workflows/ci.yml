@@ -18,8 +18,10 @@ jobs:
   check:
     runs-on: ubuntu-latest
     # The race tests plus the scenarios take about 9 minutes; at 10, a slow runner cancelled most PR
-    # runs and every one came back to the loop as a CI failure (#212).
-    timeout-minutes: 25
+    # runs and every one came back to the loop as a CI failure (#212). Later the heaviest test binary
+    # (internal/runner, 720s CI wall) hit go test's own 12m per-binary timeout (#539), so both caps
+    # got headroom.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -46,11 +48,9 @@ jobs:
         env:
           CGO_ENABLED: "1"
         # Under the job's cap, so a hung test prints its goroutines instead of the job being cut off.
-        # 12m was below what the suite now needs (#549): go test runs the packages GOMAXPROCS at a
-        # time, so on a 4-core runner the slowest binary shares a core with three other heavy ones.
-        # internal/runner (230 s alone on the dev box) had run 88% of its 286 tests when it hit 12m,
-        # with nothing failing, and the step's wall time is unchanged by the longer budget.
-        run: go test -race -timeout 20m ./...
+        # -p 2: the heavy packages (runner, sandbox, store, slack) ran 4-wide on 4 vCPUs, which is
+        # what pushed the slowest one over the per-binary timeout (#539).
+        run: go test -race -timeout 20m -p 2 ./...
       - name: build (CGO off)
         env:
           CGO_ENABLED: "0"

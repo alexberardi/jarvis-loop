@@ -73,9 +73,13 @@ const (
 	UsageLimit      = "usage_limit" // the plan's session limit
 	NoArm           = "noarm"       // run tools without the hooks (settings not applied)
 	WrongMode       = "wrong_mode"  // start in default mode whatever was asked
-	SymlinkEv       = "symlink_evidence"
-	LyingOnce       = "lying_once" // lying, then good on the runner's one retry
-	LowCache        = "low_cache"  // good, but with a cold prompt cache (10% read over 6 turns)
+	// WrongAuth reports an API key as the session's auth source instead of the subscription's
+	// "none", as a run with ANTHROPIC_API_KEY in its environment would. It needs no play body:
+	// the runner kills the run on the init event (auth_mismatch).
+	WrongAuth = "wrong_auth"
+	SymlinkEv = "symlink_evidence"
+	LyingOnce = "lying_once" // lying, then good on the runner's one retry
+	LowCache  = "low_cache"  // good, but with a cold prompt cache (10% read over 6 turns)
 	// SuggestVerify is good, but the agent also leaves a verify script of its own in .loop/ and
 	// asks for it in the PR body; the runner must never run it (it would touch
 	// <scripts dir>/../agent-verify-ran).
@@ -320,6 +324,10 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if scenario == WrongMode {
 		mode = "default"
 	}
+	auth := "none" // what claude reports for subscription (OAuth) auth: no API key at all
+	if scenario == WrongAuth {
+		auth = "ANTHROPIC_API_KEY"
+	}
 	// Sessions: an item run's is named after its scenario; a plan turn starts a session of its own
 	// (one per plan and persona). Any run resumes one (an interrupted build, a plan turn), which,
 	// as claude's, must have been made in the same working directory.
@@ -374,7 +382,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 	} else {
 		f.emit(map[string]any{"type": "system", "subtype": "init", "session_id": f.session, "cwd": f.cwd, "model": "fake-model",
-			"permissionMode": mode, "tools": []string{"Bash", "Read", "Edit", "Write"}, "apiKeySource": "none", "claude_code_version": "fake"})
+			"permissionMode": mode, "tools": []string{"Bash", "Read", "Edit", "Write"}, "apiKeySource": auth, "claude_code_version": "fake"})
 	}
 
 	if scenario == Harness || scenario == HarnessHang {
@@ -455,6 +463,11 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	case WrongMode:
 		f.say("hello from manual mode")
+		f.result("nothing done")
+		return 0
+	case WrongAuth:
+		// Never reached: the runner kills the run on the init event's apiKeySource.
+		f.say("hello from a session on someone else's key")
 		f.result("nothing done")
 		return 0
 	case GitTamper, GitTamperMirror, GitTamperShared:

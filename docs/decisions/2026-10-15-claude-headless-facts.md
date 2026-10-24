@@ -106,6 +106,12 @@ the version it needs. **What the spec got wrong or left open is in bold.**
 
 - First event `{"type":"system","subtype":"init","permissionMode":…,"tools":[…],"model":…,
   "apiKeySource":…,"session_id":…}` (SessionStart hook events may precede it).
+  **`apiKeySource` is `"none"` on subscription auth** — confirmed 2026-10-23 over all 3334 real
+  runs the runner has saved (CLI 2.1.287, every stage, Opus and Sonnet), with no other value
+  ever: `cd <work_root>/runs; for f in */stream.jsonl; do head -5 "$f" | grep -m1
+  '"subtype":"init"'; done | grep -o '"apiKeySource":"[^"]*"' | sort | uniq -c`. The runner
+  asserts it (`wantAPIKeySource`): any other reading ends the run as `auth_mismatch` and pauses
+  claims (decision file `2026-10-23-subscription-auth-only.md`).
 - `{"type":"assistant","message":{…content…},"error":"rate_limit"|"overloaded"|"billing_error"|…}`.
 - `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"|"allowed_warning"|"rejected",
   "resetsAt":<unix s>,"errorCode":"credits_required"?}}`.
@@ -123,6 +129,10 @@ the version it needs. **What the spec got wrong or left open is in bold.**
 
 ## Environment variables used
 
+**Not** used, and scrubbed from every environment the runner hands out (`ScrubEnv`): every
+`ANTHROPIC_*` variable, and `CLAUDE_CODE_USE_BEDROCK` / `CLAUDE_CODE_USE_VERTEX`. The agents
+authenticate with the OAuth login only; see `2026-10-23-subscription-auth-only.md`.
+
 `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` (no auto memory for loop agents), `ENABLE_CLAUDEAI_MCP_SERVERS=false`
 (no claude.ai connectors; `--strict-mcp-config` covers configured servers and the `mcp__*` deny
 rule removes any MCP tool that still appears). Both are documented in env-vars; their effect is
@@ -132,5 +142,6 @@ visible only in a real run's `system/init` (`mcp_servers`, `tools`).
 
 Whether the Bash tool's description embeds the sandbox config (the settings are now the same for
 every item of a repo, so it does not matter for caching); whether auto mode is actually granted to this account in `-p` today (the init event will say; the
-runner refuses to run otherwise), the exact `apiKeySource` value for subscription auth, and whether
-`-p` emits the `SessionStart` hook before `init` (the armed check tolerates either order).
+runner refuses to run otherwise), and whether `-p` emits the `SessionStart` hook before `init`
+(the armed check tolerates either order). **Answered since:** the `apiKeySource` value for
+subscription auth is `"none"` (above).

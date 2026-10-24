@@ -103,6 +103,52 @@ func gitT(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// seedDB is a once-migrated loop.db for the whole test binary: running the 41 migrations'
+// DDL through race-instrumented SQLite costs ~1s per rig on a slow machine, and with ~140
+// rigs that alone pushed the package past CI's 12m go-test timeout. Each rig gets a copy;
+// store.Open then sees every migration applied and only re-stamps the cheap version rows.
+var seedDB struct {
+	once sync.Once
+	data []byte
+	err  error
+}
+
+func seedStore(t *testing.T, dir string) {
+	t.Helper()
+	seedDB.once.Do(func() {
+		tmp, err := os.MkdirTemp("", "loop-seed-")
+		if err != nil {
+			seedDB.err = err
+			return
+		}
+		defer os.RemoveAll(tmp)
+		st, err := store.Open(tmp, clock.NewFake(t0))
+		if err != nil {
+			seedDB.err = err
+			return
+		}
+		if err := st.Close(); err != nil {
+			seedDB.err = err
+			return
+		}
+		// Closing the last connection checkpoints and removes the WAL, so loop.db is whole.
+		if _, err := os.Stat(filepath.Join(tmp, "loop.db-wal")); err == nil {
+			seedDB.err = fmt.Errorf("seed store left a WAL behind; refusing a partial template")
+			return
+		}
+		seedDB.data, seedDB.err = os.ReadFile(filepath.Join(tmp, "loop.db"))
+	})
+	if seedDB.err != nil {
+		t.Fatalf("seeding the template store: %v", seedDB.err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "loop.db"), seedDB.data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newRig(t *testing.T, scenario string) *rig {
 	t.Helper()
 	root := t.TempDir()
@@ -123,6 +169,7 @@ func newRig(t *testing.T, scenario string) *rig {
 	gitT(t, root, "clone", "-q", remote, local)
 
 	loopdClk := clock.NewFake(t0)
+	seedStore(t, filepath.Join(root, "loopd"))
 	st, err := store.Open(filepath.Join(root, "loopd"), loopdClk)
 	if err != nil {
 		t.Fatal(err)
@@ -716,6 +763,122 @@ func TestWrongModePausesTheRunner(t *testing.T) {
 	g.toBuild("Next one")
 	if g.runOnce() {
 		t.Fatal("a paused runner claimed")
+	}
+}
+
+// The loop's agents run on the user's subscription only: a session that reports any other auth
+// source dies as auth_mismatch and the runner stops claiming (an API key in its environment would
+// otherwise bill every later claim too). The reading itself is on the advance.
+func TestWrongAuthSourcePausesTheRunner(t *testing.T) {
+	g := newRig(t, fakeclaude.WrongAuth)
+	id := g.toBuild("Auth check")
+	g.runOnce()
+	d := g.item(id)
+	if d.Item.Stage != pipeline.NeedsYou || !strings.Contains(d.Item.Question, `auth source is "ANTHROPIC_API_KEY", not the subscription's "none"`) {
+		t.Fatalf("%s %q", d.Item.Stage, d.Item.Question)
+	}
+	if !strings.Contains(d.Item.Question, "ANTHROPIC_* variable in its environment") {
+		t.Fatalf("the question should say how to fix it: %q", d.Item.Question)
+	}
+	if ev := g.advanced(id); ev.Data["api_key_source"] != "ANTHROPIC_API_KEY" {
+		t.Fatalf("the advance should record what the init event said: %+v", ev.Data)
+	}
+	if g.r.Paused() == "" {
+		t.Fatal("the runner should stop claiming")
+	}
+	g.toBuild("Next one")
+	if g.runOnce() {
+		t.Fatal("a paused runner claimed")
+	}
+}
+
+// A good run records its auth source on the advance, so the value is visible before it is ever
+// asserted against.
+func TestAdvanceRecordsTheAuthSource(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	id := g.toBuild("Add a feature")
+	g.runOnce()
+	if ev := g.advanced(id); ev.Data["api_key_source"] != "none" {
+		t.Fatalf("api_key_source on the advance: %+v", ev.Data)
+	}
+}
+
+// The advice on a paused runner names the thing to change before restarting it. An auth source the
+// CLI did not report at all is the one case an ANTHROPIC_* variable may not be the cause, so it
+// does not get told to go looking for one and nothing else.
+func TestMismatchFixNamesTheCause(t *testing.T) {
+	for _, tc := range []struct {
+		reason, source string
+		want, notWant  string
+	}{
+		{reason: endModeMismatch, source: "none", want: "Auto mode may be unavailable", notWant: "ANTHROPIC_"},
+		{reason: endAuthMismatch, source: "ANTHROPIC_API_KEY", want: "the subscription only", notWant: "Auto mode"},
+		{reason: endAuthMismatch, source: "apiKeyHelper", want: "the subscription only", notWant: "Auto mode"},
+		{reason: endAuthMismatch, source: "", want: "the CLI still reports apiKeySource", notWant: "Auto mode"},
+	} {
+		got := mismatchFix(tc.reason, tc.source)
+		if !strings.Contains(got, tc.want) || strings.Contains(got, tc.notWant) {
+			t.Errorf("mismatchFix(%q, %q) = %q", tc.reason, tc.source, got)
+		}
+	}
+	// The mode mismatch's wording is what it always was: only the auth source's branch is new.
+	if !strings.Contains(mismatchFix(endModeMismatch, "none"), `(use mode "strict" to run without it).`) {
+		t.Error("the mode mismatch should still name the way to run without auto mode")
+	}
+}
+
+// No agent run, and no command the runner starts for it, may carry an Anthropic variable: the
+// runner needs none, and one stray key would bill every build to it. The rule has no exceptions,
+// so the table is "everything with that prefix", not a list to keep in step with the CLI's.
+func TestScrubEnvDropsEveryAnthropicVariable(t *testing.T) {
+	for _, tc := range []struct {
+		kv   string
+		keep bool
+	}{
+		{kv: "ANTHROPIC_API_KEY=sk-ant-xxx"},
+		{kv: "ANTHROPIC_AUTH_TOKEN=tok"},
+		{kv: "ANTHROPIC_BASE_URL=https://proxy"},
+		{kv: "ANTHROPIC_MODEL=some-model"},
+		{kv: "ANTHROPIC_SMALL_FAST_MODEL=m2"},
+		{kv: "ANTHROPIC_CUSTOM_HEADERS=x"},
+		{kv: "ANTHROPIC_DEFAULT_OPUS_MODEL=m3"},
+		{kv: "ANTHROPIC_VERTEX_PROJECT_ID=p"},
+		{kv: "ANTHROPIC_=odd"},
+		// Bedrock and Vertex take a run off the subscription the same way.
+		{kv: "CLAUDE_CODE_USE_BEDROCK=1"},
+		{kv: "CLAUDE_CODE_USE_VERTEX=1"},
+		// loopd's and Slack's secrets, as before.
+		{kv: "LOOP_TOKEN=t"},
+		{kv: "LOOP_URL=http://127.0.0.1:7780"},
+		{kv: "SLACK_BOT_TOKEN=xoxb"},
+		// Not an Anthropic variable: the prefix is ANTHROPIC_, not ANTHROPIC.
+		{kv: "ANTHROPICX=keep", keep: true},
+		{kv: "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", keep: true},
+		{kv: "PATH=/bin", keep: true},
+		{kv: "HOME=/h", keep: true},
+		{kv: "LOOP_ITEM=7", keep: true},
+	} {
+		got := ScrubEnv([]string{"PATH=/bin", tc.kv})
+		if kept := slices.Contains(got, tc.kv); kept != tc.keep {
+			t.Errorf("ScrubEnv(%q): kept=%v, want %v (got %v)", tc.kv, kept, tc.keep, got)
+		}
+	}
+	// The whole environment at once, with every caller's layer on top: the agent's own, and a
+	// fenced setup/verify command's (fencedEnv is fed the scrubbed env, never the runner's).
+	r := &Runner{Env: []string{"PATH=/bin", "HOME=/h", "ANTHROPIC_API_KEY=sk-ant-xxx", "ANTHROPIC_AUTH_TOKEN=tok",
+		"ANTHROPIC_BASE_URL=https://proxy", "ANTHROPIC_MODEL=some-model", "ANTHROPIC_SMALL_FAST_MODEL=m2",
+		"CLAUDE_CODE_USE_BEDROCK=1", "LOOP_TOKEN=t"}}
+	for _, layer := range [][2]any{{"agentEnv", r.agentEnv()}, {"fencedEnv", fencedEnv(r.agentEnv(), "/w/fenced.gitconfig")}} {
+		env := layer[1].([]string)
+		for _, kv := range env {
+			k, _, _ := strings.Cut(kv, "=")
+			if strings.HasPrefix(k, "ANTHROPIC_") || billingRedirect[k] {
+				t.Errorf("%s still carries %q (%v)", layer[0], k, env)
+			}
+		}
+		if !slices.Contains(env, "PATH=/bin") {
+			t.Errorf("%s dropped PATH (%v)", layer[0], env)
+		}
 	}
 }
 
