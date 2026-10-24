@@ -1,0 +1,32 @@
+{
+  "name": "proof-toolchain-error",
+  "about": "Proof commands, a broken toolchain (docs/decisions/2026-10-23-proof-env-hardening.md, #532: the mbp's 'go: no such tool' reopens). The proof's command fails fast with a toolchain error, not exit 127: each pass reports it as an error, not a failure, so the check stays pending with 'could not run: …' as its evidence and repeated passes never reopen the item.",
+  "stages": ["build", "review", "land"],
+  "steps": [
+    {"do": "add", "item": "a", "title": "Chime volume"},
+    {"do": "command", "as": "approver", "text": "qa 1"},
+    {"do": "script", "item": "a", "proof": [{"kind": "command", "run": "echo 'go: no such tool \"vet\"' >&2; exit 2"}]},
+    {"do": "triage", "item": "a"},
+    {"do": "ci", "main": {"ci": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "ci", "item": "a", "checks": {"check": "pass"}},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "runner", "claims": "a"},
+    {"do": "runner_idle"},
+    {"do": "expect", "stage": {"a": "qa"}},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "30m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "clock", "advance": "30m"},
+    {"do": "runner", "claims": "none"},
+    {"do": "expect", "stage": {"a": "qa"},
+     "events": [{"item": "a", "kind": "proof_checked", "actor": "runner", "data": {"status": "^pending$", "changed": "^false$"}, "count": 3}],
+     "board": {"a": {"column": "QA", "card": "waits for: command: `echo .*no such tool"}}}
+  ],
+  "expect": {
+    "stage": {"a": "qa"},
+    "no_events": [{"item": "a", "kind": "reopened"}, {"item": "a", "kind": "verified"}, {"item": "a", "kind": "refused"}]
+  }
+}

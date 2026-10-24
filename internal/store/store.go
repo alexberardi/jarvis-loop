@@ -378,7 +378,7 @@ func (s *Store) refuse(ctx context.Context, actor string, id int64, action strin
 const itemCols = `id, title, ask, repo, source, priority, stage, return_stage, question, area, size, risk,
 	resources, bounce_count, pr, branch, head_sha, builder_agent, merge_sha, summary, approval, created_at, updated_at, hold_reason, needs_qa, reopen_of, ci_red_sha, ci_main_fixed,
 	depends_on, plan_id, plan_piece, awaiting_deploy, builder, build_session, trust, proof, not_before, ci_pending_since, ci_pending_sha, verify, verify_reason, feature,
-	built_by, qwen_failures, change_kind, wait_prs, waiting_since`
+	built_by, qwen_failures, change_kind, wait_prs, waiting_since, review_pending_sha, review_pending_since`
 
 type scanner interface{ Scan(...any) error }
 
@@ -393,12 +393,13 @@ func scanItem(row scanner) (pipeline.Item, error) {
 		notBefore, ciSince  int64
 		waitPRs             string
 		waitingSince        int64
+		reviewSince         int64
 	)
 	err := row.Scan(&it.ID, &it.Title, &it.Ask, &it.Repo, &it.Source, &it.Priority, &stage, &ret, &it.Question,
 		&it.Area, &it.Size, &it.Risk, &resources, &it.BounceCount, &it.PR, &it.Branch, &it.HeadSHA,
 		&it.BuilderAgent, &it.MergeSHA, &it.Summary, &approval, &created, &updated, &it.HoldReason, &it.NeedsQA, &it.ReopenOf, &it.CIRedSHA, &it.CIMainFixed,
 		&dependsOn, &it.PlanID, &it.PlanPiece, &it.AwaitingDeploy, &it.Builder, &it.BuildSession, &trust, &proof, &notBefore, &ciSince, &it.CIPendingSHA, &it.Verify, &it.VerifyReason, &it.Feature,
-		&it.BuiltBy, &it.QwenFailures, &it.ChangeKind, &waitPRs, &waitingSince)
+		&it.BuiltBy, &it.QwenFailures, &it.ChangeKind, &waitPRs, &waitingSince, &it.ReviewPendingSHA, &reviewSince)
 	if err != nil {
 		return it, err
 	}
@@ -409,6 +410,7 @@ func scanItem(row scanner) (pipeline.Item, error) {
 		}
 	}
 	it.NotBefore, it.CIPendingSince = optNanos(notBefore), optNanos(ciSince)
+	it.ReviewPendingSince = optNanos(reviewSince)
 	it.Stage, it.ReturnStage = pipeline.Stage(stage), pipeline.Stage(ret)
 	it.Resources = splitList(resources)
 	if it.DependsOn, err = splitIDs(dependsOn); err != nil {
@@ -527,12 +529,12 @@ func saveItem(tx *sql.Tx, it pipeline.Item) error {
 		area=?, size=?, risk=?, resources=?, bounce_count=?, pr=?, branch=?, head_sha=?, builder_agent=?, merge_sha=?,
 		summary=?, approval=?, updated_at=?, hold_reason=?, needs_qa=?, ci_red_sha=?, ci_main_fixed=?, depends_on=?, awaiting_deploy=?, builder=?, build_session=?, trust=?, proof=?,
 		not_before=?, ci_pending_since=?, ci_pending_sha=?, verify=?, verify_reason=?, feature=?,
-		built_by=?, qwen_failures=?, change_kind=?, wait_prs=?, waiting_since=? WHERE id=?`,
+		built_by=?, qwen_failures=?, change_kind=?, wait_prs=?, waiting_since=?, review_pending_sha=?, review_pending_since=? WHERE id=?`,
 		it.Title, it.Ask, it.Repo, it.Source, it.Priority, string(it.Stage), string(it.ReturnStage), it.Question,
 		it.Area, it.Size, it.Risk, strings.Join(it.Resources, ","), it.BounceCount, it.PR, it.Branch, it.HeadSHA,
 		it.BuilderAgent, it.MergeSHA, it.Summary, approval, it.UpdatedAt.UnixNano(), it.HoldReason, it.NeedsQA, it.CIRedSHA, it.CIMainFixed, joinIDs(it.DependsOn), it.AwaitingDeploy, it.Builder, it.BuildSession, trust, proof,
 		toOptNanos(it.NotBefore), toOptNanos(it.CIPendingSince), it.CIPendingSHA, it.Verify, it.VerifyReason, it.Feature,
-		it.BuiltBy, it.QwenFailures, it.ChangeKind, waitPRs, toOptNanos(it.WaitingSince), it.ID)
+		it.BuiltBy, it.QwenFailures, it.ChangeKind, waitPRs, toOptNanos(it.WaitingSince), it.ReviewPendingSHA, toOptNanos(it.ReviewPendingSince), it.ID)
 	return err
 }
 
@@ -1042,6 +1044,9 @@ func (s *Store) Claim(ctx context.Context, runnerName string, req pipeline.Claim
 		if it.Stage == pipeline.Land && it.CIPendingSHA != "" {
 			data["ci_pending"] = true // a land run again after ci_pending: Slack posts nothing for it
 		}
+		if it.Stage == pipeline.Land && it.ReviewPendingSHA != "" {
+			data["review_pending"] = true // a land run again after review_pending: Slack posts nothing for it
+		}
 		return s.event(tx, Event{ItemID: it.ID, Actor: "runner:" + runnerName, Kind: "claimed", From: string(it.Stage), To: string(it.Stage),
 			Data: data})
 	})
@@ -1263,8 +1268,13 @@ func (s *Store) sweep(tx *sql.Tx) error {
 			if err := endLease(tx, l.ID, now, "expired"); err != nil {
 				return err
 			}
+			data := map[string]any{"lease": l.ID, "runner": l.Runner, "agent": l.Agent, "note": l.Note}
+			// The last tool call the run reported: where it was when its runner went quiet (#592).
+			if a := l.Activity; a != nil && len(a.Recent) > 0 {
+				data["last_tool"] = a.Recent[len(a.Recent)-1]
+			}
 			if err := s.event(tx, Event{ItemID: l.ItemID, Actor: "loopd", Kind: "lease_expired", From: string(l.Stage), To: string(l.Stage),
-				Data: map[string]any{"lease": l.ID, "runner": l.Runner, "agent": l.Agent, "note": l.Note}}); err != nil {
+				Data: data}); err != nil {
 				return err
 			}
 		case pipeline.LeaseOvertime:

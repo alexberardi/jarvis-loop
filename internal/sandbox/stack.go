@@ -108,6 +108,9 @@ type Options struct {
 	// SlowPrepare gives the demo repo a Prepare command that waits for ReleasePrepare (a slow
 	// fetch or lib download; #453).
 	SlowPrepare bool
+	// GoBroken makes the runner's Go probe fail (#591): it runs no go proof command and claims
+	// no Go repo's work.
+	GoBroken bool
 }
 
 // Stack is one sandboxed loop: loopd (store, API on a loopback port, Slack layer), a runner, a
@@ -430,6 +433,9 @@ func StartStack(opts Options) (st *Stack, err error) {
 	s.Runner = &runner.Runner{Cfg: rcfg, Client: &runner.Client{Base: s.LoopdURL, Token: runnerTok}, Clock: rclk,
 		Log: log.With("component", "runner"), Env: agentEnv(s.scripts, opts.Bin.Env), PRs: s.GitHub,
 		VerifyPR: s.GitHub.Verify, Land: s.GitHub, Close: s.GitHub, HeartbeatEvery: 60 * time.Second}
+	if opts.GoBroken {
+		s.Runner.GoProbe = func(context.Context) string { return `go: no such tool "vet"` }
+	}
 	s.user = &apiClient{base: s.LoopdURL, token: userTok}
 	s.hand = &runner.Client{Base: s.LoopdURL, Token: handTok}
 	s.handAPI = &apiClient{base: s.LoopdURL, token: handTok}
@@ -588,12 +594,14 @@ func SandboxHoldRules() []pipeline.HoldRule {
 }
 
 // agentEnv is the environment the fake claude (and the runner's helper commands) start with: the
-// runner's own minus anything that names real credentials, plus the fake's script dir.
+// runner's own minus anything that names real credentials, plus the fake's script dir. The
+// Anthropic variables (and the Bedrock/Vertex switches) go with the runner's own rule,
+// runner.ScrubEnv, so the harness has no second list of names to keep in step with it.
 func agentEnv(scripts string, extra []string) []string {
 	var out []string
-	for _, kv := range os.Environ() {
+	for _, kv := range runner.ScrubEnv(os.Environ()) {
 		k, _, _ := strings.Cut(kv, "=")
-		if k == "GH_TOKEN" || k == "GITHUB_TOKEN" || k == "ANTHROPIC_API_KEY" || strings.HasPrefix(k, "SLACK_") ||
+		if k == "GH_TOKEN" || k == "GITHUB_TOKEN" || strings.HasPrefix(k, "SLACK_") ||
 			strings.HasPrefix(k, "LOOP_") || strings.HasPrefix(k, "FAKE_CLAUDE_") {
 			continue
 		}

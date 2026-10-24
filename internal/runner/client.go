@@ -136,11 +136,16 @@ func (c *Client) Claim(ctx context.Context, agent string, caps, stages []string)
 // A runner with qwen (cfg.Qwen) claiming builds says it can build with it too
 // (pipeline.BuilderQwen): a paced claim may route a build there.
 func (c *Client) ClaimFor(ctx context.Context, agent string, cfg *Config, stages []string) (*Claim, error) {
+	return c.ClaimRepos(ctx, agent, cfg, stages, cfg.RepoNames())
+}
+
+// ClaimRepos is ClaimFor naming only repos (the runner's claimRepos).
+func (c *Client) ClaimRepos(ctx context.Context, agent string, cfg *Config, stages, repos []string) (*Claim, error) {
 	var builders []string
 	if cfg.Qwen != nil && (len(stages) == 0 || slices.Contains(stages, StageBuild)) {
 		builders = []string{pipeline.BuilderQwen}
 	}
-	return c.claim(ctx, agent, cfg.Capabilities, cfg.OnlyResources, stages, cfg.PollSeconds, cfg.Stages, builders, cfg.Slots, cfg.RepoNames())
+	return c.claim(ctx, agent, cfg.Capabilities, cfg.OnlyResources, stages, cfg.PollSeconds, cfg.Stages, builders, cfg.Slots, repos)
 }
 
 func (c *Client) claim(ctx context.Context, agent string, caps, only, stages []string, pollSeconds int, cfgStages, builders []string, slots int, repos []string) (*Claim, error) {

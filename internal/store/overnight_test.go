@@ -213,17 +213,22 @@ func TestOvernightOvertimeCap(t *testing.T) {
 		t.Fatalf("not claimed: %+v", c)
 	}
 	// Past the manual runs' 3 h it runs on (heartbeats); past 6 h it ends.
-	for clk.Now().Before(t0.Add(toOne + 2*pipeline.OvernightQuiet + 4*time.Hour)) {
-		clk.Advance(time.Minute)
-		lease := mustReg(t, s, r.ID).lease.ID
-		if _, err := s.Heartbeat(ctx, runner, lease, ""); err != nil {
-			t.Fatal(err)
+	beatUntil := func(d time.Duration) {
+		for clk.Now().Before(t0.Add(toOne + 2*pipeline.OvernightQuiet + d)) {
+			clk.Advance(time.Minute)
+			lease := mustReg(t, s, r.ID).lease.ID
+			if _, err := s.Heartbeat(ctx, runner, lease, ""); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
+	beatUntil(4 * time.Hour)
 	if got := mustReg(t, s, r.ID); got.Status != RegRunning {
 		t.Fatalf("after 4 h: %s %s", got.Status, got.Error)
 	}
-	clk.Advance(2 * time.Hour)
+	// Still heartbeating at the cap: overtime, not expired (#592).
+	beatUntil(6*time.Hour - time.Minute)
+	clk.Advance(2 * time.Minute)
 	claimWith(t, s, pipeline.WorkItem)
 	got := mustReg(t, s, r.ID)
 	if got.Status != RegError || got.ReportAt == nil {

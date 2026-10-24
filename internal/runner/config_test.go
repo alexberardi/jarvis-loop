@@ -157,15 +157,24 @@ func TestConfigHarness(t *testing.T) {
 		t.Fatalf("timeout: %v", err)
 	}
 	for name, h := range map[string]string{
-		"no down":      `{"up":"u"}`,
-		"no up":        `{"down":"d"}`,
-		"bad timeout":  `{"up":"u","down":"d","timeout":"soon"}`,
-		"unknown key":  `{"up":"u","down":"d","stop":"x"}`,
-		"zero timeout": `{"up":"u","down":"d","timeout":"0s"}`,
+		"no down":        `{"up":"u"}`,
+		"no up":          `{"down":"d"}`,
+		"bad timeout":    `{"up":"u","down":"d","timeout":"soon"}`,
+		"unknown key":    `{"up":"u","down":"d","stop":"x"}`,
+		"zero timeout":   `{"up":"u","down":"d","timeout":"0s"}`,
+		"repo is itself": `{"up":"u","down":"d","repo":"jarvis-server"}`,
+		"repo unknown":   `{"up":"u","down":"d","repo":"jarvis-pi"}`,
 	} {
 		if _, err := LoadConfig(writeCfg(t, withHarness(h), 0o600)); err == nil {
 			t.Errorf("%s accepted", name)
 		}
+	}
+	// harness.repo: the key of another configured repo, whose checkout the session's commands run
+	// in (jarvis-server's scripts/e2e for a jarvis-node-mobile agent, #546).
+	mobile := strings.Replace(cfgAllRepos, `"group":"mobile",`, `"group":"mobile","harness":{"up":"u","down":"d","repo":"jarvis-server"},`, 1)
+	c, err = LoadConfig(writeCfg(t, mobile, 0o600))
+	if err != nil || c.Repos["jarvis-node-mobile"].Harness.Repo != "jarvis-server" {
+		t.Fatalf("harness repo: %v %+v", err, c.Repos["jarvis-node-mobile"].Harness)
 	}
 }
 

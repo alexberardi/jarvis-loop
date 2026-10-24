@@ -538,10 +538,15 @@ func (v LeaseVerdict) String() string {
 	return [...]string{"live", "expired", "overtime"}[v]
 }
 
-// JudgeLease decides a lease's fate. Overtime wins over expiry: a run that went too long is
-// something the user should hear about either way.
+// JudgeLease decides a lease's fate. Overtime wins over expiry when the lease was still alive at
+// the cap: a run that went too long is something the user should hear about either way. A lease
+// that expired before the cap is expired however late the sweep sees it: its runner went away (a
+// host crash, a shutdown) before the run could go long (#592).
 func JudgeLease(claimedAt, expiresAt, now time.Time, maxRun time.Duration) LeaseVerdict {
-	if !now.Before(claimedAt.Add(maxRun)) {
+	if cap := claimedAt.Add(maxRun); !now.Before(cap) {
+		if expiresAt.Before(cap) {
+			return LeaseExpired
+		}
 		return LeaseOvertime
 	}
 	if !now.Before(expiresAt) {

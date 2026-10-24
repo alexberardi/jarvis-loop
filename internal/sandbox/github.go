@@ -32,6 +32,9 @@ type PR struct {
 	// MergeCalls are the land script's merge calls: each head it asked to merge at, and GitHub's
 	// answer ("merged" or the refusal).
 	MergeCalls []MergeCall `json:"merge_calls,omitempty"`
+	// ReviewApproved: someone approved the PR on GitHub (ApproveReview), which a base that
+	// requires a review needs before it merges.
+	ReviewApproved bool `json:"review_approved,omitempty"`
 }
 
 // MergeCall is one gh pr merge.
@@ -74,6 +77,10 @@ type GitHub struct {
 	// "require branches to be up to date before merging"): a clean head that lacks the base's tip
 	// is BEHIND, and merging it is refused (#521).
 	requireUpToDate map[string]bool
+	// requireReview marks repos whose base requires an approving review (GitHub's "require a pull
+	// request before merging" with approvals): an unapproved PR is REVIEW_REQUIRED and BLOCKED, and
+	// merging it is refused (#588).
+	requireReview map[string]bool
 }
 
 var (
@@ -84,7 +91,7 @@ var (
 // NewGitHub returns a fake over these remotes (owner/name -> bare repo).
 func NewGitHub(repos map[string]string) *GitHub {
 	g := &GitHub{next: 101, repos: repos, checks: map[string]map[string]string{}, mainCI: map[string]string{}, mainCIAt: map[string]map[string]string{}, mainRerun: map[string]string{}, reran: map[string]map[string]bool{}, mainHead: map[string]string{}, runIDs: 9000,
-		runs: map[int64]fakeRun{}, requireUpToDate: map[string]bool{}}
+		runs: map[int64]fakeRun{}, requireUpToDate: map[string]bool{}, requireReview: map[string]bool{}}
 	for slug := range repos {
 		g.mainHead[slug] = g.RemoteHead(slug, "main")
 	}
@@ -391,6 +398,37 @@ func (g *GitHub) SetRequireUpToDate(slug string, on bool) {
 	g.requireUpToDate[slug] = on
 }
 
+// SetRequireReview turns a repo's required-review protection on or off.
+func (g *GitHub) SetRequireReview(slug string, on bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.requireReview[slug] = on
+}
+
+// ApproveReview approves an item's open PR on GitHub, as the user would.
+func (g *GitHub) ApproveReview(slug, branch string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for i, p := range g.prs {
+		if p.Repo == slug && p.Head == branch && p.State == "OPEN" {
+			g.prs[i].ReviewApproved = true
+			return nil
+		}
+	}
+	return fmt.Errorf("no open PR for %s", branch)
+}
+
+// reviewDecision is GitHub's reviewDecision for a PR: "" when its base requires no review.
+func (g *GitHub) reviewDecision(p PR) string {
+	switch {
+	case !g.requireReview[p.Repo]:
+		return ""
+	case p.ReviewApproved:
+		return "APPROVED"
+	}
+	return "REVIEW_REQUIRED"
+}
+
 // mergeTree says whether head merges into the base cleanly (git merge-tree), and the tree.
 func (g *GitHub) mergeTree(slug, base, head string) (string, bool) {
 	cmd := exec.Command("git", "-C", g.repos[slug], "merge-tree", "--write-tree", "refs/heads/"+base, head)
@@ -417,6 +455,8 @@ func (g *GitHub) LandView(_ context.Context, slug string, number int) (runner.La
 			pr.Mergeable, pr.MergeStateStatus = "MERGEABLE", "CLEAN"
 			if g.requireUpToDate[slug] && g.behindBase(slug, p.Base, pr.HeadRefOid) {
 				pr.MergeStateStatus = "BEHIND"
+			} else if pr.ReviewDecision = g.reviewDecision(p); pr.ReviewDecision == "REVIEW_REQUIRED" {
+				pr.MergeStateStatus = "BLOCKED"
 			}
 		} else {
 			pr.Mergeable, pr.MergeStateStatus = "CONFLICTING", "DIRTY"
@@ -467,6 +507,10 @@ func (g *GitHub) Merge(_ context.Context, slug string, number int, head string) 
 	if g.requireUpToDate[slug] && g.behindBase(slug, p.Base, head) {
 		// gh's wording when the base requires up-to-date heads (#496, #521).
 		return refuse("Pull request is not mergeable: the head branch is not up to date with the base branch.")
+	}
+	if g.reviewDecision(*p) == "REVIEW_REQUIRED" {
+		// gh's wording when the base requires an approving review the PR lacks (#583, #524).
+		return refuse("Pull request " + slug + "#" + strconv.Itoa(number) + " is not mergeable: the base branch policy prohibits the merge.")
 	}
 	if g.refuse > 0 {
 		g.refuse--

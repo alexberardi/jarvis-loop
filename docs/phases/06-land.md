@@ -97,6 +97,11 @@ Everything is re-derived from GitHub and git, never from an agent's words.
      `CONFLICTING` goes back to build on its own (`rebuild`, the conflict as the builder's notes).
      A reply in the held thread that is not an approval, a question or a "wait" sends it back to
      build with the reply as the note.*
+6b. *As built (2026-10-24, #588): **A GitHub review.** `reviewDecision == REVIEW_REQUIRED` (the
+   base requires an approving review, which the loop cannot give) → `review_pending` with
+   `head_sha`: the item stays in land and is checked again every 10 minutes, with no give-up, until
+   the user approves on GitHub; the thread gets the PR link once per head.
+   `CHANGES_REQUESTED` → `failed` (the user). `docs/decisions/2026-10-24-land-waits-for-github-review.md`.*
 7. **Mergeable:** `mergeable == CONFLICTING` → if every conflicting path is under `docs/`, merge
    `origin/<base>` into the branch in a scratch worktree, resolve by taking both sides only if git
    resolves it (`-X` is not used; a real conflict anywhere → `back_to_build`; *as built: a
@@ -173,6 +178,9 @@ gates, or the land script would merge changes to itself.
 - *As built (2026-10-19, #278):* outcome `ci_pending` (land → land, `wait`, `head_sha` and `since`
   required): sets the item's `not_before` (claims skip it until then) and keeps the first
   `since` on that head.
+- *As built (2026-10-24, #588):* outcome `review_pending` (land → land, `review` and `head_sha`
+  required): sets `not_before` (10 minutes) and the waiting head and its start
+  (`review_pending_sha`, `review_pending_since`, migration `0042`).
 - `POST /items/{id}/events` kind `main_ci` (runner token; the item must be `done` and merged by a
   run of this runner; data `result`, `urls`), shown in `loop show` and the digest.
 - Per-repo hold rules as above, with a migration that tags the existing rows.

@@ -147,6 +147,7 @@ func ApplyWait(it Item, added []int64, prs []string, stages map[int64]Stage, rea
 	}
 	it.Stage, it.ReturnStage, it.Question = Waiting, ret, ""
 	it.NotBefore, it.CIPendingSince, it.CIPendingSHA = time.Time{}, time.Time{}, ""
+	it.ReviewPendingSHA, it.ReviewPendingSince = "", time.Time{}
 	return Transition{Item: it, From: from, To: Waiting, Kind: "waiting", Data: data}, nil
 }
 

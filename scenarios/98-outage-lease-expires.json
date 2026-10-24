@@ -1,0 +1,57 @@
+{
+  "name": "outage-lease-expires",
+  "about": "A run's host goes away mid-build (#592: the dev box crashed): the lease stops heartbeating a minute in, and loopd next sweeps hours later (the next runner's poll), well past the 45-minute cap. The lease expired before the cap, so the item goes back to the build queue (lease_expired), not to the user as overtime.",
+  "steps": [
+    {
+      "do": "add",
+      "item": "a",
+      "title": "Make the board faster"
+    },
+    {
+      "do": "triage",
+      "item": "a"
+    },
+    {
+      "do": "hand_claim",
+      "item": "a"
+    },
+    {
+      "do": "clock",
+      "advance": "3h"
+    },
+    {
+      "do": "runner",
+      "claims": "a"
+    },
+    {
+      "do": "runner_idle"
+    }
+  ],
+  "expect": {
+    "stage": {
+      "a": "review"
+    },
+    "leased": {
+      "a": false
+    },
+    "events": [
+      {
+        "item": "a",
+        "kind": "lease_expired",
+        "actor": "loopd"
+      }
+    ],
+    "no_events": [
+      {
+        "item": "a",
+        "kind": "run_overtime"
+      }
+    ],
+    "messages": [
+      {
+        "thread": "a",
+        "text": "^Lease expired; back in the build queue\\.$"
+      }
+    ]
+  }
+}
