@@ -494,7 +494,18 @@ func (g Git) DiffPaths(ctx context.Context, mirror, base, head string, pr int) (
 	if !g.hasRef(ctx, mirror, head+"^{commit}") {
 		return nil, fmt.Errorf("the mirror has no commit %s", head)
 	}
-	out, err := g.run(ctx, mirror, "diff", "--name-status", "-M", "refs/remotes/origin/"+base+"..."+head)
+	return g.diffPaths(ctx, mirror, "refs/remotes/origin/"+base+"..."+head)
+}
+
+// MergePaths are the files a merge commit brought into its first parent (`git diff
+// --name-status -M <merge>^1 <merge>`): the changed paths of a PR merged on GitHub with a merge
+// commit, whose head is then in main and diffs empty.
+func (g Git) MergePaths(ctx context.Context, mirror, merge string) ([]string, error) {
+	return g.diffPaths(ctx, mirror, merge+"^1", merge)
+}
+
+func (g Git) diffPaths(ctx context.Context, mirror string, revs ...string) ([]string, error) {
+	out, err := g.run(ctx, mirror, append([]string{"diff", "--name-status", "-M"}, revs...)...)
 	if err != nil {
 		return nil, err
 	}

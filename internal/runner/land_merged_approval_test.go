@@ -63,3 +63,28 @@ func TestLandParksAMergedHeadNeedingApproval(t *testing.T) {
 		t.Fatalf("advanced %s %+v", ev.Outcome, ev.Data)
 	}
 }
+
+// #596: a PR merged by hand with GitHub's "Create a merge commit" has its head in main, so the
+// head's diff against main is empty. Land takes the changed paths from the merge commit instead,
+// and loopd records the merge (it refuses a merged advance without changed_paths).
+func TestLandRecordsAHandMergeCommit(t *testing.T) {
+	g := newRig(t, "")
+	id, gh := g.toLand("merged by hand")
+	it := g.item(id).Item
+	c := filepath.Join(t.TempDir(), "main")
+	gitT(t, filepath.Dir(c), "clone", "-q", g.remote, c)
+	gitT(t, c, "merge", "-q", "--no-ff", "--no-edit", "origin/"+it.Branch)
+	gitT(t, c, "push", "-q", "origin", "main")
+	merge := gitT(t, c, "rev-parse", "HEAD")
+	gh.mu.Lock()
+	gh.pr.State, gh.pr.HeadRefOid, gh.pr.MergeCommit = "MERGED", it.HeadSHA, merge
+	gh.mu.Unlock()
+	g.stages(StageLand)
+	if !g.runOnce() {
+		t.Fatal("nothing claimed")
+	}
+	d := g.item(id)
+	if d.Item.Stage != pipeline.Done || d.Item.MergeSHA != merge || len(gh.merges) != 0 {
+		t.Fatalf("stage %s merge %s, land's merges %v; log:\n%s", d.Item.Stage, short7(d.Item.MergeSHA), gh.merges, g.logs.String())
+	}
+}
