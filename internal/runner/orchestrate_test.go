@@ -41,6 +41,7 @@ func TestValidateOrchResult(t *testing.T) {
 		{"a field it does not have", `{"actions": [], "summary": "x"}`, "unknown field", 0},
 		{"an unknown action", `{"actions": [{"action": "approve", "item_id": 3, "reason": "done"}]}`, `unknown action "approve"`, 0},
 		{"another action's field", `{"actions": [{"action": "retry", "item_id": 3, "text": "x", "reason": "r"}]}`, `unknown field "text"`, 0},
+		{"escalate with step", `{"actions": [{"action": "escalate", "item_id": 6, "text": "t", "recommendation": "do x", "step": "merge PR", "reason": "r"}]}`, "", 1},
 		{"no reason", `{"actions": [{"action": "retry", "item_id": 3}]}`, "reason is required", 0},
 		{"a blank reason", `{"actions": [{"action": "note", "text": "x", "reason": "  "}]}`, "reason is required", 0},
 		{"a required field", `{"actions": [{"action": "answer", "item_id": 3, "text": "x", "reason": "r"}]}`, "kind is required", 0},
@@ -80,12 +81,12 @@ func TestOrchActionRoutes(t *testing.T) {
 	}
 	// An escalation's night class and deferred part go along (docs/decisions/2026-10-20-night-shift.md).
 	acts, err := ValidateOrchResult([]byte(`{"actions": [{"action": "escalate", "item_id": 9, "text": "scope?", "recommendation": "docs only",
-		"class": "scope_choice", "deferred": "the parser", "reason": "r"}]}`))
+		"class": "scope_choice", "deferred": "the parser", "step": "merge PR", "reason": "r"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	path, body = acts[0].route()
-	if path != "/orchestrator/escalations" || body["class"] != "scope_choice" || body["deferred"] != "the parser" {
+	if path != "/orchestrator/escalations" || body["class"] != "scope_choice" || body["deferred"] != "the parser" || body["step"] != "merge PR" {
 		t.Fatalf("escalate: %s %v", path, body)
 	}
 }
