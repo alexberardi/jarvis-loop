@@ -138,6 +138,12 @@ type RepoConfig struct {
 	// DenyWrite are worktree-relative paths no tool may change. Verify does not run on a change
 	// that touches one (it would run the agent's version of a file the runner trusts).
 	DenyWrite []string `json:"deny_write,omitempty"`
+	// Generated are deny_write files a generator writes: the build may write them, and verify
+	// trusts a change to them alone once Run, at the head, reproduces them byte for byte (#593).
+	Generated *GeneratedFiles `json:"generated,omitempty"`
+	// NewOK are deny_write prefixes under which a build may add files the base branch lacks;
+	// verify still asks the user's OK for them, as for any trusted file (#593).
+	NewOK []string `json:"new_ok,omitempty"`
 	// Group is the kind of repo (server, loop, mobile, docs, installer, package), shown to triage
 	// and in the brief.
 	Group string `json:"group,omitempty"`
@@ -161,6 +167,15 @@ type RepoConfig struct {
 	// binaries do, so the user is asked to check only when a runner built from a commit that
 	// contains the merge is running (docs/decisions/2026-10-16-qa-after-deploy.md).
 	QAAfterDeploy bool `json:"qa_after_deploy,omitempty"`
+}
+
+// GeneratedFiles are a repo's generated deny_write files and the command that rewrites them.
+type GeneratedFiles struct {
+	// Paths are worktree-relative globs (path.Match: "*" stays within one segment).
+	Paths []string `json:"paths"`
+	// Run is a bash line, run fenced in the worktree at the head, that rewrites every one of them
+	// in place, e.g. `go run ./tools/pipeline toolset desktop > tools/pipeline/toolsets/desktop.json`.
+	Run string `json:"run"`
 }
 
 // Groups are the kinds of repo a config may name.
@@ -520,6 +535,9 @@ func (c *Config) normalize() error {
 		r.QA = r.QA || r.QAAfterDeploy
 		if r.Group != "" && !slices.Contains(Groups, r.Group) {
 			return fmt.Errorf("config: repo %s: group must be one of %s, not %q", name, strings.Join(Groups, ", "), r.Group)
+		}
+		if g := r.Generated; g != nil && (len(g.Paths) == 0 || strings.TrimSpace(g.Run) == "") {
+			return fmt.Errorf("config: repo %s: generated needs paths and run", name)
 		}
 		for _, a := range r.Aliases {
 			if err := claim(a, name); err != nil {

@@ -697,3 +697,29 @@ func TestReviewRefusedTwiceIsARunnerError(t *testing.T) {
 		t.Fatalf("a refused review is not posted: %q", g.prs.comments[7])
 	}
 }
+
+// A build's guard gets the repo's generated globs and new_ok prefixes, with the base branch's own
+// files under those prefixes, which stay refused (#593).
+func TestBuildGuardCarvesOutGeneratedAndNewFiles(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	c := filepath.Join(t.TempDir(), "main")
+	gitT(t, filepath.Dir(c), "clone", "-q", g.remote, c)
+	os.MkdirAll(filepath.Join(c, "tools", "scenarios"), 0o755)
+	os.WriteFile(filepath.Join(c, "tools", "scenarios", "weather.json"), []byte("{}"), 0o644)
+	gitT(t, c, "add", ".")
+	gitT(t, c, "commit", "-q", "-m", "a scenario")
+	gitT(t, c, "push", "-q", "origin", "main")
+	rc := g.r.Cfg.Repos["demo"]
+	rc.DenyWrite = []string{"tools"}
+	rc.Generated = &GeneratedFiles{Paths: []string{"tools/sets/*.json"}, Run: "true"}
+	rc.NewOK = []string{"tools/scenarios"}
+	g.r.Cfg.Repos["demo"] = rc
+	id := g.toBuild("Add a chat tool")
+	g.runOnce()
+	var gc guard.Config
+	json.Unmarshal([]byte(g.read(filepath.Join(g.lastRun(id, StageBuild), "guard.json"))), &gc)
+	if !slices.Equal(gc.Generated, []string{"tools/sets/*.json"}) || !slices.Equal(gc.NewOK, []string{"tools/scenarios"}) ||
+		!slices.Equal(gc.BaseFiles, []string{"tools/scenarios/weather.json"}) {
+		t.Fatalf("guard config %+v", gc)
+	}
+}

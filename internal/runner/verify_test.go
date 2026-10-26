@@ -336,6 +336,71 @@ func TestVerifyRunsATrustedFileChangeOnTheOK(t *testing.T) {
 	}
 }
 
+// A change to generated deny_write files alone is trusted once their generator, run at the head,
+// reproduces them byte for byte: verify then runs without the user's OK. Bytes the generator
+// does not reproduce, or a change to the generator too, go to the user as before, and the
+// worktree is left as the head has it (#593).
+func TestVerifyTrustsRegeneratedFiles(t *testing.T) {
+	g := newRig(t, fakeclaude.Good)
+	g.verifyRepo(VerifyStep{Name: "harness", Run: "touch ran"})
+	rc := g.r.Cfg.Repos["demo"]
+	rc.DenyWrite = []string{"gen"}
+	g.r.Cfg.Repos["demo"] = rc
+	id := g.toBuild("Add a chat tool")
+	cl, err := g.r.Client.Claim(g.ctx, "a", nil, []string{StageBuild})
+	if err != nil || cl == nil || cl.Item.ID != id {
+		t.Fatalf("claim %+v %v", cl, err)
+	}
+	ru, err := g.r.newRun(cl, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ru.wt, "gen", "sets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for p, text := range map[string]string{"gen/sets/desktop.json": "{\"tools\": 2}\n", "gen/main.go": "package main\n"} {
+		if err := os.WriteFile(filepath.Join(ru.wt, p), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitT(t, ru.wt, "init", "-q")
+	gitT(t, ru.wt, "add", ".")
+	gitT(t, ru.wt, "commit", "-q", "-m", "head")
+	head := gitT(t, ru.wt, "rev-parse", "HEAD")
+	marker := filepath.Join(ru.wt, "ran")
+	toolset := []string{"M gen/sets/desktop.json"}
+	for name, c := range map[string]struct {
+		run     string
+		changed []string
+	}{
+		"other bytes":       {`printf '{"tools": 3}\n' > gen/sets/desktop.json`, toolset},
+		"a new file":        {`printf '{"tools": 2}\n' > gen/sets/desktop.json; echo x > gen/sets/phone.json`, toolset},
+		"generator fails":   {"exit 1", toolset},
+		"generator changed": {`printf '{"tools": 2}\n' > gen/sets/desktop.json`, append([]string{"M gen/main.go"}, toolset...)},
+	} {
+		ru.repo.Generated = &GeneratedFiles{Paths: []string{"gen/sets/*.json"}, Run: c.run}
+		_, err := g.r.runVerify(g.ctx, ru, head, c.changed)
+		var refusal *trustRefusal
+		if !errors.As(err, &refusal) {
+			t.Fatalf("%s: runVerify: %v", name, err)
+		}
+		if _, err := os.Stat(marker); err == nil {
+			t.Fatalf("%s: verify ran", name)
+		}
+		if st := gitT(t, ru.wt, "status", "--porcelain"); st != "" {
+			t.Fatalf("%s: worktree left changed:\n%s", name, st)
+		}
+	}
+	ru.repo.Generated = &GeneratedFiles{Paths: []string{"gen/sets/*.json"}, Run: `printf '{"tools": 2}\n' > gen/sets/desktop.json`}
+	res, err := g.r.runVerify(g.ctx, ru, head, append([]string{"M feature.txt"}, toolset...))
+	if err != nil || len(res) != 1 || !res[0].Passed() {
+		t.Fatalf("regenerated runVerify: %+v %v", res, err)
+	}
+	if _, err := os.Stat(marker); err != nil || ru.trustUsed != "" {
+		t.Fatalf("verify did not run, or used an OK (%q)", ru.trustUsed)
+	}
+}
+
 // One verify at a time on the machine: a run waits for the lock (heartbeating), then verifies.
 func TestVerifyWaitsForTheMachineLock(t *testing.T) {
 	g := newRig(t, fakeclaude.Good)

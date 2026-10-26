@@ -521,3 +521,47 @@ func TestReadOnlyRuns(t *testing.T) {
 		}
 	}
 }
+
+// A generated file under a protected dir may be written on every channel (verify regenerates it
+// before trusting it), and a new file under a NewOK prefix may be added; the generator itself,
+// the base's own files there and everything else under the prefix stay refused (#593).
+func TestGeneratedAndNewFilesUnderDenyWrite(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.DenyWrite = []string{"tools/pipeline"}
+	f.cfg.Generated = []string{"tools/pipeline/toolsets/*.json"}
+	f.cfg.NewOK = []string{"tools/pipeline/scenarios"}
+	f.cfg.BaseFiles = []string{"tools/pipeline/scenarios/weather.json"}
+	tp := filepath.Join(f.wt, "tools", "pipeline")
+	cases := []struct {
+		name string
+		in   Input
+		rule string
+	}{
+		{"write a toolset", file("Write", "file_path", filepath.Join(tp, "toolsets", "desktop.json"), f), ""},
+		{"regenerate a toolset", bash(f, "go run ./tools/pipeline toolset desktop > tools/pipeline/toolsets/desktop.json"), ""},
+		{"absolute toolset redirect", bash(f, "go run ./tools/pipeline toolset desktop > "+filepath.Join(tp, "toolsets", "desktop.json")), ""},
+		{"a toolset subdir is not the glob", file("Write", "file_path", filepath.Join(tp, "toolsets", "x", "a.json"), f), RuleWriteProtected},
+		{"the generator", file("Edit", "file_path", filepath.Join(tp, "main.go"), f), RuleWriteProtected},
+		{"the generator by shell", bash(f, "echo x > tools/pipeline/main.go"), RuleWriteProtected},
+		{"add a scenario", file("Write", "file_path", filepath.Join(tp, "scenarios", "new_tool.json"), f), ""},
+		{"add a scenario by shell", bash(f, "cat > tools/pipeline/scenarios/new_tool.json <<'EOF'\n{}\nEOF"), ""},
+		{"edit a base scenario", file("Edit", "file_path", filepath.Join(tp, "scenarios", "weather.json"), f), RuleWriteProtected},
+		{"overwrite a base scenario", bash(f, "echo x > tools/pipeline/scenarios/weather.json"), RuleWriteProtected},
+		{"the scenarios dir itself", bash(f, "touch tools/pipeline/scenarios"), RuleWriteProtected},
+		{"the built-ins stay", bash(f, "echo x > .loop/brief.md"), RuleWriteProtected},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if d := f.cfg.Check(c.in); d.Rule != c.rule {
+				t.Fatalf("rule = %q (%s), want %q", d.Rule, d.Reason, c.rule)
+			}
+		})
+	}
+	// The built-in prefixes are never carved out, even by a config naming them.
+	f.cfg.Generated, f.cfg.NewOK = []string{".git/*"}, []string{".claude"}
+	for _, p := range []string{".git/config", ".claude/settings.json"} {
+		if d := f.cfg.Check(file("Write", "file_path", filepath.Join(f.wt, p), f)); d.Rule != RuleWriteProtected {
+			t.Fatalf("%s: rule = %q", p, d.Rule)
+		}
+	}
+}

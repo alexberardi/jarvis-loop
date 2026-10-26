@@ -388,7 +388,7 @@ func StartStack(opts Options) (st *Stack, err error) {
 				QAAfterDeploy: true},
 			MobileKey: {Remote: s.MobileRemote, Slug: MobileSlug, Base: "main", Group: "mobile", Aliases: []string{"mobile", "node app"},
 				Description: "the household's phone app (screens, chat, pairing)", Verify: MobileVerify(dir), QA: true,
-				DenyWrite: []string{MobileTrustedFile}},
+				DenyWrite: []string{MobileTrustedFile, "tools/toolset.txt"}, Generated: &MobileGenerated},
 		},
 		// The demo repo stands in for jarvis-server (its scripts/e2e from a scenario's e2e step).
 		// The overnight run's pipeline scenarios: the stand-in the "e2e" step commits with outcome
@@ -504,6 +504,11 @@ const (
 // MobileTrustedFile is the stand-in node-mobile's deny_write path: a harness file the runner
 // trusts, whose change verify runs only on the user's trust OK (scenario 56).
 const MobileTrustedFile = "tools/shoot"
+
+// MobileGenerated is the stand-in node-mobile's generated deny_write files: tools.txt rendered
+// into tools/toolset.txt, as jarvis-server's toolsets are from its tools (scenario 99, #593).
+var MobileGenerated = runner.GeneratedFiles{Paths: []string{"tools/toolset.txt"},
+	Run: "sed 's/^/tool: /' tools.txt > tools/toolset.txt"}
 
 // MobileVerify are the stand-in node-mobile's verify steps: unit tests in the worktree; "mobile
 // shots" in a checkout of demo (as jarvis-server's mobile-shot runs against the runner's mirror at

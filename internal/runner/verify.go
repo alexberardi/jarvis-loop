@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -130,6 +131,45 @@ func isDenyWrite(deny []string, name string) bool {
 	return false
 }
 
+// regenerates reports whether every trusted path is one of the repo's generated files and their
+// generator, run fenced in the worktree at head, leaves the worktree exactly as head has it: the
+// agent's bytes are the generator's, so the user need not look (#593). A change to anything else
+// trusted (the generator itself) keeps the whole change the user's. The worktree is put back
+// either way.
+func (r *Runner) regenerates(ctx context.Context, ru *run, head string, paths []string) bool {
+	g := ru.repo.Generated
+	if g == nil {
+		return false
+	}
+	for _, p := range paths {
+		if !slices.ContainsFunc(g.Paths, func(glob string) bool { ok, _ := path.Match(glob, p); return ok }) {
+			return false
+		}
+	}
+	if h, err := r.Git.Head(ctx, ru.wt); err != nil || h != head {
+		return false
+	}
+	if st, err := r.Git.run(ctx, ru.wt, "status", "--porcelain", "--untracked-files=all"); err != nil || st != "" {
+		return false
+	}
+	out, err := r.shell(ctx, ru.wt, g.Run, 10*time.Minute)
+	st, serr := r.Git.run(ctx, ru.wt, "status", "--porcelain", "--untracked-files=all")
+	if st != "" || serr != nil {
+		if _, err := r.Git.run(ctx, ru.wt, "reset", "-q", "--hard", head); err != nil {
+			r.Log.Warn("putting the worktree back after the generator", "item", ru.item.ID, "err", err)
+		}
+		if _, err := r.Git.run(ctx, ru.wt, "clean", "-fdq"); err != nil {
+			r.Log.Warn("putting the worktree back after the generator", "item", ru.item.ID, "err", err)
+		}
+	}
+	if err != nil || st != "" || serr != nil {
+		r.Log.Info("the generated files are not the generator's", "item", ru.item.ID, "err", err, "status", clip(st, 500), "output", clip(out, 500))
+		return false
+	}
+	r.Log.Info("verify trusts the generated files: the generator reproduces them", "item", ru.item.ID, "head", head, "paths", paths)
+	return true
+}
+
 // trustRefusal is verify refusing a commit that changes trusted files without the approver's OK
 // for it: the user must look, and may OK that one commit (pipeline.Trust).
 type trustRefusal struct {
@@ -246,7 +286,7 @@ func (r *Runner) runVerify(ctx context.Context, ru *run, head string, changed []
 	if err := r.ProbeFence(); err != nil {
 		return nil, fmt.Errorf("verify cannot run: %w", err)
 	}
-	if paths := trustedPaths(ru.repo.DenyWrite, changed); len(paths) > 0 {
+	if paths := trustedPaths(ru.repo.DenyWrite, changed); len(paths) > 0 && !r.regenerates(ctx, ru, head, paths) {
 		if !ru.item.Trust.allows(head) {
 			// Another head than the one OK'd: the OK carries only to the same trusted diff.
 			sum := r.carriedTrust(ctx, ru, head, paths)
