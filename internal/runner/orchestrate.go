@@ -60,7 +60,7 @@ var orchFields = map[string]struct{ allowed, required []string }{
 	ActAdd:         {[]string{"title", "ask", "repo", "priority", "depends_on", "signature"}, []string{"title", "signature"}},
 	ActLink:        {[]string{"item_id", "after"}, []string{"item_id", "after"}},
 	ActParkWait:    {[]string{"item_id", "on", "prs"}, []string{"item_id"}},
-	ActEscalate:    {[]string{"item_id", "text", "recommendation", "class", "deferred"}, []string{"text"}},
+	ActEscalate:    {[]string{"item_id", "text", "recommendation", "class", "deferred", "step"}, []string{"text"}},
 	ActAgents:      {[]string{"active_agents"}, []string{"active_agents"}},
 	ActNote:        {[]string{"text"}, []string{"text"}},
 	ActReply:       {[]string{"channel", "thread_ts", "text"}, []string{"channel", "text"}},
@@ -89,6 +89,7 @@ type OrchAction struct {
 	On           []int64  `json:"on,omitempty"`
 	PRs          []string `json:"prs,omitempty"`
 	Signature    string   `json:"signature,omitempty"`
+	Step         string   `json:"step,omitempty"`
 	ActiveAgents *int     `json:"active_agents,omitempty"`
 	Channel      string   `json:"channel,omitempty"`
 	ThreadTS     string   `json:"thread_ts,omitempty"`
@@ -199,7 +200,7 @@ func (a OrchAction) route() (path string, body map[string]any) {
 		}
 		return "/orchestrator/items", body
 	case ActEscalate:
-		body["item_id"], body["text"], body["recommendation"] = a.ItemID, a.Text, a.Recommendation
+		body["item_id"], body["text"], body["recommendation"], body["step"] = a.ItemID, a.Text, a.Recommendation, a.Step
 		if a.Class != "" {
 			body["class"], body["deferred"] = a.Class, a.Deferred
 		}
@@ -263,7 +264,7 @@ Every turn, write ` + "`out/result.json`" + ` as your last step:
   {"action": "link", "item_id": 16, "after": 12, "reason": "…"},
   {"action": "wait", "item_id": 16, "on": [12], "prs": ["owner/name#444"], "reason": "verify fails until main's test fix merges"},
   {"action": "add", "title": "…", "ask": "…", "repo": "owner/name", "priority": "P1", "depends_on": [], "signature": "the normalised failure", "reason": "…"},
-  {"action": "escalate", "item_id": 17, "text": "what needs the user", "recommendation": "what you would do, and why", "reason": "…"},
+  {"action": "escalate", "item_id": 17, "text": "what needs the user", "recommendation": "what you would do, and why", "step": "merge PR #477 on GitHub", "reason": "…"},
   {"action": "escalate", "item_id": 19, "text": "scope: the parser too, or docs only?", "recommendation": "docs only now", "class": "scope_choice", "deferred": "the parser change", "reason": "…"},
   {"action": "agents", "active_agents": 2, "reason": "every run fails the same way"},
   {"action": "note", "text": "what you are watching, tried, suspect", "reason": "…"},

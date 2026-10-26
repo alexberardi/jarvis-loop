@@ -275,7 +275,7 @@ Every turn, write `out/result.json` as your last step:
   {"action": "link", "item_id": 16, "after": 12, "reason": "…"},
   {"action": "wait", "item_id": 16, "on": [12], "prs": ["owner/name#444"], "reason": "verify fails until main's test fix merges"},
   {"action": "add", "title": "…", "ask": "…", "repo": "owner/name", "priority": "P1", "depends_on": [], "signature": "the normalised failure", "reason": "…"},
-  {"action": "escalate", "item_id": 17, "text": "what needs the user", "recommendation": "what you would do, and why", "reason": "…"},
+  {"action": "escalate", "item_id": 17, "text": "what needs the user", "recommendation": "what you would do, and why", "step": "merge PR #477 on GitHub", "reason": "…"},
   {"action": "escalate", "item_id": 19, "text": "scope: the parser too, or docs only?", "recommendation": "docs only now", "class": "scope_choice", "deferred": "the parser change", "reason": "…"},
   {"action": "agents", "active_agents": 2, "reason": "every run fails the same way"},
   {"action": "note", "text": "what you are watching, tried, suspect", "reason": "…"},
