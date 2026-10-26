@@ -243,6 +243,9 @@ func TestBashCommands(t *testing.T) {
 		{"rm -rf $SOMEVAR", RuleRmOutside},
 		{"rm -rf /*", RuleRmOutside},
 		{"cd .. && rm -rf x", RuleRmOutside}, // cd moves the shell, so a relative path is unknowable: refused
+		{"cd " + f.outside + "; rm -rf x", RuleRmOutside},
+		{"cd " + f.wt + "; rm -rf ..", RuleRmOutside},
+		{"cd " + f.wt + "; rm -rf .loop/scratch/x", ""},
 
 		// Protected paths and words, in any spelling the shell would expand.
 		{"cat " + f.checkout + "/go.mod", RuleProtectedPath},
@@ -361,6 +364,13 @@ func TestBashWriteProtected(t *testing.T) {
 		{"echo x > $WT/.git/config", RuleWriteProtected},           // unresolvable, but its text names .git
 		{"cd internal && echo x > hooks.json", RuleWriteProtected}, // after cd a relative target is unknowable
 		{"cd internal && touch hooks.json", RuleWriteProtected},
+		// A cd to a literal absolute path is followed (#597); the old dir still counts, the cd may fail.
+		{"cd " + f.wt + "; echo x > scripts/sandbox/run", RuleWriteProtected},
+		{"cd " + f.wt + " && echo x > .loop/brief.md", RuleWriteProtected},
+		{"cd " + filepath.Join(f.wt, "scripts") + "; echo x > sandbox/run", RuleWriteProtected},
+		{"cd /tmp; echo x > scripts/sandbox/run", RuleWriteProtected},
+		{"cd " + f.wt + "; cd internal; echo x > notes.txt", RuleWriteProtected},
+		{"cd " + f.wt + "; tee .git/config", RuleWriteProtected},
 
 		// Reading and running protected files stays theirs.
 		{"cat scripts/sandbox/run", ""},
@@ -381,6 +391,10 @@ func TestBashWriteProtected(t *testing.T) {
 		{"tee $TMPDIR/log", ""},
 		{"go test ./... > .loop/scratch/t.log 2>&1", ""},
 		{"cd internal && go test ./... 2>&1", ""},
+		{"cd " + f.wt + "; cat > .loop/result.json <<'EOF'\n{}\nEOF", ""},
+		{"cd " + f.wt + " && echo x > .loop/scratch/f", ""},
+		{"pushd " + f.wt + "; touch notes.txt", ""},
+		{"cd /tmp; echo x > notes.txt", ""},
 		{"touch README.md", ""},
 		{"mkdir -p .loop/scratch", ""},
 		{"sed -i 's/a/b/' notes.txt", ""},

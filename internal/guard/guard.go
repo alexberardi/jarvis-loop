@@ -441,18 +441,28 @@ func (c *Config) checkScript(script, cwd, target string, depth int) Decision {
 			return d
 		}
 	}
+	// dirs are every directory the shell may be in: a cd to one literal absolute path adds it (the
+	// cd may fail and leave the old one), and each relative path must pass against all of them.
+	// Any other cd (relative, $X, -, popd) makes a relative path unknowable: movedDir.
+	dirs := []string{cwd}
 	movedDir := false
 	for _, sg := range sc.segs {
 		for _, w := range sg.writes {
-			if d := c.checkWriteTarget(unmark(w), cwd, target, movedDir); d.Deny {
-				return d
+			for _, dir := range dirs {
+				if d := c.checkWriteTarget(unmark(w), dir, target, movedDir); d.Deny {
+					return d
+				}
 			}
 		}
 		raw := sg.words
 		// kill -0 is judged on the raw words (which word came from which substitution), and only
 		// when nothing wraps it: a wrapper would run /bin/kill, not the shell's builtin.
 		if len(raw) > 0 && raw[0] == "kill" {
-			if c.killZero(raw[1:], subs, cwd, movedDir) {
+			ok := true
+			for _, dir := range dirs {
+				ok = ok && c.killZero(raw[1:], subs, dir, movedDir)
+			}
+			if ok {
 				continue
 			}
 		}
@@ -488,13 +498,38 @@ func (c *Config) checkScript(script, cwd, target string, depth int) Decision {
 				}
 			}
 		case "cd", "pushd", "popd":
-			movedDir = true
+			if dir := c.literalCd(name, argv[1:]); dir != "" {
+				dirs = append(dirs, dir)
+			} else {
+				movedDir = true
+			}
 		}
-		if d := c.checkArgv(name, argv, cwd, target, movedDir); d.Deny {
-			return d
+		for _, dir := range dirs {
+			if d := c.checkArgv(name, argv, dir, target, movedDir); d.Deny {
+				return d
+			}
 		}
 	}
 	return Decision{}
+}
+
+// literalCd is the directory a cd or pushd moves to when its argument is one literal absolute path
+// (after ~), else "".
+func (c *Config) literalCd(name string, args []string) string {
+	if name == "popd" {
+		return ""
+	}
+	for len(args) > 0 && (args[0] == "-L" || args[0] == "-P" || args[0] == "--") {
+		args = args[1:]
+	}
+	if len(args) != 1 {
+		return ""
+	}
+	e := c.expandHome(args[0])
+	if !filepath.IsAbs(e) || strings.ContainsAny(e, "$`*?[{") {
+		return ""
+	}
+	return e
 }
 
 // checkProtected refuses a script that names a protected path in anything the shell could open or
