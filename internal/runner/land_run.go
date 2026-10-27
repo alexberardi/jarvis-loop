@@ -293,6 +293,10 @@ func (r *Runner) landFacts(ctx context.Context, lr *landRun) (LandFacts, error) 
 	if err == nil {
 		f.Paths, err = r.Git.DiffPaths(ctx, lr.mirror, lr.repo.Base, pr.HeadRefOid, pr.Number)
 	}
+	if err == nil && len(f.Paths) == 0 && pr.State == "MERGED" && shaRe.MatchString(pr.MergeCommit) {
+		// #596: merged with a merge commit, the head is in main; the merge commit has the paths.
+		f.Paths, err = r.Git.MergePaths(ctx, lr.mirror, pr.MergeCommit)
+	}
 	if err == nil {
 		if _, tip, terr := r.Git.MergeBase(ctx, lr.mirror, lr.repo.Base, pr.HeadRefOid); terr == nil {
 			lr.mainTip = tip
